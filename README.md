@@ -97,6 +97,30 @@ El flujo recomendado para contributors es:
 
 Ese flujo da mejor feedback para desarrollo diario, evita rebuilds del contenedor en cada cambio y deja el entorno mas facil de depurar.
 
+## Tooling opcional para Codex
+
+El repo incluye `gstack` vendorizado en `.agents/skills/gstack` para quienes trabajen con Codex sobre este proyecto.
+
+Despues de clonar el repo, ejecuta una vez:
+
+```powershell
+cd .agents/skills/gstack
+```
+
+En Windows, corre el setup con Git Bash:
+
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" -lc "./setup --host codex"
+```
+
+Luego reinicia la sesion de Codex para que redescubra las skills.
+
+En este entorno, las skills se invocan con prefijo `$`, por ejemplo:
+
+- `$gstack-review`
+- `$gstack-qa`
+- `$gstack-ship`
+
 ### Prerrequisitos
 
 - Docker Desktop o Docker Engine con Compose
