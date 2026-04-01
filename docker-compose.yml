@@ -1,35 +1,47 @@
-# Local development stack used to run the project against PostgreSQL.
+# Local development stack for ADAM-EDU.
+# Two common workflows:
+# 1. Recommended day-to-day development: run only `adam-edu-postgres` and start backend/frontend locally.
+# 2. Full containerized stack: run the whole compose file and let Docker build the API image from the repo root.
+
+name: adam-edu
+
 volumes:
-  langgraph-data:
+  adam-edu-postgres-data:
     driver: local
+
 services:
-  langgraph-postgres:
+  adam-edu-postgres:
     image: docker.io/postgres:16
-    container_name: langgraph-postgres
+    container_name: adam-edu-postgres
     restart: unless-stopped
     ports:
-      - "5433:5432"
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
-      - langgraph-data:/var/lib/postgresql/data
+      - adam-edu-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: pg_isready -U ${POSTGRES_USER:-postgres}
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
       start_period: 10s
-      timeout: 1s
+      timeout: 5s
       retries: 5
       interval: 5s
-  langgraph-api:
-    image: gemini-fullstack-langgraph
-    container_name: langgraph-api
-    ports:
-      - "8123:8000"
+
+  adam-edu-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: adam-edu-api:local
+    container_name: adam-edu-api
+    restart: unless-stopped
     depends_on:
-      langgraph-postgres:
+      adam-edu-postgres:
         condition: service_healthy
+    ports:
+      - "${API_HOST_PORT:-8123}:8000"
     environment:
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
-      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY}
-      POSTGRES_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@langgraph-postgres:5432/${POSTGRES_DB:-postgres}?sslmode=disable
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      POSTGRES_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@adam-edu-postgres:5432/${POSTGRES_DB:-postgres}?sslmode=disable
