@@ -139,7 +139,15 @@ cd backend
 uv sync --dev
 ```
 
-4. Arranca la API:
+4. Aplica las migraciones del esquema:
+
+```powershell
+uv run alembic upgrade head
+```
+
+Este paso es obligatorio. `docker compose up` levanta PostgreSQL, pero no crea las tablas de la aplicacion.
+
+5. Arranca la API:
 
 ```powershell
 uv run uvicorn shared.app:app --reload --host 0.0.0.0 --port 8000
