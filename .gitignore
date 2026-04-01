@@ -205,3 +205,4 @@ backend/.data/
 .python-version
 backend/.python-version
 skills-lock.json
+.agents/skills/gstack/bin/gstack-global-discover.exe
