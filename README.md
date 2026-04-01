@@ -99,18 +99,29 @@ Ese flujo da mejor feedback para desarrollo diario, evita rebuilds del contenedo
 
 ## Tooling opcional para Codex
 
-El repo incluye `gstack` vendorizado en `.agents/skills/gstack` para quienes trabajen con Codex sobre este proyecto.
+La opcion recomendada para el equipo es instalar `gstack` globalmente por usuario, no dentro del repo del producto.
 
-Despues de clonar el repo, ejecuta una vez:
+Eso evita:
+
+- ensuciar `git status` del proyecto
+- diferencias de line endings o archivos regenerados por `setup`
+- binarios pesados o artefactos locales dentro del repo
+- ruido en PRs y revisiones
+
+Instalacion recomendada en Windows:
 
 ```powershell
-cd .agents/skills/gstack
+git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git $HOME\gstack
+cd $HOME\gstack
+& "C:\Program Files\Git\bin\bash.exe" -lc "./setup --host codex"
 ```
 
-En Windows, corre el setup con Git Bash:
+Instalacion equivalente en entornos bash:
 
-```powershell
-& "C:\Program Files\Git\bin\bash.exe" -lc "./setup --host codex"
+```bash
+git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/gstack
+cd ~/gstack
+./setup --host codex
 ```
 
 Luego reinicia la sesion de Codex para que redescubra las skills.
@@ -120,6 +131,12 @@ En este entorno, las skills se invocan con prefijo `$`, por ejemplo:
 - `$gstack-review`
 - `$gstack-qa`
 - `$gstack-ship`
+
+Nota operativa:
+
+- `.agents/` se trata como tooling local y no forma parte del flujo normal de versionado del repo.
+- No corras `setup` de `gstack` dentro del repo del producto como rutina diaria.
+- Si necesitas actualizar tu instalacion local de `gstack`, hazlo en tu copia global (`$HOME\gstack` o `~/gstack`), no en `ADAM-EDU`.
 
 ### Prerrequisitos
 
