@@ -6,10 +6,15 @@ from shared.database import SessionLocal, engine
 from shared.models import Base
 
 
-@pytest.fixture
-def db():
-    """Provide a real SQLAlchemy session for API tests."""
+@pytest.fixture(scope="session", autouse=True)
+def ensure_db_schema() -> None:
+    """Create the ORM schema once so the suite can run against an empty database."""
     Base.metadata.create_all(bind=engine)
+
+
+@pytest.fixture
+def db(ensure_db_schema: None):
+    """Provide a real SQLAlchemy session for API tests."""
     session = SessionLocal()
     try:
         yield session
