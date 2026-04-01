@@ -90,37 +90,66 @@ El frontend usa ese flujo para renderizar el timeline y el `CasePreview` del pro
 
 ## Setup local
 
-El flujo recomendado sigue siendo:
+El flujo recomendado para contributors es:
 
-1. `docker compose up -d`
-2. levantar backend y frontend por separado
+1. levantar solo PostgreSQL con Docker
+2. correr backend y frontend localmente
 
-### Backend
+Ese flujo da mejor feedback para desarrollo diario, evita rebuilds del contenedor en cada cambio y deja el entorno mas facil de depurar.
 
-1. Copia `backend/.env.example` a `backend/.env`.
-2. Completa al menos `DATABASE_URL` y `GEMINI_API_KEY`.
-3. Levanta Postgres local:
+### Prerrequisitos
+
+- Docker Desktop o Docker Engine con Compose
+- Python 3.12
+- `uv`
+- Node.js 22 + npm
+
+### Opcion A: desarrollo recomendado (PostgreSQL en Docker, app local)
+
+#### 1. Levantar solo PostgreSQL
+
+Ejecuta esto desde la raiz del repo, no desde `backend/`:
 
 ```powershell
-docker compose up -d
+docker compose up -d adam-edu-postgres
 ```
 
-Si usas el `docker-compose.yml` del repo, los defaults locales quedan en `localhost:5433` con credenciales `postgres/postgres` y base `postgres`.
+Con el `docker-compose.yml` actual, los defaults locales quedan asi:
 
-4. Instala dependencias:
+- host: `localhost`
+- puerto: `5433`
+- usuario: `postgres`
+- password: `postgres`
+- base: `postgres`
+
+#### 2. Configurar el backend
+
+1. Copia `backend/.env.example` a `backend/.env`.
+2. Completa al menos estas variables:
+
+```env
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5433/postgres
+GEMINI_API_KEY=tu_api_key
+```
+
+3. Instala dependencias:
 
 ```powershell
 cd backend
 uv sync --dev
 ```
 
-5. Arranca la API:
+4. Arranca la API:
 
 ```powershell
 uv run uvicorn shared.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Frontend
+La API queda disponible en `http://localhost:8000`.
+
+#### 3. Levantar el frontend
+
+En otra terminal:
 
 ```powershell
 cd frontend
@@ -128,7 +157,44 @@ npm install
 npm run dev
 ```
 
+El frontend queda disponible segun la salida de Vite, normalmente en `http://localhost:5173/app/`.
+
 La ruta funcional actual del profesor vive bajo `/app/teacher`, porque Vite y React Router usan `base` y `basename` en `/app/`.
+
+### Opcion B: stack contenedorizado completo
+
+Si quieres probar la API y PostgreSQL por Docker, el compose ya construye la imagen automaticamente desde el repo:
+
+```powershell
+docker compose up -d --build
+```
+
+Servicios esperados:
+
+- PostgreSQL: `adam-edu-postgres`
+- API: `adam-edu-api`
+
+Puertos por defecto:
+
+- PostgreSQL: `localhost:5433`
+- API: `localhost:8123`
+
+Notas:
+
+- Para esta opcion, `GEMINI_API_KEY` debe existir en tu shell o en un archivo `.env` de la raiz usado por Docker Compose.
+- Si solo necesitas base de datos para desarrollo, usa la Opcion A; es la ruta principal recomendada.
+
+### Apagar el entorno Docker
+
+```powershell
+docker compose down
+```
+
+Si necesitas eliminar tambien el volumen local de PostgreSQL:
+
+```powershell
+docker compose down -v
+```
 
 ## Variables de entorno
 
@@ -137,7 +203,7 @@ La ruta funcional actual del profesor vive bajo `/app/teacher`, porque Vite y Re
 - `CORS_ALLOWED_ORIGIN`: origen extra permitido en produccion.
 - `STORYTELLER_MODEL`: override opcional del modelo usado por `/api/suggest`.
 
-Base de ejemplo: [backend/.env.example](/c:/Users/Juan%20Camilo%20Dorado/Downloads/gemini-fullstack-langgraph-quickstart/backend/.env.example)
+Base de ejemplo: [backend/.env.example](C:/Users/Juan%20Camilo%20Dorado/Downloads/ADAM-EDU/backend/.env.example)
 
 ## Validacion
 
@@ -160,4 +226,4 @@ La suite default no debe tocar Gemini ni depender de side effects externos. Los 
 
 ## Para contributors
 
-Lee [CLAUDE.md](/c:/Users/Juan%20Camilo%20Dorado/Downloads/gemini-fullstack-langgraph-quickstart/CLAUDE.md) antes de abrir cambios grandes.
+Lee [CLAUDE.md](C:/Users/Juan%20Camilo%20Dorado/Downloads/ADAM-EDU/CLAUDE.md) antes de abrir cambios grandes.
