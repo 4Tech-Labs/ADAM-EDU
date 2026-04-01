@@ -1,0 +1,41 @@
+name: Bug report
+description: Reporta un comportamiento incorrecto o una regresión.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Resumen
+      description: Explica el problema en una o dos frases.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Pasos para reproducir
+      description: Indica el flujo exacto para reproducir el problema.
+      placeholder: |
+        1. Ir a ...
+        2. Ejecutar ...
+        3. Observar ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Resultado esperado
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Resultado actual
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Entorno
+      description: Sistema operativo, navegador, rama y comandos relevantes.

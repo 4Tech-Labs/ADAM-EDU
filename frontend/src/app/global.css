@@ -1,0 +1,427 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* ── ADAM Design System ── */
+  --color-ink: #1a2332;
+  --color-ink-soft: #4a5568;
+  --color-ink-muted: #8898aa;
+  --color-bg-page: #f5f2ee;
+  --color-bg-card: #ffffff;
+  --color-bg-subtle: #f0ece6;
+  --color-border-adam: #ddd8d0;
+  --color-adam-accent: #0d7c66;
+  --color-accent-lt: #e6f4f1;
+  --color-gold: #c9933a;
+  --color-danger: #c0392b;
+  --color-danger-lt: #fdf3f2;
+
+  /* Inter es la única familia tipográfica — serif eliminado */
+  --font-sans: 'Inter', 'system-ui', sans-serif;
+
+  /* ── ADAM Typography Scale ── */
+  /* Tamaños — escala modular basada en 15px (body) */
+  --type-display:  2rem;         /* 32px — títulos de caso, hero */
+  --type-h1:       1.625rem;     /* 26px — títulos de módulo */
+  --type-h2:       1.25rem;      /* 20px — sección principal */
+  --type-h3:       1.0625rem;    /* 17px — sub-sección */
+  --type-h4:       0.9375rem;    /* 15px — cuarto nivel */
+  --type-body-lg:  1rem;         /* 16px — cuerpo enfatizado */
+  --type-body:     0.9375rem;    /* 15px — cuerpo estándar */
+  --type-body-sm:  0.875rem;     /* 14px — texto secundario */
+  --type-caption:  0.8125rem;    /* 13px — metadatos, timestamps */
+  --type-label:    0.75rem;      /* 12px — etiquetas UI, form */
+  --type-overline: 0.6875rem;    /* 11px — badges, chips */
+  --type-footnote: 0.625rem;     /* 10px — pie de página, mini-etiquetas */
+
+  /* Alturas de línea */
+  --leading-display: 1.15;
+  --leading-heading: 1.25;
+  --leading-snug:    1.4;
+  --leading-body:    1.7;
+  --leading-prose:   1.85;      /* lectura editorial prolongada */
+
+  /* Espaciado entre letras */
+  --tracking-display:  -0.025em;
+  --tracking-heading:  -0.018em;
+  --tracking-ui:        0.015em;
+  --tracking-label:     0.02em;
+  --tracking-overline:  0.08em;
+
+  --radius-card: 12px;
+  --radius-input: 8px;
+
+  --animate-chip-in: chip-in 150ms ease-out;
+  --animate-fade-down: fade-down 200ms ease-out;
+  --animate-toast-in: toast-in 300ms cubic-bezier(.34, 1.56, .64, 1);
+  --animate-spinner: spinner 1s linear infinite;
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  [role="combobox"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: var(--type-body);
+    line-height: var(--leading-body);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; /* Inter optical alternates */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  html {
+    /* Prevent scroll bounce on the entire page */
+    overscroll-behavior: none;
+  }
+}
+
+[data-slot="select-trigger"]:not([data-disabled]) {
+  cursor: pointer !important;
+}
+
+/* Animation Delays */
+.animation-delay-200 {
+  animation-delay: 0.2s;
+}
+
+.animation-delay-400 {
+  animation-delay: 0.4s;
+}
+
+.animation-delay-600 {
+  animation-delay: 0.6s;
+}
+
+.animation-delay-800 {
+  animation-delay: 0.8s;
+}
+
+/* Keyframes */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeInUpSmooth {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Animation Classes */
+.animate-fadeIn {
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 0.5s ease-out forwards;
+}
+
+.animate-fadeInUpSmooth {
+  animation: fadeInUpSmooth 0.3s ease-out forwards;
+}
+
+/* Prevent scroll bounce on scroll areas */
+[data-radix-scroll-area-viewport] {
+  overscroll-behavior: none !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Hide any white space that might appear during scroll bounce */
+[data-radix-scroll-area-viewport]::-webkit-scrollbar {
+  width: 0px;
+  background: transparent;
+}
+
+/* Subtle scroll bar styling */
+[data-slot="scroll-area-scrollbar"] {
+  opacity: 0.3;
+  transition: opacity 0.2s ease;
+}
+
+[data-slot="scroll-area"]:hover [data-slot="scroll-area-scrollbar"] {
+  opacity: 0.6;
+}
+
+[data-slot="scroll-area-thumb"] {
+  background-color: rgb(115 115 115 / 0.2) !important;
+}
+
+/* Ensure your body or html has a dark background if not already set, e.g.: */
+/* body { background-color: #0c0c0d; } */
+/* This is similar to neutral-950 */
+
+/* ── ADAM Keyframes ── */
+@keyframes chip-in {
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-down {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    transform: translateY(80px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes spinner {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ADAM — Escala tipográfica semántica
+   Uso: aplica la clase .type-* directamente en el JSX de cada componente
+   Todas las clases usan Inter; ninguna referencia a fuentes serif externas.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Títulos ─────────────────────────────────────────────────────────── */
+.type-display {
+  font-size: var(--type-display);
+  font-weight: 700;
+  line-height: var(--leading-display);
+  letter-spacing: var(--tracking-display);
+}
+
+.type-h1 {
+  font-size: var(--type-h1);
+  font-weight: 700;
+  line-height: var(--leading-heading);
+  letter-spacing: -0.02em;
+}
+
+.type-h2 {
+  font-size: var(--type-h2);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.012em;
+}
+
+.type-h3 {
+  font-size: var(--type-h3);
+  font-weight: 600;
+  line-height: var(--leading-snug);
+  letter-spacing: -0.006em;
+}
+
+.type-h4 {
+  font-size: var(--type-h4);
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: 0;
+}
+
+/* Cuerpo ───────────────────────────────────────────────────────────── */
+.type-body-lg {
+  font-size: var(--type-body-lg);
+  font-weight: 400;
+  line-height: 1.75;
+}
+
+.type-body {
+  font-size: var(--type-body);
+  font-weight: 400;
+  line-height: var(--leading-body);
+}
+
+.type-body-sm {
+  font-size: var(--type-body-sm);
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+/* Soporte UI ───────────────────────────────────────────────────────── */
+.type-caption {
+  font-size: var(--type-caption);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+}
+
+.type-label {
+  font-size: var(--type-label);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: var(--tracking-label);
+}
+
+.type-overline {
+  font-size: var(--type-overline);
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: var(--tracking-overline);
+  text-transform: uppercase;
+}
+
+.type-footnote {
+  font-size: var(--type-footnote);
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 0.04em;
+}

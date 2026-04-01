@@ -1,0 +1,10 @@
+# Default ownership starts narrow. Expand with additional technical owners as the team grows.
+
+* @JuanCamiloDorado
+/backend/ @JuanCamiloDorado
+/frontend/ @JuanCamiloDorado
+/.github/ @JuanCamiloDorado
+/Dockerfile @JuanCamiloDorado
+/docker-compose.yml @JuanCamiloDorado
+/README.md @JuanCamiloDorado
+/CONTRIBUTING.md @JuanCamiloDorado

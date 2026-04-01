@@ -1,0 +1,12 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "agent": "./src/case_generator/graph.py:graph"
+  },
+  "http": {
+    "app": "./src/shared/app.py:app"
+  },
+  "env": ".env"
+}

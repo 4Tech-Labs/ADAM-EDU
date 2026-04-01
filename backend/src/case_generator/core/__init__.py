@@ -1,0 +1,1 @@
+"""Case generator core subpackage."""
