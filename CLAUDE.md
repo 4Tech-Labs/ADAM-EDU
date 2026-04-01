@@ -1,83 +1,98 @@
 # CLAUDE.md
 
-## Proyecto
+## Project Context
 
-ADAM EDU v8.0, en este repositorio, es un Teacher Authoring + Preview MVP. El alcance actual cubre el formulario docente, `/api/suggest`, la generacion del caso con LangGraph, el progreso SSE y el preview final del profesor.
+ADAM-EDU is a teacher authoring + preview MVP for pedagogical business cases. The active product surface in this repository is the teacher flow: form assistance, authoring job intake, LangGraph-based generation, SSE progress, and preview rendering.
 
-## Mapa de dominios
+This repository does not currently publish a student runtime, full authentication, or a hardened production deployment surface.
 
-- `backend/src/case_generator/`: dominio funcional del producto. Contiene la logica de negocio del authoring, el grafo LangGraph, prompts, schemas, adapters y servicios del generador de casos.
-- `backend/src/shared/`: capa comun de app e infraestructura del MVP docente. Contiene la app FastAPI, base de datos, ORM, progress bus/SSE, sanitizacion y contratos de soporte usados por el flujo docente.
-- `backend/tests/integration/`: validacion live del flujo docente y del grafo.
-- `backend/tests/validation/`: validacion de shape, adapters y contratos auxiliares del frontend/output.
-- `frontend/src/app/`: shell del frontend. Contiene router, entrypoint, layout base y estilos globales.
-- `frontend/src/features/teacher-authoring/`: flujo docente real. Contiene formulario, submit del job, SSE y estados del authoring.
-- `frontend/src/features/case-preview/`: preview editorial del caso generado y modulos `M1..M6`.
-- `frontend/src/shared/`: API client, tipos compartidos, header, toast, utilidades y UI primitives transversales.
+## Instruction Canon
 
-## Root files
+- `AGENTS.md` is the canonical instruction surface for Codex and compatible OpenAI-oriented agents.
+- `CLAUDE.md` is the equivalent maintained instruction surface for Claude-oriented tooling.
+- If an operational rule changes, update `AGENTS.md` and `CLAUDE.md` in the same PR.
+- Human-facing setup and workflow details stay in `README.md`, `CONTRIBUTING.md`, and `docs/repo-governance.md`.
 
-- La raiz del repo debe permanecer minima y operativa.
-- Mantener en root solo archivos que ayuden a correr, entender o empaquetar el MVP publicado.
-- No dejar tooling personal, caches o documentos historicos en root si no estan documentados y usados por el equipo.
-- `docker-compose.yml` existe para desarrollo local; no describe por si solo un despliegue productivo completo.
-- `Makefile` es una conveniencia opcional, especialmente util en entornos Unix-like; no es el contrato principal del proyecto.
-- La auditoria historica vive en `docs/archive/MASTER_AUDIT_PLAN.md`, no en la superficie operativa del repo.
+## Repo Rules
 
-## Reglas de importacion
+- Treat `main` as protected.
+- Never push directly to `main`.
+- Every non-trivial change must go through a branch and pull request.
+- Default merge mode is `Squash and merge`.
+- If a change affects setup, contracts, workflows, or contributor expectations, update the relevant documentation in the same change.
 
-- Usar imports absolutos por dominio: `from {dominio}.{modulo} import {simbolo}`.
-- `shared/` no importa dominios de negocio. La unica excepcion es `shared/app.py` como composition root.
-- Prohibido reintroducir `agent.*`, imports relativos complejos entre dominios o hacks con `sys.path`.
-- Si una anotacion de tipo cruza dominios y puede crear ciclos, usar `from typing import TYPE_CHECKING` y referenciar el tipo como string o dentro del bloque `TYPE_CHECKING`.
+## Domain Map
 
-## Convenciones de naming
+- `backend/src/case_generator/`: authoring business logic, LangGraph orchestration, prompts, schemas, and downstream generation services.
+- `backend/src/shared/`: FastAPI composition root, database access, ORM models, shared contracts, sanitization, and progress/SSE support.
+- `frontend/src/app/`: application shell, router, entrypoint, and global styles.
+- `frontend/src/features/teacher-authoring/`: teacher-facing authoring workflow.
+- `frontend/src/features/case-preview/`: generated case preview and `M1..M6` rendering surface.
+- `frontend/src/shared/`: shared API client, types, UI primitives, and cross-feature utilities.
 
-- Codigo, modulos y simbolos en ingles.
-- Terminos de dominio en espanol se preservan cuando son parte del lenguaje pedagogico o del prompt.
-- Versiones de servicio deben alinearse con `backend/pyproject.toml` y exponerse de forma consistente.
-- En `frontend/src/`, mantener la convencion top-level `app / features / shared`.
-- No reabrir carpetas genericas como `components`, `pages`, `hooks`, `helpers`, `common` o `misc`.
-- Los comentarios y docstrings deben describir el MVP actual, no sprints o fases historicas como si siguieran activos.
+## Architecture Boundaries
 
-## Testing y validacion
+- Use absolute imports by domain.
+- `shared/` must not become a catch-all for new business domains.
+- `shared/` should not import business domains, except where composition requires it in the app root.
+- Schema changes for the app runtime go through Alembic migrations.
+- Keep `backend/.env.example`, local defaults, and documented setup aligned when database expectations change.
 
-- Suite default sin red: `uv run --directory backend pytest -q`
-- Suite live Gemini: `RUN_LIVE_LLM_TESTS=1 uv run --directory backend pytest -m live_llm -q`
-- Integracion live: `RUN_LIVE_LLM_TESTS=1 uv run --directory backend pytest backend/tests/integration -q`
-- Type checking: `uv run mypy backend/src/`
-- Toda modificacion debe mantener intacto el flujo docente observable y cerrar con tests de authoring pasando.
-- Los tests `live_llm` nunca deben ejecutarse por defecto en CI ni en el suite local base.
+## Validation Commands
 
-## Patrones prohibidos
+- Default backend suite: `uv run --directory backend pytest -q`
+- Backend type checking: `uv run --directory backend mypy src`
+- Frontend lint: `npm --prefix frontend run lint`
+- Frontend tests: `npm --prefix frontend run test`
+- Frontend build: `npm --prefix frontend run build`
 
-- Queries ORM cross-dominio fuera de `shared/` o de los servicios propietarios del dominio.
-- Imports directos de modelos desde lugares ajenos a `shared/`.
-- Logica de negocio nueva dentro de migraciones, routers o prompts.
-- Pragmas amplios para silenciar tipado sin una justificacion puntual.
-- Hardcodear secretos, tokens, API keys o credenciales en codigo, prompts, fixtures o docs.
+Only run live LLM tests explicitly:
 
-## Higiene estricta de prompts LLM
+- `RUN_LIVE_LLM_TESTS=1 uv run --directory backend pytest -m live_llm -q`
 
-- Ningun prompt puede incluir API keys, bearer tokens, DSN, cookies, credenciales ni variables de entorno renderizadas.
-- Todo contexto dinamico debe entrar por state/context injection controlado, nunca por concatenacion ciega de entradas del usuario a instrucciones de sistema.
-- Si un valor controlado por usuario llega a un system prompt, debe tratarse como dato delimitado y no como instruccion confiable.
-- Antes de cruzar una frontera LLM, usar `shared.sanitization.sanitize_untrusted_text()` o `sanitize_untrusted_payload()`.
-- Cuando se use salida estructurada, preferir configuraciones resilientes y handlers de fallback para errores de validacion o respuestas vacias.
+## Sensitive Areas
 
-## Convenciones de migraciones
+- `backend/src/case_generator/**` is the most sensitive part of the repo.
+- `backend/src/case_generator/graph.py` and `backend/src/case_generator/prompts.py` should not receive cosmetic-only edits.
+- Prompt boundaries, graph orchestration, and LLM-facing payload construction require extra caution.
+- Database setup, migrations, and ORM contracts must remain coherent across runtime, tests, and docs.
 
-- Naming recomendado: `{hash}_{sprintN}_{descripcion}.py`
-- Alembic debe seguir importando metadata desde `shared.models` y configuracion desde `shared.database`.
+## Forbidden Patterns
 
-## Regla operativa principal
+- Secrets, API keys, tokens, credentials, or DSNs committed to code, prompts, fixtures, or docs
+- New business logic embedded in migrations, routers, or prompt strings
+- Cross-domain imports that bypass the current ownership boundaries
+- Broad type-ignore suppression without a specific justification
+- Reopening generic frontend top-level folders such as `components`, `pages`, `hooks`, `helpers`, `common`, or `misc`
 
-- `backend/src/case_generator/**` es la zona mas sensible del repo. No tocarla salvo que el cambio este directamente justificado por authoring y se valide extremo a extremo.
-- `shared/` no debe crecer como cajon de sastre. Si aparece nueva logica de negocio, debe abrirse un dominio explicito nuevo en vez de meterla en `shared/`.
-- `shared.models` y `shared.blueprint_schema` conservan legado retenido por continuidad de esquema y contratos internos. No eliminarlos ni expandirlos sin un plan separado de re-baseline.
-- En esta fase existe un naming freeze: no renombrar `case_generator` ni `shared` sin abrir primero un refactor dedicado.
-- En frontend tambien existe un naming freeze: no renombrar `app`, `teacher-authoring`, `case-preview` ni `shared` sin abrir primero un refactor dedicado.
-- `studentProfile` y los modulos `M1..M6` se conservan porque forman parte del contrato actual de authoring/preview, aunque el repo publicado sea teacher-only.
-- En esta fase no hacer comment cleanup dentro de `backend/src/case_generator/graph.py` ni `backend/src/case_generator/prompts.py` salvo necesidad funcional directa.
-- No reintroducir runtime de estudiante, auth mock ni features experimentales en el flujo principal de este repo.
-- Si aparece un nuevo frente de producto, abrir primero un plan separado antes de mezclarlo con el MVP docente.
+## LLM Hygiene
+
+- Never inject raw secrets or environment values into prompts.
+- Treat user-controlled text as untrusted before crossing an LLM boundary.
+- Prefer explicit state/context injection over blind prompt concatenation.
+- Preserve or strengthen sanitization whenever prompt assembly changes.
+- Prefer structured-output handling that tolerates validation errors and empty responses safely.
+
+## Naming and Stability Rules
+
+- Code, modules, and symbols stay in English.
+- Spanish domain terms may remain when they are part of the pedagogical language or prompt contract.
+- Keep the stable frontend split `app / features / shared`.
+- Do not rename `case_generator`, `shared`, `app`, `teacher-authoring`, or `case-preview` without a dedicated refactor plan.
+- Preserve the current `studentProfile` and `M1..M6` contracts unless the change explicitly coordinates backend, frontend, and docs updates.
+
+## Local Environment Expectations
+
+For a normal backend local session:
+
+```powershell
+cd C:\Users\Juan Camilo Dorado\Downloads\ADAM-EDU
+docker compose up -d adam-edu-postgres
+
+cd backend
+uv sync --dev
+uv run alembic upgrade head
+uv run uvicorn shared.app:app --reload --host 0.0.0.0 --port 8000
+```
+
+`docker compose up` starts PostgreSQL, but does not apply migrations. Alembic bootstrap is required before using the API locally.
