@@ -117,7 +117,7 @@ docker compose up -d adam-edu-postgres
 Con el `docker-compose.yml` actual, los defaults locales quedan asi:
 
 - host: `localhost`
-- puerto: `5433`
+- puerto: `5434`
 - usuario: `postgres`
 - password: `postgres`
 - base: `postgres`
@@ -128,7 +128,7 @@ Con el `docker-compose.yml` actual, los defaults locales quedan asi:
 2. Completa al menos estas variables:
 
 ```env
-DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5433/postgres
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5434/postgres
 GEMINI_API_KEY=tu_api_key
 ```
 
@@ -176,7 +176,7 @@ Servicios esperados:
 
 Puertos por defecto:
 
-- PostgreSQL: `localhost:5433`
+- PostgreSQL: `localhost:5434`
 - API: `localhost:8123`
 
 Notas:
