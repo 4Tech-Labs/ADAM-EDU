@@ -2,6 +2,21 @@
 
 ADAM-EDU se mantiene con un flujo estricto por pull request. `main` es la rama estable y nadie debe empujar cambios directos a esa rama.
 
+## Manual Governance
+
+Mientras GitHub no fuerce toda la proteccion de rama en este plan, el equipo adopta estas reglas como politica operativa:
+
+- si no hay PR, el cambio no existe
+- `main` no recibe pushes directos
+- el autor no mergea hasta revisar checks y contexto del cambio
+- el merge operativo es `Squash and merge`
+- los 5 checks requeridos son:
+  - `backend-test`
+  - `backend-typecheck`
+  - `frontend-build`
+  - `frontend-lint`
+  - `frontend-test`
+
 ## Flujo de trabajo
 
 1. Crea una rama desde `main`.
@@ -43,3 +58,10 @@ npm --prefix frontend run test
 - El cambio debe ser legible y acotado.
 - El PR debe explicar qué cambió, por qué cambió y cómo se validó.
 - Si cambias contratos, flujos o setup, actualiza también la documentación relevante.
+- Si el PR toca más de un subsistema, déjalo como draft hasta cerrar alcance y validación.
+
+## Permisos mínimos recomendados
+
+- colaboradores normales: `Write`
+- admins: solo quienes necesiten gestionar settings o secrets
+- agentes: trabajo por rama y PR, sin bypass sobre `main`
