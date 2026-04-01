@@ -6,6 +6,17 @@ No incluye runtime de estudiante, super admin, auth real ni despliegue cloud end
 
 Este repositorio evoluciona hoy como `ADAM-EDU`. El proyecto deriva del quickstart original de Gemini/LangGraph y conserva esa procedencia para fines de atribucion y trazabilidad, pero su desarrollo activo, gobernanza y flujo de colaboracion viven ya en esta linea de producto.
 
+## Working Agreement
+
+Mientras el repo opere sin enforcement completo de branch protection, `main` se trata como rama protegida por acuerdo operativo:
+
+- nadie empuja directo a `main`
+- todo cambio entra por pull request
+- un PR solo se mergea con los 5 checks de CI en verde
+- el merge operativo estandar es `Squash and merge`
+
+La referencia viva para estas reglas esta en `CONTRIBUTING.md` y `docs/repo-governance.md`.
+
 ## Alcance actual
 
 - `backend/src/case_generator/`: grafo LangGraph, prompts, schemas y servicios de authoring.
