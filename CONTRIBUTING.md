@@ -47,6 +47,8 @@ npm --prefix frontend run test
 - Si el cambio toca más de un subsistema, el PR debe abrirse como draft.
 - Si un agente encuentra cambios ajenos en el árbol, debe preservarlos y trabajar alrededor de ellos.
 
+- Tooling local de agentes, como `.agents/`, no debe commitearse como parte de cambios de producto salvo que el objetivo del PR sea mantener ese tooling deliberadamente.
+
 ## Secretos y entorno
 
 - No subas secretos al repositorio.
