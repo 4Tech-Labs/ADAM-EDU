@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ADAM — Acceso Docente</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'Inter', sans-serif; background: #F0F4F8; color: #1e293b; font-size: 15px; }
+  
+  :root {
+    --brand:      #0144a0;
+    --brand-dark: #00337a;
+    --brand-lt:   #e8f0fe;
+    --muted:      #64748b;
+  }
+
+  /* ── Form Inputs ── */
+  .form-label { display: block; font-size: 14px; font-weight: 700; color: #374151; margin-bottom: 6px; }
+  .form-input {
+    width: 100%; border: 1.5px solid #e2e8f0; border-radius: 10px;
+    padding: 12px 14px; font-size: 15px; color: #1e293b;
+    background: #fff; outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+    font-family: 'Inter', sans-serif;
+  }
+  .form-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(1,68,160,0.1); }
+  .form-input:disabled { background: #f8fafc; color: #94a3b8; cursor: not-allowed; border-color: #f1f5f9; }
+
+  /* ── Buttons ── */
+  .btn-primary {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; padding: 12px 20px; background: var(--brand); color: #fff;
+    font-size: 15px; font-weight: 700; border-radius: 10px;
+    transition: background .14s, box-shadow .14s, transform .1s;
+    white-space: nowrap; border: none; cursor: pointer;
+    box-shadow: 0 4px 12px rgba(1,68,160,.25);
+  }
+  .btn-primary:hover { background: var(--brand-dark); box-shadow: 0 6px 16px rgba(1,68,160,.3); }
+  .btn-primary:active { transform: scale(.98); }
+
+  /* ── Microsoft SSO Button ── */
+  .btn-sso {
+    display: inline-flex; align-items: center; justify-content: center; gap: 12px;
+    width: 100%; padding: 12px 20px; background: #fff; color: #3f3f46;
+    font-size: 15px; font-weight: 600; border-radius: 10px;
+    border: 1.5px solid #e2e8f0; cursor: pointer; transition: all .15s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  }
+  .btn-sso:hover { background: #f8fafc; border-color: #cbd5e1; }
+  .btn-sso:active { transform: scale(.98); }
+
+  /* ── Divider ── */
+  .divider { display: flex; align-items: center; text-align: center; margin: 1.5rem 0; color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1.5px solid #f1f5f9; }
+  .divider:not(:empty)::before { margin-right: 15px; }
+  .divider:not(:empty)::after { margin-left: 15px; }
+
+  /* ── Layout & Animations ── */
+  .split-layout { min-height: 100vh; display: flex; }
+  .left-panel {
+    width: 45%; background: linear-gradient(135deg, #0144a0 0%, #002255 100%);
+    display: flex; flex-direction: column; justify-content: space-between;
+    padding: 3rem; color: white; position: relative; overflow: hidden;
+  }
+  .right-panel {
+    width: 55%; display: flex; align-items: center; justify-content: center;
+    background: white; padding: 2rem; position: relative;
+  }
+
+  /* Abstract background elements for left panel */
+  .bg-shape { position: absolute; border-radius: 50%; background: rgba(255,255,255,0.03); }
+  .shape-1 { width: 400px; height: 400px; top: -100px; left: -100px; }
+  .shape-2 { width: 300px; height: 300px; bottom: -50px; right: -50px; }
+
+  .fade-in { animation: fadeIn 0.4s ease forwards; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* Responsive */
+  @media (max-width: 1024px) {
+    .left-panel { display: none; }
+    .right-panel { width: 100%; }
+  }
+
+  /* ── Dev Toggle (Solo para probar las vistas) ── */
+  .dev-toggle {
+    position: absolute; top: 1.5rem; right: 1.5rem;
+    padding: 8px 12px; font-size: 12px; font-weight: 700;
+    background: #f1f5f9; color: #475569; border-radius: 8px; cursor: pointer;
+    border: 1.5px solid #e2e8f0; transition: all 0.2s;
+  }
+  .dev-toggle:hover { background: #e2e8f0; color: #0f172a; }
+</style>
+</head>
+<body>
+
+<div class="split-layout">
+  
+  <div class="left-panel">
+    <div class="bg-shape shape-1"></div>
+    <div class="bg-shape shape-2"></div>
+    
+    <div class="relative z-10">
+      <div class="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center backdrop-blur-sm border border-white/20 mb-6">
+        <svg class="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/>
+        </svg>
+      </div>
+      <h1 class="text-4xl font-extrabold tracking-tight mb-4">ADAM</h1>
+      <p class="text-xl text-blue-100 font-medium max-w-sm leading-snug">
+        El primer diseñador de casos y actividades académicas impulsado por Inteligencia Artificial.
+      </p>
+    </div>
+
+    <div class="relative z-10">
+      <div class="flex items-center gap-4 p-4 rounded-xl bg-white/10 backdrop-blur-sm border border-white/10 max-w-md">
+        <div class="w-10 h-10 rounded-full bg-blue-500/30 flex items-center justify-center flex-shrink-0 text-white font-bold">💡</div>
+        <div>
+          <p class="text-sm font-bold text-white">Casos listos en segundos</p>
+          <p class="text-[13px] text-blue-200 mt-0.5">Genera simulaciones basadas en el syllabus oficial de tu asignatura.</p>
+        </div>
+      </div>
+      <p class="text-sm text-blue-300/60 mt-8">© 2026 ADAM Platform. Portal Universitario.</p>
+    </div>
+  </div>
+
+  <div class="right-panel">
+    
+    <button onclick="toggleViews()" class="dev-toggle">Alternar a vista de Login</button>
+
+    <div id="view-activation" class="w-full max-w-md fade-in">
+      
+      <div class="flex items-start gap-3 p-4 bg-blue-50 border border-blue-100 rounded-xl mb-8">
+        <div class="w-8 h-8 rounded-full bg-[#0144a0] flex items-center justify-center text-white shrink-0 mt-0.5">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+        </div>
+        <div>
+          <p class="text-sm font-bold text-[#0144a0]">¡Hola, Diana López!</p>
+          <p class="text-sm text-slate-600 mt-0.5 leading-relaxed">La administración te ha asignado al curso <strong>Analítica Predictiva Avanzada</strong>. Completa tu perfil para acceder.</p>
+        </div>
+      </div>
+
+      <h2 class="text-2xl font-extrabold text-slate-900 mb-2">Activa tu cuenta docente</h2>
+      <p class="text-slate-500 mb-6 text-sm">Vincula tu cuenta institucional para un acceso seguro y rápido.</p>
+
+      <button onclick="window.location.href='Dashboard_Portal_Profesor.html'" class="btn-sso">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 21 21">
+          <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+          <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+          <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+          <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+        </svg>
+        Vincular cuenta de Microsoft
+      </button>
+
+      <div class="divider">O crear una contraseña</div>
+
+      <form onsubmit="event.preventDefault(); window.location.href='Dashboard_Portal_Profesor.html'" class="space-y-5">
+        <div>
+          <label class="form-label">Correo asignado</label>
+          <div class="relative">
+            <input type="email" class="form-input" value="diana.lopez@universidad.edu" disabled>
+            <svg class="w-5 h-5 text-slate-400 absolute right-4 top-1/2 -translate-y-1/2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          </div>
+        </div>
+
+        <div>
+          <label class="form-label">Crea una contraseña</label>
+          <input type="password" class="form-input" placeholder="Mínimo 8 caracteres" required>
+        </div>
+
+        <button type="submit" class="btn-primary mt-2">
+          Activar cuenta
+        </button>
+      </form>
+    </div>
+
+    <div id="view-login" class="w-full max-w-sm hidden fade-in">
+      
+      <div class="w-12 h-12 rounded-xl bg-[#0144a0] flex items-center justify-center shadow-md mb-6 lg:hidden">
+        <svg class="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/>
+        </svg>
+      </div>
+
+      <h2 class="text-2xl font-extrabold text-slate-900 mb-2">Bienvenido de nuevo</h2>
+      <p class="text-slate-500 mb-6 text-sm">Ingresa a tu portal docente de ADAM.</p>
+
+      <button onclick="window.location.href='Dashboard_Portal_Profesor.html'" class="btn-sso">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 21 21">
+          <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+          <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+          <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+          <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+        </svg>
+        Continuar con Microsoft
+      </button>
+
+      <div class="divider">O usa tu correo</div>
+
+      <form onsubmit="event.preventDefault(); window.location.href='Dashboard_Portal_Profesor.html'" class="space-y-5">
+        <div>
+          <label class="form-label">Correo electrónico</label>
+          <input type="email" class="form-input" placeholder="ejemplo@universidad.edu" required>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <label class="form-label !mb-0">Contraseña</label>
+            <a href="#" class="text-sm font-bold text-[#0144a0] hover:underline">¿Olvidaste tu contraseña?</a>
+          </div>
+          <input type="password" class="form-input" placeholder="••••••••" required>
+        </div>
+
+        <button type="submit" class="btn-primary mt-2">
+          Iniciar sesión
+        </button>
+      </form>
+
+      <div class="mt-8 pt-6 border-t border-slate-100 text-center">
+        <p class="text-sm text-slate-500">¿Eres un profesor nuevo? <br> Debes hacer clic en el enlace de invitación enviado a tu correo por el administrador.</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  // Función para alternar entre las dos vistas para visualizar ambos diseños
+  let isActivationView = true;
+  function toggleViews() {
+    const actView = document.getElementById('view-activation');
+    const logView = document.getElementById('view-login');
+    const toggleBtn = document.querySelector('.dev-toggle');
+
+    if (isActivationView) {
+      actView.classList.add('hidden');
+      logView.classList.remove('hidden');
+      toggleBtn.textContent = 'Alternar a vista de Invitación';
+    } else {
+      actView.classList.remove('hidden');
+      logView.classList.add('hidden');
+      toggleBtn.textContent = 'Alternar a vista de Login';
+    }
+    isActivationView = !isActivationView;
+  }
+</script>
+
+</body>
+</html>
