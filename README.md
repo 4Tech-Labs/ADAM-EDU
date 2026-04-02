@@ -272,11 +272,23 @@ docker compose down -v
 ## Variables de entorno
 
 - `DATABASE_URL`: DSN principal de PostgreSQL para `shared.database`.
+- `SUPABASE_URL`: metadata del proyecto Supabase usada desde la fase de auth substrate en adelante.
+- `SUPABASE_PROJECT_REF`: ref del proyecto Supabase para tooling y validaciones operativas de auth.
 - `GEMINI_API_KEY`: requerido para authoring real, `/api/suggest` y tests `live_llm`.
 - `CORS_ALLOWED_ORIGIN`: origen extra permitido en produccion.
 - `STORYTELLER_MODEL`: override opcional del modelo usado por `/api/suggest`.
 
 Base de ejemplo: [backend/.env.example](backend/.env.example)
+
+### Nota para Issue 23
+
+El sustrato de identidad de GitHub `#23` mantiene el bridge `users.id == auth.users.id`
+como contrato de datos, pero el entorno local actual sigue usando PostgreSQL por Docker,
+no Supabase Auth local. Eso significa:
+
+- valida esquema y migraciones localmente con PostgreSQL normal
+- valida bridge real contra `auth.users` solo cuando apuntes a Supabase alojado o a una futura ruta `supabase start`
+- si tu base local vieja todavia tiene IDs fake como `teacher-123`, reseteala y reseedala antes de correr la migracion de Issue 23
 
 ## Validacion
 

@@ -50,6 +50,7 @@ uv run pytest -m live_llm -q
 - Keep `backend/.env.example` aligned with actual local defaults.
 - If a change affects setup or schema expectations, update `README.md` in the same PR.
 - Tests may bootstrap schema differently from the app runtime; do not treat that as permission to skip migrations in real app flows.
+- If a migration tightens identity-bridge assumptions, prefer reset/reseed of local data over hand-editing legacy rows to bypass the migration.
 
 ## Sensitive Areas
 
