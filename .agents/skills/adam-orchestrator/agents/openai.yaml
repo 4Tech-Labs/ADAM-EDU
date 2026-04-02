@@ -1,0 +1,6 @@
+interface:
+  display_name: "adam-orchestrator"
+  short_description: "Route ADAM-EDU work by intent into the right gstack workflow."
+  default_prompt: "Use $adam-orchestrator to route this ADAM-EDU request into the right gstack workflow."
+policy:
+  allow_implicit_invocation: true

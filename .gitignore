@@ -201,8 +201,15 @@ cython_debug/
 
 backend/.langgraph_api
 backend/.data/
-.claude/
 .python-version
 backend/.python-version
 skills-lock.json
-.agents/
+.claude/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/adam-orchestrator/
+!.agents/skills/adam-orchestrator/**
+.codex/*
+!.codex/agents/
+!.codex/agents/**

@@ -4,7 +4,7 @@ ADAM-EDU se mantiene con un flujo estricto por pull request. `main` es la rama e
 
 ## Manual Governance
 
-Mientras GitHub no fuerce toda la proteccion de rama en este plan, el equipo adopta estas reglas como politica operativa:
+Mientras GitHub no fuerce toda la proteccion de rama, el equipo adopta estas reglas como politica operativa:
 
 - si no hay PR, el cambio no existe
 - `main` no recibe pushes directos
@@ -25,10 +25,10 @@ Mientras GitHub no fuerce toda la proteccion de rama en este plan, el equipo ado
    - `fix/...`
    - `chore/...`
    - `agent/...`
-3. Mantén cada cambio enfocado. No mezcles funcionalidad, refactor y housekeeping en el mismo PR.
+3. Manten cada cambio enfocado. No mezcles funcionalidad, refactor y housekeeping en el mismo PR.
 4. Ejecuta los checks locales antes de abrir el PR.
 5. Abre un pull request.
-6. Usa `squash merge` cuando el PR esté aprobado y con checks verdes.
+6. Usa `squash merge` cuando el PR este aprobado y con checks verdes.
 
 ## Checks locales obligatorios
 
@@ -44,10 +44,35 @@ npm --prefix frontend run test
 
 - Los agentes trabajan solo por rama y PR.
 - Un agente no debe empujar directo a `main`.
-- Si el cambio toca más de un subsistema, el PR debe abrirse como draft.
-- Si un agente encuentra cambios ajenos en el árbol, debe preservarlos y trabajar alrededor de ellos.
+- Si el cambio toca mas de un subsistema, el PR debe abrirse como draft.
+- Si un agente encuentra cambios ajenos en el arbol, debe preservarlos y trabajar alrededor de ellos.
 
-- Tooling local de agentes, como `.agents/`, no debe commitearse como parte de cambios de producto salvo que el objetivo del PR sea mantener ese tooling deliberadamente.
+- La skill local del proyecto vive en `.agents/skills/adam-orchestrator/`.
+- Los subagentes repo-scoped viven en `.codex/agents/`.
+- El lock y bootstrap de gstack viven en `scripts/agents/`.
+- `.agents/skills/gstack*` y `.claude/skills/*` son runtimes locales generados. No deben commitearse.
+- Si cambias agent tooling, usa rama `agent/...` y PR dedicado.
+- Despues de tocar agent tooling, rerun `bootstrap` y valida el runtime local antes de abrir el PR.
+
+## Workflow compartido de agentes
+
+El equipo trabaja por etapas, no por skills sueltas:
+
+- Think -> Plan -> Build -> Review -> Test -> Ship -> Reflect
+
+El entrypoint por defecto para trabajo sustancial es `adam-orchestrator`. Esa skill decide si el request debe ir a `office-hours`, `investigate`, `review`, `qa`, `ship` u otra skill de `gstack`.
+
+Comandos de bootstrap:
+
+```powershell
+pwsh -File scripts/agents/bootstrap.ps1
+```
+
+```bash
+./scripts/agents/bootstrap.sh
+```
+
+Si una persona ya tiene una instalacion global personal de `gstack`, puede mantenerla como fallback, pero la referencia compartida del equipo sigue siendo el lock pinneado y la configuracion repo-scoped de este repo.
 
 ## Secretos y entorno
 
@@ -55,14 +80,14 @@ npm --prefix frontend run test
 - Usa `backend/.env.example` como plantilla.
 - Los valores reales deben vivir en entornos locales o en GitHub Actions Secrets.
 
-## Criterio de revisión
+## Criterio de revision
 
 - El cambio debe ser legible y acotado.
-- El PR debe explicar qué cambió, por qué cambió y cómo se validó.
-- Si cambias contratos, flujos o setup, actualiza también la documentación relevante.
-- Si el PR toca más de un subsistema, déjalo como draft hasta cerrar alcance y validación.
+- El PR debe explicar que cambio, por que cambio y como se valido.
+- Si cambias contratos, flujos o setup, actualiza tambien la documentacion relevante.
+- Si el PR toca mas de un subsistema, dejalo como draft hasta cerrar alcance y validacion.
 
-## Permisos mínimos recomendados
+## Permisos minimos recomendados
 
 - colaboradores normales: `Write`
 - admins: solo quienes necesiten gestionar settings o secrets
