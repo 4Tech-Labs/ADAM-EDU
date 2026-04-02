@@ -21,6 +21,43 @@ This repository does not currently publish a student runtime, full authenticatio
 - Default merge mode is `Squash and merge`.
 - If a change affects setup, contracts, workflows, or contributor expectations, update the relevant documentation in the same change.
 
+## Shared Agent Tooling
+
+- The repo-scoped routing skill lives in `.agents/skills/adam-orchestrator/`.
+- Repo-scoped custom subagents live in `.codex/agents/`.
+- `scripts/agents/gstack.lock.json` pins the upstream gstack repository, ref, commit, and version used by the team.
+- `.agents/skills/gstack*` and `.claude/skills/*` are generated local runtimes. Rebuild them with:
+  - `pwsh -File scripts/agents/bootstrap.ps1`
+  - or `./scripts/agents/bootstrap.sh`
+- Changes to agent tooling belong in dedicated `agent/...` branches and PRs.
+- If agent tooling changes, update `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and `CLAUDE.md` in the same PR.
+
+## gstack
+
+Use the repo-driven gstack runtime materialized from the pinned lock in `scripts/agents/gstack.lock.json`.
+
+- This repo is Codex-first. Claude support is kept as a compatible bootstrap path, not as the canonical source-of-truth layout.
+- Start substantial work through `adam-orchestrator`.
+- Let `adam-orchestrator` dispatch to the right gstack skill by intent.
+- Use gstack browser skills for browser-heavy QA and manual verification flows.
+
+## Skill routing
+
+- For implementation, debugging, review, QA, release, ideation, design, or security work, invoke `adam-orchestrator` first.
+- `adam-orchestrator` routes the request into the correct gstack workflow. Do not force the user to memorize slash commands.
+- Small read-only questions, code explanations, and narrow factual requests can be answered directly without invoking a workflow.
+- Dispatch defaults:
+  - ideas and brainstorming -> `office-hours`, then `autoplan` or `plan-*`
+  - bugs, errors, regressions -> `investigate`
+  - review of a diff, branch, or PR -> `review`
+  - QA or staging verification -> `qa` or `qa-only`
+  - release preparation -> `ship`, then `land-and-deploy`, `canary`, `document-release`
+  - visual work -> `design-*`
+  - security review -> `cso`
+  - browser-heavy QA -> `browse`, `connect-chrome`, `setup-browser-cookies`
+- One agent owns the branch and final decision path. Use repo-scoped subagents only for bounded read-only sidecars such as `pr_explorer`, `reviewer`, `code_mapper`, independent report-only QA, benchmark, read-only exploration, or post-ship docs.
+- Do not use subagents for merge or deploy authority, scope decisions, conflicting writes, or parallel edits in `backend/src/case_generator/**`.
+
 ## Domain Map
 
 - `backend/src/case_generator/`: authoring business logic, LangGraph orchestration, prompts, schemas, and downstream generation services.

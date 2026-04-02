@@ -34,7 +34,7 @@ La zona funcional principal del generador vive en `backend/src/case_generator/` 
 
 ### Root hygiene
 
-La raiz del repo se mantiene minima y operativa. Artefactos locales como `.claude/`, `.vscode/`, `.mypy_cache/` y `.python-version` no forman parte del repo publicado y no deben usarse como documentacion del proyecto.
+La raiz del repo se mantiene minima y operativa. Artefactos locales generados como `.claude/`, `.vscode/`, `.mypy_cache/` y `.python-version` no forman parte del repo publicado. Las excepciones intencionales de agent tooling son `.agents/skills/adam-orchestrator/`, `.codex/agents/` y `scripts/agents/`.
 
 ## Mapa del backend
 
@@ -97,46 +97,69 @@ El flujo recomendado para contributors es:
 
 Ese flujo da mejor feedback para desarrollo diario, evita rebuilds del contenedor en cada cambio y deja el entorno mas facil de depurar.
 
-## Tooling opcional para Codex
+## Shared agent tooling
 
-La opcion recomendada para el equipo es instalar `gstack` globalmente por usuario, no dentro del repo del producto.
+El repo usa un workflow de agentes Codex-first. La superficie oficial compartida es pequena y auditable:
 
-Eso evita:
+- skill local del proyecto: `.agents/skills/adam-orchestrator/`
+- subagentes repo-scoped: `.codex/agents/`
+- bootstrap y lock pinneado de gstack: `scripts/agents/`
 
-- ensuciar `git status` del proyecto
-- diferencias de line endings o archivos regenerados por `setup`
-- binarios pesados o artefactos locales dentro del repo
-- ruido en PRs y revisiones
+Los runtimes generados siguen siendo locales:
 
-Instalacion recomendada en Windows:
+- Codex: `.agents/skills/gstack*`
+- Claude: `.claude/skills/*`
+
+No edites esos runtimes a mano. Rebuildlos con bootstrap.
+
+Bootstrap recomendado en Windows:
 
 ```powershell
-git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git $HOME\gstack
-cd $HOME\gstack
-& "C:\Program Files\Git\bin\bash.exe" -lc "./setup --host codex"
+pwsh -File scripts/agents/bootstrap.ps1
+pwsh -File scripts/agents/bootstrap.ps1 -RuntimeHost codex
+pwsh -File scripts/agents/bootstrap.ps1 -RuntimeHost claude
 ```
 
-Instalacion equivalente en entornos bash:
+Bootstrap equivalente en entornos bash:
 
 ```bash
-git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/gstack
-cd ~/gstack
-./setup --host codex
+./scripts/agents/bootstrap.sh
+./scripts/agents/bootstrap.sh --host codex
+./scripts/agents/bootstrap.sh --host claude
 ```
 
-Luego reinicia la sesion de Codex para que redescubra las skills.
+`bootstrap`:
 
-En este entorno, las skills se invocan con prefijo `$`, por ejemplo:
+1. lee `scripts/agents/gstack.lock.json`
+2. clona o actualiza `gstack` al commit pinneado dentro del runtime ignorado por git
+3. ejecuta `setup` para el host correspondiente
+4. copia `adam-orchestrator` a `.claude/skills/adam-orchestrator` cuando se pide compatibilidad con Claude
 
-- `$gstack-review`
-- `$gstack-qa`
-- `$gstack-ship`
+El workflow esperado es natural-language-first. El equipo no deberia depender de memorizar skills una por una. El estandar oficial del repo es Codex-first, con Claude como compatibilidad derivada del mismo bootstrap. Para trabajo sustancial:
 
-Nota operativa:
+- el primer router es `adam-orchestrator`
+- `adam-orchestrator` despacha a la skill correcta de `gstack`
+- preguntas pequenas, read-only o puramente explicativas pueden resolverse inline
 
-- `.agents/` se trata como tooling local y no forma parte del flujo normal de versionado del repo.
-- No corras `setup` de `gstack` dentro del repo del producto como rutina diaria.
-- Si necesitas actualizar tu instalacion local de `gstack`, hazlo en tu copia global (`$HOME\gstack` o `~/gstack`), no en `ADAM-EDU`.
+Ver guia completa: [docs/agent-workflow.md](docs/agent-workflow.md)
+
+### Actualizar el pin de gstack
+
+Hazlo solo en un PR dedicado `agent/...`:
+
+```powershell
+pwsh -File scripts/agents/update-gstack-lock.ps1
+```
+
+```bash
+./scripts/agents/update-gstack-lock.sh
+```
+
+Luego rerun `bootstrap` y valida el runtime local.
+
+### Fallback individual
+
+Si alguien prefiere una instalacion global fuera del repo, puede mantenerla como entorno personal. No es la ruta principal del equipo y no sustituye el lock pinneado ni la skill local versionada en este repo.
 
 ### Prerrequisitos
 
@@ -252,7 +275,7 @@ docker compose down -v
 - `CORS_ALLOWED_ORIGIN`: origen extra permitido en produccion.
 - `STORYTELLER_MODEL`: override opcional del modelo usado por `/api/suggest`.
 
-Base de ejemplo: [backend/.env.example](C:/Users/Juan%20Camilo%20Dorado/Downloads/ADAM-EDU/backend/.env.example)
+Base de ejemplo: [backend/.env.example](backend/.env.example)
 
 ## Validacion
 
@@ -275,4 +298,5 @@ La suite default no debe tocar Gemini ni depender de side effects externos. Los 
 
 ## Para contributors
 
-Lee [CLAUDE.md](C:/Users/Juan%20Camilo%20Dorado/Downloads/ADAM-EDU/CLAUDE.md) antes de abrir cambios grandes.
+Lee [CLAUDE.md](CLAUDE.md) antes de abrir cambios grandes.
+Lee [docs/agent-workflow.md](docs/agent-workflow.md) si vas a trabajar con Codex, Claude o tooling de agentes.

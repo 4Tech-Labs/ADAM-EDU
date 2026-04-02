@@ -15,6 +15,8 @@
   - `frontend-test`
 - El mecanismo de merge por defecto es `Squash and merge`.
 - Si no hay PR, el cambio no existe.
+- Cambios a tooling compartido de agentes (`.agents/skills/adam-orchestrator/`, `.codex/agents/`, `scripts/agents/`) deben entrar por ramas `agent/...` y PR dedicado.
+- Los runtimes locales `.agents/skills/gstack*` y `.claude/skills/*` no forman parte del arbol versionado del producto.
 
 ## Permisos recomendados
 

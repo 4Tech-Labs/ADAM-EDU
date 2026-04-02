@@ -29,6 +29,35 @@ This repository does not currently include a student runtime, full authenticatio
 - `docs/repo-governance.md`: repository governance and merge policy
 - `CLAUDE.md`: equivalent agent guidance for Claude-oriented tooling
 
+## Shared Agent Tooling
+
+- This repo is Codex-first. Claude remains a supported compatibility path, but it does not define the canonical repo layout.
+- The repo-scoped routing skill lives in `.agents/skills/adam-orchestrator/`.
+- Repo-scoped custom subagents live in `.codex/agents/`.
+- `scripts/agents/gstack.lock.json` pins the upstream gstack repository, ref, commit, and version used by the team.
+- `.agents/skills/gstack*` and `.claude/skills/*` are generated local runtimes. Keep them out of git and rebuild them with:
+  - `pwsh -File scripts/agents/bootstrap.ps1`
+  - or `./scripts/agents/bootstrap.sh`
+- Changes to agent tooling belong in dedicated `agent/...` branches and PRs.
+- If agent tooling changes, update `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and `CLAUDE.md` in the same PR.
+
+## Skill Routing
+
+- For substantial implementation, debugging, review, QA, release, ideation, design, or security work, invoke `adam-orchestrator` first.
+- `adam-orchestrator` routes the request into the right gstack workflow. Do not make the user memorize individual skills.
+- Small read-only questions, code explanations, and narrow factual requests can be answered directly without a workflow.
+- Dispatch defaults:
+  - ideas and brainstorming -> `office-hours`, then `autoplan` or `plan-*`
+  - bugs, errors, regressions -> `investigate`
+  - review of a diff, branch, or PR -> `review`
+  - QA or staging verification -> `qa` or `qa-only`
+  - release preparation -> `ship`, then `land-and-deploy`, `canary`, `document-release`
+  - visual work -> `design-*`
+  - security review -> `cso`
+  - browser-heavy QA -> `browse`, `connect-chrome`, `setup-browser-cookies`
+- One agent owns the branch and final decision path. Use repo-scoped subagents only for bounded read-only sidecars such as `pr_explorer`, `reviewer`, `code_mapper`, independent report-only QA, benchmark, read-only exploration, or post-ship docs.
+- Do not use subagents for merge or deploy authority, scope decisions, conflicting writes, or parallel edits in `backend/src/case_generator/**`.
+
 ## Architecture Boundaries
 
 - `backend/src/case_generator/` owns authoring business logic, prompts, schemas, and graph execution.
