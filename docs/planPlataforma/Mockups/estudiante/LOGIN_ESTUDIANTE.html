@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ADAM — Acceso Estudiantes</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'Inter', sans-serif; background: #F0F4F8; color: #1e293b; font-size: 15px; }
+  
+  :root {
+    --brand:      #0144a0;
+    --brand-dark: #00337a;
+    --brand-lt:   #e8f0fe;
+    --muted:      #64748b;
+  }
+
+  /* ── Form Inputs ── */
+  .form-label { display: block; font-size: 14px; font-weight: 700; color: #374151; margin-bottom: 6px; }
+  .form-input {
+    width: 100%; border: 1.5px solid #e2e8f0; border-radius: 10px;
+    padding: 12px 14px; font-size: 15px; color: #1e293b;
+    background: #fff; outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+    font-family: 'Inter', sans-serif;
+  }
+  .form-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(1,68,160,0.1); }
+  .form-input:disabled { background: #f8fafc; color: #94a3b8; cursor: not-allowed; border-color: #f1f5f9; }
+
+  /* ── Buttons ── */
+  .btn-primary {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; padding: 12px 20px; background: var(--brand); color: #fff;
+    font-size: 15px; font-weight: 700; border-radius: 10px;
+    transition: background .14s, box-shadow .14s, transform .1s;
+    white-space: nowrap; border: none; cursor: pointer;
+    box-shadow: 0 4px 12px rgba(1,68,160,.25);
+  }
+  .btn-primary:hover { background: var(--brand-dark); box-shadow: 0 6px 16px rgba(1,68,160,.3); }
+  .btn-primary:active { transform: scale(.98); }
+
+  /* ── Microsoft SSO Button ── */
+  .btn-sso {
+    display: inline-flex; align-items: center; justify-content: center; gap: 12px;
+    width: 100%; padding: 12px 20px; background: #fff; color: #3f3f46;
+    font-size: 15px; font-weight: 600; border-radius: 10px;
+    border: 1.5px solid #e2e8f0; cursor: pointer; transition: all .15s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  }
+  .btn-sso:hover { background: #f8fafc; border-color: #cbd5e1; }
+  .btn-sso:active { transform: scale(.98); }
+
+  /* ── Divider ── */
+  .divider { display: flex; align-items: center; text-align: center; margin: 1.5rem 0; color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1.5px solid #f1f5f9; }
+  .divider:not(:empty)::before { margin-right: 15px; }
+  .divider:not(:empty)::after { margin-left: 15px; }
+
+  /* ── Layout & Animations ── */
+  .split-layout { min-height: 100vh; display: flex; }
+  .left-panel {
+    width: 45%; background: linear-gradient(135deg, #0144a0 0%, #002255 100%);
+    display: flex; flex-direction: column; justify-content: space-between;
+    padding: 3rem; color: white; position: relative; overflow: hidden;
+  }
+  .right-panel {
+    width: 55%; display: flex; align-items: center; justify-content: center;
+    background: white; padding: 2rem; position: relative;
+  }
+
+  /* Abstract background elements for left panel */
+  .bg-shape { position: absolute; border-radius: 50%; background: rgba(255,255,255,0.03); }
+  .shape-1 { width: 400px; height: 400px; top: -100px; left: -100px; }
+  .shape-2 { width: 300px; height: 300px; bottom: -50px; right: -50px; }
+
+  .fade-in { animation: fadeIn 0.4s ease forwards; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* Responsive */
+  @media (max-width: 1024px) {
+    .left-panel { display: none; }
+    .right-panel { width: 100%; }
+  }
+
+  /* ── Dev Toggle ── */
+  .dev-toggle {
+    position: absolute; top: 1.5rem; right: 1.5rem;
+    padding: 8px 12px; font-size: 12px; font-weight: 700;
+    background: #f1f5f9; color: #475569; border-radius: 8px; cursor: pointer;
+    border: 1.5px solid #e2e8f0; transition: all 0.2s;
+  }
+  .dev-toggle:hover { background: #e2e8f0; color: #0f172a; }
+</style>
+</head>
+<body>
+
+<div class="split-layout">
+  
+  <div class="left-panel">
+    <div class="bg-shape shape-1"></div>
+    <div class="bg-shape shape-2"></div>
+    
+    <div class="relative z-10">
+      <div class="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center backdrop-blur-sm border border-white/20 mb-6">
+        <svg class="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+        </svg>
+      </div>
+      <h1 class="text-4xl font-extrabold tracking-tight mb-4">ADAM</h1>
+      <p class="text-xl text-blue-100 font-medium max-w-sm leading-snug">
+        Aprende resolviendo. Accede a casos de estudio interactivos diseñados para tu carrera.
+      </p>
+    </div>
+
+    <div class="relative z-10">
+      <div class="flex items-center gap-4 p-4 rounded-xl bg-white/10 backdrop-blur-sm border border-white/10 max-w-md">
+        <div class="w-10 h-10 rounded-full bg-blue-500/30 flex items-center justify-center flex-shrink-0 text-white font-bold">🚀</div>
+        <div>
+          <p class="text-sm font-bold text-white">Impulsa tu análisis estratégico</p>
+          <p class="text-[13px] text-blue-200 mt-0.5">Enfrenta dilemas gerenciales reales y pon a prueba tus conocimientos.</p>
+        </div>
+      </div>
+      <p class="text-sm text-blue-300/60 mt-8">© 2026 ADAM Platform. Portal Estudiantil.</p>
+    </div>
+  </div>
+
+  <div class="right-panel">
+    
+    <button onclick="toggleViews()" class="dev-toggle">Probar vista de Invitación</button>
+
+    <div id="view-login" class="w-full max-w-sm fade-in">
+      
+      <div class="w-12 h-12 rounded-xl bg-[#0144a0] flex items-center justify-center shadow-md mb-6 lg:hidden">
+        <svg class="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+        </svg>
+      </div>
+
+      <h2 class="text-2xl font-extrabold text-slate-900 mb-2">Portal Estudiantil</h2>
+      <p class="text-slate-500 mb-6 text-sm">Ingresa para acceder a tus casos y simulaciones.</p>
+
+      <button onclick="window.location.href='Dashboard_Portal_Estudiante.html'" class="btn-sso">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 21 21">
+          <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+          <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+          <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+          <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+        </svg>
+        Continuar con cuenta Institucional
+      </button>
+
+      <div class="divider">O usa tu correo</div>
+
+      <form onsubmit="event.preventDefault(); window.location.href='Dashboard_Portal_Estudiante.html'" class="space-y-5">
+        <div>
+          <label class="form-label">Correo electrónico</label>
+          <input type="email" class="form-input" placeholder="ejemplo@estudiantes.edu" required>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <label class="form-label !mb-0">Contraseña</label>
+            <a href="#" class="text-sm font-bold text-[#0144a0] hover:underline">¿Olvidaste tu contraseña?</a>
+          </div>
+          <input type="password" class="form-input" placeholder="••••••••" required>
+        </div>
+
+        <button type="submit" class="btn-primary mt-2">
+          Iniciar sesión
+        </button>
+      </form>
+
+      <div class="mt-8 pt-6 border-t border-slate-100 text-center">
+        <p class="text-sm text-slate-500">¿Tienes un código de clase nuevo? <br> <span class="font-semibold text-slate-700">Inicia sesión y úsalo directamente en tu panel.</span></p>
+      </div>
+    </div>
+
+    <div id="view-invite" class="w-full max-w-sm hidden fade-in">
+      
+      <div class="bg-blue-50/50 border border-blue-200 rounded-xl p-4 mb-8 text-center shadow-sm relative overflow-hidden">
+        <div class="absolute top-0 left-0 w-full h-1 bg-[#0144a0]"></div>
+        <div class="w-12 h-12 bg-white rounded-full mx-auto flex items-center justify-center shadow-sm mb-3 text-[#0144a0]">
+          <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 14l9-5-9-5-9 5 9 5z" /><path stroke-linecap="round" stroke-linejoin="round" d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" /></svg>
+        </div>
+        <p class="text-xs font-bold text-blue-600 uppercase tracking-wide mb-1">Has sido invitado a la clase:</p>
+        <h3 class="text-base font-bold text-slate-900 leading-tight mb-1">Gerencia Estratégica y Modelos de Negocio</h3>
+        <p class="text-sm text-slate-500 font-medium">Prof. Julio César Paz</p>
+      </div>
+
+      <h2 class="text-2xl font-extrabold text-slate-900 mb-2">Confirma tu identidad</h2>
+      <p class="text-slate-500 mb-6 text-sm">Inicia sesión para matricularte automáticamente en este curso.</p>
+
+      <button onclick="window.location.href='Dashboard_Portal_Estudiante.html'" class="btn-sso">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 21 21">
+          <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+          <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+          <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+          <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+        </svg>
+        Matricularme con Microsoft
+      </button>
+
+      <div class="divider">O usa tu correo</div>
+
+      <form onsubmit="event.preventDefault(); window.location.href='Dashboard_Portal_Estudiante.html'" class="space-y-4">
+        <div>
+          <input type="email" class="form-input" placeholder="Correo electrónico" required>
+        </div>
+        <div>
+          <input type="password" class="form-input" placeholder="Contraseña" required>
+        </div>
+        <button type="submit" class="btn-primary mt-2">
+          Matricularme e ingresar
+        </button>
+      </form>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  let isNormalLogin = true;
+  function toggleViews() {
+    const loginView = document.getElementById('view-login');
+    const inviteView = document.getElementById('view-invite');
+    const toggleBtn = document.querySelector('.dev-toggle');
+
+    if (isNormalLogin) {
+      loginView.classList.add('hidden');
+      inviteView.classList.remove('hidden');
+      toggleBtn.textContent = 'Probar vista de Login normal';
+    } else {
+      loginView.classList.remove('hidden');
+      inviteView.classList.add('hidden');
+      toggleBtn.textContent = 'Probar vista de Invitación';
+    }
+    isNormalLogin = !isNormalLogin;
+  }
+</script>
+
+</body>
+</html>
