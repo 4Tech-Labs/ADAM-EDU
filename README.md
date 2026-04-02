@@ -30,6 +30,7 @@ La zona funcional principal del generador vive en `backend/src/case_generator/` 
 - `docker-compose.yml`: stack local de desarrollo. Levanta la base PostgreSQL del proyecto y deja listo el entorno local base.
 - `Dockerfile`: build contenedorizado del stack publicado. Se conserva para empaquetado del backend con el frontend compilado.
 - `Makefile`: atajos opcionales para desarrollo en entornos Unix-like. Es conveniencia local, no la ruta principal de trabajo en Windows.
+- `docs/adr/`: architecture decision records aceptados. Aqui vive la decision canonica del auth perimeter de Fase 1.
 - `docs/archive/MASTER_AUDIT_PLAN.md`: auditoria historica archivada. Se conserva como referencia, pero ya no gobierna el alcance operativo del repo.
 
 ### Root hygiene
@@ -299,4 +300,5 @@ La suite default no debe tocar Gemini ni depender de side effects externos. Los 
 ## Para contributors
 
 Lee [CLAUDE.md](CLAUDE.md) antes de abrir cambios grandes.
+Lee [docs/adr/0001-auth-perimeter-fase1.md](docs/adr/0001-auth-perimeter-fase1.md) si vas a tocar auth, tenancy o trust boundaries de Fase 1.
 Lee [docs/agent-workflow.md](docs/agent-workflow.md) si vas a trabajar con Codex, Claude o tooling de agentes.
