@@ -35,9 +35,9 @@ def _setup_mock_job(db, job_status="pending"):
         db.add(tenant)
         db.commit()
 
-    teacher = db.query(User).filter(User.role == "Teacher").first()
+    teacher = db.query(User).filter(User.role == "teacher").first()
     if not teacher:
-        teacher = User(tenant_id=tenant.id, email=f"test{uuid.uuid4()}@adam.edu", role="Teacher")
+        teacher = User(tenant_id=tenant.id, email=f"test{uuid.uuid4()}@adam.edu", role="teacher")
         db.add(teacher)
         db.commit()
 

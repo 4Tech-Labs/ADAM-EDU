@@ -116,7 +116,7 @@ def create_authoring_job(
             db.add(tenant)
             db.commit()
             db.refresh(tenant)
-        teacher = User(id=req.teacher_id, tenant_id=tenant.id, email=f"{req.teacher_id}@adam.edu", role="Teacher")
+        teacher = User(id=req.teacher_id, tenant_id=tenant.id, email=f"{req.teacher_id}@adam.edu", role="teacher")
         db.add(teacher)
         db.commit()
 

@@ -1,0 +1,59 @@
+-- Issue #23 secondary RLS policies.
+-- Backend SQLAlchemy remains the primary authorization boundary.
+-- Any invite token hash comparison performed outside SQL must use
+-- hmac.compare_digest() in the backend auth flows introduced after this issue.
+
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE memberships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE courses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE course_memberships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE allowed_email_domains ENABLE ROW LEVEL SECURITY;
+ALTER TABLE university_sso_configs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY profiles_self ON profiles
+  FOR ALL
+  USING (id = auth.uid()::text)
+  WITH CHECK (id = auth.uid()::text);
+
+CREATE POLICY memberships_self ON memberships
+  FOR SELECT
+  USING (user_id = auth.uid()::text);
+
+CREATE POLICY courses_by_university ON courses
+  FOR SELECT
+  USING (
+    university_id IN (
+      SELECT m.university_id
+      FROM memberships m
+      WHERE m.user_id = auth.uid()::text
+        AND m.status = 'active'
+    )
+  );
+
+CREATE POLICY course_memberships_self ON course_memberships
+  FOR SELECT
+  USING (
+    membership_id IN (
+      SELECT m.id
+      FROM memberships m
+      WHERE m.user_id = auth.uid()::text
+        AND m.status = 'active'
+    )
+  );
+
+-- Backend-managed tables stay deny-all from client-side access.
+CREATE POLICY deny_all ON invites
+  FOR ALL
+  USING (false)
+  WITH CHECK (false);
+
+CREATE POLICY deny_all ON allowed_email_domains
+  FOR ALL
+  USING (false)
+  WITH CHECK (false);
+
+CREATE POLICY deny_all ON university_sso_configs
+  FOR ALL
+  USING (false)
+  WITH CHECK (false);

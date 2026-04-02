@@ -10,6 +10,9 @@ from shared.models import Assignment, AuthoringJob
 
 client = TestClient(app)
 
+TEACHER_ID = "00000000-0000-0000-0000-000000000102"
+ERROR_TEACHER_ID = "00000000-0000-0000-0000-000000000103"
+
 
 async def _successful_astream(*args, **kwargs):
     """Stub the LangGraph stream with a single final state."""
@@ -32,7 +35,7 @@ def test_phase1b_intake_and_authoring_stubbed() -> None:
     The LangGraph stream is stubbed so BackgroundTasks can execute deterministically.
     """
     payload = {
-        "teacher_id": "phase1b-test-teacher",
+        "teacher_id": TEACHER_ID,
         "assignment_title": "Phase 1B Integration Test Title",
     }
 
@@ -101,7 +104,7 @@ def test_phase1b_intake_and_authoring_stubbed() -> None:
 def test_phase1b_authoring_service_failure() -> None:
     """Test how the system handles exceptions from LangGraph stream execution."""
     payload = {
-        "teacher_id": "phase1b-error-teacher",
+        "teacher_id": ERROR_TEACHER_ID,
         "assignment_title": "Phase 1B Error Test Title",
     }
 
