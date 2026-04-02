@@ -7,6 +7,8 @@ from shared.models import Assignment, AuthoringJob
 
 client = TestClient(app)
 
+TEACHER_ID = "00000000-0000-0000-0000-000000000101"
+
 def test_database_connection():
     """Verify that we can connect to the database and tables exist."""
     db = SessionLocal()
@@ -26,7 +28,7 @@ def test_intake_and_idempotency_workflow():
     """
     # 1. Test Intake Endpoint
     payload = {
-        "teacher_id": "smoke-test-teacher",
+        "teacher_id": TEACHER_ID,
         "assignment_title": "Post-Hardening Smoke Test Verification"
     }
     with patch("fastapi.BackgroundTasks.add_task"):
@@ -138,6 +140,19 @@ def test_intake_and_idempotency_workflow():
     # Assert the execution was safely bypassed without errors
     assert response_data.get("status") == "bypassed"
     assert "idempotency_barrier" in response_data.get("reason", "")
+
+
+def test_intake_rejects_non_uuid_teacher_ids() -> None:
+    payload = {
+        "teacher_id": "teacher-123",
+        "assignment_title": "Should Fail",
+    }
+
+    with patch("fastapi.BackgroundTasks.add_task"):
+        response = client.post("/api/authoring/jobs", json=payload)
+
+    assert response.status_code == 422
+    assert "teacher_id must be a UUID string compatible with Supabase Auth" in response.text
 
 if __name__ == "__main__":
     print("Running Smoke Tests...")

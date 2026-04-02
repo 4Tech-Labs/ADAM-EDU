@@ -17,8 +17,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Set the SQLAlchemy URL from our application settings safely
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Allow tests to override the URL explicitly while keeping app settings as the default.
+configured_url = config.get_main_option("sqlalchemy.url")
+if not configured_url or configured_url == "driver://user:pass@localhost/dbname":
+    config.set_main_option("sqlalchemy.url", settings.database_url)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

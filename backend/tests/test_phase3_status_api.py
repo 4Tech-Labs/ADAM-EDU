@@ -8,6 +8,7 @@ from shared.database import SessionLocal, Base, engine
 from shared.models import AuthoringJob, Assignment, User, Tenant
 
 client = TestClient(app)
+TEACHER_ID = "00000000-0000-0000-0000-000000000104"
 
 def setup_db():
     Base.metadata.create_all(bind=engine)
@@ -21,7 +22,7 @@ def setup_db():
         
     teacher = db.query(User).filter(User.email=="teacher@test.edu").first()
     if not teacher:
-        teacher = User(id="teacher-123", tenant_id=tenant.id, email="teacher@test.edu", role="Teacher")
+        teacher = User(id=TEACHER_ID, tenant_id=tenant.id, email="teacher@test.edu", role="teacher")
         db.add(teacher)
         db.commit()
     
@@ -32,7 +33,7 @@ from unittest.mock import patch
 def test_polling_happy_path(db):
     print("\n--- Test 1: Polling Happy Path ---")
     intake_data = {
-        "teacher_id": "teacher-123",
+        "teacher_id": TEACHER_ID,
         "assignment_title": "Test Phase 3",
         "subject": "Finance",
         "academic_level": "MBA",
@@ -127,7 +128,7 @@ def test_job_not_found():
 def test_failed_job_path(db):
     print("\n--- Test 3: Failed Job Status & Trace ---")
     intake_data = {
-        "teacher_id": "teacher-123",
+        "teacher_id": TEACHER_ID,
         "assignment_title": "Fail Test"
     }
     with patch("fastapi.BackgroundTasks.add_task"):

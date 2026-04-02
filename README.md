@@ -272,11 +272,25 @@ docker compose down -v
 ## Variables de entorno
 
 - `DATABASE_URL`: DSN principal de PostgreSQL para `shared.database`.
+- `SUPABASE_URL`: metadata del proyecto Supabase usada desde la fase de auth substrate en adelante.
+- `SUPABASE_PROJECT_REF`: ref del proyecto Supabase para tooling y validaciones operativas de auth.
 - `GEMINI_API_KEY`: requerido para authoring real, `/api/suggest` y tests `live_llm`.
 - `CORS_ALLOWED_ORIGIN`: origen extra permitido en produccion.
 - `STORYTELLER_MODEL`: override opcional del modelo usado por `/api/suggest`.
 
 Base de ejemplo: [backend/.env.example](backend/.env.example)
+
+### Nota para Issue 23
+
+El sustrato de identidad de GitHub `#23` mantiene el bridge `users.id == auth.users.id`
+como contrato de datos, pero el entorno local actual sigue usando PostgreSQL por Docker,
+no Supabase Auth local. Eso significa:
+
+- valida esquema y migraciones localmente con PostgreSQL normal
+- valida bridge real contra `auth.users` solo cuando apuntes a Supabase alojado o a una futura ruta `supabase start`
+- si tu base local vieja todavia tiene IDs fake como `teacher-123`, reseteala y reseedala antes de correr la migracion de Issue 23
+- `backend/sql/rls_policies.sql` es un entregable separado de Alembic y no se aplica con `uv run alembic upgrade head`
+- esas policies dependen de `auth.uid()`, asi que solo deben aplicarse en Supabase o en un entorno local que realmente exponga el schema Auth compatible
 
 ## Validacion
 
@@ -292,6 +306,8 @@ Base de ejemplo: [backend/.env.example](backend/.env.example)
   `RUN_LIVE_LLM_TESTS=1 uv run --directory backend pytest -m live_llm -q`
 
 La suite default no debe tocar Gemini ni depender de side effects externos. Los tests `live_llm` quedan aislados detras de `RUN_LIVE_LLM_TESTS=1`.
+
+La prueba de migracion de Issue 23 crea y elimina bases temporales para validar upgrade y downgrade de Alembic. Con los defaults locales funciona porque el usuario `postgres` tiene permisos amplios sobre el contenedor local. Si apuntas a otro Postgres, asegurate de tener permisos `CREATE DATABASE` y `DROP DATABASE` o esa prueba fallara aunque el codigo este bien.
 
 ## Nota historica
 

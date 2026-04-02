@@ -4,7 +4,18 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,6 +25,9 @@ from shared.database import Base
 def generate_uuid() -> str:
     """Return a UUID string compatible with existing VARCHAR primary keys."""
     return str(uuid.uuid4())
+
+
+UUID_TEXT_CHECK = r"id ~* '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'"
 
 
 # --- TEACHER AUTHORING MVP SCHEMA ---
@@ -34,14 +48,23 @@ class Tenant(Base):
     )
 
     users: Mapped[list["User"]] = relationship(back_populates="tenant")
+    memberships: Mapped[list["Membership"]] = relationship(back_populates="university")
+    invites: Mapped[list["Invite"]] = relationship(back_populates="university")
+    allowed_email_domains: Mapped[list["AllowedEmailDomain"]] = relationship(back_populates="university")
+    courses: Mapped[list["Course"]] = relationship(back_populates="university")
+    sso_configs: Mapped[list["UniversitySsoConfig"]] = relationship(back_populates="university")
 
 
 class User(Base):
     """
-    System user, representing roles for both 'Teacher' and 'Student'.
+    Legacy bridge user record. Role values are normalized to lowercase.
     """
 
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(UUID_TEXT_CHECK, name="ck_users_id_auth_uuid"),
+        CheckConstraint("role IN ('teacher', 'student', 'university_admin')", name="ck_users_role"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
@@ -55,6 +78,173 @@ class User(Base):
     tenant: Mapped["Tenant"] = relationship(back_populates="users")
     assignments: Mapped[list["Assignment"]] = relationship(back_populates="teacher")
     artifacts: Mapped[list["ArtifactManifest"]] = relationship(back_populates="owner")
+
+
+class Profile(Base):
+    """Identity profile keyed by the Supabase Auth user id stored as text."""
+
+    __tablename__ = "profiles"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    full_name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    memberships: Mapped[list["Membership"]] = relationship(back_populates="user")
+
+
+class Membership(Base):
+    """University membership keyed off the identity profile, not legacy teacher ids."""
+
+    __tablename__ = "memberships"
+    __table_args__ = (
+        UniqueConstraint("user_id", "university_id", "role", name="uix_membership_user_university_role"),
+        CheckConstraint("role IN ('teacher', 'student', 'university_admin')", name="ck_memberships_role"),
+        CheckConstraint("status IN ('active', 'suspended')", name="ck_memberships_status"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    user_id: Mapped[str] = mapped_column(Text, ForeignKey("profiles.id"), nullable=False, index=True)
+    university_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    must_rotate_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    user: Mapped["Profile"] = relationship(back_populates="memberships")
+    university: Mapped["Tenant"] = relationship(back_populates="memberships")
+    courses_as_teacher: Mapped[list["Course"]] = relationship(back_populates="teacher_membership")
+    course_memberships: Mapped[list["CourseMembership"]] = relationship(back_populates="membership")
+
+
+class AllowedEmailDomain(Base):
+    """Institutional domains allowed for invite-gated student activation."""
+
+    __tablename__ = "allowed_email_domains"
+    __table_args__ = (
+        UniqueConstraint("university_id", "domain", name="uix_allowed_email_domain"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    university_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False, index=True)
+    domain: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    university: Mapped["Tenant"] = relationship(back_populates="allowed_email_domains")
+
+
+class Course(Base):
+    """Course ownership moves through teacher memberships, not legacy user ids."""
+
+    __tablename__ = "courses"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    university_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    teacher_membership_id: Mapped[str] = mapped_column(Text, ForeignKey("memberships.id"), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    university: Mapped["Tenant"] = relationship(back_populates="courses")
+    teacher_membership: Mapped["Membership"] = relationship(back_populates="courses_as_teacher")
+    invites: Mapped[list["Invite"]] = relationship(back_populates="course")
+    course_memberships: Mapped[list["CourseMembership"]] = relationship(back_populates="course")
+
+
+class Invite(Base):
+    """Invite is the only pre-activation artifact in the auth substrate."""
+
+    __tablename__ = "invites"
+    __table_args__ = (
+        CheckConstraint("role IN ('teacher', 'student')", name="ck_invites_role"),
+        CheckConstraint("status IN ('pending', 'consumed', 'expired', 'revoked')", name="ck_invites_status"),
+        CheckConstraint("role <> 'student' OR course_id IS NOT NULL", name="ck_invites_student_requires_course"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    university_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    course_id: Mapped[str | None] = mapped_column(Text, ForeignKey("courses.id"), nullable=True)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    university: Mapped["Tenant"] = relationship(back_populates="invites")
+    course: Mapped["Course | None"] = relationship(back_populates="invites")
+
+
+class CourseMembership(Base):
+    """Enrollment links a course to a membership, never directly to a user id."""
+
+    __tablename__ = "course_memberships"
+    __table_args__ = (
+        UniqueConstraint("course_id", "membership_id", name="uix_course_membership"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    course_id: Mapped[str] = mapped_column(Text, ForeignKey("courses.id"), nullable=False, index=True)
+    membership_id: Mapped[str] = mapped_column(Text, ForeignKey("memberships.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    course: Mapped["Course"] = relationship(back_populates="course_memberships")
+    membership: Mapped["Membership"] = relationship(back_populates="course_memberships")
+
+
+class UniversitySsoConfig(Base):
+    """University-scoped SSO configuration, even while rollout stays single-tenant."""
+
+    __tablename__ = "university_sso_configs"
+    __table_args__ = (
+        UniqueConstraint("university_id", "provider", name="uix_university_sso_config"),
+        CheckConstraint("provider IN ('azure')", name="ck_university_sso_provider"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    university_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    azure_tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    client_id: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    university: Mapped["Tenant"] = relationship(back_populates="sso_configs")
 
 
 class Assignment(Base):
