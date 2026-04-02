@@ -26,6 +26,7 @@ This repository does not currently include a student runtime, full authenticatio
 
 - `README.md`: onboarding, local setup, Docker, Alembic, runtime commands
 - `CONTRIBUTING.md`: branch, PR, validation, and collaboration workflow
+- `docs/adr/`: accepted architecture decisions, including the Fase 1 auth perimeter ADR
 - `docs/repo-governance.md`: repository governance and merge policy
 - `CLAUDE.md`: equivalent agent guidance for Claude-oriented tooling
 

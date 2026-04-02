@@ -8,6 +8,7 @@ entender el alcance, los contratos y los criterios de aceptacion.
 
 ## Referencias
 
+- ADR canonico Fase 1: [0001-auth-perimeter-fase1.md](../adr/0001-auth-perimeter-fase1.md)
 - Fuente funcional: [Parte1-Inicio-Registro.md](./Parte1-Inicio-Registro.md)
 - Mockup docente: [LOGIN_PROFESOR.HTML](./Mockups/profesor/LOGIN_PROFESOR.HTML)
 - Mockup estudiante: [LOGIN_ESTUDIANTE.html](./Mockups/estudiante/LOGIN_ESTUDIANTE.html)
@@ -273,6 +274,8 @@ explicitas y criterios de aceptacion testeables.
 
 **Tipo:** `Infra`
 
+**GitHub Tracking:** `#24`
+
 **Dependencias:** ninguna
 
 **Descripcion:**
@@ -281,6 +284,10 @@ con auth real. El ADR debe fijar trust boundaries, aclarar por que el monolito a
 mantiene hasta cerrar auth perimeter, y documentar que el split `public-api` /
 `authoring-worker` ocurre despues, no antes.
 
+**Entregable canonico:** `docs/adr/0001-auth-perimeter-fase1.md`
+
+**Issue del plan habilitado por este ADR:** `Feature: auth perimeter backend y contratos body-only de activacion/redencion`
+
 **Tareas (Checklist):**
 
 - [ ] Documentar el estado real del repo:
@@ -288,19 +295,30 @@ mantiene hasta cerrar auth perimeter, y documentar que el split `public-api` /
   - frontend shell docente bajo `/app/teacher`
   - `teacher_id` enviado por el cliente
   - autocreacion de `Tenant/User` en `POST /api/authoring/jobs`
+- [ ] Incluir seccion `Current insecure state` con evidencia del repo actual.
+- [ ] Incluir matriz `boundary / accepted credential / source of truth / rejected input / owner`.
 - [ ] Documentar que Supabase Auth es source of truth de identidad.
 - [ ] Documentar que Supabase Postgres es el unico plano de datos para acceso.
 - [ ] Documentar que FastAPI sigue siendo el application plane y que el frontend no usa
       PostgREST para datos de dominio.
+- [ ] Fijar que el frontend solo puede usar Supabase para auth y session management.
 - [ ] Fijar que JWT se verifica localmente con JWKS, `issuer` y `audience`.
 - [ ] Dejar `SUPABASE_JWT_SECRET` solo como fallback local, nunca como camino primario de
       produccion.
 - [ ] Fijar que no hay custom claims en la ruta critica.
 - [ ] Fijar que RLS es defensa secundaria y no reemplaza el auth perimeter del backend.
+- [ ] Fijar el contrato `Bearer JWT -> JWKS/issuer/audience -> DB lookup -> CurrentActor -> authorization`.
+- [ ] Retirar explicitamente identidad por body (`teacher_id`, `student_id`, `role`, `auth_user_id`, `university_id`) como fuente de verdad.
+- [ ] Retirar explicitamente la autocreacion implicita de `Tenant/User` de endpoints productivos.
+- [ ] Fijar que `SUPABASE_SERVICE_ROLE_KEY` es backend-only y CLI-only.
 - [ ] Fijar que la SPA sigue servida por `public-api`.
 - [ ] Fijar que Fase 1 modela `university_sso_configs`, pero solo habilita un tenant
       Microsoft activo por deployment.
 - [ ] Fijar que el split `public-api` / `authoring-worker` queda despues de cerrar Issue 3.
+- [ ] Documentar que el seam `/api/internal/tasks/authoring_step` se mantiene en el monolito hasta el split posterior.
+- [ ] Fijar que no hay token de invitacion en path, query string, `state`, logs, analytics o breadcrumbs.
+- [ ] Incluir diagrama ASCII de contexto y diagrama ASCII del flujo de request autenticado.
+- [ ] Incluir tabla `decision / impact on GitHub #23 / impact on Issue 3`.
 - [ ] Documentar triggers de salida del stack:
   - drift operacional entre universidades y un solo tenant Microsoft
   - p95 DB fuera de presupuesto
@@ -311,9 +329,15 @@ mantiene hasta cerrar auth perimeter, y documentar que el split `public-api` /
 **Criterios de Aceptacion:**
 
 - Existe un ADR versionado que fija trust boundaries y limites de Fase 1.
+- El ADR vive en `docs/adr/0001-auth-perimeter-fase1.md`.
 - El ADR deja claro que el monolito actual se reutiliza primero y se divide despues.
+- El ADR contiene una matriz de trust boundaries y dos diagramas ASCII.
 - El ADR deja claro que JWKS es el mecanismo de verificacion JWT de produccion.
 - El ADR deja claro que no hay token de invitacion en URL path ni `state`.
+- El ADR deja claro que tampoco hay token de invitacion en query string, logs, analytics o breadcrumbs.
+- El ADR deja claro que el frontend no usa PostgREST para dominio y solo usa Supabase para auth/session.
+- El ADR deja claro que `SUPABASE_SERVICE_ROLE_KEY` no sale de backend o CLI.
+- El ADR deja claro el contrato de resolucion de actor que consumira Issue 3.
 - El ADR deja claro que Microsoft SSO es tenant-scoped en modelo pero limitado en rollout.
 
 **Notas Tecnicas:**
@@ -335,6 +359,8 @@ mantiene hasta cerrar auth perimeter, y documentar que el split `public-api` /
 **Titulo:** `Infra: schema de identidad, memberships, invites, RLS secundaria y bridge legacy`
 
 **Tipo:** `Infra`
+
+**GitHub Tracking:** `#23`
 
 **Dependencias:** Issue 1
 
