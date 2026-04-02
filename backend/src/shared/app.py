@@ -27,6 +27,17 @@ from shared.progress_bus import subscribe, unsubscribe
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def normalize_auth_user_id(raw_user_id: str) -> str:
+    """Reject legacy fake ids and keep auth-compatible UUID text canonical."""
+    try:
+        return str(uuid.UUID(raw_user_id))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="teacher_id must be a UUID string compatible with Supabase Auth",
+        ) from exc
+
 # Lifespan management
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -107,8 +118,10 @@ def create_authoring_job(
     Persists the Assignment and queued AuthoringJob, then schedules local
     background execution through AuthoringService.
     """
+    teacher_id = normalize_auth_user_id(req.teacher_id)
+
     # Resolve the teacher or create a local development record if missing.
-    teacher = db.query(User).filter(User.id == req.teacher_id).first()
+    teacher = db.query(User).filter(User.id == teacher_id).first()
     if not teacher:
         tenant = db.query(Tenant).first()
         if not tenant:
@@ -116,7 +129,7 @@ def create_authoring_job(
             db.add(tenant)
             db.commit()
             db.refresh(tenant)
-        teacher = User(id=req.teacher_id, tenant_id=tenant.id, email=f"{req.teacher_id}@adam.edu", role="teacher")
+        teacher = User(id=teacher_id, tenant_id=tenant.id, email=f"{teacher_id}@adam.edu", role="teacher")
         db.add(teacher)
         db.commit()
 

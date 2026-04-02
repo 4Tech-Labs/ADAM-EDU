@@ -84,6 +84,12 @@ def upgrade() -> None:
     connection = op.get_bind()
     _normalize_roles(connection)
     _validate_legacy_bridge_ids(connection)
+    op.create_check_constraint("ck_users_id_auth_uuid", "users", f"id ~* '{UUID_TEXT_PATTERN}'")
+    op.create_check_constraint(
+        "ck_users_role",
+        "users",
+        "role IN ('teacher', 'student', 'university_admin')",
+    )
 
     op.create_table(
         "profiles",
@@ -192,6 +198,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema."""
+    op.drop_constraint("ck_users_role", "users", type_="check")
+    op.drop_constraint("ck_users_id_auth_uuid", "users", type_="check")
     op.drop_index("ix_course_memberships_membership_id", table_name="course_memberships")
     op.drop_index("ix_course_memberships_course_id", table_name="course_memberships")
     op.drop_table("course_memberships")

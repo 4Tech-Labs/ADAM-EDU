@@ -61,6 +61,41 @@ def _alembic_config(db_url: str) -> Config:
     return config
 
 
+def _seed_legacy_tenant_and_user(
+    engine,
+    *,
+    user_id: str,
+    email: str,
+    role: str,
+    tenant_id: str = "10000000-0000-0000-0000-000000000001",
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO tenants (id, name, created_at)
+                VALUES (:id, :name, NOW())
+                ON CONFLICT (id) DO NOTHING
+                """
+            ),
+            {"id": tenant_id, "name": "Issue 23 Tenant"},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO users (id, tenant_id, email, role, created_at)
+                VALUES (:id, :tenant_id, :email, :role, NOW())
+                """
+            ),
+            {
+                "id": user_id,
+                "tenant_id": tenant_id,
+                "email": email,
+                "role": role,
+            },
+        )
+
+
 def test_issue23_alembic_upgrade_and_downgrade() -> None:
     with temporary_database() as db_url:
         config = _alembic_config(db_url)
@@ -68,30 +103,24 @@ def test_issue23_alembic_upgrade_and_downgrade() -> None:
         command.upgrade(config, PRE_ISSUE23_REVISION)
 
         engine = create_engine(db_url)
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO tenants (id, name, created_at)
-                    VALUES (:id, :name, NOW())
-                    """
-                ),
-                {"id": "10000000-0000-0000-0000-000000000001", "name": "Issue 23 Tenant"},
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO users (id, tenant_id, email, role, created_at)
-                    VALUES (:id, :tenant_id, :email, :role, NOW())
-                    """
-                ),
-                {
-                    "id": "20000000-0000-0000-0000-000000000001",
-                    "tenant_id": "10000000-0000-0000-0000-000000000001",
-                    "email": "teacher@example.edu",
-                    "role": "Teacher",
-                },
-            )
+        _seed_legacy_tenant_and_user(
+            engine,
+            user_id="20000000-0000-0000-0000-000000000001",
+            email="teacher@example.edu",
+            role="Teacher",
+        )
+        _seed_legacy_tenant_and_user(
+            engine,
+            user_id="20000000-0000-0000-0000-000000000002",
+            email="student@example.edu",
+            role="Student",
+        )
+        _seed_legacy_tenant_and_user(
+            engine,
+            user_id="20000000-0000-0000-0000-000000000003",
+            email="admin@example.edu",
+            role="UniversityAdmin",
+        )
 
         command.upgrade(config, "head")
 
@@ -108,11 +137,22 @@ def test_issue23_alembic_upgrade_and_downgrade() -> None:
         }.issubset(tables)
 
         with engine.begin() as conn:
-            role = conn.execute(
-                text("SELECT role FROM users WHERE id = :id"),
-                {"id": "20000000-0000-0000-0000-000000000001"},
-            ).scalar_one()
-            assert role == "teacher"
+            roles = dict(
+                conn.execute(
+                    text(
+                        """
+                        SELECT id, role
+                        FROM users
+                        ORDER BY id
+                        """
+                    )
+                ).all()
+            )
+            assert roles == {
+                "20000000-0000-0000-0000-000000000001": "teacher",
+                "20000000-0000-0000-0000-000000000002": "student",
+                "20000000-0000-0000-0000-000000000003": "university_admin",
+            }
 
             conn.execute(
                 text(
@@ -213,3 +253,41 @@ def test_issue23_rls_sql_exists() -> None:
     content = sql_path.read_text(encoding="utf-8")
     assert "ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;" in content
     assert "hmac.compare_digest()" in content
+
+
+def test_issue23_migration_rejects_unknown_legacy_roles() -> None:
+    with temporary_database() as db_url:
+        config = _alembic_config(db_url)
+        command.upgrade(config, PRE_ISSUE23_REVISION)
+
+        engine = create_engine(db_url)
+        _seed_legacy_tenant_and_user(
+            engine,
+            user_id="20000000-0000-0000-0000-000000000010",
+            email="dean@example.edu",
+            role="Dean",
+        )
+
+        with pytest.raises(RuntimeError, match="unmapped legacy roles"):
+            command.upgrade(config, "head")
+
+        engine.dispose()
+
+
+def test_issue23_migration_rejects_non_uuid_legacy_user_ids() -> None:
+    with temporary_database() as db_url:
+        config = _alembic_config(db_url)
+        command.upgrade(config, PRE_ISSUE23_REVISION)
+
+        engine = create_engine(db_url)
+        _seed_legacy_tenant_and_user(
+            engine,
+            user_id="teacher-123",
+            email="legacy-teacher@example.edu",
+            role="Teacher",
+        )
+
+        with pytest.raises(RuntimeError, match="auth-compatible UUID text"):
+            command.upgrade(config, "head")
+
+        engine.dispose()

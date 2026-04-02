@@ -34,6 +34,10 @@ Si una migracion nueva endurece contratos de identidad o esquema, no parchees da
 a mano para forzar que pase. Resetea la base local y vuelve a sembrarla antes de rerun
 `uv run --directory backend alembic upgrade head`.
 
+Si el cambio introduce SQL operativo fuera de Alembic, como `backend/sql/rls_policies.sql`,
+documenta explicitamente como y donde se aplica. No asumas que `alembic upgrade head`
+cubre artefactos SQL separados.
+
 ## Checks locales obligatorios
 
 ```powershell
@@ -43,6 +47,10 @@ npm --prefix frontend run lint
 npm --prefix frontend run build
 npm --prefix frontend run test
 ```
+
+Nota: la prueba de migracion del Issue 23 crea y elimina bases temporales. En el entorno
+local default eso funciona con el usuario `postgres`, pero en otros entornos necesitaras
+permisos `CREATE DATABASE` y `DROP DATABASE` para que `pytest` pase completo.
 
 ## Reglas para agentes
 

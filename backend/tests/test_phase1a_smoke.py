@@ -141,6 +141,19 @@ def test_intake_and_idempotency_workflow():
     assert response_data.get("status") == "bypassed"
     assert "idempotency_barrier" in response_data.get("reason", "")
 
+
+def test_intake_rejects_non_uuid_teacher_ids() -> None:
+    payload = {
+        "teacher_id": "teacher-123",
+        "assignment_title": "Should Fail",
+    }
+
+    with patch("fastapi.BackgroundTasks.add_task"):
+        response = client.post("/api/authoring/jobs", json=payload)
+
+    assert response.status_code == 422
+    assert "teacher_id must be a UUID string compatible with Supabase Auth" in response.text
+
 if __name__ == "__main__":
     print("Running Smoke Tests...")
     test_database_connection()

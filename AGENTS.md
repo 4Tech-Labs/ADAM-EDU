@@ -80,6 +80,14 @@ npm --prefix frontend run test
 npm --prefix frontend run build
 ```
 
+Issue 23 adds a migration test that creates and drops temporary databases. In the default
+local Docker Postgres this works with the `postgres` user. On other Postgres environments,
+the backend test suite now assumes `CREATE DATABASE` and `DROP DATABASE` privileges.
+
+Issue 23 also introduces `backend/sql/rls_policies.sql` as a separate artifact. Alembic
+does not apply that file. Treat it as an explicit secondary-RLS deployment step only for
+Supabase or another environment that exposes compatible Auth helpers like `auth.uid()`.
+
 ## Sensitive Areas
 
 - `backend/src/case_generator/**` is the most sensitive part of the repo.

@@ -27,6 +27,9 @@ def generate_uuid() -> str:
     return str(uuid.uuid4())
 
 
+UUID_TEXT_CHECK = r"id ~* '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'"
+
+
 # --- TEACHER AUTHORING MVP SCHEMA ---
 # Active persistence layer used by the published teacher authoring flow.
 class Tenant(Base):
@@ -58,6 +61,10 @@ class User(Base):
     """
 
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(UUID_TEXT_CHECK, name="ck_users_id_auth_uuid"),
+        CheckConstraint("role IN ('teacher', 'student', 'university_admin')", name="ck_users_role"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)

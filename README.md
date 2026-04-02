@@ -289,6 +289,8 @@ no Supabase Auth local. Eso significa:
 - valida esquema y migraciones localmente con PostgreSQL normal
 - valida bridge real contra `auth.users` solo cuando apuntes a Supabase alojado o a una futura ruta `supabase start`
 - si tu base local vieja todavia tiene IDs fake como `teacher-123`, reseteala y reseedala antes de correr la migracion de Issue 23
+- `backend/sql/rls_policies.sql` es un entregable separado de Alembic y no se aplica con `uv run alembic upgrade head`
+- esas policies dependen de `auth.uid()`, asi que solo deben aplicarse en Supabase o en un entorno local que realmente exponga el schema Auth compatible
 
 ## Validacion
 
@@ -304,6 +306,8 @@ no Supabase Auth local. Eso significa:
   `RUN_LIVE_LLM_TESTS=1 uv run --directory backend pytest -m live_llm -q`
 
 La suite default no debe tocar Gemini ni depender de side effects externos. Los tests `live_llm` quedan aislados detras de `RUN_LIVE_LLM_TESTS=1`.
+
+La prueba de migracion de Issue 23 crea y elimina bases temporales para validar upgrade y downgrade de Alembic. Con los defaults locales funciona porque el usuario `postgres` tiene permisos amplios sobre el contenedor local. Si apuntas a otro Postgres, asegurate de tener permisos `CREATE DATABASE` y `DROP DATABASE` o esa prueba fallara aunque el codigo este bien.
 
 ## Nota historica
 
