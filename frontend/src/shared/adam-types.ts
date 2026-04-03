@@ -136,7 +136,6 @@ export interface CanonicalCaseOutput {
 }
 
 export interface AuthoringJobCreateRequest {
-    teacher_id: string;
     assignment_title: string;
     subject: string;
     academic_level: string;

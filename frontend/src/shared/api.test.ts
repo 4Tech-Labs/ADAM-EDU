@@ -1,0 +1,118 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { createClientMock, getSessionMock } = vi.hoisted(() => {
+    const sessionMock = vi.fn();
+    const clientMock = vi.fn(() => ({
+        auth: {
+            getSession: sessionMock,
+        },
+    }));
+
+    return {
+        createClientMock: clientMock,
+        getSessionMock: sessionMock,
+    };
+});
+
+vi.mock("@supabase/supabase-js", () => ({
+    createClient: createClientMock,
+}));
+
+import { ApiError, api, createSseParser, formatHttpError, resetApiClientForTests } from "./api";
+
+describe("api auth + stream glue", () => {
+    beforeEach(() => {
+        resetApiClientForTests();
+        getSessionMock.mockReset();
+        createClientMock.mockClear();
+        vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
+        vi.stubGlobal("window", {});
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("attaches a bearer token when a Supabase session exists", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+        getSessionMock.mockResolvedValue({
+            data: { session: { access_token: "token-123" } },
+            error: null,
+        });
+
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ job_id: "job-1" }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.authoring.submitJob({
+            assignment_title: "Case",
+            subject: "Case",
+            academic_level: "MBA",
+            industry: "FinTech",
+            student_profile: "business",
+            case_type: "harvard_only",
+            syllabus_module: "M1",
+            scenario_description: "Scenario",
+            guiding_question: "Question",
+            topic_unit: "Unit",
+            target_groups: ["A"],
+            eda_depth: null,
+            include_python_code: false,
+            suggested_techniques: ["SWOT"],
+            available_from: null,
+            due_at: null,
+        });
+
+        const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
+        expect(new Headers(options.headers).get("Authorization")).toBe("Bearer token-123");
+    });
+
+    it("parses SSE events across chunk boundaries", () => {
+        const events: Array<{ event: string; data: string }> = [];
+        const parser = createSseParser((event) => events.push(event));
+
+        parser.push("event: metadata\ndata: {\"status\":\"processing\"}\n\n");
+        parser.push("event: result\ndata: {\"title\"");
+        parser.push(":\"Case\"}\n\n");
+        parser.flush();
+
+        expect(events).toEqual([
+            { event: "metadata", data: "{\"status\":\"processing\"}" },
+            { event: "result", data: "{\"title\":\"Case\"}" },
+        ]);
+    });
+
+    it("returns a non-generic auth error for forbidden streams", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn().mockResolvedValue(
+                new Response(JSON.stringify({ detail: "authoring_forbidden" }), {
+                    status: 403,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            ),
+        );
+
+        await expect(api.authoring.streamProgress("job-1", () => undefined)).rejects.toMatchObject(
+            {
+                status: 403,
+                message: "Acceso denegado para esta accion.",
+            } satisfies Pick<ApiError, "status" | "message">,
+        );
+    });
+
+    it("maps 401 and 403 away from generic network errors", () => {
+        expect(formatHttpError(401, "invalid_token")).toBe(
+            "Sesion requerida o expirada. Vuelve a iniciar sesion.",
+        );
+        expect(formatHttpError(403, "membership_required")).toBe(
+            "Tu cuenta no tiene membresia activa para usar esta accion.",
+        );
+    });
+});
