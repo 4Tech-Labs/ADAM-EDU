@@ -81,11 +81,13 @@ En este corte no se renombran carpetas del frontend.
 ## Flujo del MVP docente
 
 1. `POST /api/suggest` ayuda a completar escenario y tecnicas del formulario.
-2. `POST /api/authoring/jobs` crea `Assignment` + `AuthoringJob`.
+2. `POST /api/authoring/jobs` es teacher-only y requiere bearer JWT valido; crea `Assignment` + `AuthoringJob` sin confiar en `teacher_id` del cliente.
 3. `AuthoringService.run_job()` ejecuta el grafo y persiste el resultado.
-4. `GET /api/authoring/jobs/{job_id}/progress` emite progreso por SSE.
-5. `GET /api/authoring/jobs/{job_id}` permite polling del job.
-6. `GET /api/authoring/jobs/{job_id}/result` devuelve el resultado persistido para preview.
+4. `GET /api/authoring/jobs/{job_id}/progress` emite progreso por SSE autenticado con ownership exacto por docente.
+5. `GET /api/authoring/jobs/{job_id}` permite polling autenticado del job.
+6. `GET /api/authoring/jobs/{job_id}/result` devuelve el resultado persistido para preview del owner.
+7. `GET /api/auth/me` expone `CurrentActor`, memberships y `must_rotate_password`.
+8. `POST /api/invites/resolve`, `POST /api/invites/redeem`, `POST /api/auth/activate/password` y `POST /api/auth/activate/oauth/complete` consumen `invite_token` por body.
 
 El frontend usa ese flujo para renderizar el timeline y el `CasePreview` del profesor.
 
@@ -195,6 +197,9 @@ Con el `docker-compose.yml` actual, los defaults locales quedan asi:
 ```env
 DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5434/postgres
 GEMINI_API_KEY=tu_api_key
+SUPABASE_URL=https://tu-proyecto.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=tu_service_role_key
+SUPABASE_JWT_SECRET=solo_dev_si_necesitas_fallback_local
 ```
 
 3. Instala dependencias:
@@ -233,6 +238,15 @@ npm run dev
 El frontend queda disponible segun la salida de Vite, normalmente en `http://localhost:5173/app/`.
 
 La ruta funcional actual del profesor vive bajo `/app/teacher`, porque Vite y React Router usan `base` y `basename` en `/app/`.
+
+Para usar el flujo docente protegido despues de Issue 30, copia `frontend/.env.example` a `frontend/.env` y completa:
+
+```env
+VITE_SUPABASE_URL=https://tu-proyecto.supabase.co
+VITE_SUPABASE_ANON_KEY=tu_publishable_o_anon_key
+```
+
+Esta issue no agrega login UI ni callback OAuth. El frontend adjunta bearer auth solo si ya existe una sesion Supabase valida en el browser; si no existe sesion, el authoring quedara fail-closed con `401/403`.
 
 ### Opcion B: stack contenedorizado completo
 
@@ -274,11 +288,16 @@ docker compose down -v
 - `DATABASE_URL`: DSN principal de PostgreSQL para `shared.database`.
 - `SUPABASE_URL`: metadata del proyecto Supabase usada desde la fase de auth substrate en adelante.
 - `SUPABASE_PROJECT_REF`: ref del proyecto Supabase para tooling y validaciones operativas de auth.
+- `SUPABASE_SERVICE_ROLE_KEY`: clave backend-only para activation/password y operaciones admin de Supabase Auth.
+- `SUPABASE_JWT_SECRET`: fallback de desarrollo para JWT locales. No sustituye JWKS en produccion.
 - `GEMINI_API_KEY`: requerido para authoring real, `/api/suggest` y tests `live_llm`.
 - `CORS_ALLOWED_ORIGIN`: origen extra permitido en produccion.
 - `STORYTELLER_MODEL`: override opcional del modelo usado por `/api/suggest`.
+- `VITE_SUPABASE_URL`: URL publica del proyecto Supabase usada por el frontend para resolver la sesion del browser.
+- `VITE_SUPABASE_ANON_KEY`: publishable/anon key usada por el frontend para leer la sesion actual.
 
 Base de ejemplo: [backend/.env.example](backend/.env.example)
+Frontend base de ejemplo: [frontend/.env.example](frontend/.env.example)
 
 ### Nota para Issue 23
 

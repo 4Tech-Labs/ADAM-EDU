@@ -1,3 +1,5 @@
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+
 import type {
     AuthoringJobCreateRequest,
     AuthoringJobCreateResponse,
@@ -9,46 +11,304 @@ import type {
 } from "@/shared/adam-types";
 
 /**
- * ADAM v8 — Centralized API Client
- * Vite proxy routes `/api/*` requests to the Python backend.
+ * Centralized API client for the teacher authoring flow.
+ * The backend now expects bearer auth on protected routes when a Supabase session exists.
  */
 export const API_BASE = "/api";
+
+type ApiErrorCode =
+    | "invalid_token"
+    | "profile_incomplete"
+    | "membership_required"
+    | "account_suspended"
+    | "authoring_forbidden"
+    | "legacy_bridge_missing";
+
+export interface SseEvent {
+    event: string;
+    data: string;
+}
+
+export class ApiError extends Error {
+    readonly status: number;
+    readonly detail?: string;
+
+    constructor(status: number, message: string, detail?: string) {
+        super(message);
+        this.name = "ApiError";
+        this.status = status;
+        this.detail = detail;
+    }
+}
+
+let supabaseClient: SupabaseClient | null | undefined;
+
+function getSupabaseEnv() {
+    return {
+        url: import.meta.env.VITE_SUPABASE_URL?.trim(),
+        anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY?.trim(),
+    };
+}
+
+function getSupabaseClient() {
+    if (supabaseClient !== undefined) {
+        return supabaseClient;
+    }
+
+    if (typeof window === "undefined") {
+        supabaseClient = null;
+        return supabaseClient;
+    }
+
+    const { url, anonKey } = getSupabaseEnv();
+    if (!url || !anonKey) {
+        supabaseClient = null;
+        return supabaseClient;
+    }
+
+    supabaseClient = createClient(url, anonKey, {
+        auth: {
+            autoRefreshToken: true,
+            detectSessionInUrl: true,
+            persistSession: true,
+        },
+    });
+    return supabaseClient;
+}
+
+export function resetApiClientForTests() {
+    supabaseClient = undefined;
+}
+
+export async function getBearerToken(): Promise<string | null> {
+    const client = getSupabaseClient();
+    if (!client) {
+        return null;
+    }
+
+    const { data, error } = await client.auth.getSession();
+    if (error) {
+        return null;
+    }
+
+    return data.session?.access_token ?? null;
+}
+
+export async function createAuthorizedHeaders(init?: HeadersInit): Promise<Headers> {
+    const headers = new Headers(init);
+    const token = await getBearerToken();
+
+    if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+    }
+
+    return headers;
+}
+
+function normalizeErrorDetail(detail?: string) {
+    return detail?.trim() || undefined;
+}
+
+export function formatHttpError(status: number, detail?: string) {
+    const normalized = normalizeErrorDetail(detail);
+    const code = normalized as ApiErrorCode | undefined;
+
+    if (status === 401) {
+        return "Sesion requerida o expirada. Vuelve a iniciar sesion.";
+    }
+
+    if (status === 403) {
+        switch (code) {
+            case "profile_incomplete":
+                return "Tu cuenta no esta lista para usar el authoring todavia.";
+            case "membership_required":
+                return "Tu cuenta no tiene membresia activa para usar esta accion.";
+            case "account_suspended":
+                return "Tu cuenta esta suspendida para esta accion.";
+            case "authoring_forbidden":
+                return "Acceso denegado para esta accion.";
+            default:
+                return "No tienes permisos para esta accion.";
+        }
+    }
+
+    return normalized || "Error del servidor";
+}
+
+async function readErrorDetail(res: Response): Promise<string | undefined> {
+    const contentType = res.headers.get("Content-Type") ?? "";
+
+    if (contentType.includes("application/json")) {
+        try {
+            const payload = (await res.json()) as { detail?: unknown };
+            if (typeof payload.detail === "string") {
+                return payload.detail;
+            }
+        } catch {
+            return undefined;
+        }
+    }
+
+    try {
+        const text = await res.text();
+        return text.trim() || undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+async function apiFetch(path: string, init?: RequestInit) {
+    const headers = await createAuthorizedHeaders(init?.headers);
+    const response = await fetch(`${API_BASE}${path}`, {
+        ...init,
+        headers,
+    });
+
+    if (!response.ok) {
+        const detail = await readErrorDetail(response);
+        throw new ApiError(response.status, formatHttpError(response.status, detail), detail);
+    }
+
+    return response;
+}
+
+async function parseJsonResponse<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await apiFetch(path, init);
+    return response.json() as Promise<T>;
+}
+
+export function createSseParser(onEvent: (event: SseEvent) => void) {
+    let buffer = "";
+    let eventName = "message";
+    let dataLines: string[] = [];
+
+    const dispatch = () => {
+        if (dataLines.length === 0) {
+            eventName = "message";
+            return;
+        }
+
+        onEvent({
+            event: eventName,
+            data: dataLines.join("\n"),
+        });
+
+        eventName = "message";
+        dataLines = [];
+    };
+
+    const processLine = (line: string) => {
+        if (line === "") {
+            dispatch();
+            return;
+        }
+
+        if (line.startsWith(":")) {
+            return;
+        }
+
+        const separatorIndex = line.indexOf(":");
+        const field = separatorIndex >= 0 ? line.slice(0, separatorIndex) : line;
+        const rawValue = separatorIndex >= 0 ? line.slice(separatorIndex + 1) : "";
+        const value = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;
+
+        if (field === "event") {
+            eventName = value || "message";
+            return;
+        }
+
+        if (field === "data") {
+            dataLines.push(value);
+        }
+    };
+
+    return {
+        push(chunk: string) {
+            buffer += chunk;
+
+            let newlineIndex = buffer.indexOf("\n");
+            while (newlineIndex >= 0) {
+                let line = buffer.slice(0, newlineIndex);
+                buffer = buffer.slice(newlineIndex + 1);
+
+                if (line.endsWith("\r")) {
+                    line = line.slice(0, -1);
+                }
+
+                processLine(line);
+                newlineIndex = buffer.indexOf("\n");
+            }
+        },
+        flush() {
+            if (buffer.length > 0) {
+                processLine(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
+                buffer = "";
+            }
+
+            dispatch();
+        },
+    };
+}
+
+async function readSseStream(
+    path: string,
+    onEvent: (event: SseEvent) => void,
+    signal?: AbortSignal,
+) {
+    const response = await apiFetch(path, {
+        headers: { Accept: "text/event-stream" },
+        signal,
+    });
+
+    if (!response.body) {
+        throw new ApiError(502, "No se pudo abrir el stream de progreso.");
+    }
+
+    const parser = createSseParser(onEvent);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            break;
+        }
+
+        parser.push(decoder.decode(value, { stream: true }));
+    }
+
+    parser.push(decoder.decode());
+    parser.flush();
+}
 
 export const api = {
     authoring: {
         async submitJob(reqBody: AuthoringJobCreateRequest): Promise<AuthoringJobCreateResponse> {
-            const res = await fetch(`${API_BASE}/authoring/jobs`, {
+            return parseJsonResponse<AuthoringJobCreateResponse>("/authoring/jobs", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(reqBody)
+                body: JSON.stringify(reqBody),
             });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return res.json() as Promise<AuthoringJobCreateResponse>;
         },
         async getStatus(jobId: string): Promise<AuthoringJobStatusResponse> {
-            const res = await fetch(`${API_BASE}/authoring/jobs/${jobId}`);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return res.json() as Promise<AuthoringJobStatusResponse>;
+            return parseJsonResponse<AuthoringJobStatusResponse>(`/authoring/jobs/${jobId}`);
         },
         async getResult(jobId: string): Promise<AuthoringJobResultResponse> {
-            const res = await fetch(`${API_BASE}/authoring/jobs/${jobId}/result`);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return res.json() as Promise<AuthoringJobResultResponse>;
+            return parseJsonResponse<AuthoringJobResultResponse>(`/authoring/jobs/${jobId}/result`);
         },
-        getProgressUrl(jobId: string) {
-            return `${API_BASE}/authoring/jobs/${jobId}/progress`;
-        }
+        async streamProgress(
+            jobId: string,
+            onEvent: (event: SseEvent) => void,
+            signal?: AbortSignal,
+        ) {
+            await readSseStream(`/authoring/jobs/${jobId}/progress`, onEvent, signal);
+        },
     },
     async suggest(intent: IntentType, data: SuggestRequest): Promise<SuggestResponse> {
-        const res = await fetch(`${API_BASE}/suggest`, {
+        return parseJsonResponse<SuggestResponse>("/suggest", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ intent, ...data }),
         });
-        if (!res.ok) {
-            const err = await res.json().catch((): { detail: string } => ({ detail: "Error del servidor" }));
-            throw new Error(err.detail || "Error del servidor");
-        }
-        return res.json() as Promise<SuggestResponse>;
-    }
+    },
 };

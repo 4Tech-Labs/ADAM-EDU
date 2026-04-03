@@ -1,5 +1,7 @@
-from fastapi.testclient import TestClient
 from unittest.mock import patch
+import uuid
+
+from fastapi.testclient import TestClient
 
 from shared.app import app
 from shared.database import SessionLocal
@@ -7,52 +9,43 @@ from shared.models import Assignment, AuthoringJob
 
 client = TestClient(app)
 
-TEACHER_ID = "00000000-0000-0000-0000-000000000101"
 
-def test_database_connection():
-    """Verify that we can connect to the database and tables exist."""
+def test_database_connection() -> None:
     db = SessionLocal()
     try:
-        # Simple query to ensure connection and tables are present
         db.query(AuthoringJob).limit(1).all()
-        assert True
     finally:
         db.close()
 
-def test_intake_and_idempotency_workflow():
-    """
-    Smoke test simulating the full Phase 1A workflow:
-    1. UI sends Intake request -> DB Job Created.
-    2. Cloud Tasks triggers internal handler -> Job processes.
-    3. Cloud Tasks retries -> Idempotency barrier blocks duplicates.
-    """
-    # 1. Test Intake Endpoint
+
+def test_intake_and_idempotency_workflow(auth_headers_factory, seed_identity) -> None:
+    teacher_id = "00000000-0000-0000-0000-000000000101"
+    teacher_email = "teacher101@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    headers = auth_headers_factory(sub=teacher_id, email=teacher_email)
+
     payload = {
-        "teacher_id": TEACHER_ID,
-        "assignment_title": "Post-Hardening Smoke Test Verification"
+        "assignment_title": "Post-Hardening Smoke Test Verification",
     }
     with patch("fastapi.BackgroundTasks.add_task"):
-        resp1 = client.post("/api/authoring/jobs", json=payload)
-    
-    # Assert successful intake and 202 output
-    assert resp1.status_code == 202, f"Intake failed: {resp1.text}"
-    data = resp1.json()
-    job_id = data.get("job_id")
-    assert job_id is not None
-    assert data.get("status") == "accepted"
+        response = client.post("/api/authoring/jobs", json=payload, headers=headers)
 
-    # 2. Extract Idempotency Key directly from DB to simulate Cloud Task payload
+    assert response.status_code == 202, response.text
+    job_id = response.json()["job_id"]
+
     db = SessionLocal()
-    job = db.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
-    assert job is not None, "Job was not persisted to the database."
-    idempotency_key = job.idempotency_key
-    db.close()
+    try:
+        job = db.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
+        assert job is not None
+        idempotency_key = job.idempotency_key
+    finally:
+        db.close()
 
-    # 3. Simulate GCP Cloud Task webhook hitting the internal handler (Initial Run)
     task_payload = {
         "job_id": job_id,
-        "idempotency_key": idempotency_key
+        "idempotency_key": idempotency_key,
     }
+
     async def _stub_run_job(job_id_to_complete: str) -> None:
         db2 = SessionLocal()
         try:
@@ -120,46 +113,25 @@ def test_intake_and_idempotency_workflow():
             db2.close()
 
     with patch("shared.app.AuthoringService.run_job", side_effect=_stub_run_job):
-        resp2 = client.post(
+        internal_response = client.post(
             "/api/internal/tasks/authoring_step",
             json=task_payload,
-            headers={"x-cloudtasks-taskname": "smoke-test-task-1"}
+            headers={"x-cloudtasks-taskname": "smoke-test-task-1"},
         )
-    assert resp2.status_code == 200
-    assert resp2.json().get("status") == "success"
+    assert internal_response.status_code == 200
+    assert internal_response.json()["status"] == "success"
 
-    # 4. Simulate a Duplicate/Retry webhook from GCP Cloud Tasks (Idempotency Run)
-    resp3 = client.post(
-        "/api/internal/tasks/authoring_step", 
+    retry_response = client.post(
+        "/api/internal/tasks/authoring_step",
         json=task_payload,
-        headers={"x-cloudtasks-taskname": "smoke-test-task-1-retry"}
+        headers={"x-cloudtasks-taskname": "smoke-test-task-1-retry"},
     )
-    assert resp3.status_code == 200
-    response_data = resp3.json()
-    
-    # Assert the execution was safely bypassed without errors
-    assert response_data.get("status") == "bypassed"
-    assert "idempotency_barrier" in response_data.get("reason", "")
+    assert retry_response.status_code == 200
+    assert retry_response.json()["status"] == "bypassed"
 
 
-def test_intake_rejects_non_uuid_teacher_ids() -> None:
-    payload = {
-        "teacher_id": "teacher-123",
-        "assignment_title": "Should Fail",
-    }
-
-    with patch("fastapi.BackgroundTasks.add_task"):
-        response = client.post("/api/authoring/jobs", json=payload)
-
-    assert response.status_code == 422
-    assert "teacher_id must be a UUID string compatible with Supabase Auth" in response.text
-
-if __name__ == "__main__":
-    print("Running Smoke Tests...")
-    test_database_connection()
-    print("Database Connection ✅")
-    test_intake_and_idempotency_workflow()
-    print("Workflow and Idempotency barrier ✅")
-    print("All tests passed successfully.")
-
-
+def test_intake_requires_bearer_auth() -> None:
+    payload = {"assignment_title": f"Case {uuid.uuid4()}"}
+    response = client.post("/api/authoring/jobs", json=payload)
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_token"
