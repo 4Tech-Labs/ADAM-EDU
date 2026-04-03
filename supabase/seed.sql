@@ -1,0 +1,3 @@
+-- Issue 32 scaffold seed.
+-- Keep this file intentionally minimal so `supabase start` and reset flows
+-- remain reproducible from a clean clone.

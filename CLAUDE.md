@@ -49,14 +49,15 @@ Use the repo-driven gstack runtime materialized from the pinned lock in `scripts
 - Dispatch defaults:
   - ideas and brainstorming -> `office-hours`, then `autoplan` or `plan-*`
   - bugs, errors, regressions -> `investigate`
-  - review of a diff, branch, or PR -> `review`
-  - QA or staging verification -> `qa` or `qa-only`
-  - release preparation -> `ship`, then `land-and-deploy`, `canary`, `document-release`
+- review of a diff, branch, or PR -> `review`
+- QA or staging verification -> `qa` or `qa-only`
+- release preparation -> `ship`, then `land-and-deploy`, `canary`, `document-release`
   - visual work -> `design-*`
   - security review -> `cso`
   - browser-heavy QA -> `browse`, `connect-chrome`, `setup-browser-cookies`
 - One agent owns the branch and final decision path. Use repo-scoped subagents only for bounded read-only sidecars such as `pr_explorer`, `reviewer`, `code_mapper`, independent report-only QA, benchmark, read-only exploration, or post-ship docs.
 - Do not use subagents for merge or deploy authority, scope decisions, conflicting writes, or parallel edits in `backend/src/case_generator/**`.
+- Do not run `document-release` before `uv run --directory backend pytest -q` is green. Pre-PR docs sync belongs in the implementation diff itself.
 
 ## Domain Map
 
@@ -128,11 +129,20 @@ Only run live LLM tests explicitly:
 
 ## Local Environment Expectations
 
+For local auth + backend work, treat the repo as two local planes:
+
+- app DB local via `docker compose up -d adam-edu-postgres` on host `5434`
+- auth/session local via `supabase start` on `http://localhost:54321`
+
+Use `docs/runbooks/local-dev-auth.md` as the canonical runbook when setup or auth-local
+workflow changes.
+
 For a normal backend local session:
 
 ```powershell
 cd C:\Users\Juan Camilo Dorado\Downloads\ADAM-EDU
 docker compose up -d adam-edu-postgres
+supabase start
 
 cd backend
 uv sync --dev
@@ -141,3 +151,4 @@ uv run uvicorn shared.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 `docker compose up` starts PostgreSQL, but does not apply migrations. Alembic bootstrap is required before using the API locally.
+`DATABASE_URL` stays on `localhost:5434`. Do not point it at the Supabase local database on `54322`.

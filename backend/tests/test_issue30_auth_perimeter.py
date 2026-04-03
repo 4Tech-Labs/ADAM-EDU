@@ -7,15 +7,11 @@ from unittest.mock import patch
 import httpx
 import jwt
 import pytest
-from fastapi.testclient import TestClient
 from jwt.exceptions import PyJWKClientError
 from sqlalchemy import select
 
-from shared.app import app
 from shared.auth import AuthError, AuthSettings, JwtVerifier, SupabaseAdminAuthClient
 from shared.models import Assignment, AuthoringJob, CourseMembership, Membership, Profile, Tenant
-
-client = TestClient(app)
 
 
 def build_auth_settings(*, environment: str = "development", jwt_secret: str = "test-jwt-secret-with-sufficient-length-123") -> AuthSettings:
@@ -27,7 +23,21 @@ def build_auth_settings(*, environment: str = "development", jwt_secret: str = "
     )
 
 
-def test_auth_me_rejects_invalid_issuer(auth_headers_factory, seed_identity) -> None:
+def test_health_returns_ok(client) -> None:
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "service": "adam-v8.0"}
+
+
+def test_auth_me_requires_bearer_token(client) -> None:
+    response = client.get("/api/auth/me")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_token"
+
+
+def test_auth_me_rejects_invalid_issuer(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "issuer@example.edu"
     seed_identity(user_id=user_id, email=email, role="teacher")
@@ -38,7 +48,7 @@ def test_auth_me_rejects_invalid_issuer(auth_headers_factory, seed_identity) -> 
     assert response.json()["detail"] == "invalid_token"
 
 
-def test_auth_me_rejects_invalid_audience(auth_headers_factory, seed_identity) -> None:
+def test_auth_me_rejects_invalid_audience(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "audience@example.edu"
     seed_identity(user_id=user_id, email=email, role="teacher")
@@ -149,7 +159,7 @@ def test_supabase_admin_get_user_by_email_paginates_across_list_users_pages() ->
     assert admin_client.client.auth.admin.calls == [(1, 200), (2, 200)]
 
 
-def test_auth_me_profile_incomplete(auth_headers_factory, seed_identity) -> None:
+def test_auth_me_profile_incomplete(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "noprofile@example.edu"
     seed_identity(
@@ -166,7 +176,7 @@ def test_auth_me_profile_incomplete(auth_headers_factory, seed_identity) -> None
     assert response.json()["detail"] == "profile_incomplete"
 
 
-def test_auth_me_membership_required(auth_headers_factory, db) -> None:
+def test_auth_me_membership_required(client, auth_headers_factory, db) -> None:
     user_id = str(uuid.uuid4())
     email = "nomembership@example.edu"
     db.add(Profile(id=user_id, full_name="No Membership"))
@@ -178,7 +188,7 @@ def test_auth_me_membership_required(auth_headers_factory, db) -> None:
     assert response.json()["detail"] == "membership_required"
 
 
-def test_auth_me_account_suspended(auth_headers_factory, seed_identity) -> None:
+def test_auth_me_account_suspended(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "suspended@example.edu"
     seed_identity(user_id=user_id, email=email, role="teacher", membership_status="suspended")
@@ -189,7 +199,7 @@ def test_auth_me_account_suspended(auth_headers_factory, seed_identity) -> None:
     assert response.json()["detail"] == "account_suspended"
 
 
-def test_auth_me_returns_memberships_and_primary_role(auth_headers_factory, seed_identity) -> None:
+def test_auth_me_returns_memberships_and_primary_role(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "multirole@example.edu"
     first = seed_identity(user_id=user_id, email=email, role="student", university_id="10000000-0000-0000-0000-000000000010")
@@ -206,7 +216,7 @@ def test_auth_me_returns_memberships_and_primary_role(auth_headers_factory, seed
     assert first["profile"].full_name == payload["profile"]["full_name"]
 
 
-def test_authoring_denies_student(auth_headers_factory, seed_identity) -> None:
+def test_authoring_denies_student(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "student@example.edu"
     seed_identity(user_id=user_id, email=email, role="student")
@@ -217,7 +227,7 @@ def test_authoring_denies_student(auth_headers_factory, seed_identity) -> None:
     assert response.json()["detail"] == "authoring_forbidden"
 
 
-def test_authoring_requires_legacy_bridge(auth_headers_factory, seed_identity) -> None:
+def test_authoring_requires_legacy_bridge(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "bridge@example.edu"
     seed_identity(user_id=user_id, email=email, role="teacher", create_legacy_user=False)
@@ -228,7 +238,7 @@ def test_authoring_requires_legacy_bridge(auth_headers_factory, seed_identity) -
     assert response.json()["detail"] == "legacy_bridge_missing"
 
 
-def test_authoring_progress_requires_auth(seed_identity, db) -> None:
+def test_authoring_progress_requires_auth(client, seed_identity, db) -> None:
     teacher_id = str(uuid.uuid4())
     email = "progress-owner@example.edu"
     seed_identity(user_id=teacher_id, email=email, role="teacher")
@@ -245,7 +255,7 @@ def test_authoring_progress_requires_auth(seed_identity, db) -> None:
     assert response.json()["detail"] == "invalid_token"
 
 
-def test_authoring_progress_denies_student(auth_headers_factory, seed_identity, db) -> None:
+def test_authoring_progress_denies_student(client, auth_headers_factory, seed_identity, db) -> None:
     teacher_id = str(uuid.uuid4())
     owner_email = "progress-teacher@example.edu"
     seed_identity(user_id=teacher_id, email=owner_email, role="teacher")
@@ -267,7 +277,7 @@ def test_authoring_progress_denies_student(auth_headers_factory, seed_identity, 
     assert response.json()["detail"] == "authoring_forbidden"
 
 
-def test_authoring_progress_hides_jobs_from_other_teachers(auth_headers_factory, seed_identity, db) -> None:
+def test_authoring_progress_hides_jobs_from_other_teachers(client, auth_headers_factory, seed_identity, db) -> None:
     owner_id = str(uuid.uuid4())
     owner_email = "owner-teacher@example.edu"
     seed_identity(user_id=owner_id, email=owner_email, role="teacher")
@@ -289,7 +299,7 @@ def test_authoring_progress_hides_jobs_from_other_teachers(auth_headers_factory,
     assert response.json()["detail"] == "Job not found"
 
 
-def test_invite_resolve_returns_status_and_expiry(db, seed_invite) -> None:
+def test_invite_resolve_returns_status_and_expiry(client, db, seed_invite) -> None:
     university_id = "10000000-0000-0000-0000-000000000031"
     db.add(Tenant(id=university_id, name="Resolve University"))
     db.commit()
@@ -309,13 +319,14 @@ def test_invite_resolve_returns_status_and_expiry(db, seed_invite) -> None:
     assert payload["email_masked"].endswith("@example.edu")
 
 
-def test_invite_resolve_invalid() -> None:
+def test_invite_resolve_invalid(client) -> None:
     response = client.post("/api/invites/resolve", json={"invite_token": "missing"})
     assert response.status_code == 404
     assert response.json()["detail"] == "invalid_invite"
 
 
 def test_activate_password_success_and_retry(
+    client,
     db,
     fake_admin_client,
     seed_course,
@@ -388,7 +399,7 @@ def test_activate_password_success_and_retry(
     assert retry_response.json()["status"] == "activated"
 
 
-def test_activate_password_compensation_failure(fake_admin_client, db, seed_invite) -> None:
+def test_activate_password_compensation_failure(client, fake_admin_client, db, seed_invite) -> None:
     tenant = Tenant(id="10000000-0000-0000-0000-000000000060", name="Compensation University")
     db.add(tenant)
     db.commit()
@@ -414,7 +425,7 @@ def test_activate_password_compensation_failure(fake_admin_client, db, seed_invi
     assert response.json()["detail"] == "activation_failed"
 
 
-def test_activate_password_does_not_delete_preexisting_user_on_failure(fake_admin_client, db, seed_invite) -> None:
+def test_activate_password_does_not_delete_preexisting_user_on_failure(client, fake_admin_client, db, seed_invite) -> None:
     tenant = Tenant(id="10000000-0000-0000-0000-000000000062", name="Existing User University")
     db.add(tenant)
     db.commit()
@@ -440,7 +451,7 @@ def test_activate_password_does_not_delete_preexisting_user_on_failure(fake_admi
     assert fake_admin_client.get_user_by_id(existing_user.id) is not None
 
 
-def test_activate_password_derives_profile_name_when_full_name_missing(fake_admin_client, db, seed_invite) -> None:
+def test_activate_password_derives_profile_name_when_full_name_missing(client, fake_admin_client, db, seed_invite) -> None:
     tenant = Tenant(id="10000000-0000-0000-0000-000000000061", name="Derived Name University")
     db.add(tenant)
     db.commit()
@@ -466,7 +477,7 @@ def test_activate_password_derives_profile_name_when_full_name_missing(fake_admi
     assert profile.full_name == "derived.name"
 
 
-def test_activate_password_reactivates_existing_membership(fake_admin_client, db, seed_invite) -> None:
+def test_activate_password_reactivates_existing_membership(client, fake_admin_client, db, seed_invite) -> None:
     tenant = Tenant(id="10000000-0000-0000-0000-000000000063", name="Reactivation University")
     db.add(tenant)
     db.commit()
@@ -512,6 +523,7 @@ def test_activate_password_reactivates_existing_membership(fake_admin_client, db
 
 
 def test_redeem_rolls_back_if_invite_cannot_be_consumed(
+    client,
     db,
     auth_headers_factory,
     seed_course,
@@ -563,6 +575,7 @@ def test_redeem_rolls_back_if_invite_cannot_be_consumed(
 
 
 def test_redeem_success_and_repeat_is_idempotent(
+    client,
     seed_course,
     seed_identity,
     seed_invite,
@@ -619,7 +632,7 @@ def test_redeem_success_and_repeat_is_idempotent(
     assert refreshed_invite.status == "consumed"
 
 
-def test_activate_oauth_complete_mismatch_does_not_delete_existing_auth_user(fake_admin_client, seed_invite, db) -> None:
+def test_activate_oauth_complete_mismatch_does_not_delete_existing_auth_user(client, fake_admin_client, seed_invite, db) -> None:
     tenant = Tenant(id="10000000-0000-0000-0000-000000000070", name="OAuth University")
     db.add(tenant)
     db.commit()
@@ -653,7 +666,7 @@ def test_activate_oauth_complete_mismatch_does_not_delete_existing_auth_user(fak
     assert fake_admin_client.get_user_by_id(oauth_user_id) is fake_user
 
 
-def test_activate_oauth_complete_mismatch_skips_delete_even_if_admin_delete_would_fail(fake_admin_client, seed_invite, db) -> None:
+def test_activate_oauth_complete_mismatch_skips_delete_even_if_admin_delete_would_fail(client, fake_admin_client, seed_invite, db) -> None:
     tenant = Tenant(id="10000000-0000-0000-0000-000000000071", name="OAuth Failure University")
     db.add(tenant)
     db.commit()
@@ -688,7 +701,7 @@ def test_activate_oauth_complete_mismatch_skips_delete_even_if_admin_delete_woul
     assert fake_admin_client.get_user_by_id(oauth_user_id) is fake_user
 
 
-def test_activate_oauth_complete_success(seed_invite, auth_headers_factory, db) -> None:
+def test_activate_oauth_complete_success(client, seed_invite, auth_headers_factory, db) -> None:
     tenant = Tenant(id="10000000-0000-0000-0000-000000000072", name="OAuth Success University")
     db.add(tenant)
     db.commit()

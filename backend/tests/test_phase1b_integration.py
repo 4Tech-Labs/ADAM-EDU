@@ -2,13 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
-from shared.app import app
 from shared.database import SessionLocal
 from shared.models import Assignment, AuthoringJob
-
-client = TestClient(app)
 
 TEACHER_ID = "00000000-0000-0000-0000-000000000102"
 ERROR_TEACHER_ID = "00000000-0000-0000-0000-000000000103"
@@ -27,7 +22,7 @@ async def _failing_astream(*args, **kwargs):
     yield {}
 
 
-def test_phase1b_intake_and_authoring_stubbed(auth_headers_factory, seed_identity) -> None:
+def test_phase1b_intake_and_authoring_stubbed(client, auth_headers_factory, seed_identity) -> None:
     teacher_email = "teacher102@example.edu"
     seed_identity(user_id=TEACHER_ID, email=teacher_email, role="teacher")
     headers = auth_headers_factory(sub=TEACHER_ID, email=teacher_email)
@@ -64,7 +59,7 @@ def test_phase1b_intake_and_authoring_stubbed(auth_headers_factory, seed_identit
         db.close()
 
 
-def test_phase1b_authoring_service_failure(auth_headers_factory, seed_identity) -> None:
+def test_phase1b_authoring_service_failure(client, auth_headers_factory, seed_identity) -> None:
     teacher_email = "teacher103@example.edu"
     seed_identity(user_id=ERROR_TEACHER_ID, email=teacher_email, role="teacher")
     headers = auth_headers_factory(sub=ERROR_TEACHER_ID, email=teacher_email)

@@ -1,13 +1,8 @@
 from unittest.mock import patch
 import uuid
 
-from fastapi.testclient import TestClient
-
-from shared.app import app
 from shared.database import SessionLocal
 from shared.models import Assignment, AuthoringJob
-
-client = TestClient(app)
 
 
 def test_database_connection() -> None:
@@ -18,7 +13,7 @@ def test_database_connection() -> None:
         db.close()
 
 
-def test_intake_and_idempotency_workflow(auth_headers_factory, seed_identity) -> None:
+def test_intake_and_idempotency_workflow(client, auth_headers_factory, seed_identity) -> None:
     teacher_id = "00000000-0000-0000-0000-000000000101"
     teacher_email = "teacher101@example.edu"
     seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
@@ -130,7 +125,7 @@ def test_intake_and_idempotency_workflow(auth_headers_factory, seed_identity) ->
     assert retry_response.json()["status"] == "bypassed"
 
 
-def test_intake_requires_bearer_auth() -> None:
+def test_intake_requires_bearer_auth(client) -> None:
     payload = {"assignment_title": f"Case {uuid.uuid4()}"}
     response = client.post("/api/authoring/jobs", json=payload)
     assert response.status_code == 401

@@ -11,6 +11,7 @@ For a normal local backend session:
 ```powershell
 cd C:\Users\Juan Camilo Dorado\Downloads\ADAM-EDU
 docker compose up -d adam-edu-postgres
+supabase start
 
 cd backend
 uv sync --dev
@@ -19,6 +20,8 @@ uv run uvicorn shared.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 `docker compose up` starts PostgreSQL, but it does not apply migrations. `uv run alembic upgrade head` is required for a usable local schema.
+Supabase CLI owns auth/session local on `http://localhost:54321`. The repo app database
+stays on `localhost:5434`, not the Supabase local database on `54322`.
 
 ## Validation
 

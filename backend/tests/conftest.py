@@ -8,9 +8,12 @@ import uuid
 
 import jwt
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import close_all_sessions
 
+from shared.app import app
 from shared.auth import get_auth_settings, get_jwt_verifier, get_supabase_admin_auth_client
 from shared.database import SessionLocal, engine
 from shared.models import Base, Course, Invite, Membership, Profile, Tenant, User
@@ -54,28 +57,40 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(skip_missing_key)
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    numprocesses = getattr(config.option, "numprocesses", None)
+    if getattr(config, "workerinput", None) is not None:
+        raise pytest.UsageError(
+            "The backend test suite uses a shared database and must run in serial. "
+            "Do not use pytest-xdist (-n) until the harness isolates one database per worker."
+        )
+    if numprocesses == "auto" or (isinstance(numprocesses, int) and numprocesses > 0):
+        raise pytest.UsageError(
+            "The backend test suite uses a shared database and must run in serial. "
+            "Do not use pytest-xdist (-n) until the harness isolates one database per worker."
+        )
+
+
+def _truncate_all_tables() -> None:
+    table_names = ", ".join(table.name for table in Base.metadata.sorted_tables)
+    if not table_names:
+        return
+    truncate_sql = text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE")
+    close_all_sessions()
+    # The backend suite assumes exclusive ownership of the local test DB while it runs.
+    with engine.begin() as connection:
+        connection.execute(truncate_sql)
+
+
 @pytest.fixture(autouse=True)
 def clean_db(ensure_db_schema: None, request: pytest.FixtureRequest) -> Generator[None, None, None]:
     if request.node.module.__name__.endswith("test_issue23_identity_schema"):
         yield
         return
 
-    table_names = ", ".join(table.name for table in Base.metadata.sorted_tables)
-    truncate_sql = text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE")
-
-    session = SessionLocal()
-    try:
-        session.execute(truncate_sql)
-        session.commit()
-    finally:
-        session.close()
+    _truncate_all_tables()
     yield
-    session = SessionLocal()
-    try:
-        session.execute(truncate_sql)
-        session.commit()
-    finally:
-        session.close()
+    _truncate_all_tables()
 
 
 @pytest.fixture
@@ -84,7 +99,14 @@ def db(ensure_db_schema: None):
     try:
         yield session
     finally:
+        session.rollback()
         session.close()
+
+
+@pytest.fixture
+def client() -> Generator[TestClient, None, None]:
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 @pytest.fixture

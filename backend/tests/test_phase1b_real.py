@@ -1,19 +1,13 @@
 import os
-import json
 import uuid
-import asyncio
-from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
-from shared.app import app
 from shared.database import SessionLocal
 from shared.models import AuthoringJob, Assignment
 
-client = TestClient(app)
 pytestmark = pytest.mark.live_llm
 
-def test_real_success_and_idempotency(auth_headers_factory, seed_identity):
+def test_real_success_and_idempotency(client, auth_headers_factory, seed_identity):
     print("\n--- Testing Real Success ---")
     teacher_id = str(uuid.uuid4())
     teacher_email = f"{teacher_id}@example.edu"
@@ -66,7 +60,7 @@ def test_real_success_and_idempotency(auth_headers_factory, seed_identity):
         db.close()
 
 
-def test_real_failure_handling(auth_headers_factory, seed_identity):
+def test_real_failure_handling(client, auth_headers_factory, seed_identity):
     print("\n--- Testing Real Failure (Invalid API Key) ---")
     teacher_id = str(uuid.uuid4())
     teacher_email = f"{teacher_id}@example.edu"
@@ -108,7 +102,7 @@ def test_real_failure_handling(auth_headers_factory, seed_identity):
         db.close()
 
 
-def test_legacy_suggest():
+def test_legacy_suggest(client):
     print("\n--- Testing Legacy /suggest Endpoint ---")
     
     # We use a dummy payload that matches the Pydantic SuggestRequest exactly
@@ -138,40 +132,4 @@ def test_legacy_suggest():
     else:
         print(f"Error Response: {resp.text}")
         assert False, "Legacy /suggest failed."
-
-
-if __name__ == "__main__":
-    # Ensure stdout uses utf-8 just in case
-    import sys
-    sys.stdout.reconfigure(encoding='utf-8')
-    
-    print("==================================================")
-    print("STARTING REAL PHASE 1B VERIFICATION")
-    print("==================================================")
-    
-    try:
-        test_legacy_suggest()
-        print("Legacy Endpoint OK\n")
-        
-        test_real_failure_handling()
-        print("Failure Handling OK\n")
-        
-        test_real_success_and_idempotency()
-        print("Success & Idempotency OK\n")
-        
-        print("==================================================")
-        print("ALL REAL TESTS PASSED. PHASE 1B API FULLY FUNCTIONAL.")
-        print("==================================================")
-        
-    except AssertionError as e:
-        print(f"\n[FAIL] TEST FAILED: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n[ERROR] UNEXPECTED ERROR: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-
 
