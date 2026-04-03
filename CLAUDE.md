@@ -49,9 +49,9 @@ Use the repo-driven gstack runtime materialized from the pinned lock in `scripts
 - Dispatch defaults:
   - ideas and brainstorming -> `office-hours`, then `autoplan` or `plan-*`
   - bugs, errors, regressions -> `investigate`
-- review of a diff, branch, or PR -> `review`
-- QA or staging verification -> `qa` or `qa-only`
-- release preparation -> `ship`, then `land-and-deploy`, `canary`, `document-release`
+  - review of a diff, branch, or PR -> `review`
+  - QA or staging verification -> `qa` or `qa-only`
+  - release preparation -> `ship`, then `land-and-deploy`, `canary`, `document-release`
   - visual work -> `design-*`
   - security review -> `cso`
   - browser-heavy QA -> `browse`, `connect-chrome`, `setup-browser-cookies`
