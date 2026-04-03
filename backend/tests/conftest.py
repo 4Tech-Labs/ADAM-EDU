@@ -8,7 +8,7 @@ import uuid
 
 import jwt
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from shared.auth import get_auth_settings, get_jwt_verifier, get_supabase_admin_auth_client
@@ -55,19 +55,24 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 @pytest.fixture(autouse=True)
-def clean_db(ensure_db_schema: None) -> Generator[None, None, None]:
+def clean_db(ensure_db_schema: None, request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    if request.node.module.__name__.endswith("test_issue23_identity_schema"):
+        yield
+        return
+
+    table_names = ", ".join(table.name for table in Base.metadata.sorted_tables)
+    truncate_sql = text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE")
+
     session = SessionLocal()
     try:
-        for table in reversed(Base.metadata.sorted_tables):
-            session.execute(table.delete())
+        session.execute(truncate_sql)
         session.commit()
     finally:
         session.close()
     yield
     session = SessionLocal()
     try:
-        for table in reversed(Base.metadata.sorted_tables):
-            session.execute(table.delete())
+        session.execute(truncate_sql)
         session.commit()
     finally:
         session.close()
@@ -243,6 +248,12 @@ class FakeAdminUser:
 
 
 @dataclass
+class FakeAdminUserResult:
+    user: FakeAdminUser
+    created: bool
+
+
+@dataclass
 class FakeAdminClient:
     users_by_id: dict[str, FakeAdminUser] = field(default_factory=dict)
     users_by_email: dict[str, FakeAdminUser] = field(default_factory=dict)
@@ -251,11 +262,18 @@ class FakeAdminClient:
     def find_user_by_email(self, email: str) -> FakeAdminUser | None:
         return self.users_by_email.get(email.lower())
 
-    def create_password_user(self, email: str, password: str) -> FakeAdminUser:
+    def get_or_create_user_by_email(self, email: str, password: str) -> FakeAdminUserResult:
+        existing = self.find_user_by_email(email)
+        if existing is not None:
+            return FakeAdminUserResult(user=existing, created=False)
+
         user = FakeAdminUser(id=str(uuid.uuid4()), email=email)
         self.users_by_id[user.id] = user
         self.users_by_email[email.lower()] = user
-        return user
+        return FakeAdminUserResult(user=user, created=True)
+
+    def create_password_user(self, email: str, password: str) -> FakeAdminUser:
+        return self.get_or_create_user_by_email(email, password).user
 
     def get_user_by_id(self, user_id: str) -> FakeAdminUser | None:
         return self.users_by_id.get(user_id)

@@ -323,6 +323,32 @@ def test_activate_password_compensation_failure(fake_admin_client, db, seed_invi
     assert response.json()["detail"] == "activation_failed"
 
 
+def test_activate_password_does_not_delete_preexisting_user_on_failure(fake_admin_client, db, seed_invite) -> None:
+    tenant = Tenant(id="10000000-0000-0000-0000-000000000062", name="Existing User University")
+    db.add(tenant)
+    db.commit()
+    existing_user = fake_admin_client.create_password_user("existing.user@example.edu", "not-used")
+    _, token = seed_invite(
+        email="existing.user@example.edu",
+        university_id=tenant.id,
+        role="teacher",
+    )
+
+    with patch("shared.app.upsert_profile", side_effect=RuntimeError("db fail")):
+        response = client.post(
+            "/api/auth/activate/password",
+            json={
+                "invite_token": token,
+                "full_name": "Existing User",
+                "password": "super-secret",
+                "confirm_password": "super-secret",
+            },
+        )
+
+    assert response.status_code == 500
+    assert fake_admin_client.get_user_by_id(existing_user.id) is not None
+
+
 def test_activate_password_derives_profile_name_when_full_name_missing(fake_admin_client, db, seed_invite) -> None:
     tenant = Tenant(id="10000000-0000-0000-0000-000000000061", name="Derived Name University")
     db.add(tenant)
@@ -347,6 +373,102 @@ def test_activate_password_derives_profile_name_when_full_name_missing(fake_admi
     profile = db.get(Profile, existing_user.id)
     assert profile is not None
     assert profile.full_name == "derived.name"
+
+
+def test_activate_password_reactivates_existing_membership(fake_admin_client, db, seed_invite) -> None:
+    tenant = Tenant(id="10000000-0000-0000-0000-000000000063", name="Reactivation University")
+    db.add(tenant)
+    db.commit()
+    existing_user = fake_admin_client.create_password_user("reactivate@example.edu", "not-used")
+    db.add(Profile(id=existing_user.id, full_name="Dormant User"))
+    db.add(
+        Membership(
+            user_id=existing_user.id,
+            university_id=tenant.id,
+            role="teacher",
+            status="suspended",
+            must_rotate_password=True,
+        )
+    )
+    db.commit()
+    _, token = seed_invite(
+        email="reactivate@example.edu",
+        university_id=tenant.id,
+        role="teacher",
+    )
+
+    response = client.post(
+        "/api/auth/activate/password",
+        json={
+            "invite_token": token,
+            "full_name": "Dormant User",
+            "password": "super-secret",
+            "confirm_password": "super-secret",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == existing_user.id,
+            Membership.university_id == tenant.id,
+            Membership.role == "teacher",
+        )
+    )
+    assert membership is not None
+    assert membership.status == "active"
+    assert membership.must_rotate_password is False
+
+
+def test_redeem_rolls_back_if_invite_cannot_be_consumed(
+    db,
+    auth_headers_factory,
+    seed_course,
+    seed_identity,
+    seed_invite,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "redeem-teacher@example.edu"
+    teacher_seed = seed_identity(
+        user_id=teacher_id,
+        email=teacher_email,
+        role="teacher",
+        university_id="10000000-0000-0000-0000-000000000064",
+    )
+    course = seed_course(
+        university_id=teacher_seed["tenant"].id,
+        teacher_membership_id=teacher_seed["membership"].id,
+        title="Redeem Rollback Course",
+    )
+
+    student_id = str(uuid.uuid4())
+    student_email = "redeem-student@example.edu"
+    student_seed = seed_identity(
+        user_id=student_id,
+        email=student_email,
+        role="student",
+        university_id=teacher_seed["tenant"].id,
+    )
+    _, token = seed_invite(
+        email=student_email,
+        university_id=teacher_seed["tenant"].id,
+        role="student",
+        course_id=course.id,
+    )
+    headers = auth_headers_factory(sub=student_id, email=student_email)
+
+    with patch("shared.app.consume_invite_if_pending", return_value=False):
+        response = client.post("/api/invites/redeem", json={"invite_token": token}, headers=headers)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "invalid_invite"
+    course_membership = db.scalar(
+        select(CourseMembership).where(
+            CourseMembership.course_id == course.id,
+            CourseMembership.membership_id == student_seed["membership"].id,
+        )
+    )
+    assert course_membership is None
 
 
 def test_activate_oauth_complete_mismatch_deletes_auth_user(fake_admin_client, seed_invite, db) -> None:
@@ -381,3 +503,37 @@ def test_activate_oauth_complete_mismatch_deletes_auth_user(fake_admin_client, s
     assert response.status_code == 422
     assert response.json()["detail"] == "invite_email_mismatch"
     assert fake_admin_client.get_user_by_id(oauth_user_id) is None
+
+
+def test_activate_oauth_complete_mismatch_delete_failure_is_closed(fake_admin_client, seed_invite, db) -> None:
+    tenant = Tenant(id="10000000-0000-0000-0000-000000000071", name="OAuth Failure University")
+    db.add(tenant)
+    db.commit()
+    _, token = seed_invite(
+        email="expected@example.edu",
+        university_id=tenant.id,
+        role="teacher",
+    )
+    oauth_user_id = str(uuid.uuid4())
+    fake_user = fake_admin_client.create_password_user("wrong@example.edu", "not-used")
+    fake_admin_client.users_by_id[oauth_user_id] = fake_user
+    fake_admin_client.users_by_email["wrong@example.edu"] = fake_user
+    fake_admin_client.fail_delete = True
+    headers = {
+        "Authorization": "Bearer "
+        + jwt.encode(
+            {
+                "sub": oauth_user_id,
+                "email": "wrong@example.edu",
+                "iss": "https://example.supabase.co/auth/v1",
+                "aud": "authenticated",
+                "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            },
+            "test-jwt-secret-with-sufficient-length-123",
+            algorithm="HS256",
+        )
+    }
+
+    response = client.post("/api/auth/activate/oauth/complete", json={"invite_token": token}, headers=headers)
+    assert response.status_code == 500
+    assert response.json()["detail"] == "activation_failed"

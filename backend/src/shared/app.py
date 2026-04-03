@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -121,6 +122,9 @@ def upsert_membership(db: Session, auth_user_id: str, university_id: str, role: 
         )
     )
     if membership is not None:
+        membership.status = "active"
+        membership.must_rotate_password = False
+        db.flush()
         return membership
 
     membership = Membership(
@@ -135,7 +139,7 @@ def upsert_membership(db: Session, auth_user_id: str, university_id: str, role: 
     return membership
 
 
-def upsert_course_membership(db: Session, course_id: str, membership_id: str) -> CourseMembership:
+def upsert_course_membership(db: Session, course_id: str, membership_id: str) -> tuple[CourseMembership, bool]:
     course_membership = db.scalar(
         select(CourseMembership).where(
             CourseMembership.course_id == course_id,
@@ -143,12 +147,30 @@ def upsert_course_membership(db: Session, course_id: str, membership_id: str) ->
         )
     )
     if course_membership is not None:
-        return course_membership
+        return course_membership, False
 
-    course_membership = CourseMembership(course_id=course_id, membership_id=membership_id)
-    db.add(course_membership)
-    db.flush()
-    return course_membership
+    inserted_id = db.execute(
+        pg_insert(CourseMembership)
+        .values(course_id=course_id, membership_id=membership_id)
+        .on_conflict_do_nothing(constraint="uix_course_membership")
+        .returning(CourseMembership.id)
+    ).scalar_one_or_none()
+
+    if inserted_id is None:
+        existing = db.scalar(
+            select(CourseMembership).where(
+                CourseMembership.course_id == course_id,
+                CourseMembership.membership_id == membership_id,
+            )
+        )
+        if existing is None:  # pragma: no cover
+            raise RuntimeError("course_membership_upsert_failed")
+        return existing, False
+
+    created_membership = db.get(CourseMembership, inserted_id)
+    if created_membership is None:  # pragma: no cover
+        raise RuntimeError("course_membership_inserted_but_missing")
+    return created_membership, True
 
 
 def consume_invite_if_pending(db: Session, invite: Invite) -> bool:
@@ -648,8 +670,28 @@ def redeem_invite(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
 
     try:
-        upsert_course_membership(db, invite.course_id, membership.id)
-        consume_invite_if_pending(db, invite)
+        _, created_course_membership = upsert_course_membership(db, invite.course_id, membership.id)
+        consumed = consume_invite_if_pending(db, invite)
+        if not consumed:
+            db.rollback()
+            existing_after_rollback = db.scalar(
+                select(CourseMembership).where(
+                    CourseMembership.course_id == invite.course_id,
+                    CourseMembership.membership_id == membership.id,
+                )
+            )
+            if existing_after_rollback is not None or not created_course_membership:
+                audit_log(
+                    "invite.redeem",
+                    "already_enrolled",
+                    auth_user_id=actor.auth_user_id,
+                    invite_id=invite.id,
+                    invite_hash_prefix=invite.token_hash[:12],
+                    http_status=status.HTTP_200_OK,
+                    reason="already_enrolled",
+                )
+                return InviteRedeemResponse(status="already_enrolled")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -711,8 +753,9 @@ def activate_password(
     created_new_user = False
     auth_user = existing_user
     if auth_user is None:
-        auth_user = admin_client.create_password_user(invite.email, req.password)
-        created_new_user = True
+        admin_user_result = admin_client.get_or_create_user_by_email(invite.email, req.password)
+        auth_user = admin_user_result.user
+        created_new_user = admin_user_result.created
 
     try:
         upsert_profile(db, auth_user.id, derive_activation_full_name(req.full_name, invite.email))
@@ -787,16 +830,26 @@ def activate_oauth_complete(
         if not profile_exists and not membership_exists:
             try:
                 get_supabase_admin_auth_client().delete_user(identity.auth_user_id)
-            finally:
+            except Exception as exc:
                 audit_log(
                     "activate.oauth.mismatch_delete",
-                    "deleted",
+                    "partial_failure",
                     auth_user_id=identity.auth_user_id,
                     invite_id=invite.id,
                     invite_hash_prefix=invite.token_hash[:12],
-                    http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    reason="invite_email_mismatch",
+                    http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    reason="delete_failed",
                 )
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="activation_failed") from exc
+            audit_log(
+                "activate.oauth.mismatch_delete",
+                "deleted",
+                auth_user_id=identity.auth_user_id,
+                invite_id=invite.id,
+                invite_hash_prefix=invite.token_hash[:12],
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                reason="invite_email_mismatch",
+            )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invite_email_mismatch")
 
     try:
