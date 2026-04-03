@@ -13,15 +13,18 @@ from shared.models import AuthoringJob, Assignment
 client = TestClient(app)
 pytestmark = pytest.mark.live_llm
 
-def test_real_success_and_idempotency():
+def test_real_success_and_idempotency(auth_headers_factory, seed_identity):
     print("\n--- Testing Real Success ---")
+    teacher_id = str(uuid.uuid4())
+    teacher_email = f"{teacher_id}@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    headers = auth_headers_factory(sub=teacher_id, email=teacher_email)
     payload = {
-        "teacher_id": str(uuid.uuid4()),
         "assignment_title": "Real LLM Test Case"
     }
 
     # Execute Intake
-    resp = client.post("/api/authoring/jobs", json=payload)
+    resp = client.post("/api/authoring/jobs", json=payload, headers=headers)
     assert resp.status_code == 202
     job_id = resp.json().get("job_id")
     print(f"Intake Response 202 OK. Job ID: {job_id}")
@@ -63,10 +66,13 @@ def test_real_success_and_idempotency():
         db.close()
 
 
-def test_real_failure_handling():
+def test_real_failure_handling(auth_headers_factory, seed_identity):
     print("\n--- Testing Real Failure (Invalid API Key) ---")
+    teacher_id = str(uuid.uuid4())
+    teacher_email = f"{teacher_id}@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    headers = auth_headers_factory(sub=teacher_id, email=teacher_email)
     payload = {
-        "teacher_id": str(uuid.uuid4()),
         "assignment_title": "Real Error LLM Test Case"
     }
 
@@ -75,7 +81,7 @@ def test_real_failure_handling():
     os.environ["GEMINI_API_KEY"] = "INVALID_KEY_12345"
 
     try:
-        resp = client.post("/api/authoring/jobs", json=payload)
+        resp = client.post("/api/authoring/jobs", json=payload, headers=headers)
         assert resp.status_code == 202
         job_id = resp.json().get("job_id")
         print(f"Intake Response 202 OK. Job ID: {job_id}")

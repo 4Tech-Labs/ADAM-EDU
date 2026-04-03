@@ -1,9 +1,19 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Generator
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 import os
+import uuid
 
+import jwt
 import pytest
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
+from shared.auth import get_auth_settings, get_jwt_verifier, get_supabase_admin_auth_client
 from shared.database import SessionLocal, engine
-from shared.models import Base
+from shared.models import Base, Course, Invite, Membership, Profile, Tenant, User
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -12,14 +22,19 @@ def ensure_db_schema() -> None:
     Base.metadata.create_all(bind=engine)
 
 
-@pytest.fixture
-def db(ensure_db_schema: None):
-    """Provide a real SQLAlchemy session for API tests."""
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
+@pytest.fixture(autouse=True)
+def configure_auth_env(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-jwt-secret-with-sufficient-length-123")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
+    get_auth_settings.cache_clear()
+    get_jwt_verifier.cache_clear()
+    get_supabase_admin_auth_client.cache_clear()
+    yield
+    get_auth_settings.cache_clear()
+    get_jwt_verifier.cache_clear()
+    get_supabase_admin_auth_client.cache_clear()
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -37,3 +52,224 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(skip_live)
         elif not has_gemini_key:
             item.add_marker(skip_missing_key)
+
+
+@pytest.fixture(autouse=True)
+def clean_db(ensure_db_schema: None) -> Generator[None, None, None]:
+    session = SessionLocal()
+    try:
+        for table in reversed(Base.metadata.sorted_tables):
+            session.execute(table.delete())
+        session.commit()
+    finally:
+        session.close()
+    yield
+    session = SessionLocal()
+    try:
+        for table in reversed(Base.metadata.sorted_tables):
+            session.execute(table.delete())
+        session.commit()
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def db(ensure_db_schema: None):
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def token_factory() -> Callable[..., str]:
+    def _factory(
+        *,
+        sub: str,
+        email: str,
+        exp_delta_seconds: int = 3600,
+        issuer: str | None = None,
+        audience: str = "authenticated",
+        claims: dict[str, object] | None = None,
+        algorithm: str = "HS256",
+    ) -> str:
+        settings = get_auth_settings()
+        payload: dict[str, object] = {
+            "sub": sub,
+            "email": email,
+            "iss": issuer or settings.issuer,
+            "aud": audience,
+            "exp": datetime.now(timezone.utc) + timedelta(seconds=exp_delta_seconds),
+        }
+        if claims:
+            payload.update(claims)
+        return jwt.encode(payload, settings.supabase_jwt_secret, algorithm=algorithm)
+
+    return _factory
+
+
+@pytest.fixture
+def auth_headers_factory(token_factory: Callable[..., str]) -> Callable[..., dict[str, str]]:
+    def _factory(**kwargs: object) -> dict[str, str]:
+        token = token_factory(**kwargs)
+        return {"Authorization": f"Bearer {token}"}
+
+    return _factory
+
+
+@pytest.fixture
+def seed_identity(db) -> Callable[..., dict[str, object]]:
+    def _factory(
+        *,
+        user_id: str,
+        email: str,
+        role: str,
+        university_id: str | None = None,
+        university_name: str = "Test University",
+        full_name: str = "Test User",
+        membership_status: str = "active",
+        create_profile: bool = True,
+        create_legacy_user: bool = True,
+        must_rotate_password: bool = False,
+    ) -> dict[str, object]:
+        tenant_id = university_id or "10000000-0000-0000-0000-000000000001"
+        tenant = db.get(Tenant, tenant_id)
+        if tenant is None:
+            tenant = Tenant(id=tenant_id, name=university_name)
+            db.add(tenant)
+            try:
+                db.flush()
+            except IntegrityError:
+                db.rollback()
+                tenant = db.get(Tenant, tenant_id)
+                if tenant is None:  # pragma: no cover
+                    raise
+
+        profile = None
+        if create_profile:
+            profile = db.get(Profile, user_id)
+            if profile is None:
+                profile = Profile(id=user_id, full_name=full_name)
+                db.add(profile)
+                db.flush()
+
+        membership = None
+        membership = db.scalar(
+            select(Membership).where(
+                Membership.user_id == user_id,
+                Membership.university_id == tenant_id,
+                Membership.role == role,
+            )
+        )
+        if membership is None and create_profile:
+            membership = Membership(
+                user_id=user_id,
+                university_id=tenant_id,
+                role=role,
+                status=membership_status,
+                must_rotate_password=must_rotate_password,
+            )
+            db.add(membership)
+            db.flush()
+
+        legacy_user = None
+        if create_legacy_user:
+            legacy_user = db.get(User, user_id)
+            if legacy_user is None:
+                legacy_user = User(id=user_id, tenant_id=tenant_id, email=email, role=role)
+                db.add(legacy_user)
+                db.flush()
+
+        db.commit()
+        return {
+            "tenant": tenant,
+            "profile": profile,
+            "membership": membership,
+            "legacy_user": legacy_user,
+        }
+
+    return _factory
+
+
+@pytest.fixture
+def seed_course(db):
+    def _factory(*, university_id: str, teacher_membership_id: str, title: str = "Test Course") -> Course:
+        course = Course(university_id=university_id, teacher_membership_id=teacher_membership_id, title=title)
+        db.add(course)
+        db.commit()
+        db.refresh(course)
+        return course
+
+    return _factory
+
+
+@pytest.fixture
+def seed_invite(db):
+    def _factory(
+        *,
+        email: str,
+        university_id: str,
+        role: str,
+        course_id: str | None = None,
+        status: str = "pending",
+        expires_at: datetime | None = None,
+        raw_token: str | None = None,
+    ) -> tuple[Invite, str]:
+        from shared.auth import hash_invite_token
+
+        token = raw_token or f"invite-{uuid.uuid4()}"
+        invite = Invite(
+            token_hash=hash_invite_token(token),
+            email=email,
+            university_id=university_id,
+            course_id=course_id,
+            role=role,
+            status=status,
+            expires_at=expires_at or (datetime.now(timezone.utc) + timedelta(days=1)),
+        )
+        db.add(invite)
+        db.commit()
+        db.refresh(invite)
+        return invite, token
+
+    return _factory
+
+
+@dataclass
+class FakeAdminUser:
+    id: str
+    email: str
+
+
+@dataclass
+class FakeAdminClient:
+    users_by_id: dict[str, FakeAdminUser] = field(default_factory=dict)
+    users_by_email: dict[str, FakeAdminUser] = field(default_factory=dict)
+    fail_delete: bool = False
+
+    def find_user_by_email(self, email: str) -> FakeAdminUser | None:
+        return self.users_by_email.get(email.lower())
+
+    def create_password_user(self, email: str, password: str) -> FakeAdminUser:
+        user = FakeAdminUser(id=str(uuid.uuid4()), email=email)
+        self.users_by_id[user.id] = user
+        self.users_by_email[email.lower()] = user
+        return user
+
+    def get_user_by_id(self, user_id: str) -> FakeAdminUser | None:
+        return self.users_by_id.get(user_id)
+
+    def delete_user(self, user_id: str) -> None:
+        if self.fail_delete:
+            raise RuntimeError("delete failed")
+        user = self.users_by_id.pop(user_id, None)
+        if user is not None:
+            self.users_by_email.pop(user.email.lower(), None)
+
+
+@pytest.fixture
+def fake_admin_client(monkeypatch: pytest.MonkeyPatch) -> FakeAdminClient:
+    client = FakeAdminClient()
+    monkeypatch.setattr("shared.app.get_supabase_admin_auth_client", lambda: client)
+    return client
