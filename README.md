@@ -1,8 +1,12 @@
 ## ADAM EDU v8.0
 
-ADAM EDU, en este corte, es un Teacher Authoring + Preview MVP. El repositorio publica el flujo docente que ya funciona: sugerencias para el formulario, generacion asincrona del caso con LangGraph, timeline por SSE y preview final para el profesor.
+ADAM EDU es un Teacher Authoring + Preview MVP en transicion a una plataforma multi-rol con autenticacion real. El repositorio incluye:
 
-No incluye runtime de estudiante, super admin, auth real ni despliegue cloud endurecido. Esos frentes quedan fuera del alcance de esta subida para mantener el repo pequeno, honesto y estable.
+- Flujo docente completo: sugerencias en formulario, generacion asincrona con LangGraph, timeline por SSE y preview del caso.
+- Shell frontend auth-aware (Issue #5): `AuthProvider`, guards por rol, rutas reales para teacher/student/admin, callback OAuth PKCE, helper `sessionStorage` de activacion con TTL 5 minutos.
+- Auth perimeter backend (Issue #3): verificacion JWT via JWKS, actor resolution por memberships, `GET /api/auth/me`, endpoints de activacion body-only.
+
+Los flujos de negocio completos de teacher activation, student join y admin provisioning siguen en Issues #6, #7 y #8 respectivamente. El shell actual deja listos los placeholders y contratos de routing para esas historias.
 
 Este repositorio evoluciona hoy como `ADAM-EDU`. El proyecto deriva del quickstart original de Gemini/LangGraph y conserva esa procedencia para fines de atribucion y trazabilidad, pero su desarrollo activo, gobernanza y flujo de colaboracion viven ya en esta linea de producto.
 

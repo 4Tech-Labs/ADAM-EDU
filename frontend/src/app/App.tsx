@@ -3,24 +3,68 @@ import { SiteHeader } from "@/shared/SiteHeader";
 import { useToast } from "@/shared/Toast";
 
 import { TeacherAuthoringPage } from "@/features/teacher-authoring/TeacherAuthoringPage";
+import { AuthCallbackPage } from "@/features/auth-callback/AuthCallbackPage";
+import { TeacherLoginPage } from "@/features/teacher-auth/TeacherLoginPage";
+import { TeacherActivatePage } from "@/features/teacher-auth/TeacherActivatePage";
+import { StudentLoginPage } from "@/features/student-auth/StudentLoginPage";
+import { StudentJoinPage } from "@/features/student-auth/StudentJoinPage";
+import { AdminLoginPage } from "@/features/admin-auth/AdminLoginPage";
+import { AdminChangePasswordPage } from "@/features/admin-auth/AdminChangePasswordPage";
+
+import { RootRedirect } from "./auth/RootRedirect";
+import { RequireRole } from "./auth/RequireRole";
+import { RequirePasswordRotation } from "./auth/RequirePasswordRotation";
 
 function App() {
-  const { ToastContainer } = useToast();
+    const { ToastContainer } = useToast();
 
-  return (
-    <div className="flex min-h-screen flex-col bg-bg-page font-sans type-body">
-      <SiteHeader />
+    return (
+        <div className="flex min-h-screen flex-col bg-bg-page font-sans type-body">
+            <SiteHeader />
 
-      <main className="flex-1">
-        <Routes>
-          <Route path="/" element={<Navigate to="/teacher" replace />} />
-          <Route path="/teacher/*" element={<TeacherAuthoringPage />} />
-        </Routes>
-      </main>
+            <main className="flex-1">
+                <Routes>
+                    {/* Root — redirects by session/role or shows landing */}
+                    <Route path="/" element={<RootRedirect />} />
 
-      <ToastContainer />
-    </div>
-  );
+                    {/* Teacher routes */}
+                    <Route path="/teacher/login" element={<TeacherLoginPage />} />
+                    <Route path="/teacher/activate" element={<TeacherActivatePage />} />
+                    <Route
+                        path="/teacher/*"
+                        element={
+                            <RequireRole role="teacher">
+                                <TeacherAuthoringPage />
+                            </RequireRole>
+                        }
+                    />
+
+                    {/* Student routes */}
+                    <Route path="/student/login" element={<StudentLoginPage />} />
+                    <Route path="/join" element={<StudentJoinPage />} />
+
+                    {/* Admin routes */}
+                    <Route path="/admin/login" element={<AdminLoginPage />} />
+                    <Route
+                        path="/admin/change-password"
+                        element={
+                            <RequirePasswordRotation>
+                                <AdminChangePasswordPage />
+                            </RequirePasswordRotation>
+                        }
+                    />
+
+                    {/* OAuth callback — PKCE code exchange handled by Supabase */}
+                    <Route path="/auth/callback" element={<AuthCallbackPage />} />
+
+                    {/* Catch-all */}
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+            </main>
+
+            <ToastContainer />
+        </div>
+    );
 }
 
 export default App;
