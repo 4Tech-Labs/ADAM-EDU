@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { defineConfig } from "vite";
+// defineConfig from vitest/config re-exports vite's defineConfig and adds the
+// typed `test` field so TypeScript recognises test configuration.
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react-swc";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -9,6 +11,14 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: "/app/",
   resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: ["./src/test-setup.ts"],
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },

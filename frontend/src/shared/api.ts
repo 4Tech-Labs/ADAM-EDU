@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseClient, resetSupabaseClientForTests } from "@/shared/supabaseClient";
 
 import type {
     AuthoringJobCreateRequest,
@@ -14,6 +14,8 @@ import type {
  * Centralized API client for the teacher authoring flow.
  * The backend now expects bearer auth on protected routes when a Supabase session exists.
  */
+export { resetSupabaseClientForTests as resetApiClientForTests };
+
 export const API_BASE = "/api";
 
 type ApiErrorCode =
@@ -41,44 +43,6 @@ export class ApiError extends Error {
     }
 }
 
-let supabaseClient: SupabaseClient | null | undefined;
-
-function getSupabaseEnv() {
-    return {
-        url: import.meta.env.VITE_SUPABASE_URL?.trim(),
-        anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY?.trim(),
-    };
-}
-
-function getSupabaseClient() {
-    if (supabaseClient !== undefined) {
-        return supabaseClient;
-    }
-
-    if (typeof window === "undefined") {
-        supabaseClient = null;
-        return supabaseClient;
-    }
-
-    const { url, anonKey } = getSupabaseEnv();
-    if (!url || !anonKey) {
-        supabaseClient = null;
-        return supabaseClient;
-    }
-
-    supabaseClient = createClient(url, anonKey, {
-        auth: {
-            autoRefreshToken: true,
-            detectSessionInUrl: true,
-            persistSession: true,
-        },
-    });
-    return supabaseClient;
-}
-
-export function resetApiClientForTests() {
-    supabaseClient = undefined;
-}
 
 export async function getBearerToken(): Promise<string | null> {
     const client = getSupabaseClient();
@@ -157,7 +121,7 @@ async function readErrorDetail(res: Response): Promise<string | undefined> {
     }
 }
 
-async function apiFetch(path: string, init?: RequestInit) {
+export async function apiFetch(path: string, init?: RequestInit) {
     const headers = await createAuthorizedHeaders(init?.headers);
     const response = await fetch(`${API_BASE}${path}`, {
         ...init,

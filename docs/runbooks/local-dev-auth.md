@@ -41,9 +41,9 @@ Supabase CLI se usa para auth/session local y para obtener claves del stack loca
 El Postgres de Supabase CLI en `54322` no reemplaza la base principal del repo. Sirve
 para el stack local de Supabase, no para `DATABASE_URL`.
 
-El scaffold de `supabase/config.toml` solo deja activas rutas que el frontend actual ya
-puede servir. Los callbacks y pantallas finales de activation/join siguen como trabajo
-posterior de Issue 5.
+El `supabase/config.toml` incluye las rutas del shell auth-aware de Issue 5:
+`/app/auth/callback`, `/app/teacher/activate`, `/app/join`. Para que los cambios de
+`config.toml` tengan efecto local, reinicia Supabase: `supabase stop && supabase start`.
 
 ## Puertos remotos y de produccion
 
@@ -97,31 +97,30 @@ Frontend:
 
 - `VITE_SUPABASE_URL=http://localhost:54321`
 - `VITE_SUPABASE_ANON_KEY=<ANON_KEY desde supabase status -o env>`
+- `VITE_AUTH_CALLBACK_URL=http://localhost:5173/app/auth/callback`
+- `VITE_APP_BASE_URL=http://localhost:5173/app`
 
 Nunca lleves `SUPABASE_SERVICE_ROLE_KEY` al browser ni a ejemplos frontend.
 
 ## Smoke minimo
 
-Este issue documenta y valida infraestructura local. No promete login productivo final.
-
 - `GET /health` responde `200`
 - `GET /api/auth/me` sin bearer responde `401`
+- `http://localhost:5173/app/` sin sesion muestra la landing con 3 entrypoints por rol
+- `http://localhost:5173/app/teacher` sin sesion redirige a `/teacher/login`
+- `http://localhost:5173/app/auth/callback` muestra spinner de "Completando inicio de sesion"
 
-Eso confirma:
+## Prerequisito manual para produccion
 
-- backend levantado
-- auth perimeter fail-closed activo
-- frontend listo para usar Supabase local como origen de sesion cuando llegue Issue 5
+En Supabase Dashboard → Authentication → URL Configuration, agregar:
 
-## Limite explicito de esta issue
+- `https://<TU-DOMINIO>/app/auth/callback`
 
-Todavia no existe:
+Para Microsoft OAuth (Issue #6), agregar ademas en Azure AD la Redirect URI:
 
-- login UI final
-- callback UX final
-- guards finales por rol
+- `https://<TU-SUPABASE-PROJECT>.supabase.co/auth/v1/callback`
 
-Todo eso sigue en Issue 5.
+No incluir secretos de provider en el frontend ni en este runbook.
 
 ## Microsoft OAuth local
 

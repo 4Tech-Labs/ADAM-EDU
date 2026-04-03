@@ -24,6 +24,10 @@ describe("api auth + stream glue", () => {
     beforeEach(() => {
         resetApiClientForTests();
         getSessionMock.mockReset();
+        // Default: no active session. Tests that need a token set this explicitly.
+        // Required because jsdom defines `window`, so getSupabaseClient() no longer
+        // short-circuits on `typeof window === "undefined"`.
+        getSessionMock.mockResolvedValue({ data: { session: null }, error: null });
         createClientMock.mockClear();
         vi.unstubAllEnvs();
         vi.unstubAllGlobals();

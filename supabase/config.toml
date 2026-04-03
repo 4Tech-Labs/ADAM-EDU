@@ -74,14 +74,12 @@ max_indexes = 5
 enabled = true
 # Keep the local auth stack centered on localhost so future OAuth callbacks match Issue 5.
 site_url = "http://localhost:5173/app/"
-# Current runnable routes only. Issue 5 will add dedicated callback and activation URLs.
-# Future placeholders:
-# - http://localhost:5173/app/auth/callback
-# - http://localhost:5173/app/teacher/activate
-# - http://localhost:5173/app/join
 additional_redirect_urls = [
   "http://localhost:5173/app/",
   "http://localhost:5173/app/teacher",
+  "http://localhost:5173/app/auth/callback",
+  "http://localhost:5173/app/teacher/activate",
+  "http://localhost:5173/app/join",
 ]
 jwt_expiry = 3600
 enable_refresh_token_rotation = true
