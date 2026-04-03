@@ -26,6 +26,7 @@ This repository does not currently include a student runtime, full authenticatio
 
 - `README.md`: onboarding, local setup, Docker, Alembic, runtime commands
 - `CONTRIBUTING.md`: branch, PR, validation, and collaboration workflow
+- `docs/runbooks/`: runbooks operativos, incluido el setup local canonico de auth y authoring
 - `docs/adr/`: accepted architecture decisions, including the Fase 1 auth perimeter ADR
 - `docs/repo-governance.md`: repository governance and merge policy
 - `CLAUDE.md`: equivalent agent guidance for Claude-oriented tooling
@@ -50,14 +51,15 @@ This repository does not currently include a student runtime, full authenticatio
 - Dispatch defaults:
   - ideas and brainstorming -> `office-hours`, then `autoplan` or `plan-*`
   - bugs, errors, regressions -> `investigate`
-  - review of a diff, branch, or PR -> `review`
-  - QA or staging verification -> `qa` or `qa-only`
-  - release preparation -> `ship`, then `land-and-deploy`, `canary`, `document-release`
+- review of a diff, branch, or PR -> `review`
+- QA or staging verification -> `qa` or `qa-only`
+- release preparation -> `ship`, then `land-and-deploy`, `canary`, `document-release`
   - visual work -> `design-*`
   - security review -> `cso`
   - browser-heavy QA -> `browse`, `connect-chrome`, `setup-browser-cookies`
 - One agent owns the branch and final decision path. Use repo-scoped subagents only for bounded read-only sidecars such as `pr_explorer`, `reviewer`, `code_mapper`, independent report-only QA, benchmark, read-only exploration, or post-ship docs.
 - Do not use subagents for merge or deploy authority, scope decisions, conflicting writes, or parallel edits in `backend/src/case_generator/**`.
+- Do not run `document-release` before `uv run --directory backend pytest -q` is green. Pre-PR docs sync belongs in the implementation diff itself.
 
 ## Architecture Boundaries
 
@@ -111,3 +113,14 @@ More specific rules live in:
 - `frontend/AGENTS.md`
 
 Files closer to the working directory are intended to add or override guidance for that area.
+
+## Local Dev Auth
+
+Cuando el cambio toque setup local o auth:
+
+- usa `docs/runbooks/local-dev-auth.md` como fuente canonica
+- distingue siempre los dos planos locales:
+  - app DB del repo por `docker compose` en `5434`
+  - auth/session local por `supabase start` en `54321`
+- no documentes `5432` como puerto host local por defecto del repo
+- no permitas ejemplos donde `DATABASE_URL` apunte al Postgres interno de Supabase local en `54322`

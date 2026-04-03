@@ -48,9 +48,56 @@ npm --prefix frontend run build
 npm --prefix frontend run test
 ```
 
+La suite backend actual debe correr en serie. No uses `pytest-xdist` ni `pytest -n ...`
+mientras el harness siga compartiendo una sola base de datos local.
+
 Nota: la prueba de migracion del Issue 23 crea y elimina bases temporales. En el entorno
 local default eso funciona con el usuario `postgres`, pero en otros entornos necesitaras
 permisos `CREATE DATABASE` y `DROP DATABASE` para que `pytest` pase completo.
+
+## Bootstrap local canonico
+
+El setup local canonico vive en:
+
+- [docs/runbooks/local-dev-auth.md](docs/runbooks/local-dev-auth.md)
+
+Antes de empezar, asume estos prerrequisitos fuera del conteo de comandos:
+
+- Docker Desktop o Docker Engine funcionando
+- Supabase CLI instalada
+- `uv` instalado
+- Node.js 22 + npm
+
+Resumen del arranque:
+
+1. `docker compose up -d adam-edu-postgres`
+2. `supabase start`
+3. `supabase status -o env`
+4. prepara `backend/.env` y `frontend/.env` desde sus ejemplos con el mapping local correcto
+5. `uv sync --directory backend --dev`
+6. `uv run --directory backend alembic upgrade head`
+7. `uv run --directory backend uvicorn shared.app:app --reload --host 0.0.0.0 --port 8000`
+8. `npm --prefix frontend install`
+9. `npm --prefix frontend run dev`
+
+Puntos no negociables:
+
+- `DATABASE_URL` local del repo apunta al Postgres del repo en `5434`
+- `supabase start` levanta auth/session local en `54321`, no la base principal del repo
+- `5432` solo aparece como referencia remota de session mode, nunca como default local del repo
+- el frontend no recibe `SUPABASE_SERVICE_ROLE_KEY`
+- login UI, callback UX y guards finales siguen en Issue 5
+- la suite backend se ejecuta en serie hasta que exista aislamiento de DB por worker
+
+## Restriccion temporal de la suite backend
+
+La suite backend actual comparte una sola base local. Hasta que exista aislamiento por
+worker:
+
+- corre `uv run --directory backend pytest -q` en serie
+- no uses `pytest -n auto` ni otra variante con `pytest-xdist`
+- si alguien fuerza `xdist`, la suite debe fallar rapido con un mensaje explicito
+- no dejes backend local, shells `psql` u otras sesiones conectadas a la misma DB mientras corre la suite
 
 ## Reglas para agentes
 
@@ -65,6 +112,7 @@ permisos `CREATE DATABASE` y `DROP DATABASE` para que `pytest` pase completo.
 - `.agents/skills/gstack*` y `.claude/skills/*` son runtimes locales generados. No deben commitearse.
 - Si cambias agent tooling, usa rama `agent/...` y PR dedicado.
 - Despues de tocar agent tooling, rerun `bootstrap` y valida el runtime local antes de abrir el PR.
+- No corras `document-release` antes de que `uv run --directory backend pytest -q` este en verde.
 
 ## Workflow compartido de agentes
 

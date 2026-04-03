@@ -15,6 +15,7 @@ services:
     container_name: adam-edu-postgres
     restart: unless-stopped
     ports:
+      # Host port 5434 is the repo's app/authoring DB. Container port 5432 stays internal to Docker.
       - "${POSTGRES_HOST_PORT:-5434}:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
@@ -42,6 +43,12 @@ services:
     ports:
       - "${API_HOST_PORT:-8123}:8000"
     environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@adam-edu-postgres:5432/${POSTGRES_DB:-postgres}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
-      POSTGRES_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@adam-edu-postgres:5432/${POSTGRES_DB:-postgres}?sslmode=disable
+      # Optional only: when the API runs in Docker and auth runs on the host via Supabase CLI,
+      # inject a host-reachable URL such as http://host.docker.internal:54321. Do not use localhost here.
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}

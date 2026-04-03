@@ -31,6 +31,7 @@ La zona funcional principal del generador vive en `backend/src/case_generator/` 
 - `Dockerfile`: build contenedorizado del stack publicado. Se conserva para empaquetado del backend con el frontend compilado.
 - `Makefile`: atajos opcionales para desarrollo en entornos Unix-like. Es conveniencia local, no la ruta principal de trabajo en Windows.
 - `docs/adr/`: architecture decision records aceptados. Aqui vive la decision canonica del auth perimeter de Fase 1.
+- `docs/runbooks/`: runbooks operativos del repo. Aqui vive el setup local canonico de auth y authoring.
 - `docs/archive/MASTER_AUDIT_PLAN.md`: auditoria historica archivada. Se conserva como referencia, pero ya no gobierna el alcance operativo del repo.
 
 ### Root hygiene
@@ -93,12 +94,16 @@ El frontend usa ese flujo para renderizar el timeline y el `CasePreview` del pro
 
 ## Setup local
 
-El flujo recomendado para contributors es:
+El setup local canonico vive en [docs/runbooks/local-dev-auth.md](docs/runbooks/local-dev-auth.md).
 
-1. levantar solo PostgreSQL con Docker
-2. correr backend y frontend localmente
+Resumen corto:
 
-Ese flujo da mejor feedback para desarrollo diario, evita rebuilds del contenedor en cada cambio y deja el entorno mas facil de depurar.
+- plano `authoring/app DB local`: `docker compose up -d adam-edu-postgres` en `5434`
+- plano `auth local`: `supabase start` con API `54321`, DB `54322`, Studio `54323` y Mailpit `54324`
+- referencias remotas: `5432` para session mode y `6543` para transaction mode, nunca como default local del repo
+
+El error mas comun en esta fase es apuntar `DATABASE_URL` al Postgres de Supabase local.
+No lo hagas. `DATABASE_URL` local del repo sigue apuntando a `localhost:5434`.
 
 ## Shared agent tooling
 
@@ -166,89 +171,25 @@ Si alguien prefiere una instalacion global fuera del repo, puede mantenerla como
 
 ### Prerrequisitos
 
-- Docker Desktop o Docker Engine con Compose
+- Docker Desktop o Docker Engine con Compose funcionando
+- Supabase CLI instalada
 - Python 3.12
 - `uv`
 - Node.js 22 + npm
 
-### Opcion A: desarrollo recomendado (PostgreSQL en Docker, app local)
+`npx supabase ...` puede servir como fallback personal, pero la ruta principal del repo
+asume CLI instalada y scaffold committeado.
 
-#### 1. Levantar solo PostgreSQL
+### Arranque recomendado
 
-Ejecuta esto desde la raiz del repo, no desde `backend/`:
+Sigue el runbook:
 
-```powershell
-docker compose up -d adam-edu-postgres
-```
+- [docs/runbooks/local-dev-auth.md](docs/runbooks/local-dev-auth.md)
 
-Con el `docker-compose.yml` actual, los defaults locales quedan asi:
+Ese runbook deja el flujo operativo en menos de 10 comandos reales y mantiene los
+prerrequisitos fuera del conteo.
 
-- host: `localhost`
-- puerto: `5434`
-- usuario: `postgres`
-- password: `postgres`
-- base: `postgres`
-
-#### 2. Configurar el backend
-
-1. Copia `backend/.env.example` a `backend/.env`.
-2. Completa al menos estas variables:
-
-```env
-DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5434/postgres
-GEMINI_API_KEY=tu_api_key
-SUPABASE_URL=https://tu-proyecto.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=tu_service_role_key
-SUPABASE_JWT_SECRET=solo_dev_si_necesitas_fallback_local
-```
-
-3. Instala dependencias:
-
-```powershell
-cd backend
-uv sync --dev
-```
-
-4. Aplica las migraciones del esquema:
-
-```powershell
-uv run alembic upgrade head
-```
-
-Este paso es obligatorio. `docker compose up` levanta PostgreSQL, pero no crea las tablas de la aplicacion.
-
-5. Arranca la API:
-
-```powershell
-uv run uvicorn shared.app:app --reload --host 0.0.0.0 --port 8000
-```
-
-La API queda disponible en `http://localhost:8000`.
-
-#### 3. Levantar el frontend
-
-En otra terminal:
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-El frontend queda disponible segun la salida de Vite, normalmente en `http://localhost:5173/app/`.
-
-La ruta funcional actual del profesor vive bajo `/app/teacher`, porque Vite y React Router usan `base` y `basename` en `/app/`.
-
-Para usar el flujo docente protegido despues de Issue 30, copia `frontend/.env.example` a `frontend/.env` y completa:
-
-```env
-VITE_SUPABASE_URL=https://tu-proyecto.supabase.co
-VITE_SUPABASE_ANON_KEY=tu_publishable_o_anon_key
-```
-
-Esta issue no agrega login UI ni callback OAuth. El frontend adjunta bearer auth solo si ya existe una sesion Supabase valida en el browser; si no existe sesion, el authoring quedara fail-closed con `401/403`.
-
-### Opcion B: stack contenedorizado completo
+### Stack contenedorizado opcional
 
 Si quieres probar la API y PostgreSQL por Docker, el compose ya construye la imagen automaticamente desde el repo:
 
@@ -269,7 +210,10 @@ Puertos por defecto:
 Notas:
 
 - Para esta opcion, `GEMINI_API_KEY` debe existir en tu shell o en un archivo `.env` de la raiz usado por Docker Compose.
-- Si solo necesitas base de datos para desarrollo, usa la Opcion A; es la ruta principal recomendada.
+- Esta ruta no sustituye el runbook canonico de auth local. El compose deja la API alineada con `DATABASE_URL`, pero el flujo recomendado sigue siendo backend/frontend locales + `supabase start`.
+- Si quieres que la API en Docker use auth local, debes inyectar `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` y `SUPABASE_JWT_SECRET` de forma explicita. No se asume como happy path del repo.
+- Dentro del contenedor, `SUPABASE_URL=http://localhost:54321` es incorrecto porque `localhost` apunta al propio contenedor. En Docker Desktop usa una URL alcanzable desde el contenedor, por ejemplo `http://host.docker.internal:54321`; en otros entornos Docker usa el hostname equivalente de tu host.
+- Si solo necesitas base de datos para desarrollo, usa el runbook canonico; esa es la ruta principal recomendada.
 
 ### Apagar el entorno Docker
 
@@ -285,16 +229,21 @@ docker compose down -v
 
 ## Variables de entorno
 
-- `DATABASE_URL`: DSN principal de PostgreSQL para `shared.database`.
-- `SUPABASE_URL`: metadata del proyecto Supabase usada desde la fase de auth substrate en adelante.
-- `SUPABASE_PROJECT_REF`: ref del proyecto Supabase para tooling y validaciones operativas de auth.
-- `SUPABASE_SERVICE_ROLE_KEY`: clave backend-only para activation/password y operaciones admin de Supabase Auth.
-- `SUPABASE_JWT_SECRET`: fallback de desarrollo para JWT locales. No sustituye JWKS en produccion.
+- `DATABASE_URL`: DSN principal del Postgres local del repo. En local apunta a `localhost:5434`, no a `54322`.
+- `SUPABASE_URL`: URL del plano de auth/session. En local via Supabase CLI apunta a `http://localhost:54321`.
+- `SUPABASE_PROJECT_REF`: ref documental para tooling y validaciones. En local la convencion del repo es `local`.
+- `SUPABASE_SERVICE_ROLE_KEY`: clave backend-only para activation/password y operaciones admin. Sale de `supabase status -o env`.
+- `SUPABASE_JWT_SECRET`: fallback de desarrollo para JWT locales. Sale de `supabase status -o env`. No sustituye JWKS en produccion.
+- `MICROSOFT_TENANT_ID`: placeholder para la configuracion local/remota de Azure en las siguientes issues.
+- `INVITE_TEACHER_TTL_HOURS`: TTL de invitaciones de docentes.
+- `INVITE_STUDENT_TTL_HOURS`: TTL de invitaciones de estudiantes.
 - `GEMINI_API_KEY`: requerido para authoring real, `/api/suggest` y tests `live_llm`.
 - `CORS_ALLOWED_ORIGIN`: origen extra permitido en produccion.
 - `STORYTELLER_MODEL`: override opcional del modelo usado por `/api/suggest`.
-- `VITE_SUPABASE_URL`: URL publica del proyecto Supabase usada por el frontend para resolver la sesion del browser.
-- `VITE_SUPABASE_ANON_KEY`: publishable/anon key usada por el frontend para leer la sesion actual.
+- `VITE_SUPABASE_URL`: URL publica del plano auth/session. En local apunta a `http://localhost:54321`.
+- `VITE_SUPABASE_ANON_KEY`: anon/publishable key usada por el frontend para leer la sesion actual. Sale de `supabase status -o env`.
+
+Nunca expongas `SUPABASE_SERVICE_ROLE_KEY` en frontend, browser, ejemplos de Vite o docs de UI.
 
 Base de ejemplo: [backend/.env.example](backend/.env.example)
 Frontend base de ejemplo: [frontend/.env.example](frontend/.env.example)
@@ -302,11 +251,17 @@ Frontend base de ejemplo: [frontend/.env.example](frontend/.env.example)
 ### Nota para Issue 23
 
 El sustrato de identidad de GitHub `#23` mantiene el bridge `users.id == auth.users.id`
-como contrato de datos, pero el entorno local actual sigue usando PostgreSQL por Docker,
-no Supabase Auth local. Eso significa:
+como contrato de datos. El entorno local actual usa dos planos distintos y los dos son
+obligatorios:
 
-- valida esquema y migraciones localmente con PostgreSQL normal
-- valida bridge real contra `auth.users` solo cuando apuntes a Supabase alojado o a una futura ruta `supabase start`
+- Postgres del repo por Docker en `5434`
+- Supabase CLI para auth local en `54321`
+
+Eso significa:
+
+- valida esquema y migraciones de la app contra el Postgres del repo
+- valida auth/session local contra Supabase CLI
+- no apuntes `DATABASE_URL` al Postgres interno de Supabase CLI en `54322`
 - si tu base local vieja todavia tiene IDs fake como `teacher-123`, reseteala y reseedala antes de correr la migracion de Issue 23
 - `backend/sql/rls_policies.sql` es un entregable separado de Alembic y no se aplica con `uv run alembic upgrade head`
 - esas policies dependen de `auth.uid()`, asi que solo deben aplicarse en Supabase o en un entorno local que realmente exponga el schema Auth compatible
