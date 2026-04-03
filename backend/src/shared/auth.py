@@ -333,11 +333,17 @@ class SupabaseAdminAuthClient:
         if admin is None:
             raise RuntimeError("Supabase admin API is unavailable")
 
-        response = admin.list_users()
-        users = self._extract_users(response)
-        for user in users:
-            if email_equals(user.email, email):
-                return user
+        page = 1
+        per_page = 200
+        while True:
+            response = admin.list_users(page=page, per_page=per_page)
+            users = self._extract_users(response)
+            for user in users:
+                if email_equals(user.email, email):
+                    return user
+            if len(users) < per_page:
+                break
+            page += 1
         return None
 
     def get_or_create_user_by_email(self, email: str, password: str) -> AdminUserResult:
@@ -380,7 +386,9 @@ class SupabaseAdminAuthClient:
         elif hasattr(payload, "dict"):
             payload = payload.dict()
 
-        if isinstance(payload, dict):
+        if isinstance(payload, list):
+            raw_users = payload
+        elif isinstance(payload, dict):
             raw_users = payload.get("users") or payload.get("data") or []
         else:
             raw_users = getattr(payload, "users", None) or getattr(payload, "data", None) or []

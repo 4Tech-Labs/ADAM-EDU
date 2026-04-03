@@ -825,31 +825,15 @@ def activate_oauth_complete(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
 
     if normalize_email(identity.email) != normalize_email(invite.email):
-        profile_exists = db.scalar(select(Profile).where(Profile.id == identity.auth_user_id)) is not None
-        membership_exists = db.scalar(select(Membership).where(Membership.user_id == identity.auth_user_id)) is not None
-        if not profile_exists and not membership_exists:
-            try:
-                get_supabase_admin_auth_client().delete_user(identity.auth_user_id)
-            except Exception as exc:
-                audit_log(
-                    "activate.oauth.mismatch_delete",
-                    "partial_failure",
-                    auth_user_id=identity.auth_user_id,
-                    invite_id=invite.id,
-                    invite_hash_prefix=invite.token_hash[:12],
-                    http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    reason="delete_failed",
-                )
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="activation_failed") from exc
-            audit_log(
-                "activate.oauth.mismatch_delete",
-                "deleted",
-                auth_user_id=identity.auth_user_id,
-                invite_id=invite.id,
-                invite_hash_prefix=invite.token_hash[:12],
-                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                reason="invite_email_mismatch",
-            )
+        audit_log(
+            "activate.oauth.mismatch_delete",
+            "skipped",
+            auth_user_id=identity.auth_user_id,
+            invite_id=invite.id,
+            invite_hash_prefix=invite.token_hash[:12],
+            http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            reason="invite_email_mismatch",
+        )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invite_email_mismatch")
 
     try:
