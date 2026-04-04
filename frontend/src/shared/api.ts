@@ -9,6 +9,7 @@ import type {
     AuthoringJobResultResponse,
     AuthoringJobStatusResponse,
     IntentType,
+    InviteRedeemResponse,
     InviteResolveResponse,
     SuggestRequest,
     SuggestResponse,
@@ -296,6 +297,13 @@ export const api = {
         },
         async activateOAuthComplete(invite_token: string): Promise<ActivateOAuthCompleteResponse> {
             return parseJsonResponse<ActivateOAuthCompleteResponse>("/auth/activate/oauth/complete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ invite_token }),
+            });
+        },
+        async redeemInvite(invite_token: string): Promise<InviteRedeemResponse> {
+            return parseJsonResponse<InviteRedeemResponse>("/invites/redeem", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ invite_token }),

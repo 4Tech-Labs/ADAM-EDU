@@ -27,6 +27,7 @@ dependencies = [
     "PyJWT[crypto]>=2.10.1",
     "scipy>=1.17.1",
     "supabase>=2.23.0",
+    "cachetools>=5.0.0",
 ]
 
 

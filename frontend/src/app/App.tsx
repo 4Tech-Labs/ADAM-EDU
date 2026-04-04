@@ -42,6 +42,19 @@ function App() {
                     {/* Student routes */}
                     <Route path="/student/login" element={<StudentLoginPage />} />
                     <Route path="/join" element={<StudentJoinPage />} />
+                    <Route
+                        path="/student/*"
+                        element={
+                            <RequireRole role="student">
+                                <div className="flex flex-col items-center justify-center gap-4 px-4 py-24 text-center">
+                                    <h1 className="text-xl font-semibold">Panel del estudiante</h1>
+                                    <p className="text-sm text-muted-foreground max-w-xs">
+                                        El panel completo estará disponible en la próxima versión.
+                                    </p>
+                                </div>
+                            </RequireRole>
+                        }
+                    />
 
                     {/* Admin routes */}
                     <Route path="/admin/login" element={<AdminLoginPage />} />

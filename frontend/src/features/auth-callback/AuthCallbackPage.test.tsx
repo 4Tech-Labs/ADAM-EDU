@@ -18,6 +18,7 @@ vi.mock("@/shared/api", () => ({
             activateOAuthComplete: vi.fn(),
             resolveInvite: vi.fn(),
             activatePassword: vi.fn(),
+            redeemInvite: vi.fn(),
         },
     },
     ApiError: class ApiError extends Error {
@@ -276,5 +277,143 @@ describe("AuthCallbackPage", () => {
         await waitFor(() =>
             expect(mockNavigate).toHaveBeenCalledWith("/teacher", { replace: true }),
         );
+    });
+
+    // ---- New cases for Issue #39 student_join ----
+
+    it("calls activateOAuthComplete then refreshActor then navigates to /student when ctx.flow === student_join and actor is null", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join",
+            invite_token: "stu-tok-abc",
+            role: "student",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseCtx,
+            actor: null, // no membership yet — first activation
+        });
+        vi.mocked(api.auth.activateOAuthComplete).mockResolvedValue({ status: "activated" });
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(api.auth.activateOAuthComplete).toHaveBeenCalledWith("stu-tok-abc"),
+        );
+        await waitFor(() => expect(mockRefreshActor).toHaveBeenCalled());
+        await waitFor(() =>
+            expect(mockNavigate).toHaveBeenCalledWith("/student", { replace: true }),
+        );
+    });
+
+    it("calls redeemInvite then refreshActor then navigates to /student when ctx.flow === student_join and actor exists", async () => {
+        const studentActor: AuthMeActor = {
+            ...teacherActor,
+            primary_role: "student",
+            memberships: [
+                {
+                    id: "m2",
+                    university_id: "uni1",
+                    role: "student",
+                    status: "active",
+                    must_rotate_password: false,
+                },
+            ],
+        };
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join",
+            invite_token: "stu-tok-xyz",
+            role: "student",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseCtx,
+            actor: studentActor, // already has membership
+        });
+        vi.mocked(api.auth.redeemInvite).mockResolvedValue({ status: "redeemed" });
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(api.auth.redeemInvite).toHaveBeenCalledWith("stu-tok-xyz"),
+        );
+        await waitFor(() => expect(mockRefreshActor).toHaveBeenCalled());
+        await waitFor(() =>
+            expect(mockNavigate).toHaveBeenCalledWith("/student", { replace: true }),
+        );
+    });
+
+    it("shows email_domain_not_allowed error when student_join activateOAuthComplete fails", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join",
+            invite_token: "stu-tok-domain",
+            role: "student",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseCtx,
+            actor: null,
+        });
+        vi.mocked(api.auth.activateOAuthComplete).mockRejectedValue(
+            Object.assign(new Error("email_domain_not_allowed"), {
+                detail: "email_domain_not_allowed",
+                status: 422,
+            }),
+        );
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(
+                screen.getByText(/no está habilitado para esta universidad/i),
+            ).toBeTruthy(),
+        );
+        // Must show "Contacta a tu docente" instead of link to /teacher/activate
+        expect(screen.getByText(/contacta a tu docente/i)).toBeTruthy();
+        expect(mockNavigate).not.toHaveBeenCalledWith("/", { replace: true });
+    });
+
+    it("redirects to /student for regular login with student actor and no ctx", async () => {
+        const studentActor: AuthMeActor = {
+            ...teacherActor,
+            primary_role: "student",
+            memberships: [
+                {
+                    id: "m2",
+                    university_id: "uni1",
+                    role: "student",
+                    status: "active",
+                    must_rotate_password: false,
+                },
+            ],
+        };
+        vi.mocked(readActivationContext).mockReturnValue(null);
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseCtx,
+            actor: studentActor,
+        });
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(mockNavigate).toHaveBeenCalledWith("/student", { replace: true }),
+        );
+        // Must NOT redirect to /student/login (loop prevention)
+        expect(mockNavigate).not.toHaveBeenCalledWith("/student/login", expect.anything());
     });
 });
