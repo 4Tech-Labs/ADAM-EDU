@@ -37,7 +37,11 @@ export function StudentLoginPage() {
         setSubmitting(true);
 
         try {
-            const supabase = getSupabaseClient()!;
+            const supabase = getSupabaseClient();
+            if (!supabase) {
+                setLoginError("Credenciales incorrectas. Verifica tu correo y contraseña.");
+                return;
+            }
             const { error } = await supabase.auth.signInWithPassword({
                 email,
                 password,

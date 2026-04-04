@@ -141,7 +141,11 @@ export function StudentJoinPage() {
                 full_name: fullName,
             });
 
-            const supabase = getSupabaseClient()!;
+            const supabase = getSupabaseClient();
+            if (!supabase) {
+                setSubmitError("No se pudo iniciar sesión. Recarga la página e intenta de nuevo.");
+                return;
+            }
             const { error } = await supabase.auth.signInWithPassword({
                 email: res.email,
                 password,
