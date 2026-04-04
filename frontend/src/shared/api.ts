@@ -1,11 +1,15 @@
 import { getSupabaseClient, resetSupabaseClientForTests } from "@/shared/supabaseClient";
 
 import type {
+    ActivateOAuthCompleteResponse,
+    ActivatePasswordRequest,
+    ActivatePasswordResponse,
     AuthoringJobCreateRequest,
     AuthoringJobCreateResponse,
     AuthoringJobResultResponse,
     AuthoringJobStatusResponse,
     IntentType,
+    InviteResolveResponse,
     SuggestRequest,
     SuggestResponse,
 } from "@/shared/adam-types";
@@ -274,5 +278,28 @@ export const api = {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ intent, ...data }),
         });
+    },
+    auth: {
+        async resolveInvite(invite_token: string): Promise<InviteResolveResponse> {
+            return parseJsonResponse<InviteResolveResponse>("/invites/resolve", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ invite_token }),
+            });
+        },
+        async activatePassword(req: ActivatePasswordRequest): Promise<ActivatePasswordResponse> {
+            return parseJsonResponse<ActivatePasswordResponse>("/auth/activate/password", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(req),
+            });
+        },
+        async activateOAuthComplete(invite_token: string): Promise<ActivateOAuthCompleteResponse> {
+            return parseJsonResponse<ActivateOAuthCompleteResponse>("/auth/activate/oauth/complete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ invite_token }),
+            });
+        },
     },
 };

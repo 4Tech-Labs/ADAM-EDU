@@ -728,6 +728,7 @@ class ActivatePasswordRequest(BaseModel):
 class ActivatePasswordResponse(BaseModel):
     status: str
     next_step: str
+    email: str
 
 
 @app.post("/api/auth/activate/password", response_model=ActivatePasswordResponse, status_code=201)
@@ -746,7 +747,7 @@ def activate_password(
     existing_user = admin_client.find_user_by_email(invite.email)
     effective_status = invite_effective_status(invite)
     if effective_status == "consumed" and existing_user and activation_state_exists(db, invite, existing_user.id):
-        return ActivatePasswordResponse(status="activated", next_step="sign_in")
+        return ActivatePasswordResponse(status="activated", next_step="sign_in", email=invite.email)
     if effective_status != "pending":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
 
@@ -765,7 +766,7 @@ def activate_password(
         if not consume_invite_if_pending(db, invite):
             db.rollback()
             if activation_state_exists(db, invite, auth_user.id):
-                return ActivatePasswordResponse(status="activated", next_step="sign_in")
+                return ActivatePasswordResponse(status="activated", next_step="sign_in", email=invite.email)
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
         db.commit()
     except HTTPException:
@@ -797,7 +798,7 @@ def activate_password(
         http_status=status.HTTP_201_CREATED,
         reason="activated",
     )
-    return ActivatePasswordResponse(status="activated", next_step="sign_in")
+    return ActivatePasswordResponse(status="activated", next_step="sign_in", email=invite.email)
 
 
 class ActivateOAuthCompleteRequest(BaseModel):

@@ -12,6 +12,25 @@ vi.mock("react-router-dom", async () => {
     );
     return { ...actual, useNavigate: vi.fn() };
 });
+vi.mock("@/shared/api", () => ({
+    api: {
+        auth: {
+            activateOAuthComplete: vi.fn(),
+            resolveInvite: vi.fn(),
+            activatePassword: vi.fn(),
+        },
+    },
+    ApiError: class ApiError extends Error {
+        status: number;
+        detail?: string;
+        constructor(status: number, message: string, detail?: string) {
+            super(message);
+            this.name = "ApiError";
+            this.status = status;
+            this.detail = detail;
+        }
+    },
+}));
 
 import { useAuth } from "@/app/auth/useAuth";
 import {
@@ -19,6 +38,7 @@ import {
     clearActivationContext,
 } from "@/shared/activationContext";
 import { useNavigate } from "react-router-dom";
+import { api } from "@/shared/api";
 
 const mockNavigate = vi.fn();
 
@@ -38,12 +58,14 @@ const teacherActor: AuthMeActor = {
     primary_role: "teacher",
 };
 
+const mockRefreshActor = vi.fn();
+
 const baseCtx = {
     session: { access_token: "jwt" } as never,
     error: null,
     loading: false,
     signOut: vi.fn(),
-    refreshActor: vi.fn(),
+    refreshActor: mockRefreshActor,
 };
 
 describe("AuthCallbackPage", () => {
@@ -52,6 +74,8 @@ describe("AuthCallbackPage", () => {
         vi.mocked(useNavigate).mockReturnValue(mockNavigate);
         vi.mocked(readActivationContext).mockReturnValue(null);
         vi.mocked(clearActivationContext).mockImplementation(() => undefined);
+        vi.mocked(mockRefreshActor).mockResolvedValue(undefined);
+        vi.mocked(api.auth.activateOAuthComplete).mockResolvedValue({ status: "activated" });
     });
 
     it("shows loading state while auth is in flight", () => {
@@ -167,5 +191,90 @@ describe("AuthCallbackPage", () => {
         expect(
             screen.getByText(/no se pudo completar el inicio de sesión/i),
         ).toBeTruthy();
+    });
+
+    // ---- New cases for Issue #37 OAuth activation ----
+
+    it("calls activateOAuthComplete then refreshActor then navigates to /teacher when ctx.flow === teacher_activate", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "teacher_activate",
+            invite_token: "tok-abc",
+            role: "teacher",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseCtx,
+            actor: null, // not yet activated
+        });
+        vi.mocked(api.auth.activateOAuthComplete).mockResolvedValue({ status: "activated" });
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(api.auth.activateOAuthComplete).toHaveBeenCalledWith("tok-abc"),
+        );
+        await waitFor(() => expect(mockRefreshActor).toHaveBeenCalled());
+        await waitFor(() =>
+            expect(mockNavigate).toHaveBeenCalledWith("/teacher", { replace: true }),
+        );
+    });
+
+    it("shows activation error UI (not / redirect) when activateOAuthComplete fails", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "teacher_activate",
+            invite_token: "tok-abc",
+            role: "teacher",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseCtx,
+            actor: null,
+        });
+        vi.mocked(api.auth.activateOAuthComplete).mockRejectedValue(
+            Object.assign(new Error("email_mismatch"), {
+                detail: "email_mismatch",
+                status: 422,
+            }),
+        );
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(
+                screen.getByText(/no coincide con la invitación/i),
+            ).toBeTruthy(),
+        );
+
+        // Must NOT redirect to /
+        expect(mockNavigate).not.toHaveBeenCalledWith("/", { replace: true });
+
+        // Must show link back to /teacher/activate
+        expect(screen.getByText(/volver a activación/i)).toBeTruthy();
+    });
+
+    it("redirects to /teacher for regular login (no ctx, teacher actor)", async () => {
+        vi.mocked(readActivationContext).mockReturnValue(null);
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseCtx,
+            actor: teacherActor,
+        });
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(mockNavigate).toHaveBeenCalledWith("/teacher", { replace: true }),
+        );
     });
 });

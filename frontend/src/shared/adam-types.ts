@@ -229,6 +229,33 @@ export const INDUSTRIAS = [
     "Turismo",
 ];
 
+// Invite and activation API contracts — Issue #37
+export interface InviteResolveResponse {
+    role: "teacher" | "student";
+    email_masked: string;
+    university_name: string;
+    course_title: string | null;
+    status: "pending" | "expired" | "consumed" | "revoked";
+    expires_at: string;
+}
+
+export interface ActivatePasswordRequest {
+    invite_token: string;
+    password: string;
+    confirm_password: string;
+    full_name?: string;
+}
+
+export interface ActivatePasswordResponse {
+    status: string;
+    next_step: string;
+    email: string;
+}
+
+export interface ActivateOAuthCompleteResponse {
+    status: string;
+}
+
 export const EMPTY_FORM: CaseFormData = {
     subject: "",
     academicLevel: "Pregrado",

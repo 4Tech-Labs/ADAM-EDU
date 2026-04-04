@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/app/auth/useAuth";
+import { api, ApiError } from "@/shared/api";
 import {
     readActivationContext,
     clearActivationContext,
@@ -19,10 +20,23 @@ import {
  * - activation context is always cleared after this page runs (success or error)
  * - no redirect happens while loading is true (prevents race conditions)
  */
+
+function parseActivationError(err: ApiError): string {
+    switch (err.detail) {
+        case "invalid_invite":
+            return "Esta invitación ya no es válida. Solicita una nueva.";
+        case "email_mismatch":
+            return "El correo de tu cuenta Microsoft no coincide con la invitación.";
+        default:
+            return "No se pudo completar la activación. Intenta de nuevo.";
+    }
+}
+
 export function AuthCallbackPage() {
-    const { session, actor, loading, error } = useAuth();
+    const { session, actor, loading, error, refreshActor } = useAuth();
     const navigate = useNavigate();
     const handled = useRef(false);
+    const [activationError, setActivationError] = useState<string | null>(null);
 
     useEffect(() => {
         if (loading) return;
@@ -30,26 +44,36 @@ export function AuthCallbackPage() {
         handled.current = true;
 
         const ctx = readActivationContext();
-
-        // Always clean up the activation context — both success and error paths.
-        // Issues #6 and #7 will add the actual backend activation call here
-        // before clearActivationContext() when ctx is present.
         clearActivationContext();
 
-        if (!session || !actor) {
-            // Auth failed or was cancelled — return to landing
+        if (!session) {
             navigate("/", { replace: true });
             return;
         }
 
-        // Determine redirect destination using the same precedence as RootRedirect
+        if (ctx?.flow === "teacher_activate") {
+            async function runActivation() {
+                try {
+                    await api.auth.activateOAuthComplete(ctx!.invite_token);
+                    await refreshActor();
+                    navigate("/teacher", { replace: true });
+                } catch (err: unknown) {
+                    setActivationError(parseActivationError(err as ApiError));
+                }
+            }
+            void runActivation();
+            return;
+        }
+
+        if (!actor) {
+            navigate("/", { replace: true });
+            return;
+        }
+
         if (actor.must_rotate_password) {
             navigate("/admin/change-password", { replace: true });
             return;
         }
-
-        // ctx is available here for Issues #6/#7 to call their activation endpoints
-        void ctx;
 
         switch (actor.primary_role) {
             case "university_admin":
@@ -64,7 +88,7 @@ export function AuthCallbackPage() {
             default:
                 navigate("/", { replace: true });
         }
-    }, [loading, session, actor, navigate]);
+    }, [loading, session, actor, navigate, refreshActor]);
 
     if (error) {
         return (
@@ -74,6 +98,20 @@ export function AuthCallbackPage() {
                 </p>
                 <a href="/app/" className="text-sm underline hover:opacity-80">
                     Volver al inicio
+                </a>
+            </div>
+        );
+    }
+
+    if (activationError) {
+        return (
+            <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
+                <p className="text-sm text-danger">{activationError}</p>
+                <a
+                    href="/app/teacher/activate"
+                    className="text-sm underline hover:opacity-80"
+                >
+                    Volver a activación
                 </a>
             </div>
         );
