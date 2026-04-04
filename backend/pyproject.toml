@@ -91,6 +91,10 @@ exclude = [
     '^src/agent\.egg-info/',
 ]
 
+[[tool.mypy.overrides]]
+module = "cachetools"
+follow_imports = "skip"
+
 [dependency-groups]
 dev = [
     "langgraph-cli[inmem]>=0.1.71",
