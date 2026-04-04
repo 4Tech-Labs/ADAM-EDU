@@ -8,8 +8,11 @@ import json
 import logging
 import os
 import pathlib
+import threading
 from typing import Any
 import uuid
+
+from cachetools import TTLCache
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, status
@@ -41,6 +44,7 @@ from shared.auth import (
 )
 from shared.database import SessionLocal, get_db
 from shared.models import (
+    AllowedEmailDomain,
     Assignment,
     AuthoringJob,
     Course,
@@ -227,6 +231,46 @@ def derive_activation_full_name(full_name: str | None, email: str) -> str:
     if normalized:
         return normalized
     return email.split("@", maxsplit=1)[0]
+
+
+# ---------------------------------------------------------------------------
+# Domain validation cache — TTL 5 min, thread-safe via explicit lock.
+# Empty list means no domain restriction configured for that university.
+# ---------------------------------------------------------------------------
+_allowed_domains_cache: TTLCache[str, list[str]] = TTLCache(maxsize=100, ttl=300)
+_allowed_domains_lock = threading.Lock()
+
+
+def _get_allowed_domains(db: Session, university_id: str) -> list[str]:
+    """Return allowed email domains for a university, with TTL caching."""
+    with _allowed_domains_lock:
+        if university_id in _allowed_domains_cache:
+            return _allowed_domains_cache[university_id]
+    domains = db.scalars(
+        select(AllowedEmailDomain.domain).where(
+            AllowedEmailDomain.university_id == university_id,
+        )
+    ).all()
+    result = [d.lower() for d in domains]
+    with _allowed_domains_lock:
+        _allowed_domains_cache[university_id] = result
+    return result
+
+
+def _check_student_email_domain(db: Session, invite: Invite) -> None:
+    """Raise 422 if the invite email domain is not in the university's allow-list.
+
+    A university with no configured domains has an open allow-list (all domains
+    accepted). This preserves backward-compatibility for existing universities
+    that have not yet configured allowed_email_domains.
+    """
+    email_domain = invite.email.split("@")[-1].lower()
+    allowed = _get_allowed_domains(db, invite.university_id)
+    if allowed and email_domain not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="email_domain_not_allowed",
+        )
 
 
 @asynccontextmanager
@@ -555,6 +599,7 @@ class InviteResolveResponse(BaseModel):
     email_masked: str
     university_name: str
     course_title: str | None
+    teacher_name: str | None
     status: str
     expires_at: str
 
@@ -575,9 +620,16 @@ def resolve_invite(req: InviteResolveRequest, db: Session = Depends(get_db)) -> 
 
     tenant = db.scalar(select(Tenant).where(Tenant.id == invite.university_id))
     course_title = None
+    teacher_name = None
     if invite.course_id:
         course = db.scalar(select(Course).where(Course.id == invite.course_id))
-        course_title = None if course is None else course.title
+        if course is not None:
+            course_title = course.title
+            if course.teacher_membership_id:
+                membership = db.get(Membership, course.teacher_membership_id)
+                if membership is not None:
+                    profile = db.get(Profile, membership.user_id)
+                    teacher_name = profile.full_name if profile is not None else None
 
     effective_status = invite_effective_status(invite)
     audit_log(
@@ -593,6 +645,7 @@ def resolve_invite(req: InviteResolveRequest, db: Session = Depends(get_db)) -> 
         email_masked=mask_email(invite.email),
         university_name=tenant.name if tenant else invite.university_id,
         course_title=course_title,
+        teacher_name=teacher_name,
         status=effective_status,
         expires_at=invite.expires_at.isoformat(),
     )
@@ -751,6 +804,14 @@ def activate_password(
     if effective_status != "pending":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
 
+    # B1: full_name is required for student activation (not teacher)
+    if invite.role == "student" and not (req.full_name and req.full_name.strip()):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="full_name_required")
+
+    # B2: validate institutional email domain for students
+    if invite.role == "student":
+        _check_student_email_domain(db, invite)
+
     created_new_user = False
     auth_user = existing_user
     if auth_user is None:
@@ -836,6 +897,10 @@ def activate_oauth_complete(
             reason="invite_email_mismatch",
         )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invite_email_mismatch")
+
+    # B3: validate institutional email domain for students
+    if invite.role == "student":
+        _check_student_email_domain(db, invite)
 
     try:
         upsert_profile(db, identity.auth_user_id, derive_oauth_full_name(identity))

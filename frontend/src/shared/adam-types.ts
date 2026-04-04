@@ -229,14 +229,20 @@ export const INDUSTRIAS = [
     "Turismo",
 ];
 
-// Invite and activation API contracts — Issue #37
+// Invite and activation API contracts — Issue #37 / #39
 export interface InviteResolveResponse {
     role: "teacher" | "student";
     email_masked: string;
     university_name: string;
     course_title: string | null;
+    teacher_name: string | null;
     status: "pending" | "expired" | "consumed" | "revoked";
     expires_at: string;
+}
+
+export interface InviteRedeemResponse {
+    // "redeemed" = first time; "already_enrolled" = idempotent re-join
+    status: "redeemed" | "already_enrolled";
 }
 
 export interface ActivatePasswordRequest {

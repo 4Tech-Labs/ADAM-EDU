@@ -52,6 +52,7 @@ const pendingResolveResponse = {
     email_masked: "d****@uni.edu",
     university_name: "Universidad Test",
     course_title: "Analítica de Datos",
+    teacher_name: null,
     status: "pending" as const,
     expires_at: new Date(Date.now() + 3600000).toISOString(),
 };
