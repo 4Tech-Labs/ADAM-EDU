@@ -65,3 +65,25 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Context:** Identificado en Issue #44 (plan-eng-review TODO item 3, decisión 10A: aceptar bloqueo síncrono hoy). La misma restricción existe en `shared/auth.py` con `JwtVerifier`. Resolver ambos juntos tiene más sentido que resolver solo el worker.
 
 **Depends on / blocked by:** Issue #44 (completado). Solo prioritario si el worker escala a alta concurrencia (>10 req/s simultáneos). Post-Fase 1.
+
+---
+
+## TODO-005: Rate limiting distribuido (deuda aceptada)
+
+**What:** Reemplazar el rate limiting in-memory (`slowapi` o `limits` con backend local) por un backend distribuido usando Cloud Memorystore (Redis) cuando `max_instances > 1`.
+
+**Why:** El rate limiting in-process vive en cada réplica por separado. Con múltiples instancias de Cloud Run cada réplica tiene su propio contador — un atacante puede hacer N requests por réplica antes de ser bloqueado. Esto hace el rate limiting inefectivo a escala.
+
+**Pros:** Rate limiting efectivo independientemente del número de réplicas. Resistente a ataques distribuidos. Coherente con el modelo de escalado de Cloud Run.
+
+**Cons:** Requiere aprovisionar Cloud Memorystore (Redis) en el mismo proyecto GCP y inyectar `REDIS_URL` como secret. Añade una dependencia de infraestructura nueva. Con `max_instances=1` (configuración actual de Fase 1), el impacto de la deuda es nulo.
+
+**Context:** Identificado en Issue #48 (plan-eng-review, decisión TODO-005). No hay rate limiting implementado todavía en Fase 1 — este TODO documenta la deuda para cuando se implemente en Fase 2. La deuda solo se activa si se escala a múltiples instancias o se incorpora un segundo cliente universitario con tráfico mayor.
+
+**How to implement:**
+1. Aprovisionar Cloud Memorystore (Redis) en el mismo proyecto GCP.
+2. Cambiar el backend de `limits` de `memory://` a `redis://<memorystore-host>`.
+3. Actualizar el Cloud Run service para inyectar `REDIS_URL` desde Secret Manager.
+4. Agregar health check de Redis en `/health`.
+
+**Depends on / blocked by:** Implementación de rate limiting (post-Fase 1) + Cloud Memorystore aprovisionado. Trigger: escala a `max_instances > 1` o segundo cliente universitario.

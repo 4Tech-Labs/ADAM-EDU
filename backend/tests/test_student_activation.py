@@ -298,3 +298,85 @@ class TestActivatePasswordDomainValidation:
         # Empty allow-list = open (backward-compatible)
         assert resp.status_code == 201
         assert resp.json()["status"] == "activated"
+
+
+class TestActivateOAuthDomainValidation:
+    """B3: _check_student_email_domain is called for students in activate_oauth_complete.
+
+    Production code: shared/app.py
+        if invite.role == "student":
+            _check_student_email_domain(db, invite)
+    """
+
+    def test_oauth_complete_student_email_domain_not_allowed(
+        self, client: TestClient, university, allowed_domain, course, seed_invite, auth_headers_factory
+    ) -> None:
+        """Student with a domain not in allowed_email_domains → 422."""
+        _, token = seed_invite(
+            email="student@foreign.com",
+            university_id=university.id,
+            role="student",
+            course_id=course.id,
+        )
+        user_id = str(uuid.uuid4())
+        headers = auth_headers_factory(sub=user_id, email="student@foreign.com")
+
+        response = client.post(
+            "/api/auth/activate/oauth/complete", json={"invite_token": token}, headers=headers
+        )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == "email_domain_not_allowed"
+
+    def test_oauth_complete_student_email_domain_allowed(
+        self, client: TestClient, university, allowed_domain, course, seed_invite, auth_headers_factory, db
+    ) -> None:
+        """Student with allowed domain → activation succeeds, profile and membership created."""
+        _, token = seed_invite(
+            email="student@universidad.edu",
+            university_id=university.id,
+            role="student",
+            course_id=course.id,
+        )
+        user_id = str(uuid.uuid4())
+        headers = auth_headers_factory(sub=user_id, email="student@universidad.edu")
+
+        response = client.post(
+            "/api/auth/activate/oauth/complete", json={"invite_token": token}, headers=headers
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "activated"
+        profile = db.get(Profile, user_id)
+        assert profile is not None
+        membership = db.scalar(
+            select(Membership).where(
+                Membership.user_id == user_id,
+                Membership.university_id == university.id,
+                Membership.role == "student",
+            )
+        )
+        assert membership is not None
+
+    def test_oauth_complete_teacher_bypasses_domain_check(
+        self, client: TestClient, university, allowed_domain, seed_invite, auth_headers_factory
+    ) -> None:
+        """Teacher role skips domain check even when university has restrictions.
+
+        The condition `if invite.role == 'student'` explicitly excludes teachers.
+        allowed_domain fixture sets up the restriction to prove it exists but is skipped.
+        """
+        _, token = seed_invite(
+            email="teacher@foreign.com",
+            university_id=university.id,
+            role="teacher",
+        )
+        user_id = str(uuid.uuid4())
+        headers = auth_headers_factory(sub=user_id, email="teacher@foreign.com")
+
+        response = client.post(
+            "/api/auth/activate/oauth/complete", json={"invite_token": token}, headers=headers
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "activated"
