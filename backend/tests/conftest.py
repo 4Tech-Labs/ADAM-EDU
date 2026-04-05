@@ -280,6 +280,8 @@ class FakeAdminClient:
     users_by_id: dict[str, FakeAdminUser] = field(default_factory=dict)
     users_by_email: dict[str, FakeAdminUser] = field(default_factory=dict)
     fail_delete: bool = False
+    fail_update_password: bool = False
+    updated_passwords: dict[str, str] = field(default_factory=dict)
 
     def find_user_by_email(self, email: str) -> FakeAdminUser | None:
         return self.users_by_email.get(email.lower())
@@ -306,6 +308,11 @@ class FakeAdminClient:
         user = self.users_by_id.pop(user_id, None)
         if user is not None:
             self.users_by_email.pop(user.email.lower(), None)
+
+    def update_user_password(self, user_id: str, new_password: str) -> None:
+        if self.fail_update_password:
+            raise RuntimeError("Supabase Auth password update failed")
+        self.updated_passwords[user_id] = new_password
 
 
 @pytest.fixture

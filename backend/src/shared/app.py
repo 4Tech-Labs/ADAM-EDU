@@ -590,6 +590,93 @@ def get_auth_me(actor: CurrentActor = Depends(require_current_actor)) -> AuthMeR
     )
 
 
+class ChangePasswordRequest(BaseModel):
+    new_password: str
+
+
+class ChangePasswordResponse(BaseModel):
+    status: str
+
+
+@app.post("/api/auth/change-password", response_model=ChangePasswordResponse)
+def change_admin_password(
+    req: ChangePasswordRequest,
+    actor: CurrentActor = Depends(require_current_actor),
+    db: Session = Depends(get_db),
+) -> ChangePasswordResponse:
+    """Rotate password for a university_admin with must_rotate_password=True.
+
+    FAIL-CLOSED flow:
+      [D] update_user_password → Supabase Auth API   (if fails: 500, DB untouched)
+      [E] UPDATE memberships SET must_rotate_password=False  (if fails: 500, Auth updated)
+
+    Auth update intentionally precedes DB update. If Auth succeeds but DB fails,
+    the admin retries with the new password — flag still True, flow repeats safely.
+    """
+    # [B] Role guard
+    if not actor.has_active_role("university_admin"):
+        audit_log(
+            "admin.change_password",
+            "denied",
+            auth_user_id=actor.auth_user_id,
+            http_status=403,
+            reason="not_admin",
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin_role_required")
+
+    # [C] Rotation guard — 403 if flag already cleared
+    if not actor.must_rotate_password:
+        audit_log(
+            "admin.change_password",
+            "denied",
+            auth_user_id=actor.auth_user_id,
+            http_status=403,
+            reason="rotation_not_required",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="password_rotation_not_required",
+        )
+
+    # [D] Update Supabase Auth FIRST — fail-closed: DB untouched if this raises
+    admin_client = get_supabase_admin_auth_client()
+    try:
+        admin_client.update_user_password(actor.auth_user_id, req.new_password)
+    except Exception as exc:
+        audit_log(
+            "admin.change_password",
+            "error",
+            auth_user_id=actor.auth_user_id,
+            http_status=500,
+            reason="auth_update_failed",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="password_update_failed",
+        ) from exc
+
+    # [E] Clear must_rotate_password for ALL university_admin memberships of this user.
+    # Auth password is global (not per-university), so all flags clear together.
+    db.execute(
+        update(Membership)
+        .where(
+            Membership.user_id == actor.auth_user_id,
+            Membership.role == "university_admin",
+            Membership.must_rotate_password == True,  # noqa: E712
+        )
+        .values(must_rotate_password=False)
+    )
+    db.commit()
+
+    audit_log(
+        "admin.change_password",
+        "success",
+        auth_user_id=actor.auth_user_id,
+        http_status=200,
+    )
+    return ChangePasswordResponse(status="password_rotated")
+
+
 class InviteResolveRequest(BaseModel):
     invite_token: str
 
