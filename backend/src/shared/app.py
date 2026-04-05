@@ -9,8 +9,11 @@ import logging
 import os
 import pathlib
 import threading
+import time
 from typing import Any
 import uuid
+
+from pythonjsonlogger.json import JsonFormatter
 
 from cachetools import TTLCache
 
@@ -55,11 +58,14 @@ from shared.models import (
     Tenant,
     User,
 )
+from shared.internal_tasks import process_authoring_job_task
 from shared.progress_bus import subscribe, unsubscribe
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
+_json_handler = logging.StreamHandler()
+_json_handler.setFormatter(JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+logging.basicConfig(handlers=[_json_handler], level=logging.INFO, force=True)
 logger = logging.getLogger(__name__)
 
 
@@ -281,6 +287,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="adam-v8.0 - Case Generation API", lifespan=lifespan)
 
+
+@app.middleware("http")
+async def structured_logging_middleware(request: Request, call_next: Any) -> Any:
+    """Emit a structured JSON log line for every HTTP request.
+
+    Fields: request_id (UUID4), method, path, status_code, latency_ms.
+    request_id is stored in request.state for downstream use.
+    """
+    request_id = str(uuid.uuid4())
+    start = time.monotonic()
+    request.state.request_id = request_id
+    response = await call_next(request)
+    latency_ms = round((time.monotonic() - start) * 1000)
+    logger.info(
+        "request",
+        extra={
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "latency_ms": latency_ms,
+        },
+    )
+    return response
+
+
 _cors_origins = [
     "http://localhost:5173",
     "http://localhost:3000",
@@ -386,30 +418,14 @@ def create_authoring_job(
     )
 
 
-class InternalTaskPayload(BaseModel):
-    job_id: str
-    idempotency_key: str
-
-
-@app.post("/api/internal/tasks/authoring_step", status_code=200)
-async def process_authoring_job_task(
-    payload: InternalTaskPayload,
-    db: Session = Depends(get_db),
-    x_cloudtasks_taskname: str | None = Header(None),
-) -> dict[str, str]:
-    logger.info("Received Cloud Task execution for job %s | Task: %s", payload.job_id, x_cloudtasks_taskname)
-
-    job = db.scalar(select(AuthoringJob).where(AuthoringJob.id == payload.job_id))
-    if not job:
-        logger.error("Job not found. Discarding task.")
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    if job.status in ["completed", "failed", "processing"]:
-        logger.warning("IDEMPOTENCY TRIGGERED: Job %s is already %s.", job.id, job.status)
-        return {"status": "bypassed", "reason": f"idempotency_barrier: {job.status}"}
-
-    await AuthoringService.run_job(job.id)
-    return {"status": "success", "job_id": job.id}
+# Cloud Tasks internal endpoint — handler lives in shared.internal_tasks
+# to avoid import side effects when worker_app.py mounts the same route.
+app.add_api_route(
+    "/api/internal/tasks/authoring_step",
+    process_authoring_job_task,
+    methods=["POST"],
+    status_code=200,
+)
 
 
 class JobStatusResponse(BaseModel):
