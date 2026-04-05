@@ -588,6 +588,12 @@ class AuthMeResponse(BaseModel):
 
 @app.get("/api/auth/me", response_model=AuthMeResponse)
 def get_auth_me(actor: CurrentActor = Depends(require_current_actor)) -> AuthMeResponse:
+    audit_log(
+        "session.verified",
+        "success",
+        auth_user_id=actor.auth_user_id,
+        http_status=200,
+    )
     return AuthMeResponse(
         auth_user_id=actor.auth_user_id,
         profile=AuthMeProfileResponse(id=actor.profile.id, full_name=actor.profile.full_name),

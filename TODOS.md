@@ -65,3 +65,24 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Context:** Identificado en Issue #44 (plan-eng-review TODO item 3, decisión 10A: aceptar bloqueo síncrono hoy). La misma restricción existe en `shared/auth.py` con `JwtVerifier`. Resolver ambos juntos tiene más sentido que resolver solo el worker.
 
 **Depends on / blocked by:** Issue #44 (completado). Solo prioritario si el worker escala a alta concurrencia (>10 req/s simultáneos). Post-Fase 1.
+
+---
+
+## TODO-005: Rate limiting distribuido en endpoints de auth públicos
+
+**What:** Implementar rate limiting en los 5 endpoints de auth públicos con `fastapi-limiter>=0.1.6` + `redis>=5.0` contra Cloud Memorystore:
+- `POST /api/invites/resolve` → 10 req/min por IP
+- `POST /api/invites/redeem` → 5 req/min por IP
+- `POST /api/auth/activate/password` → 5 req/min por IP
+- `POST /api/auth/activate/oauth/complete` → 10 req/min por IP
+- `POST /api/auth/change-password` → 3 req/min por auth_user_id
+
+**Why:** Sin rate limiting, los endpoints de activación e invitación son vulnerables a brute-force y enumeración de tokens. In-memory no protege nada porque `public-api` tiene `max-instances=10` — cada instancia mantiene contadores independientes, permitiendo hasta 10× el límite configurado.
+
+**Pros:** Protección real contra brute-force en tokens de invitación y activación. Cierra el único control de seguridad operativa diferido del Plan Issue #10.
+
+**Cons:** Requiere aprovisionar Cloud Memorystore (Redis) en el proyecto GCP — cambio de infra fuera del alcance de Issue #46. Añade `fastapi-limiter` y `redis` como dependencias de runtime.
+
+**Context:** Identificado en Issue #46 (Plan Issue #10, plan-eng-review decisión 1A). La decisión de diferir fue explícita: no hay Redis disponible en la infra actual, y `slowapi` in-memory da falsa seguridad con max-instances=10. Ver sección "Rate Limiting Strategy" en `docs/runbooks/cloud-run-deploy.md` para los límites target y el contexto de la decisión.
+
+**Depends on / blocked by:** Aprovisionamiento de Cloud Memorystore en el proyecto GCP, o reducción de `maxInstances` a 1 en `public-api`. No bloquea Issue #11.
