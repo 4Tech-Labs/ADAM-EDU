@@ -1,0 +1,22 @@
+# authoring-worker image — Issue #9
+#
+# Uses the same base as the main Dockerfile because AuthoringService.run_job
+# depends on LangGraph runtime libraries bundled in langchain/langgraph-api.
+# Using python:3.12-slim would break the LangGraph execution context.
+
+FROM langchain/langgraph-api:3.12
+
+WORKDIR /deps
+
+# Install uv for fast, reproducible dependency installation
+RUN pip install --no-cache-dir uv
+
+# Copy only the backend source (no frontend assets needed for the worker)
+COPY pyproject.toml uv.lock* ./
+COPY src/ src/
+
+# Install production dependencies only
+RUN uv sync --no-dev
+
+# Run the minimal worker entrypoint — no SPA, no auth routes
+CMD ["uvicorn", "shared.worker_app:worker_app", "--host", "0.0.0.0", "--port", "8080"]
