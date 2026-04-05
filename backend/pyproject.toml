@@ -28,6 +28,7 @@ dependencies = [
     "scipy>=1.17.1",
     "supabase>=2.23.0",
     "cachetools>=5.0.0",
+    "python-json-logger>=2.0.7",
 ]
 
 
