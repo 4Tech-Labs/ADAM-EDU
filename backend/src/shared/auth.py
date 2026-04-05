@@ -378,6 +378,17 @@ class SupabaseAdminAuthClient:
             raise RuntimeError("Supabase admin API is unavailable")
         admin.delete_user(user_id)
 
+    def update_user_password(self, user_id: str, new_password: str) -> None:
+        """Update the Auth password for an existing user via Service Role key.
+
+        FAIL-CLOSED CONTRACT: This must be called BEFORE clearing must_rotate_password
+        in the DB. If this raises, the DB flag must NOT be modified.
+        """
+        admin = getattr(self.client.auth, "admin", None)
+        if admin is None:
+            raise RuntimeError("Supabase admin API is unavailable")
+        admin.update_user_by_id(user_id, {"password": new_password})
+
     @staticmethod
     def _extract_users(response: Any) -> list[AdminAuthUser]:
         payload = response

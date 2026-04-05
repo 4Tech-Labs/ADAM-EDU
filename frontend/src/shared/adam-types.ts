@@ -262,6 +262,15 @@ export interface ActivateOAuthCompleteResponse {
     status: string;
 }
 
+// Admin password rotation (Issue #8)
+export interface ChangePasswordRequest {
+    new_password: string;
+}
+
+export interface ChangePasswordResponse {
+    status: string;
+}
+
 export const EMPTY_FORM: CaseFormData = {
     subject: "",
     academicLevel: "Pregrado",

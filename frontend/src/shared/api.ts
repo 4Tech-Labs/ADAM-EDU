@@ -8,6 +8,8 @@ import type {
     AuthoringJobCreateResponse,
     AuthoringJobResultResponse,
     AuthoringJobStatusResponse,
+    ChangePasswordRequest,
+    ChangePasswordResponse,
     IntentType,
     InviteRedeemResponse,
     InviteResolveResponse,
@@ -307,6 +309,13 @@ export const api = {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ invite_token }),
+            });
+        },
+        async changePassword(req: ChangePasswordRequest): Promise<ChangePasswordResponse> {
+            return parseJsonResponse<ChangePasswordResponse>("/auth/change-password", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(req),
             });
         },
     },
