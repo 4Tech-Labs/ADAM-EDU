@@ -137,9 +137,9 @@ max_frequency = "5s"
 # Prepare Azure OAuth wiring now so Issue 5 does not start with a hidden local config blocker.
 # Keep it disabled until the team sets real values and validates redirect URLs.
 [auth.external.azure]
-enabled = false
-client_id = "env(SUPABASE_AUTH_EXTERNAL_AZURE_CLIENT_ID)"
-secret = "env(SUPABASE_AUTH_EXTERNAL_AZURE_SECRET)"
+enabled = true
+client_id = "90ee4844-7eba-4ceb-92c1-402534081377"
+secret = "IJL8Q~JbESxn~2j~HXD1co_WpWiuvCFTEy1sHbK~"
 redirect_uri = "http://localhost:54321/auth/v1/callback"
 url = ""
 skip_nonce_check = false
