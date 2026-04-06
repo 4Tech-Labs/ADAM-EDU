@@ -57,7 +57,10 @@ export function AuthCallbackPage() {
         handled.current = true;
 
         const ctx = readActivationContext();
-        clearActivationContext();
+        // Do NOT clear ctx here — React StrictMode double-invokes effects on
+        // mount. The first run would clear sessionStorage; the second run would
+        // find null ctx and navigate("/") before activation completes.
+        // clearActivationContext() is called inside each terminal branch below.
 
         if (!session) {
             navigate("/", { replace: true });
@@ -68,9 +71,11 @@ export function AuthCallbackPage() {
             async function runTeacherActivation() {
                 try {
                     await api.auth.activateOAuthComplete(ctx!.invite_token);
+                    clearActivationContext();
                     await refreshActor();
                     navigate("/teacher", { replace: true });
                 } catch (err: unknown) {
+                    clearActivationContext();
                     setActivationFlow("teacher_activate");
                     setActivationError(parseActivationError(err as ApiError));
                 }
@@ -89,9 +94,11 @@ export function AuthCallbackPage() {
                         // Already has a membership — just redeem to enroll in course
                         await api.auth.redeemInvite(ctx!.invite_token);
                     }
+                    clearActivationContext();
                     await refreshActor();
                     navigate("/student", { replace: true });
                 } catch (err: unknown) {
+                    clearActivationContext();
                     setActivationFlow("student_join");
                     setActivationError(parseActivationError(err as ApiError));
                 }

@@ -77,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         void bootstrap();
 
         const { data: listenerData } = supabase.auth.onAuthStateChange(
-            async (event, nextSession) => {
+            (event, nextSession) => {
                 if (cancelled) return;
 
                 if (
@@ -87,11 +87,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 ) {
                     setSession(nextSession);
                     if (nextSession) {
-                        const resolvedActor = await fetchActor();
-                        if (!cancelled) {
-                            setActor(resolvedActor);
-                            setError(null);
-                        }
+                        // Defer fetchActor to avoid deadlocking on the Supabase
+                        // PKCE storage lock: onAuthStateChange fires while the
+                        // lock is still held, so calling getSession() here
+                        // (via getBearerToken) blocks forever.
+                        setTimeout(() => {
+                            if (cancelled) return;
+                            void fetchActor().then((resolvedActor) => {
+                                if (!cancelled) {
+                                    setActor(resolvedActor);
+                                    setError(null);
+                                }
+                            });
+                        }, 0);
                     }
                 } else if (event === "SIGNED_OUT") {
                     setSession(null);

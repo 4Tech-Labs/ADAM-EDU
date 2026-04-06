@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 import hashlib
 import hmac
@@ -25,6 +25,7 @@ from shared.models import CourseMembership, Invite, Membership, Profile, User
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 AUTH_AUDIENCE = "authenticated"
+_JWKS_ALGORITHMS = frozenset({"RS256", "ES256"})
 PRIMARY_ROLE_ORDER = {"university_admin": 0, "teacher": 1, "student": 2}
 
 logger = logging.getLogger(__name__)
@@ -253,10 +254,16 @@ class JwtVerifier:
             raise AuthError(401, "invalid_token") from exc
 
         algorithm = header.get("alg")
-        if algorithm == "HS256" and self.settings.can_use_local_secret_fallback:
-            claims = self._decode_with_secret(token)
-        else:
-            claims = self._decode_with_jwks(token, header)
+        kid = header.get("kid")
+        logger.warning("[AUTH_DEBUG] JWT header: alg=%s kid=%s can_local_fallback=%s", algorithm, kid, self.settings.can_use_local_secret_fallback)
+        try:
+            if algorithm == "HS256" and self.settings.can_use_local_secret_fallback:
+                claims = self._decode_with_secret(token)
+            else:
+                claims = self._decode_with_jwks(token, header)
+        except AuthError as exc:
+            logger.warning("[AUTH_DEBUG] JWT verification FAILED: %s", exc.code)
+            raise
 
         auth_user_id = claims.get("sub")
         if not auth_user_id:
@@ -279,7 +286,7 @@ class JwtVerifier:
     def _decode_with_jwks(self, token: str, header: dict[str, Any]) -> dict[str, Any]:
         kid = header.get("kid")
         algorithm = header.get("alg")
-        if not kid or algorithm != "RS256":
+        if not kid or algorithm not in _JWKS_ALGORITHMS:
             raise AuthError(401, "invalid_token")
 
         try:
@@ -297,9 +304,10 @@ class JwtVerifier:
             return jwt.decode(
                 token,
                 signing_key.key,
-                algorithms=["RS256"],
+                algorithms=list(_JWKS_ALGORITHMS),
                 audience=AUTH_AUDIENCE,
                 issuer=self.settings.issuer,
+                leeway=timedelta(seconds=30),
             )
         except InvalidTokenError as exc:
             raise AuthError(401, "invalid_token") from exc

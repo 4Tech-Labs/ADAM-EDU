@@ -114,7 +114,11 @@ describe("AuthCallbackPage", () => {
         );
     });
 
-    it("always clears activation context", async () => {
+    it("does not clear activation context on plain login (no pending ctx)", async () => {
+        // clearActivationContext() is called only inside terminal activation
+        // branches (success or error), not eagerly at the top of the effect.
+        // Eager clearing was removed to fix a React StrictMode double-invocation
+        // bug where the second effect run found null ctx and navigated to "/".
         vi.mocked(useAuth).mockReturnValue({
             ...baseCtx,
             actor: teacherActor,
@@ -127,8 +131,12 @@ describe("AuthCallbackPage", () => {
         );
 
         await waitFor(() =>
-            expect(clearActivationContext).toHaveBeenCalledTimes(1),
+            expect(mockNavigate).toHaveBeenCalledWith("/teacher", {
+                replace: true,
+            }),
         );
+
+        expect(clearActivationContext).not.toHaveBeenCalled();
     });
 
     it("redirects to / when no session after loading", async () => {
