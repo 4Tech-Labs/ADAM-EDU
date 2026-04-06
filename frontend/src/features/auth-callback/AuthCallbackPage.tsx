@@ -63,6 +63,7 @@ export function AuthCallbackPage() {
         // clearActivationContext() is called inside each terminal branch below.
 
         if (!session) {
+            clearActivationContext();
             navigate("/", { replace: true });
             return;
         }

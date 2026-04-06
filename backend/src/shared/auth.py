@@ -254,15 +254,12 @@ class JwtVerifier:
             raise AuthError(401, "invalid_token") from exc
 
         algorithm = header.get("alg")
-        kid = header.get("kid")
-        logger.warning("[AUTH_DEBUG] JWT header: alg=%s kid=%s can_local_fallback=%s", algorithm, kid, self.settings.can_use_local_secret_fallback)
         try:
             if algorithm == "HS256" and self.settings.can_use_local_secret_fallback:
                 claims = self._decode_with_secret(token)
             else:
                 claims = self._decode_with_jwks(token, header)
-        except AuthError as exc:
-            logger.warning("[AUTH_DEBUG] JWT verification FAILED: %s", exc.code)
+        except AuthError:
             raise
 
         auth_user_id = claims.get("sub")
