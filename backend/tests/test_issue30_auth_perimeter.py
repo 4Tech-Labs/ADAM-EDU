@@ -131,6 +131,29 @@ def test_jwt_verifier_fails_closed_when_jwks_refresh_fails() -> None:
     assert exc_info.value.code == "invalid_token"
 
 
+def test_jwt_verifier_rejects_unknown_algorithm() -> None:
+    settings = build_auth_settings(environment="production")
+    verifier = JwtVerifier(settings)
+
+    with pytest.raises(AuthError) as exc_info:
+        verifier._decode_with_jwks("token", {"kid": "kid-1", "alg": "PS256"})
+
+    assert exc_info.value.code == "invalid_token"
+
+
+def test_jwt_verifier_accepts_es256_via_jwks() -> None:
+    settings = build_auth_settings(environment="production")
+    verifier = JwtVerifier(settings)
+
+    with (
+        patch.object(verifier._jwks_client, "get_signing_key", return_value=type("Key", (), {"key": "ec-public-key"})()),
+        patch("shared.auth.jwt.decode", return_value={"sub": "auth-user-es256", "aud": "authenticated", "iss": settings.issuer}),
+    ):
+        claims = verifier._decode_with_jwks("token", {"kid": "kid-ec", "alg": "ES256"})
+
+    assert claims["sub"] == "auth-user-es256"
+
+
 def test_supabase_admin_get_user_by_email_paginates_across_list_users_pages() -> None:
     settings = build_auth_settings()
     admin_client = SupabaseAdminAuthClient(settings)
@@ -826,7 +849,7 @@ def test_activate_oauth_full_name_from_user_metadata_key(
     derive_oauth_full_name tries ("full_name", "name") in order.
     The existing success test covers "name"; this covers the higher-priority "full_name".
     """
-    tenant = Tenant(id="10000000-0000-0000-0000-000000000073", name="OAuth FullName University")
+    tenant = Tenant(id=str(uuid.uuid4()), name="OAuth FullName University")
     db.add(tenant)
     db.commit()
     _, token = seed_invite(email="fullname-teacher@example.edu", university_id=tenant.id, role="teacher")
@@ -849,7 +872,7 @@ def test_activate_oauth_full_name_fallback_to_email_prefix(
     client, seed_invite, auth_headers_factory, db
 ) -> None:
     """JWT with no user_metadata → Profile.full_name falls back to email prefix."""
-    tenant = Tenant(id="10000000-0000-0000-0000-000000000074", name="OAuth Fallback University")
+    tenant = Tenant(id=str(uuid.uuid4()), name="OAuth Fallback University")
     db.add(tenant)
     db.commit()
     _, token = seed_invite(email="fallback-teacher@example.edu", university_id=tenant.id, role="teacher")
