@@ -218,6 +218,25 @@ def test_auth_me_returns_memberships_and_primary_role(client, auth_headers_facto
     assert first["profile"].full_name == payload["profile"]["full_name"]
 
 
+def test_auth_me_emits_session_verified_audit(client, auth_headers_factory, seed_identity) -> None:
+    """GET /api/auth/me must emit a session.verified audit event on every successful call."""
+    user_id = str(uuid.uuid4())
+    email = "audit@example.edu"
+    seed_identity(user_id=user_id, email=email, role="teacher")
+    headers = auth_headers_factory(sub=user_id, email=email)
+
+    with patch("shared.app.audit_log") as mock_audit:
+        response = client.get("/api/auth/me", headers=headers)
+
+    assert response.status_code == 200
+    mock_audit.assert_called_once_with(
+        "session.verified",
+        "success",
+        auth_user_id=user_id,
+        http_status=200,
+    )
+
+
 def test_authoring_denies_student(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "student@example.edu"
