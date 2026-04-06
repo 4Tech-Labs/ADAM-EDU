@@ -113,6 +113,31 @@ timeout: 3600            # Long-running authoring jobs
 
 ---
 
+## Rate Limiting Strategy
+
+**Estado actual (Issue #46):** Diferido — ver TODO-005 en `TODOS.md`.
+
+`public-api` usa `maxInstances: 10`. Rate limiting in-memory (`slowapi`) daría contadores
+independientes por instancia — hasta 10× el límite configurado sin protección real.
+
+**Trigger para implementar:**
+- Aprovisionar Cloud Memorystore (Redis) en el proyecto GCP, **o**
+- Reducir `maxInstances` a 1 en `public-api` (permite `slowapi` in-memory)
+
+**Límites target cuando se implemente:**
+
+| Endpoint | Límite | Dimensión |
+|---|---|---|
+| `POST /api/invites/resolve` | 10 req/min | por IP |
+| `POST /api/invites/redeem` | 5 req/min | por IP |
+| `POST /api/auth/activate/password` | 5 req/min | por IP |
+| `POST /api/auth/activate/oauth/complete` | 10 req/min | por IP |
+| `POST /api/auth/change-password` | 3 req/min | por auth_user_id |
+
+**Dependencias de implementación:** `fastapi-limiter>=0.1.6` + `redis>=5.0` en `backend/pyproject.toml`.
+
+---
+
 ## Cloud Monitoring — minimum alert policies
 
 | Alert | Threshold | Rationale |

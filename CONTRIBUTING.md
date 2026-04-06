@@ -139,6 +139,8 @@ Si una persona ya tiene una instalacion global personal de `gstack`, puede mante
 - No subas secretos al repositorio.
 - Usa `backend/.env.example` como plantilla.
 - Los valores reales deben vivir en entornos locales o en GitHub Actions Secrets.
+- Para PRs que modifiquen `auth.py`, `app.py` (endpoints auth), `internal_tasks.py` o modelos auth,
+  revisa el checklist de seguridad en [`docs/runbooks/security-pr-checklist.md`](docs/runbooks/security-pr-checklist.md).
 
 ## Criterio de revision
 

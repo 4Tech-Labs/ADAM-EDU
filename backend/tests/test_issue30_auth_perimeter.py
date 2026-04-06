@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import concurrent.futures
 from datetime import datetime, timedelta, timezone
+import threading
 import uuid
 from unittest.mock import patch
 
@@ -214,6 +216,25 @@ def test_auth_me_returns_memberships_and_primary_role(client, auth_headers_facto
     assert len(payload["memberships"]) == 2
     assert {membership["role"] for membership in payload["memberships"]} == {"student", "teacher"}
     assert first["profile"].full_name == payload["profile"]["full_name"]
+
+
+def test_auth_me_emits_session_verified_audit(client, auth_headers_factory, seed_identity) -> None:
+    """GET /api/auth/me must emit a session.verified audit event on every successful call."""
+    user_id = str(uuid.uuid4())
+    email = "audit@example.edu"
+    seed_identity(user_id=user_id, email=email, role="teacher")
+    headers = auth_headers_factory(sub=user_id, email=email)
+
+    with patch("shared.app.audit_log") as mock_audit:
+        response = client.get("/api/auth/me", headers=headers)
+
+    assert response.status_code == 200
+    mock_audit.assert_called_once_with(
+        "session.verified",
+        "success",
+        auth_user_id=user_id,
+        http_status=200,
+    )
 
 
 def test_authoring_denies_student(client, auth_headers_factory, seed_identity) -> None:
@@ -632,6 +653,69 @@ def test_redeem_success_and_repeat_is_idempotent(
     assert refreshed_invite.status == "consumed"
 
 
+def test_redeem_concurrent_double_redemption_is_idempotent(
+    client, seed_course, seed_identity, seed_invite, auth_headers_factory, db
+) -> None:
+    """Two simultaneous redeem requests for the same invite → exactly one wins.
+
+    DB barrier: UPDATE invite SET status='consumed' WHERE status='pending'
+    RETURNING id is atomic in PostgreSQL. Only one thread gets a row back.
+
+    Thread model:
+        Thread A ──► POST /api/invites/redeem ──► "redeemed"
+        Thread B ──► POST /api/invites/redeem ──► "already_enrolled"
+        threading.Barrier(2) releases both at the same instant.
+    """
+    teacher_seed = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="concurrent-teacher@example.edu",
+        role="teacher",
+        university_id="10000000-0000-0000-0000-000000000090",
+    )
+    course = seed_course(
+        university_id=teacher_seed["tenant"].id,
+        teacher_membership_id=teacher_seed["membership"].id,
+        title="Concurrent Redeem Course",
+    )
+    student_id = str(uuid.uuid4())
+    student_seed = seed_identity(
+        user_id=student_id,
+        email="concurrent-student@example.edu",
+        role="student",
+        university_id=teacher_seed["tenant"].id,
+    )
+    invite, token = seed_invite(
+        email="concurrent-student@example.edu",
+        university_id=teacher_seed["tenant"].id,
+        role="student",
+        course_id=course.id,
+    )
+    headers = auth_headers_factory(sub=student_id, email="concurrent-student@example.edu")
+
+    barrier = threading.Barrier(2)
+
+    def redeem() -> httpx.Response:
+        barrier.wait()  # release both threads at the same instant
+        return client.post("/api/invites/redeem", json={"invite_token": token}, headers=headers)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(redeem), executor.submit(redeem)]
+        responses = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+    statuses = sorted(r.json()["status"] for r in responses)
+    assert statuses == ["already_enrolled", "redeemed"], f"Unexpected statuses: {statuses}"
+    assert all(r.status_code == 200 for r in responses)
+
+    db.expire_all()
+    course_memberships = db.scalars(
+        select(CourseMembership).where(
+            CourseMembership.course_id == course.id,
+            CourseMembership.membership_id == student_seed["membership"].id,
+        )
+    ).all()
+    assert len(course_memberships) == 1, "Duplicate CourseMembership created under concurrency"
+
+
 def test_activate_oauth_complete_mismatch_does_not_delete_existing_auth_user(client, fake_admin_client, seed_invite, db) -> None:
     tenant = Tenant(id="10000000-0000-0000-0000-000000000070", name="OAuth University")
     db.add(tenant)
@@ -732,3 +816,49 @@ def test_activate_oauth_complete_success(client, seed_invite, auth_headers_facto
         )
     )
     assert membership is not None
+
+
+def test_activate_oauth_full_name_from_user_metadata_key(
+    client, seed_invite, auth_headers_factory, db
+) -> None:
+    """JWT with user_metadata.full_name → Profile uses that name.
+
+    derive_oauth_full_name tries ("full_name", "name") in order.
+    The existing success test covers "name"; this covers the higher-priority "full_name".
+    """
+    tenant = Tenant(id="10000000-0000-0000-0000-000000000073", name="OAuth FullName University")
+    db.add(tenant)
+    db.commit()
+    _, token = seed_invite(email="fullname-teacher@example.edu", university_id=tenant.id, role="teacher")
+    user_id = str(uuid.uuid4())
+    headers = auth_headers_factory(
+        sub=user_id,
+        email="fullname-teacher@example.edu",
+        claims={"user_metadata": {"full_name": "Ana García"}},
+    )
+
+    response = client.post("/api/auth/activate/oauth/complete", json={"invite_token": token}, headers=headers)
+
+    assert response.status_code == 200
+    profile = db.get(Profile, user_id)
+    assert profile is not None
+    assert profile.full_name == "Ana García"
+
+
+def test_activate_oauth_full_name_fallback_to_email_prefix(
+    client, seed_invite, auth_headers_factory, db
+) -> None:
+    """JWT with no user_metadata → Profile.full_name falls back to email prefix."""
+    tenant = Tenant(id="10000000-0000-0000-0000-000000000074", name="OAuth Fallback University")
+    db.add(tenant)
+    db.commit()
+    _, token = seed_invite(email="fallback-teacher@example.edu", university_id=tenant.id, role="teacher")
+    user_id = str(uuid.uuid4())
+    headers = auth_headers_factory(sub=user_id, email="fallback-teacher@example.edu")
+
+    response = client.post("/api/auth/activate/oauth/complete", json={"invite_token": token}, headers=headers)
+
+    assert response.status_code == 200
+    profile = db.get(Profile, user_id)
+    assert profile is not None
+    assert profile.full_name == "fallback-teacher"
