@@ -14,6 +14,7 @@ import { AdminChangePasswordPage } from "@/features/admin-auth/AdminChangePasswo
 import { RootRedirect } from "./auth/RootRedirect";
 import { RequireRole } from "./auth/RequireRole";
 import { RequirePasswordRotation } from "./auth/RequirePasswordRotation";
+import { GuestOnlyRoute } from "./auth/GuestOnlyRoute";
 
 function App() {
     const { ToastContainer } = useToast();
@@ -28,7 +29,7 @@ function App() {
                     <Route path="/" element={<RootRedirect />} />
 
                     {/* Teacher routes */}
-                    <Route path="/teacher/login" element={<TeacherLoginPage />} />
+                    <Route path="/teacher/login" element={<GuestOnlyRoute role="teacher"><TeacherLoginPage /></GuestOnlyRoute>} />
                     <Route path="/teacher/activate" element={<TeacherActivatePage />} />
                     <Route
                         path="/teacher/*"
@@ -40,7 +41,7 @@ function App() {
                     />
 
                     {/* Student routes */}
-                    <Route path="/student/login" element={<StudentLoginPage />} />
+                    <Route path="/student/login" element={<GuestOnlyRoute role="student"><StudentLoginPage /></GuestOnlyRoute>} />
                     <Route path="/join" element={<StudentJoinPage />} />
                     <Route
                         path="/student/*"
@@ -57,7 +58,7 @@ function App() {
                     />
 
                     {/* Admin routes */}
-                    <Route path="/admin/login" element={<AdminLoginPage />} />
+                    <Route path="/admin/login" element={<GuestOnlyRoute role="university_admin"><AdminLoginPage /></GuestOnlyRoute>} />
                     <Route
                         path="/admin/change-password"
                         element={

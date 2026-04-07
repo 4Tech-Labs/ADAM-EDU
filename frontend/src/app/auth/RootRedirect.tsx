@@ -9,7 +9,7 @@ import { AppLanding } from "@/app/AppLanding";
  *  1. must_rotate_password=true      → /admin/change-password  (always wins)
  *  2. primary_role=university_admin  → /admin/dashboard (placeholder)
  *  3. primary_role=teacher           → /teacher
- *  4. primary_role=student           → /student/login (full experience in Issue #7)
+ *  4. primary_role=student           → /student
  *  5. no session or unknown role     → AppLanding (role entrypoints)
  */
 export function RootRedirect() {
@@ -28,7 +28,7 @@ export function RootRedirect() {
         case "teacher":
             return <Navigate to="/teacher" replace />;
         case "student":
-            return <Navigate to="/student/login" replace />;
+            return <Navigate to="/student" replace />;
         default:
             return <AppLanding />;
     }
