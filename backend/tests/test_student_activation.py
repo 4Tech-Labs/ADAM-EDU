@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from shared.app import _allowed_domains_cache, _allowed_domains_lock
+from shared.identity_activation import _allowed_domains_cache, _allowed_domains_lock
 from shared.models import AllowedEmailDomain, Course, Membership, Profile, Tenant
 
 
