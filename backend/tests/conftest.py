@@ -10,18 +10,33 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import close_all_sessions
 
 from shared.app import app
 from shared.auth import get_auth_settings, get_jwt_verifier, get_supabase_admin_auth_client
-from shared.database import SessionLocal, engine
+from shared.database import SessionLocal, engine, settings
 from shared.models import Base, Course, CourseAccessLink, Invite, Membership, Profile, Tenant, User
+
+
+def _assert_local_schema_reset_target() -> None:
+    db_url = make_url(settings.database_url)
+    allowed_hosts = {"localhost", "127.0.0.1"}
+    if settings.environment == "production":
+        raise RuntimeError("Refusing to reset test schema against a production database URL.")
+    if db_url.host not in allowed_hosts or db_url.port != 5434:
+        raise RuntimeError(
+            "Refusing to reset test schema outside the repo-local Postgres target "
+            f"(expected localhost:5434, got {db_url.host}:{db_url.port})."
+        )
 
 
 @pytest.fixture(scope="session", autouse=True)
 def ensure_db_schema() -> None:
     """Recreate the ORM schema once so metadata changes are reflected in the test DB."""
+    _assert_local_schema_reset_target()
+    close_all_sessions()
     with engine.begin() as connection:
         connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
         connection.execute(text("CREATE SCHEMA public"))

@@ -19,9 +19,6 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-ACADEMIC_LEVELS = ("Pregrado", "Especialización", "Maestría", "MBA", "Doctorado")
-
-
 def _backfill_legacy_courses(connection: sa.Connection) -> None:
     connection.execute(
         sa.text(
