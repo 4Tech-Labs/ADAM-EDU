@@ -25,10 +25,19 @@ def _assert_local_schema_reset_target() -> None:
     allowed_hosts = {"localhost", "127.0.0.1"}
     if settings.environment == "production":
         raise RuntimeError("Refusing to reset test schema against a production database URL.")
-    if db_url.host not in allowed_hosts or db_url.port != 5434:
+    is_repo_local_postgres = db_url.host in allowed_hosts and db_url.port == 5434
+    is_github_actions_postgres = (
+        os.getenv("GITHUB_ACTIONS") == "true"
+        and db_url.host in allowed_hosts
+        and db_url.port == 5432
+        and db_url.database == "postgres"
+        and db_url.username == "postgres"
+    )
+    if not (is_repo_local_postgres or is_github_actions_postgres):
         raise RuntimeError(
-            "Refusing to reset test schema outside the repo-local Postgres target "
-            f"(expected localhost:5434, got {db_url.host}:{db_url.port})."
+            "Refusing to reset test schema outside approved local test targets "
+            "(repo-local localhost:5434 or GitHub Actions 127.0.0.1:5432/postgres, "
+            f"got {db_url.host}:{db_url.port}/{db_url.database})."
         )
 
 
