@@ -47,6 +47,7 @@ from shared.auth import (
     require_verified_identity,
 )
 from shared.database import SessionLocal, get_db
+from shared.invite_status import invite_effective_status
 from shared.models import (
     AllowedEmailDomain,
     Assignment,
@@ -72,12 +73,6 @@ logger = logging.getLogger(__name__)
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def invite_effective_status(invite: Invite) -> str:
-    if invite.status == "pending" and invite.expires_at <= utc_now():
-        return "expired"
-    return invite.status
 
 
 def get_legacy_teacher_or_500(db: Session, actor: CurrentActor) -> User:
