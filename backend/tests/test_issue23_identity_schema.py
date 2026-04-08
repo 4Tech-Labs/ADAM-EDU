@@ -134,6 +134,7 @@ def test_issue23_alembic_upgrade_and_downgrade() -> None:
             "courses",
             "course_memberships",
             "university_sso_configs",
+            "course_access_links",
         }.issubset(tables)
 
         with engine.begin() as conn:
@@ -186,8 +187,31 @@ def test_issue23_alembic_upgrade_and_downgrade() -> None:
             conn.execute(
                 text(
                     """
-                    INSERT INTO courses (id, university_id, teacher_membership_id, title, created_at)
-                    VALUES (:id, :university_id, :teacher_membership_id, :title, NOW())
+                    INSERT INTO courses (
+                        id,
+                        university_id,
+                        teacher_membership_id,
+                        pending_teacher_invite_id,
+                        title,
+                        code,
+                        semester,
+                        academic_level,
+                        max_students,
+                        status,
+                        created_at
+                    ) VALUES (
+                        :id,
+                        :university_id,
+                        :teacher_membership_id,
+                        NULL,
+                        :title,
+                        :code,
+                        :semester,
+                        :academic_level,
+                        :max_students,
+                        :status,
+                        NOW()
+                    )
                     """
                 ),
                 {
@@ -195,6 +219,11 @@ def test_issue23_alembic_upgrade_and_downgrade() -> None:
                     "university_id": "10000000-0000-0000-0000-000000000001",
                     "teacher_membership_id": "30000000-0000-0000-0000-000000000001",
                     "title": "Course A",
+                    "code": "ISSUE23-COURSE-001",
+                    "semester": "2026-I",
+                    "academic_level": "Pregrado",
+                    "max_students": 30,
+                    "status": "active",
                 },
             )
 
@@ -202,9 +231,9 @@ def test_issue23_alembic_upgrade_and_downgrade() -> None:
                 text(
                     """
                     INSERT INTO invites (
-                        id, token_hash, email, university_id, course_id, role, status, expires_at, consumed_at, created_at
+                        id, token_hash, email, full_name, university_id, course_id, role, status, expires_at, consumed_at, created_at
                     ) VALUES (
-                        :id, :token_hash, :email, :university_id, :course_id, :role, :status, NOW() + INTERVAL '1 day', NULL, NOW()
+                        :id, :token_hash, :email, :full_name, :university_id, :course_id, :role, :status, NOW() + INTERVAL '1 day', NULL, NOW()
                     )
                     """
                 ),
@@ -212,6 +241,7 @@ def test_issue23_alembic_upgrade_and_downgrade() -> None:
                     "id": "50000000-0000-0000-0000-000000000001",
                     "token_hash": "teacher-token-hash",
                     "email": "teacher-invite@example.edu",
+                    "full_name": None,
                     "university_id": "10000000-0000-0000-0000-000000000001",
                     "course_id": None,
                     "role": "teacher",
@@ -225,9 +255,9 @@ def test_issue23_alembic_upgrade_and_downgrade() -> None:
                     text(
                         """
                         INSERT INTO invites (
-                            id, token_hash, email, university_id, course_id, role, status, expires_at, consumed_at, created_at
+                            id, token_hash, email, full_name, university_id, course_id, role, status, expires_at, consumed_at, created_at
                         ) VALUES (
-                            :id, :token_hash, :email, :university_id, :course_id, :role, :status, NOW() + INTERVAL '1 day', NULL, NOW()
+                            :id, :token_hash, :email, :full_name, :university_id, :course_id, :role, :status, NOW() + INTERVAL '1 day', NULL, NOW()
                         )
                         """
                     ),
@@ -235,6 +265,7 @@ def test_issue23_alembic_upgrade_and_downgrade() -> None:
                         "id": "50000000-0000-0000-0000-000000000002",
                         "token_hash": "student-token-hash",
                         "email": "student-invite@example.edu",
+                        "full_name": None,
                         "university_id": "10000000-0000-0000-0000-000000000001",
                         "course_id": None,
                         "role": "student",

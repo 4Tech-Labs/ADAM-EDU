@@ -739,6 +739,9 @@ def resolve_invite(req: InviteResolveRequest, db: Session = Depends(get_db)) -> 
                 if membership is not None:
                     profile = db.get(Profile, membership.user_id)
                     teacher_name = profile.full_name if profile is not None else None
+            elif course.pending_teacher_invite_id:
+                pending_invite = db.get(Invite, course.pending_teacher_invite_id)
+                teacher_name = pending_invite.full_name if pending_invite is not None else None
 
     effective_status = invite_effective_status(invite)
     audit_log(

@@ -70,6 +70,11 @@ def course(db, university):
         university_id=UNIVERSITY_ID,
         teacher_membership_id=teacher_membership.id,
         title="Curso de Prueba",
+        code="TEST-STUDENT-ACT-001",
+        semester="2026-I",
+        academic_level="Pregrado",
+        max_students=30,
+        status="active",
     )
     db.add(c)
     db.commit()
@@ -106,6 +111,11 @@ class TestResolveInviteTeacherName:
             university_id=UNIVERSITY_ID,
             teacher_membership_id=membership.id,
             title="Análisis de Datos",
+            code="TEST-STUDENT-ACT-002",
+            semester="2026-I",
+            academic_level="Pregrado",
+            max_students=30,
+            status="active",
         )
         db.add(course)
         db.commit()

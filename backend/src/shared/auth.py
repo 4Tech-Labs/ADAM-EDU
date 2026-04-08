@@ -151,6 +151,10 @@ def hash_invite_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def hash_course_access_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def normalize_email(email: str | None) -> str | None:
     if email is None:
         return None
