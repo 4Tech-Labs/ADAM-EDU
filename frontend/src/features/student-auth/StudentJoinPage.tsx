@@ -62,6 +62,8 @@ function resolveSubmitError(err: ApiError, tokenKind: "invite" | "course_access"
             return "Debes ingresar tu correo electronico.";
         case "email_domain_not_allowed":
             return "Tu correo institucional no esta habilitado para esta universidad.";
+        case "account_exists_sign_in_required":
+            return "Ya existe una cuenta con este correo. Inicia sesion en /student/login o usa Microsoft.";
         default:
             return tokenKind === "invite"
                 ? "No se pudo completar la activacion. Intenta de nuevo."

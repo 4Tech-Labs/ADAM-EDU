@@ -300,7 +300,7 @@ def test_issue57_course_access_activate_password_creates_membership_and_enrollme
     assert enrollment is not None
 
 
-def test_issue57_course_access_activate_password_reuses_existing_user(
+def test_issue57_course_access_activate_password_returns_idempotent_response_for_existing_activation(
     client,
     db,
     fake_admin_client,
@@ -322,6 +322,14 @@ def test_issue57_course_access_activate_password_reuses_existing_user(
         title="Curso Reuse",
         code="COURSE-ACCESS-006",
     )
+    student = seed_identity(
+        user_id=existing_user.id,
+        email="student.reuse@example.edu",
+        role="student",
+        university_id=university_id,
+    )
+    db.add(CourseMembership(course_id=course.id, membership_id=student["membership"].id))
+    db.commit()
     _, token = seed_course_access_link(course_id=course.id, status="active")
 
     response = client.post(
@@ -339,6 +347,46 @@ def test_issue57_course_access_activate_password_reuses_existing_user(
     )
     assert membership is not None
     assert len(fake_admin_client.users_by_email) == 1
+
+
+def test_issue57_course_access_activate_password_existing_account_requires_sign_in(
+    client,
+    db,
+    fake_admin_client,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+) -> None:
+    university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.existing.account@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    fake_admin_client.create_password_user("student.existing.account@example.edu", "Existing123!")
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Existing Account",
+        code="COURSE-ACCESS-006A",
+    )
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/activate/password",
+        json=_activate_password_payload(token, email="student.existing.account@example.edu"),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "account_exists_sign_in_required"
+    memberships = db.scalars(
+        select(Membership).where(
+            Membership.university_id == university_id,
+            Membership.role == "student",
+        )
+    ).all()
+    assert memberships == []
 
 
 def test_issue57_course_access_activate_password_requires_email_and_full_name(

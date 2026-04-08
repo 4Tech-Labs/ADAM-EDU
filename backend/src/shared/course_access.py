@@ -355,6 +355,23 @@ def activate_course_access_password(
             email=normalized_email,
         )
 
+    if existing_user is not None:
+        audit_log(
+            "course_access.activate_password",
+            "denied",
+            auth_user_id=existing_user.id,
+            university_id=context.course.university_id,
+            course_id=context.course.id,
+            link_id=context.link.id,
+            token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+            http_status=status.HTTP_409_CONFLICT,
+            reason="account_exists_sign_in_required",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="account_exists_sign_in_required",
+        )
+
     created_new_user = False
     auth_user = existing_user
     if auth_user is None:

@@ -184,6 +184,40 @@ def test_supabase_admin_get_user_by_email_paginates_across_list_users_pages() ->
     assert admin_client.client.auth.admin.calls == [(1, 200), (2, 200)]
 
 
+def test_supabase_admin_get_or_create_user_by_email_recovers_from_duplicate_create() -> None:
+    settings = build_auth_settings()
+    admin_client = SupabaseAdminAuthClient(settings)
+
+    class StubAdmin:
+        def __init__(self) -> None:
+            self.create_calls = 0
+            self.list_calls: list[tuple[int | None, int | None]] = []
+
+        def create_user(self, payload: dict[str, object]):
+            self.create_calls += 1
+            assert payload["email"] == "race@example.edu"
+            raise RuntimeError("user already exists")
+
+        def list_users(self, page: int | None = None, per_page: int | None = None):
+            self.list_calls.append((page, per_page))
+            if len(self.list_calls) == 1:
+                return []
+            return [{"id": "existing-user", "email": "race@example.edu"}]
+
+    class StubClient:
+        def __init__(self) -> None:
+            self.auth = type("Auth", (), {"admin": StubAdmin()})()
+
+    admin_client._client = StubClient()
+
+    result = admin_client.get_or_create_user_by_email("race@example.edu", "Secure1234!")
+
+    assert result.created is False
+    assert result.user.id == "existing-user"
+    assert admin_client.client.auth.admin.create_calls == 1
+    assert admin_client.client.auth.admin.list_calls == [(1, 200), (1, 200)]
+
+
 def test_auth_me_profile_incomplete(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "noprofile@example.edu"

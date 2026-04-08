@@ -381,7 +381,13 @@ class SupabaseAdminAuthClient:
         if admin is None:
             raise RuntimeError("Supabase admin API is unavailable")
 
-        response = admin.create_user({"email": email, "password": password, "email_confirm": True})
+        try:
+            response = admin.create_user({"email": email, "password": password, "email_confirm": True})
+        except Exception:
+            existing_after_conflict = self.get_user_by_email(email)
+            if existing_after_conflict is not None:
+                return AdminUserResult(user=existing_after_conflict, created=False)
+            raise
         user = self._extract_single_user(response)
         return AdminUserResult(user=user, created=True)
 

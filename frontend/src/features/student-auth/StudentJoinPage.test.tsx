@@ -216,4 +216,50 @@ describe("StudentJoinPage", () => {
             expect(mockNavigate).toHaveBeenCalledWith("/student", { replace: true }),
         );
     });
+
+    it("shows an explicit sign-in message when the course access email already has an account", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-existing",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["microsoft", "password"],
+        });
+        vi.mocked(api.auth.activateCourseAccessPassword).mockRejectedValue(
+            Object.assign(new Error("account_exists_sign_in_required"), {
+                detail: "account_exists_sign_in_required",
+                status: 409,
+            }),
+        );
+
+        renderPage();
+
+        await waitFor(() => screen.getByText(/Activar cuenta/i));
+
+        fireEvent.change(screen.getByPlaceholderText(/tu.correo@universidad.edu/i), {
+            target: { value: "student@universidad.edu" },
+        });
+        fireEvent.change(screen.getByPlaceholderText(/Nombre completo/i), {
+            target: { value: "Estudiante Test" },
+        });
+        const passwordInputs = document.querySelectorAll("input[type=password]");
+        fireEvent.change(passwordInputs[0], { target: { value: "Password123!" } });
+        fireEvent.change(passwordInputs[1], { target: { value: "Password123!" } });
+
+        await act(async () => {
+            fireEvent.submit(document.querySelector("form")!);
+        });
+
+        await waitFor(() =>
+            expect(screen.getByText(/ya existe una cuenta con este correo/i)).toBeTruthy(),
+        );
+    });
 });
