@@ -11,10 +11,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text as sql_text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -155,19 +157,58 @@ class Course(Base):
     """Course ownership moves through teacher memberships, not legacy user ids."""
 
     __tablename__ = "courses"
+    __table_args__ = (
+        UniqueConstraint("university_id", "code", "semester", name="uix_courses_university_code_semester"),
+        CheckConstraint("status IN ('active', 'inactive')", name="ck_courses_status"),
+        CheckConstraint("max_students > 0", name="ck_courses_max_students_positive"),
+        CheckConstraint(
+            "academic_level IN ('Pregrado', 'Especialización', 'Maestría', 'MBA', 'Doctorado')",
+            name="ck_courses_academic_level",
+        ),
+        CheckConstraint(
+            """
+            (
+                teacher_membership_id IS NOT NULL
+                AND pending_teacher_invite_id IS NULL
+            ) OR (
+                teacher_membership_id IS NULL
+                AND pending_teacher_invite_id IS NOT NULL
+            )
+            """,
+            name="ck_courses_teacher_assignment_xor",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
     university_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
-    teacher_membership_id: Mapped[str] = mapped_column(Text, ForeignKey("memberships.id"), nullable=False)
+    teacher_membership_id: Mapped[str | None] = mapped_column(Text, ForeignKey("memberships.id"), nullable=True)
+    pending_teacher_invite_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("invites.id", name="fk_courses_pending_teacher_invite_id_invites", use_alter=True),
+        nullable=True,
+    )
     title: Mapped[str] = mapped_column(Text, nullable=False)
+    code: Mapped[str] = mapped_column(Text, nullable=False)
+    semester: Mapped[str] = mapped_column(Text, nullable=False)
+    academic_level: Mapped[str] = mapped_column(Text, nullable=False)
+    max_students: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
 
     university: Mapped["Tenant"] = relationship(back_populates="courses")
-    teacher_membership: Mapped["Membership"] = relationship(back_populates="courses_as_teacher")
-    invites: Mapped[list["Invite"]] = relationship(back_populates="course")
+    teacher_membership: Mapped["Membership | None"] = relationship(
+        back_populates="courses_as_teacher",
+        foreign_keys=[teacher_membership_id],
+    )
+    pending_teacher_invite: Mapped["Invite | None"] = relationship(
+        back_populates="pending_teacher_courses",
+        foreign_keys=[pending_teacher_invite_id],
+    )
+    invites: Mapped[list["Invite"]] = relationship(back_populates="course", foreign_keys="Invite.course_id")
+    access_links: Mapped[list["CourseAccessLink"]] = relationship(back_populates="course")
     course_memberships: Mapped[list["CourseMembership"]] = relationship(back_populates="course")
 
 
@@ -184,6 +225,7 @@ class Invite(Base):
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
     token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     email: Mapped[str] = mapped_column(Text, nullable=False)
+    full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     university_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
     course_id: Mapped[str | None] = mapped_column(Text, ForeignKey("courses.id"), nullable=True)
     role: Mapped[str] = mapped_column(Text, nullable=False)
@@ -196,7 +238,38 @@ class Invite(Base):
     )
 
     university: Mapped["Tenant"] = relationship(back_populates="invites")
-    course: Mapped["Course | None"] = relationship(back_populates="invites")
+    course: Mapped["Course | None"] = relationship(back_populates="invites", foreign_keys=[course_id])
+    pending_teacher_courses: Mapped[list["Course"]] = relationship(
+        back_populates="pending_teacher_invite",
+        foreign_keys="Course.pending_teacher_invite_id",
+    )
+
+
+class CourseAccessLink(Base):
+    """Revocable course access link stored as a token hash, never raw token."""
+
+    __tablename__ = "course_access_links"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'rotated', 'revoked')", name="ck_course_access_links_status"),
+        Index(
+            "uix_course_access_links_active_course",
+            "course_id",
+            unique=True,
+            postgresql_where=sql_text("status = 'active'"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    course_id: Mapped[str] = mapped_column(Text, ForeignKey("courses.id"), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    course: Mapped["Course"] = relationship(back_populates="access_links")
 
 
 class CourseMembership(Base):

@@ -16,12 +16,15 @@ from sqlalchemy.orm import close_all_sessions
 from shared.app import app
 from shared.auth import get_auth_settings, get_jwt_verifier, get_supabase_admin_auth_client
 from shared.database import SessionLocal, engine
-from shared.models import Base, Course, Invite, Membership, Profile, Tenant, User
+from shared.models import Base, Course, CourseAccessLink, Invite, Membership, Profile, Tenant, User
 
 
 @pytest.fixture(scope="session", autouse=True)
 def ensure_db_schema() -> None:
-    """Create the ORM schema once so the suite can run against an empty database."""
+    """Recreate the ORM schema once so metadata changes are reflected in the test DB."""
+    with engine.begin() as connection:
+        connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+        connection.execute(text("CREATE SCHEMA public"))
     Base.metadata.create_all(bind=engine)
 
 
@@ -221,8 +224,32 @@ def seed_identity(db) -> Callable[..., dict[str, object]]:
 
 @pytest.fixture
 def seed_course(db):
-    def _factory(*, university_id: str, teacher_membership_id: str, title: str = "Test Course") -> Course:
-        course = Course(university_id=university_id, teacher_membership_id=teacher_membership_id, title=title)
+    def _factory(
+        *,
+        university_id: str,
+        teacher_membership_id: str | None = None,
+        pending_teacher_invite_id: str | None = None,
+        title: str = "Test Course",
+        code: str | None = None,
+        semester: str = "2026-I",
+        academic_level: str = "Pregrado",
+        max_students: int = 30,
+        status: str = "active",
+    ) -> Course:
+        if (teacher_membership_id is None) == (pending_teacher_invite_id is None):
+            raise ValueError("seed_course requires exactly one teacher assignment")
+
+        course = Course(
+            university_id=university_id,
+            teacher_membership_id=teacher_membership_id,
+            pending_teacher_invite_id=pending_teacher_invite_id,
+            title=title,
+            code=code or f"TEST-{uuid.uuid4().hex[:8].upper()}",
+            semester=semester,
+            academic_level=academic_level,
+            max_students=max_students,
+            status=status,
+        )
         db.add(course)
         db.commit()
         db.refresh(course)
@@ -239,6 +266,7 @@ def seed_invite(db):
         university_id: str,
         role: str,
         course_id: str | None = None,
+        full_name: str | None = None,
         status: str = "pending",
         expires_at: datetime | None = None,
         raw_token: str | None = None,
@@ -249,6 +277,7 @@ def seed_invite(db):
         invite = Invite(
             token_hash=hash_invite_token(token),
             email=email,
+            full_name=full_name,
             university_id=university_id,
             course_id=course_id,
             role=role,
@@ -259,6 +288,32 @@ def seed_invite(db):
         db.commit()
         db.refresh(invite)
         return invite, token
+
+    return _factory
+
+
+@pytest.fixture
+def seed_course_access_link(db):
+    def _factory(
+        *,
+        course_id: str,
+        raw_token: str | None = None,
+        status: str = "active",
+        rotated_at: datetime | None = None,
+    ) -> tuple[CourseAccessLink, str]:
+        from shared.auth import hash_course_access_token
+
+        token = raw_token or f"course-access-{uuid.uuid4()}"
+        access_link = CourseAccessLink(
+            course_id=course_id,
+            token_hash=hash_course_access_token(token),
+            status=status,
+            rotated_at=rotated_at,
+        )
+        db.add(access_link)
+        db.commit()
+        db.refresh(access_link)
+        return access_link, token
 
     return _factory
 
