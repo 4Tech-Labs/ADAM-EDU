@@ -297,6 +297,12 @@ def seed_invite(db):
     ) -> tuple[Invite, str]:
         from shared.auth import hash_invite_token
 
+        tenant = db.get(Tenant, university_id)
+        if tenant is None:
+            tenant = Tenant(id=university_id, name=f"Tenant {university_id[-6:]}")
+            db.add(tenant)
+            db.flush()
+
         token = raw_token or f"invite-{uuid.uuid4()}"
         invite = Invite(
             token_hash=hash_invite_token(token),
@@ -414,6 +420,7 @@ class FakeAdminClient:
 @pytest.fixture
 def fake_admin_client(monkeypatch: pytest.MonkeyPatch) -> FakeAdminClient:
     client = FakeAdminClient()
+    monkeypatch.setattr("shared.auth.get_supabase_admin_auth_client", lambda: client)
     monkeypatch.setattr("shared.app.get_supabase_admin_auth_client", lambda: client)
     monkeypatch.setattr("shared.admin_reads.get_supabase_admin_auth_client", lambda: client)
     return client

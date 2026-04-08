@@ -8,14 +8,12 @@ import json
 import logging
 import os
 import pathlib
-import threading
+import sys
 import time
 from typing import Any
 import uuid
 
 from pythonjsonlogger.json import JsonFormatter
-
-from cachetools import TTLCache
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, status
@@ -23,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -32,6 +29,7 @@ from sse_starlette.sse import EventSourceResponse
 from case_generator.core.authoring import AuthoringService
 from case_generator.suggest_service import SuggestRequest, SuggestResponse, generate_suggestion
 from shared.admin_router import router as admin_router
+from shared.course_access_router import router as course_access_router
 from shared.auth import (
     AuthError,
     CurrentActor,
@@ -46,10 +44,19 @@ from shared.auth import (
     require_teacher_actor,
     require_verified_identity,
 )
+from shared.identity_activation import (
+    _allowed_domains_cache,
+    _allowed_domains_lock,
+    derive_activation_full_name,
+    derive_oauth_full_name,
+    ensure_course_membership as ensure_course_membership_impl,
+    ensure_email_domain_allowed,
+    upsert_membership as upsert_membership_impl,
+    upsert_profile as upsert_profile_impl,
+)
 from shared.database import SessionLocal, get_db
 from shared.invite_status import invite_effective_status
 from shared.models import (
-    AllowedEmailDomain,
     Assignment,
     AuthoringJob,
     Course,
@@ -69,7 +76,6 @@ _json_handler = logging.StreamHandler()
 _json_handler.setFormatter(JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
 logging.basicConfig(handlers=[_json_handler], level=logging.INFO, force=True)
 logger = logging.getLogger(__name__)
-
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -104,79 +110,15 @@ def require_invite_email_match(invite: Invite, email: str | None) -> None:
 
 
 def upsert_profile(db: Session, auth_user_id: str, full_name: str | None) -> Profile:
-    profile = db.scalar(select(Profile).where(Profile.id == auth_user_id))
-    if profile is None:
-        if not full_name:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="full_name_required")
-        profile = Profile(id=auth_user_id, full_name=full_name.strip())
-        db.add(profile)
-        db.flush()
-        return profile
-
-    if full_name and profile.full_name != full_name.strip():
-        profile.full_name = full_name.strip()
-        db.flush()
-    return profile
+    return upsert_profile_impl(db, auth_user_id, full_name)
 
 
 def upsert_membership(db: Session, auth_user_id: str, university_id: str, role: str) -> Membership:
-    membership = db.scalar(
-        select(Membership).where(
-            Membership.user_id == auth_user_id,
-            Membership.university_id == university_id,
-            Membership.role == role,
-        )
-    )
-    if membership is not None:
-        membership.status = "active"
-        membership.must_rotate_password = False
-        db.flush()
-        return membership
-
-    membership = Membership(
-        user_id=auth_user_id,
-        university_id=university_id,
-        role=role,
-        status="active",
-        must_rotate_password=False,
-    )
-    db.add(membership)
-    db.flush()
-    return membership
+    return upsert_membership_impl(db, auth_user_id, university_id, role)
 
 
 def upsert_course_membership(db: Session, course_id: str, membership_id: str) -> tuple[CourseMembership, bool]:
-    course_membership = db.scalar(
-        select(CourseMembership).where(
-            CourseMembership.course_id == course_id,
-            CourseMembership.membership_id == membership_id,
-        )
-    )
-    if course_membership is not None:
-        return course_membership, False
-
-    inserted_id = db.execute(
-        pg_insert(CourseMembership)
-        .values(course_id=course_id, membership_id=membership_id)
-        .on_conflict_do_nothing(constraint="uix_course_membership")
-        .returning(CourseMembership.id)
-    ).scalar_one_or_none()
-
-    if inserted_id is None:
-        existing = db.scalar(
-            select(CourseMembership).where(
-                CourseMembership.course_id == course_id,
-                CourseMembership.membership_id == membership_id,
-            )
-        )
-        if existing is None:  # pragma: no cover
-            raise RuntimeError("course_membership_upsert_failed")
-        return existing, False
-
-    created_membership = db.get(CourseMembership, inserted_id)
-    if created_membership is None:  # pragma: no cover
-        raise RuntimeError("course_membership_inserted_but_missing")
-    return created_membership, True
+    return ensure_course_membership_impl(db, course_id=course_id, membership_id=membership_id)
 
 
 def consume_invite_if_pending(db: Session, invite: Invite) -> bool:
@@ -215,50 +157,6 @@ def activation_state_exists(db: Session, invite: Invite, auth_user_id: str) -> b
 
     return True
 
-
-def derive_oauth_full_name(identity: VerifiedIdentity) -> str | None:
-    user_metadata = identity.claims.get("user_metadata")
-    if isinstance(user_metadata, dict):
-        for key in ("full_name", "name"):
-            value = user_metadata.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    if identity.email:
-        return identity.email.split("@", maxsplit=1)[0]
-    return None
-
-
-def derive_activation_full_name(full_name: str | None, email: str) -> str:
-    normalized = (full_name or "").strip()
-    if normalized:
-        return normalized
-    return email.split("@", maxsplit=1)[0]
-
-
-# ---------------------------------------------------------------------------
-# Domain validation cache — TTL 5 min, thread-safe via explicit lock.
-# Empty list means no domain restriction configured for that university.
-# ---------------------------------------------------------------------------
-_allowed_domains_cache: TTLCache[str, list[str]] = TTLCache(maxsize=100, ttl=300)
-_allowed_domains_lock = threading.Lock()
-
-
-def _get_allowed_domains(db: Session, university_id: str) -> list[str]:
-    """Return allowed email domains for a university, with TTL caching."""
-    with _allowed_domains_lock:
-        if university_id in _allowed_domains_cache:
-            return _allowed_domains_cache[university_id]
-    domains = db.scalars(
-        select(AllowedEmailDomain.domain).where(
-            AllowedEmailDomain.university_id == university_id,
-        )
-    ).all()
-    result = [d.lower() for d in domains]
-    with _allowed_domains_lock:
-        _allowed_domains_cache[university_id] = result
-    return result
-
-
 def _check_student_email_domain(db: Session, invite: Invite) -> None:
     """Raise 422 if the invite email domain is not in the university's allow-list.
 
@@ -266,13 +164,11 @@ def _check_student_email_domain(db: Session, invite: Invite) -> None:
     accepted). This preserves backward-compatibility for existing universities
     that have not yet configured allowed_email_domains.
     """
-    email_domain = invite.email.split("@")[-1].lower()
-    allowed = _get_allowed_domains(db, invite.university_id)
-    if allowed and email_domain not in allowed:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="email_domain_not_allowed",
-        )
+    ensure_email_domain_allowed(
+        db,
+        university_id=invite.university_id,
+        email=invite.email,
+    )
 
 
 @asynccontextmanager
@@ -283,6 +179,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="adam-v8.0 - Case Generation API", lifespan=lifespan)
 app.include_router(admin_router)
+app.include_router(course_access_router)
 
 
 @app.middleware("http")
@@ -929,10 +826,20 @@ def activate_password(
         created_new_user = admin_user_result.created
 
     try:
-        upsert_profile(db, auth_user.id, derive_activation_full_name(req.full_name, invite.email))
-        membership = upsert_membership(db, auth_user.id, invite.university_id, invite.role)
+        current_module = sys.modules[__name__]
+        current_module.upsert_profile(
+            db,
+            auth_user.id,
+            derive_activation_full_name(req.full_name, invite.email),
+        )
+        membership = current_module.upsert_membership(
+            db,
+            auth_user.id,
+            invite.university_id,
+            invite.role,
+        )
         if invite.role == "student" and invite.course_id:
-            upsert_course_membership(db, invite.course_id, membership.id)
+            current_module.upsert_course_membership(db, invite.course_id, membership.id)
         if not consume_invite_if_pending(db, invite):
             db.rollback()
             if activation_state_exists(db, invite, auth_user.id):
@@ -1012,10 +919,20 @@ def activate_oauth_complete(
         _check_student_email_domain(db, invite)
 
     try:
-        upsert_profile(db, identity.auth_user_id, derive_oauth_full_name(identity))
-        membership = upsert_membership(db, identity.auth_user_id, invite.university_id, invite.role)
+        current_module = sys.modules[__name__]
+        current_module.upsert_profile(
+            db,
+            identity.auth_user_id,
+            derive_oauth_full_name(identity) or identity.auth_user_id,
+        )
+        membership = current_module.upsert_membership(
+            db,
+            identity.auth_user_id,
+            invite.university_id,
+            invite.role,
+        )
         if invite.role == "student" and invite.course_id:
-            upsert_course_membership(db, invite.course_id, membership.id)
+            current_module.upsert_course_membership(db, invite.course_id, membership.id)
         if not consume_invite_if_pending(db, invite):
             db.rollback()
             if activation_state_exists(db, invite, identity.auth_user_id):

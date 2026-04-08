@@ -10,6 +10,11 @@ import type {
     AuthoringJobStatusResponse,
     ChangePasswordRequest,
     ChangePasswordResponse,
+    CourseAccessActivateOAuthCompleteResponse,
+    CourseAccessActivatePasswordRequest,
+    CourseAccessActivatePasswordResponse,
+    CourseAccessEnrollResponse,
+    CourseAccessResolveResponse,
     IntentType,
     InviteRedeemResponse,
     InviteResolveResponse,
@@ -309,6 +314,38 @@ export const api = {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ invite_token }),
+            });
+        },
+        async resolveCourseAccess(course_access_token: string): Promise<CourseAccessResolveResponse> {
+            return parseJsonResponse<CourseAccessResolveResponse>("/course-access/resolve", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ course_access_token }),
+            });
+        },
+        async enrollWithCourseAccess(course_access_token: string): Promise<CourseAccessEnrollResponse> {
+            return parseJsonResponse<CourseAccessEnrollResponse>("/course-access/enroll", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ course_access_token }),
+            });
+        },
+        async activateCourseAccessPassword(
+            req: CourseAccessActivatePasswordRequest,
+        ): Promise<CourseAccessActivatePasswordResponse> {
+            return parseJsonResponse<CourseAccessActivatePasswordResponse>("/course-access/activate/password", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(req),
+            });
+        },
+        async activateCourseAccessOAuthComplete(
+            course_access_token: string,
+        ): Promise<CourseAccessActivateOAuthCompleteResponse> {
+            return parseJsonResponse<CourseAccessActivateOAuthCompleteResponse>("/course-access/activate/oauth/complete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ course_access_token }),
             });
         },
         async changePassword(req: ChangePasswordRequest): Promise<ChangePasswordResponse> {

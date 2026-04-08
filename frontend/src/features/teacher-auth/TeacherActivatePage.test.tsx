@@ -103,6 +103,7 @@ describe("TeacherActivatePage", () => {
     it("calls resolveInvite with the invite_token from activation context", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "teacher_activate",
+            token_kind: "invite",
             invite_token: "tok-abc",
             role: "teacher",
             expires_at: Date.now() + 300000,
@@ -120,6 +121,7 @@ describe("TeacherActivatePage", () => {
     it("renders the activation form with email_masked disabled when invite is pending", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "teacher_activate",
+            token_kind: "invite",
             invite_token: "tok-abc",
             role: "teacher",
             expires_at: Date.now() + 300000,
@@ -142,6 +144,7 @@ describe("TeacherActivatePage", () => {
     it("shows expired message when invite status is expired", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "teacher_activate",
+            token_kind: "invite",
             invite_token: "tok-abc",
             role: "teacher",
             expires_at: Date.now() + 300000,
@@ -162,6 +165,7 @@ describe("TeacherActivatePage", () => {
     it("shows consumed message when invite status is consumed", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "teacher_activate",
+            token_kind: "invite",
             invite_token: "tok-abc",
             role: "teacher",
             expires_at: Date.now() + 300000,
@@ -182,6 +186,7 @@ describe("TeacherActivatePage", () => {
     it("shows client-side error when passwords do not match — does not call activatePassword", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "teacher_activate",
+            token_kind: "invite",
             invite_token: "tok-abc",
             role: "teacher",
             expires_at: Date.now() + 300000,
@@ -209,6 +214,7 @@ describe("TeacherActivatePage", () => {
     it("calls activatePassword then signInWithPassword with res.email and navigates to /teacher", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "teacher_activate",
+            token_kind: "invite",
             invite_token: "tok-abc",
             role: "teacher",
             expires_at: Date.now() + 300000,
@@ -261,6 +267,7 @@ describe("TeacherActivatePage", () => {
     it("shows inline error when activatePassword fails with invalid_invite", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "teacher_activate",
+            token_kind: "invite",
             invite_token: "tok-abc",
             role: "teacher",
             expires_at: Date.now() + 300000,
@@ -295,6 +302,7 @@ describe("TeacherActivatePage", () => {
     it("calls signInWithOAuth with provider azure when Microsoft button is clicked", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "teacher_activate",
+            token_kind: "invite",
             invite_token: "tok-abc",
             role: "teacher",
             expires_at: Date.now() + 300000,

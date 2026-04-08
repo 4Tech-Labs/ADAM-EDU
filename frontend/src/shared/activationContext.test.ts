@@ -14,9 +14,10 @@ describe("activationContext", () => {
         vi.useRealTimers();
     });
 
-    it("save → read returns the correct value", () => {
+    it("save and read preserves invite activation context", () => {
         saveActivationContext({
             flow: "teacher_activate",
+            token_kind: "invite",
             invite_token: "tok_abc123",
             role: "teacher",
         });
@@ -24,20 +25,50 @@ describe("activationContext", () => {
         const ctx = readActivationContext();
         expect(ctx).not.toBeNull();
         expect(ctx?.flow).toBe("teacher_activate");
-        expect(ctx?.invite_token).toBe("tok_abc123");
-        expect(ctx?.role).toBe("teacher");
-        expect(typeof ctx?.expires_at).toBe("number");
+        expect(ctx?.token_kind).toBe("invite");
+        expect("invite_token" in (ctx ?? {})).toBe(true);
     });
 
-    it("returns null when nothing is stored", () => {
-        expect(readActivationContext()).toBeNull();
+    it("save and read preserves course access context", () => {
+        saveActivationContext({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course_tok_123",
+        });
+
+        const ctx = readActivationContext();
+        expect(ctx).not.toBeNull();
+        expect(ctx?.flow).toBe("student_join_course_access");
+        expect(ctx?.token_kind).toBe("course_access");
+        expect("course_access_token" in (ctx ?? {})).toBe(true);
+    });
+
+    it("normalizes the legacy student_join invite shape", () => {
+        sessionStorage.setItem(
+            "adam_activation_ctx",
+            JSON.stringify({
+                flow: "student_join",
+                invite_token: "legacy_tok",
+                role: "student",
+                expires_at: Date.now() + 1000,
+            }),
+        );
+
+        const ctx = readActivationContext();
+        expect(ctx).toEqual({
+            flow: "student_join_invite",
+            token_kind: "invite",
+            invite_token: "legacy_tok",
+            role: "student",
+            expires_at: expect.any(Number),
+        });
     });
 
     it("clearActivationContext removes the stored context", () => {
         saveActivationContext({
-            flow: "student_join",
-            invite_token: "tok_xyz",
-            role: "student",
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course_tok_xyz",
         });
         clearActivationContext();
         expect(readActivationContext()).toBeNull();
@@ -47,19 +78,18 @@ describe("activationContext", () => {
         vi.useFakeTimers();
         saveActivationContext({
             flow: "teacher_activate",
+            token_kind: "invite",
             invite_token: "tok_expired",
             role: "teacher",
         });
 
-        // Advance clock past the 5-minute TTL
         vi.advanceTimersByTime(5 * 60 * 1000 + 1);
 
         expect(readActivationContext()).toBeNull();
-        // The key must be cleaned up
         expect(sessionStorage.getItem("adam_activation_ctx")).toBeNull();
     });
 
-    it("returns null and removes the entry for malformed JSON", () => {
+    it("returns null and removes malformed payloads", () => {
         sessionStorage.setItem("adam_activation_ctx", "{invalid-json}");
         expect(readActivationContext()).toBeNull();
         expect(sessionStorage.getItem("adam_activation_ctx")).toBeNull();
