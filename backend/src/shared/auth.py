@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, joinedload
 from supabase import Client, create_client
 
 from shared.database import get_db
+from shared.invite_status import invite_effective_status
 from shared.models import CourseMembership, Invite, Membership, Profile, User
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -190,6 +191,10 @@ def audit_event(
     invite_hash_prefix: str | None = None,
     job_id: str | None = None,
     assignment_id: str | None = None,
+    university_id: str | None = None,
+    course_id: str | None = None,
+    link_id: str | None = None,
+    membership_id: str | None = None,
     http_status: int | None = None,
     reason: str | None = None,
 ) -> None:
@@ -201,6 +206,10 @@ def audit_event(
         "invite_hash_prefix": invite_hash_prefix,
         "job_id": job_id,
         "assignment_id": assignment_id,
+        "university_id": university_id,
+        "course_id": course_id,
+        "link_id": link_id,
+        "membership_id": membership_id,
         "http_status": http_status,
         "reason": reason,
     }
@@ -216,6 +225,10 @@ def audit_log(event: str, outcome: str, **fields: Any) -> None:
         invite_hash_prefix=fields.get("invite_hash_prefix"),
         job_id=fields.get("job_id"),
         assignment_id=fields.get("assignment_id"),
+        university_id=fields.get("university_id"),
+        course_id=fields.get("course_id"),
+        link_id=fields.get("link_id"),
+        membership_id=fields.get("membership_id"),
         http_status=fields.get("http_status"),
         reason=fields.get("reason"),
     )
@@ -544,13 +557,11 @@ def resolve_invite_by_token(db: Session, invite_token: str) -> InviteResolution:
 
 
 def validate_pending_invite(invite: Invite) -> None:
-    expires_at = _coerce_datetime(invite.expires_at)
-    if invite.status != "pending":
-        if invite.status == "expired" or expires_at <= datetime.now(timezone.utc):
-            raise AuthError(410, "invite_expired")
-        raise AuthError(404, "invite_invalid")
-    if expires_at <= datetime.now(timezone.utc):
+    effective_status = invite_effective_status(invite)
+    if effective_status == "expired":
         raise AuthError(410, "invite_expired")
+    if effective_status != "pending":
+        raise AuthError(404, "invite_invalid")
 
 
 def consume_invite(db: Session, invite: Invite) -> bool:

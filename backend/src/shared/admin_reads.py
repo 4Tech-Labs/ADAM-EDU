@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, aliased
 
 from shared.admin_context import AdminContext
 from shared.auth import get_supabase_admin_auth_client
+from shared.invite_status import invite_effective_status_from_fields
 from shared.models import Course, CourseAccessLink, CourseMembership, Invite, Membership, Profile, User
 
 
@@ -53,7 +54,7 @@ class CourseListItemResponse(BaseModel):
     students_count: int
     max_students: int
     occupancy_percent: int
-    access_link: None = None
+    access_link: str | None = None
     access_link_status: AccessLinkStatus
 
 
@@ -85,12 +86,6 @@ class TeacherOptionsResponse(BaseModel):
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _effective_invite_status(invite_status: str, expires_at: datetime | None) -> str:
-    if invite_status == "pending" and expires_at is not None and expires_at <= utc_now():
-        return "expired"
-    return invite_status
 
 
 def _clamp_percent(value: int) -> int:
@@ -310,7 +305,7 @@ def _build_courses_query(
     return stmt
 
 
-def _serialize_course_item(row: dict[str, Any]) -> CourseListItemResponse:
+def _serialize_course_item(row: dict[str, Any], *, access_link: str | None = None) -> CourseListItemResponse:
     course_teacher_membership_id = row["course_teacher_membership_id"]
     course_pending_teacher_invite_id = row["course_pending_teacher_invite_id"]
     students_count = int(row["students_count"])
@@ -344,7 +339,7 @@ def _serialize_course_item(row: dict[str, Any]) -> CourseListItemResponse:
             students_count=students_count,
             max_students=max_students,
             occupancy_percent=_calculate_percent(students_count, max_students),
-            access_link=None,
+            access_link=access_link,
             access_link_status="active" if row["active_link_status"] == "active" else "missing",
         )
 
@@ -361,7 +356,7 @@ def _serialize_course_item(row: dict[str, Any]) -> CourseListItemResponse:
             detail="teacher_display_name_unavailable",
         )
 
-    effective_invite_status = _effective_invite_status(
+    effective_invite_status = invite_effective_status_from_fields(
         row["pending_invite_status"],
         row["pending_invite_expires_at"],
     )
@@ -383,9 +378,41 @@ def _serialize_course_item(row: dict[str, Any]) -> CourseListItemResponse:
         students_count=students_count,
         max_students=max_students,
         occupancy_percent=_calculate_percent(students_count, max_students),
-        access_link=None,
+        access_link=access_link,
         access_link_status="active" if row["active_link_status"] == "active" else "missing",
     )
+
+
+def get_admin_course_item(
+    db: Session,
+    context: AdminContext,
+    course_id: str,
+    *,
+    access_link: str | None = None,
+) -> CourseListItemResponse:
+    row = (
+        db.execute(
+            _build_courses_query(
+                context=context,
+                search=None,
+                semester=None,
+                course_status=None,
+                academic_level=None,
+            )
+            .where(Course.id == course_id)
+            .limit(1)
+        )
+        .mappings()
+        .first()
+    )
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="course_not_found",
+        )
+
+    return _serialize_course_item(dict(row), access_link=access_link)
 
 
 def list_admin_courses(
