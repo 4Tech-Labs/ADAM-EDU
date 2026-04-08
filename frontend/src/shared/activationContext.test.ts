@@ -24,9 +24,13 @@ describe("activationContext", () => {
 
         const ctx = readActivationContext();
         expect(ctx).not.toBeNull();
-        expect(ctx?.flow).toBe("teacher_activate");
-        expect(ctx?.token_kind).toBe("invite");
-        expect("invite_token" in (ctx ?? {})).toBe(true);
+        expect(ctx).toEqual({
+            flow: "teacher_activate",
+            token_kind: "invite",
+            invite_token: "tok_abc123",
+            role: "teacher",
+            expires_at: expect.any(Number),
+        });
     });
 
     it("save and read preserves course access context", () => {
@@ -38,9 +42,12 @@ describe("activationContext", () => {
 
         const ctx = readActivationContext();
         expect(ctx).not.toBeNull();
-        expect(ctx?.flow).toBe("student_join_course_access");
-        expect(ctx?.token_kind).toBe("course_access");
-        expect("course_access_token" in (ctx ?? {})).toBe(true);
+        expect(ctx).toEqual({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course_tok_123",
+            expires_at: expect.any(Number),
+        });
     });
 
     it("normalizes the legacy student_join invite shape", () => {

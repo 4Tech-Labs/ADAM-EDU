@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { AuthCallbackPage } from "./AuthCallbackPage";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import type { AuthMeActor } from "@/app/auth/auth-types";
+
+import { AuthCallbackPage } from "./AuthCallbackPage";
 
 vi.mock("@/app/auth/useAuth");
 vi.mock("@/shared/activationContext");
@@ -16,12 +18,14 @@ vi.mock("@/shared/api", () => ({
             activateOAuthComplete: vi.fn(),
             redeemInvite: vi.fn(),
             enrollWithCourseAccess: vi.fn(),
+            activateCourseAccessComplete: vi.fn(),
             activateCourseAccessOAuthComplete: vi.fn(),
         },
     },
     ApiError: class ApiError extends Error {
         status: number;
         detail?: string;
+
         constructor(status: number, message: string, detail?: string) {
             super(message);
             this.name = "ApiError";
@@ -32,12 +36,9 @@ vi.mock("@/shared/api", () => ({
 }));
 
 import { useAuth } from "@/app/auth/useAuth";
-import {
-    readActivationContext,
-    clearActivationContext,
-} from "@/shared/activationContext";
-import { useNavigate } from "react-router-dom";
+import { clearActivationContext, readActivationContext } from "@/shared/activationContext";
 import { api } from "@/shared/api";
+import { useNavigate } from "react-router-dom";
 
 const mockNavigate = vi.fn();
 const mockRefreshActor = vi.fn();
@@ -76,6 +77,7 @@ describe("AuthCallbackPage", () => {
         vi.mocked(api.auth.activateOAuthComplete).mockResolvedValue({ status: "activated" });
         vi.mocked(api.auth.redeemInvite).mockResolvedValue({ status: "redeemed" });
         vi.mocked(api.auth.enrollWithCourseAccess).mockResolvedValue({ status: "enrolled" });
+        vi.mocked(api.auth.activateCourseAccessComplete).mockResolvedValue({ status: "activated" });
         vi.mocked(api.auth.activateCourseAccessOAuthComplete).mockResolvedValue({ status: "activated" });
     });
 
@@ -92,7 +94,7 @@ describe("AuthCallbackPage", () => {
             </MemoryRouter>,
         );
 
-        expect(screen.getByText(/completando inicio de sesion/i)).toBeTruthy();
+        expect(screen.getByText(/completando inicio de sesión/i)).toBeTruthy();
     });
 
     it("handles teacher invite oauth activation", async () => {
@@ -166,7 +168,30 @@ describe("AuthCallbackPage", () => {
         );
     });
 
-    it("falls back to course access oauth activation when enroll reports missing membership", async () => {
+    it("uses authenticated course access completion when no student membership exists yet", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-complete",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(useAuth).mockReturnValue({ ...baseCtx, actor: null });
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(api.auth.activateCourseAccessComplete).toHaveBeenCalledWith("course-access-complete"),
+        );
+        await waitFor(() =>
+            expect(mockNavigate).toHaveBeenCalledWith("/student", { replace: true }),
+        );
+    });
+
+    it("falls back to authenticated course access completion when enroll reports missing membership", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "student_join_course_access",
             token_kind: "course_access",
@@ -188,7 +213,7 @@ describe("AuthCallbackPage", () => {
         );
 
         await waitFor(() =>
-            expect(api.auth.activateCourseAccessOAuthComplete).toHaveBeenCalledWith("course-access-fallback"),
+            expect(api.auth.activateCourseAccessComplete).toHaveBeenCalledWith("course-access-fallback"),
         );
     });
 
@@ -200,7 +225,7 @@ describe("AuthCallbackPage", () => {
             expires_at: Date.now() + 300000,
         });
         vi.mocked(useAuth).mockReturnValue({ ...baseCtx, actor: null });
-        vi.mocked(api.auth.activateCourseAccessOAuthComplete).mockRejectedValue(
+        vi.mocked(api.auth.activateCourseAccessComplete).mockRejectedValue(
             Object.assign(new Error("course_access_link_rotated"), {
                 detail: "course_access_link_rotated",
                 status: 410,

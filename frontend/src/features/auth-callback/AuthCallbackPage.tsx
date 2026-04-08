@@ -1,36 +1,34 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+
 import { useAuth } from "@/app/auth/useAuth";
 import { api, ApiError } from "@/shared/api";
-import {
-    readActivationContext,
-    clearActivationContext,
-} from "@/shared/activationContext";
+import { clearActivationContext, readActivationContext } from "@/shared/activationContext";
 
 function parseActivationError(err: ApiError): string {
     switch (err.detail) {
         case "invalid_invite":
-            return "Esta invitacion ya no es valida. Solicita una nueva.";
+            return "Esta invitación ya no es válida. Solicita una nueva.";
         case "invalid_course_access_token":
-            return "Este enlace de acceso ya no es valido.";
+            return "Este enlace de acceso ya no es válido.";
         case "course_access_link_rotated":
             return "Este enlace fue rotado. Solicita el enlace actualizado.";
         case "course_access_link_revoked":
             return "Este enlace fue revocado. Solicita uno nuevo.";
         case "course_inactive":
-            return "Este curso no esta disponible en este momento.";
+            return "Este curso no está disponible en este momento.";
         case "email_mismatch":
         case "invite_email_mismatch":
-            return "El correo de tu cuenta Microsoft no coincide con la invitacion.";
+            return "El correo de tu cuenta Microsoft no coincide con la invitación.";
         case "email_domain_not_allowed":
-            return "Tu correo institucional no esta habilitado para esta universidad.";
+            return "Tu correo institucional no está habilitado para esta universidad.";
         case "membership_required":
         case "student_membership_required":
-            return "No tienes una membresia activa para este curso.";
+            return "No tienes una membresía activa para este curso.";
         case "auth_method_not_allowed":
-            return "Microsoft no esta habilitado para este curso.";
+            return "Microsoft no está habilitado para este curso.";
         default:
-            return "No se pudo completar la activacion. Intenta de nuevo.";
+            return "No se pudo completar la activación. Intenta de nuevo.";
     }
 }
 
@@ -104,20 +102,25 @@ export function AuthCallbackPage() {
             const courseAccessCtx = ctx;
             async function runCourseAccessActivation() {
                 try {
-                    if (!actor) {
-                        await api.auth.activateCourseAccessOAuthComplete(courseAccessCtx.course_access_token);
-                    } else {
+                    const hasStudentMembership = actor?.memberships.some(
+                        (membership) => membership.role === "student" && membership.status === "active",
+                    ) ?? false;
+
+                    if (hasStudentMembership) {
                         try {
                             await api.auth.enrollWithCourseAccess(courseAccessCtx.course_access_token);
                         } catch (err: unknown) {
                             const apiErr = err as ApiError;
                             if (apiErr.detail === "student_membership_required") {
-                                await api.auth.activateCourseAccessOAuthComplete(courseAccessCtx.course_access_token);
+                                await api.auth.activateCourseAccessComplete(courseAccessCtx.course_access_token);
                             } else {
                                 throw err;
                             }
                         }
+                    } else {
+                        await api.auth.activateCourseAccessComplete(courseAccessCtx.course_access_token);
                     }
+
                     clearActivationContext();
                     await refreshActor();
                     navigate("/student", { replace: true });
@@ -160,7 +163,7 @@ export function AuthCallbackPage() {
         return (
             <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
                 <p className="text-sm text-danger">
-                    No se pudo completar el inicio de sesion. Intenta de nuevo.
+                    No se pudo completar el inicio de sesión. Intenta de nuevo.
                 </p>
                 <a href="/app/" className="text-sm underline hover:opacity-80">
                     Volver al inicio
@@ -178,7 +181,7 @@ export function AuthCallbackPage() {
                         href="/app/teacher/activate"
                         className="text-sm underline hover:opacity-80"
                     >
-                        Volver a activacion
+                        Volver a activación
                     </a>
                 ) : (
                     <p className="text-sm text-muted-foreground">
@@ -192,7 +195,7 @@ export function AuthCallbackPage() {
     return (
         <div className="flex items-center justify-center py-24">
             <span className="text-sm text-muted-foreground">
-                Completando inicio de sesion...
+                Completando inicio de sesión...
             </span>
         </div>
     );

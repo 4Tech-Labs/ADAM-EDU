@@ -314,6 +314,10 @@ export interface CourseAccessActivatePasswordResponse {
     email: string;
 }
 
+export interface CourseAccessActivateCompleteResponse {
+    status: "activated";
+}
+
 export interface CourseAccessActivateOAuthCompleteResponse {
     status: "activated";
 }

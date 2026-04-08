@@ -45,8 +45,6 @@ from shared.auth import (
     require_verified_identity,
 )
 from shared.identity_activation import (
-    _allowed_domains_cache,
-    _allowed_domains_lock,
     derive_activation_full_name,
     derive_oauth_full_name,
     ensure_course_membership as ensure_course_membership_impl,

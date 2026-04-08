@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import concurrent.futures
-from datetime import datetime, timedelta, timezone
 import threading
 import uuid
 
@@ -387,6 +386,62 @@ def test_issue57_course_access_activate_password_existing_account_requires_sign_
         )
     ).all()
     assert memberships == []
+
+
+def test_issue57_course_access_activate_complete_creates_membership_for_existing_session(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.complete@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Complete",
+        code="COURSE-ACCESS-006B",
+    )
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+    student_id = str(uuid.uuid4())
+
+    response = client.post(
+        "/api/course-access/activate/complete",
+        json=_resolve_payload(token),
+        headers=auth_headers_factory(
+            sub=student_id,
+            email="student.complete@example.edu",
+            claims={"user_metadata": {"full_name": "Estudiante Complete"}},
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "activated"}
+    profile = db.get(Profile, student_id)
+    assert profile is not None
+    assert profile.full_name == "Estudiante Complete"
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == student_id,
+            Membership.university_id == university_id,
+            Membership.role == "student",
+        )
+    )
+    assert membership is not None
+    enrollment = db.scalar(
+        select(CourseMembership).where(
+            CourseMembership.course_id == course.id,
+            CourseMembership.membership_id == membership.id,
+        )
+    )
+    assert enrollment is not None
 
 
 def test_issue57_course_access_activate_password_requires_email_and_full_name(

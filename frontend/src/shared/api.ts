@@ -10,6 +10,7 @@ import type {
     AuthoringJobStatusResponse,
     ChangePasswordRequest,
     ChangePasswordResponse,
+    CourseAccessActivateCompleteResponse,
     CourseAccessActivateOAuthCompleteResponse,
     CourseAccessActivatePasswordRequest,
     CourseAccessActivatePasswordResponse,
@@ -337,6 +338,15 @@ export const api = {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(req),
+            });
+        },
+        async activateCourseAccessComplete(
+            course_access_token: string,
+        ): Promise<CourseAccessActivateCompleteResponse> {
+            return parseJsonResponse<CourseAccessActivateCompleteResponse>("/course-access/activate/complete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ course_access_token }),
             });
         },
         async activateCourseAccessOAuthComplete(

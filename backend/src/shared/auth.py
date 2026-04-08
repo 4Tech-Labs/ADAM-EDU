@@ -17,7 +17,6 @@ from fastapi import Depends, Header
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 from supabase import Client, create_client
 

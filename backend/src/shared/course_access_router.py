@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from shared.auth import CurrentActor, VerifiedIdentity, require_current_actor, require_verified_identity
 from shared.course_access import (
+    CourseAccessActivateCompleteRequest,
+    CourseAccessActivateCompleteResponse,
     CourseAccessActivateOAuthCompleteRequest,
     CourseAccessActivateOAuthCompleteResponse,
     CourseAccessActivatePasswordRequest,
@@ -15,6 +17,7 @@ from shared.course_access import (
     CourseAccessEnrollResponse,
     CourseAccessResolveRequest,
     CourseAccessResolveResponse,
+    activate_course_access_complete,
     activate_course_access_oauth_complete,
     activate_course_access_password,
     enroll_with_course_access,
@@ -48,6 +51,15 @@ def post_course_access_activate_password(
     db: Session = Depends(get_db),
 ) -> CourseAccessActivatePasswordResponse:
     return activate_course_access_password(db, request)
+
+
+@router.post("/activate/complete", response_model=CourseAccessActivateCompleteResponse)
+def post_course_access_activate_complete(
+    request: CourseAccessActivateCompleteRequest,
+    identity: Annotated[VerifiedIdentity, Depends(require_verified_identity)],
+    db: Session = Depends(get_db),
+) -> CourseAccessActivateCompleteResponse:
+    return activate_course_access_complete(db, identity, request)
 
 
 @router.post("/activate/oauth/complete", response_model=CourseAccessActivateOAuthCompleteResponse)

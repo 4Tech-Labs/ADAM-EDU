@@ -39,15 +39,10 @@ type ActivationContextInput =
 export function saveActivationContext(
     ctx: ActivationContextInput,
 ): void {
-    const value: ActivationContext = ctx.token_kind === "invite"
-        ? {
-            ...ctx,
-            expires_at: Date.now() + TTL_MS,
-        }
-        : {
-            ...ctx,
-            expires_at: Date.now() + TTL_MS,
-        };
+    const value: ActivationContext = {
+        ...ctx,
+        expires_at: Date.now() + TTL_MS,
+    };
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(value));
 }
 

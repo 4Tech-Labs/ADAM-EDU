@@ -70,6 +70,14 @@ class CourseAccessActivateOAuthCompleteResponse(BaseModel):
     status: Literal["activated"]
 
 
+class CourseAccessActivateCompleteRequest(BaseModel):
+    course_access_token: str
+
+
+class CourseAccessActivateCompleteResponse(BaseModel):
+    status: Literal["activated"]
+
+
 @dataclass(slots=True)
 class CourseAccessContext:
     link: CourseAccessLink
@@ -441,12 +449,46 @@ def activate_course_access_oauth_complete(
     identity: VerifiedIdentity,
     request: CourseAccessActivateOAuthCompleteRequest,
 ) -> CourseAccessActivateOAuthCompleteResponse:
+    response = _activate_course_access_authenticated(
+        db,
+        identity=identity,
+        course_access_token=request.course_access_token,
+        event="course_access.activate_oauth",
+        require_microsoft=True,
+    )
+    return CourseAccessActivateOAuthCompleteResponse(status=response.status)
+
+
+def activate_course_access_complete(
+    db: Session,
+    identity: VerifiedIdentity,
+    request: CourseAccessActivateCompleteRequest,
+) -> CourseAccessActivateCompleteResponse:
+    response = _activate_course_access_authenticated(
+        db,
+        identity=identity,
+        course_access_token=request.course_access_token,
+        event="course_access.activate_complete",
+        require_microsoft=False,
+    )
+    return CourseAccessActivateCompleteResponse(status=response.status)
+
+
+def _activate_course_access_authenticated(
+    db: Session,
+    *,
+    identity: VerifiedIdentity,
+    course_access_token: str,
+    event: str,
+    require_microsoft: bool,
+) -> CourseAccessActivateCompleteResponse:
     context = _require_course_access_context(
         db,
-        request.course_access_token,
-        event="course_access.activate_oauth",
+        course_access_token,
+        event=event,
     )
-    _ensure_oauth_allowed(context)
+    if require_microsoft:
+        _ensure_oauth_allowed(context)
 
     normalized_email = normalize_email(identity.email)
     if normalized_email is None:
@@ -463,23 +505,23 @@ def activate_course_access_oauth_complete(
         course_id=context.course.id,
     ):
         audit_log(
-            "course_access.activate_oauth",
+            event,
             "activated",
             auth_user_id=identity.auth_user_id,
             university_id=context.course.university_id,
             course_id=context.course.id,
             link_id=context.link.id,
-            token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+            token_hash_prefix=_course_access_hash_prefix(course_access_token),
             http_status=status.HTTP_200_OK,
             reason="already_activated",
         )
-        return CourseAccessActivateOAuthCompleteResponse(status="activated")
+        return CourseAccessActivateCompleteResponse(status="activated")
 
     try:
         ensure_profile(
             db,
             auth_user_id=identity.auth_user_id,
-            full_name=derive_oauth_full_name(identity) or identity.auth_user_id,
+            full_name=derive_oauth_full_name(identity) or normalized_email.split("@", maxsplit=1)[0],
         )
         membership = ensure_membership(
             db,
@@ -500,14 +542,14 @@ def activate_course_access_oauth_complete(
         ) from exc
 
     audit_log(
-        "course_access.activate_oauth",
+        event,
         "activated",
         auth_user_id=identity.auth_user_id,
         university_id=context.course.university_id,
         course_id=context.course.id,
         link_id=context.link.id,
-        token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+        token_hash_prefix=_course_access_hash_prefix(course_access_token),
         http_status=status.HTTP_200_OK,
         reason="activated",
     )
-    return CourseAccessActivateOAuthCompleteResponse(status="activated")
+    return CourseAccessActivateCompleteResponse(status="activated")
