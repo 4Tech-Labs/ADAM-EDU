@@ -17,7 +17,7 @@ from sqlalchemy.orm import close_all_sessions
 from shared.app import app
 from shared.auth import get_auth_settings, get_jwt_verifier, get_supabase_admin_auth_client
 from shared.database import SessionLocal, engine, settings
-from shared.models import Base, Course, CourseAccessLink, Invite, Membership, Profile, Tenant, User
+from shared.models import Base, Course, CourseAccessLink, CourseMembership, Invite, Membership, Profile, Tenant, User
 
 
 def _assert_local_schema_reset_target() -> None:
@@ -342,6 +342,21 @@ def seed_course_access_link(db):
     return _factory
 
 
+@pytest.fixture
+def seed_course_membership(db):
+    def _factory(*, course_id: str, membership_id: str) -> CourseMembership:
+        course_membership = CourseMembership(
+            course_id=course_id,
+            membership_id=membership_id,
+        )
+        db.add(course_membership)
+        db.commit()
+        db.refresh(course_membership)
+        return course_membership
+
+    return _factory
+
+
 @dataclass
 class FakeAdminUser:
     id: str
@@ -361,6 +376,7 @@ class FakeAdminClient:
     fail_delete: bool = False
     fail_update_password: bool = False
     updated_passwords: dict[str, str] = field(default_factory=dict)
+    get_user_by_id_calls: dict[str, int] = field(default_factory=dict)
 
     def find_user_by_email(self, email: str) -> FakeAdminUser | None:
         return self.users_by_email.get(email.lower())
@@ -379,6 +395,7 @@ class FakeAdminClient:
         return self.get_or_create_user_by_email(email, password).user
 
     def get_user_by_id(self, user_id: str) -> FakeAdminUser | None:
+        self.get_user_by_id_calls[user_id] = self.get_user_by_id_calls.get(user_id, 0) + 1
         return self.users_by_id.get(user_id)
 
     def delete_user(self, user_id: str) -> None:
@@ -398,4 +415,5 @@ class FakeAdminClient:
 def fake_admin_client(monkeypatch: pytest.MonkeyPatch) -> FakeAdminClient:
     client = FakeAdminClient()
     monkeypatch.setattr("shared.app.get_supabase_admin_auth_client", lambda: client)
+    monkeypatch.setattr("shared.admin_reads.get_supabase_admin_auth_client", lambda: client)
     return client
