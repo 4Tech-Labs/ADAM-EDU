@@ -286,8 +286,9 @@ def _build_courses_query(
         .where(Course.university_id == context.university_id)
     )
 
-    if search:
-        pattern = f"%{search.strip()}%"
+    normalized_search = (search or "").strip()
+    if normalized_search:
+        pattern = f"%{normalized_search}%"
         stmt = stmt.where(
             or_(
                 Course.title.ilike(pattern),
@@ -448,8 +449,6 @@ def _resolve_teacher_email(user_id: str, legacy_email: str | None) -> str:
     try:
         auth_user = get_supabase_admin_auth_client().get_user_by_id(user_id)
     except Exception as exc:
-        with _teacher_email_cache_lock:
-            _teacher_email_cache[user_id] = _MISSING_TEACHER_EMAIL
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="teacher_email_unavailable",

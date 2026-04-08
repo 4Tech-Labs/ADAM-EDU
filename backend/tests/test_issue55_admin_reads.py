@@ -333,6 +333,43 @@ def test_issue55_courses_support_pending_invite_search_and_stale_pending_state(
     assert items_by_id[stale_course.id]["teacher_state"] == "stale_pending_invite"
 
 
+def test_issue55_courses_ignore_whitespace_only_search(
+    client,
+    seed_identity,
+    seed_course,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000567"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher-whitespace@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    first_course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Whitespace One",
+        code="WS-001",
+    )
+    second_course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Whitespace Two",
+        code="WS-002",
+    )
+
+    response = client.get(
+        "/api/admin/courses",
+        params={"search": "   "},
+        headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+    )
+
+    assert response.status_code == 200
+    assert {item["id"] for item in response.json()["items"]} == {first_course.id, second_course.id}
+
+
 def test_issue55_courses_return_access_link_status_without_raw_token(
     client,
     seed_identity,
@@ -555,6 +592,58 @@ def test_issue55_teacher_options_caches_supabase_fallback_between_requests(
     assert first_response.status_code == 200
     assert second_response.status_code == 200
     assert fake_admin_client.get_user_by_id_calls[teacher_user_id] == 1
+
+
+def test_issue55_teacher_options_does_not_cache_transient_supabase_failure(
+    client,
+    fake_admin_client,
+    seed_identity,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000568"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    teacher_user_id = str(uuid.uuid4())
+    seed_identity(
+        user_id=teacher_user_id,
+        email="ignored-transient@example.edu",
+        role="teacher",
+        university_id=university_id,
+        full_name="Transient Teacher",
+        create_legacy_user=False,
+    )
+
+    original_get_user_by_id = fake_admin_client.get_user_by_id
+    state = {"fail_once": True}
+
+    def flaky_get_user_by_id(user_id: str):
+        fake_admin_client.get_user_by_id_calls[user_id] = fake_admin_client.get_user_by_id_calls.get(user_id, 0) + 1
+        if state["fail_once"]:
+            state["fail_once"] = False
+            raise RuntimeError("temporary outage")
+        return fake_admin_client.users_by_id.get(user_id)
+
+    fake_admin_client.get_user_by_id = flaky_get_user_by_id  # type: ignore[method-assign]
+    fake_admin_client.users_by_id[teacher_user_id] = type(
+        "User",
+        (),
+        {"id": teacher_user_id, "email": "transient.teacher@example.edu"},
+    )()
+
+    first_response = client.get(
+        "/api/admin/teacher-options",
+        headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+    )
+    second_response = client.get(
+        "/api/admin/teacher-options",
+        headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+    )
+
+    assert first_response.status_code == 500
+    assert first_response.json()["detail"] == "teacher_email_unavailable"
+    assert second_response.status_code == 200
+    assert second_response.json()["active_teachers"][0]["email"] == "transient.teacher@example.edu"
+    assert fake_admin_client.get_user_by_id_calls[teacher_user_id] == 2
+    fake_admin_client.get_user_by_id = original_get_user_by_id  # type: ignore[method-assign]
 
 
 def test_issue55_teacher_options_fail_explicitly_if_email_is_unavailable(
