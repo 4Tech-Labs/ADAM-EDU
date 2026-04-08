@@ -1,48 +1,42 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+
 import { useAuth } from "@/app/auth/useAuth";
 import { api, ApiError } from "@/shared/api";
-import {
-    readActivationContext,
-    clearActivationContext,
-} from "@/shared/activationContext";
-
-/**
- * OAuth PKCE callback page — /app/auth/callback
- *
- * Supabase completes the PKCE code exchange automatically via getSession()
- * in the AuthProvider bootstrap. This page waits for that to finish, reads
- * any short-lived activation context from sessionStorage, cleans it up, and
- * redirects the user to the appropriate destination.
- *
- * Activation flows handled:
- *   teacher_activate — calls activateOAuthComplete, navigates to /teacher
- *   student_join     — calls activateOAuthComplete (no session) or
- *                      redeemInvite (session exists), navigates to /student
- *
- * Security rules:
- * - invite_token is never read from the URL (not in state, path, or query)
- * - activation context is always cleared after this page runs (success or error)
- * - no redirect happens while loading is true (prevents race conditions)
- */
+import { clearActivationContext, readActivationContext } from "@/shared/activationContext";
 
 function parseActivationError(err: ApiError): string {
     switch (err.detail) {
         case "invalid_invite":
             return "Esta invitación ya no es válida. Solicita una nueva.";
+        case "invalid_course_access_token":
+            return "Este enlace de acceso ya no es válido.";
+        case "course_access_link_rotated":
+            return "Este enlace fue rotado. Solicita el enlace actualizado.";
+        case "course_access_link_revoked":
+            return "Este enlace fue revocado. Solicita uno nuevo.";
+        case "course_inactive":
+            return "Este curso no está disponible en este momento.";
         case "email_mismatch":
-        case "invite_email_mismatch": // Backend may return either string
+        case "invite_email_mismatch":
             return "El correo de tu cuenta Microsoft no coincide con la invitación.";
         case "email_domain_not_allowed":
             return "Tu correo institucional no está habilitado para esta universidad.";
         case "membership_required":
-            return "No tienes una invitación activa para este curso.";
+        case "student_membership_required":
+            return "No tienes una membresía activa para este curso.";
+        case "auth_method_not_allowed":
+            return "Microsoft no está habilitado para este curso.";
         default:
             return "No se pudo completar la activación. Intenta de nuevo.";
     }
 }
 
-type ActivationFlow = "teacher_activate" | "student_join" | null;
+type ActivationFlow =
+    | "teacher_activate"
+    | "student_join_invite"
+    | "student_join_course_access"
+    | null;
 
 export function AuthCallbackPage() {
     const { session, actor, loading, error, refreshActor } = useAuth();
@@ -57,10 +51,6 @@ export function AuthCallbackPage() {
         handled.current = true;
 
         const ctx = readActivationContext();
-        // Do NOT clear ctx here — React StrictMode double-invokes effects on
-        // mount. The first run would clear sessionStorage; the second run would
-        // find null ctx and navigate("/") before activation completes.
-        // clearActivationContext() is called inside each terminal branch below.
 
         if (!session) {
             clearActivationContext();
@@ -69,9 +59,10 @@ export function AuthCallbackPage() {
         }
 
         if (ctx?.flow === "teacher_activate") {
+            const teacherCtx = ctx;
             async function runTeacherActivation() {
                 try {
-                    await api.auth.activateOAuthComplete(ctx!.invite_token);
+                    await api.auth.activateOAuthComplete(teacherCtx.invite_token);
                     clearActivationContext();
                     await refreshActor();
                     navigate("/teacher", { replace: true });
@@ -85,26 +76,61 @@ export function AuthCallbackPage() {
             return;
         }
 
-        if (ctx?.flow === "student_join") {
-            async function runStudentActivation() {
+        if (ctx?.flow === "student_join_invite") {
+            const inviteCtx = ctx;
+            async function runStudentInviteActivation() {
                 try {
                     if (!actor) {
-                        // No membership yet — full OAuth activation
-                        await api.auth.activateOAuthComplete(ctx!.invite_token);
+                        await api.auth.activateOAuthComplete(inviteCtx.invite_token);
                     } else {
-                        // Already has a membership — just redeem to enroll in course
-                        await api.auth.redeemInvite(ctx!.invite_token);
+                        await api.auth.redeemInvite(inviteCtx.invite_token);
                     }
                     clearActivationContext();
                     await refreshActor();
                     navigate("/student", { replace: true });
                 } catch (err: unknown) {
                     clearActivationContext();
-                    setActivationFlow("student_join");
+                    setActivationFlow("student_join_invite");
                     setActivationError(parseActivationError(err as ApiError));
                 }
             }
-            void runStudentActivation();
+            void runStudentInviteActivation();
+            return;
+        }
+
+        if (ctx?.flow === "student_join_course_access") {
+            const courseAccessCtx = ctx;
+            async function runCourseAccessActivation() {
+                try {
+                    const hasStudentMembership = actor?.memberships.some(
+                        (membership) => membership.role === "student" && membership.status === "active",
+                    ) ?? false;
+
+                    if (hasStudentMembership) {
+                        try {
+                            await api.auth.enrollWithCourseAccess(courseAccessCtx.course_access_token);
+                        } catch (err: unknown) {
+                            const apiErr = err as ApiError;
+                            if (apiErr.detail === "student_membership_required") {
+                                await api.auth.activateCourseAccessComplete(courseAccessCtx.course_access_token);
+                            } else {
+                                throw err;
+                            }
+                        }
+                    } else {
+                        await api.auth.activateCourseAccessComplete(courseAccessCtx.course_access_token);
+                    }
+
+                    clearActivationContext();
+                    await refreshActor();
+                    navigate("/student", { replace: true });
+                } catch (err: unknown) {
+                    clearActivationContext();
+                    setActivationFlow("student_join_course_access");
+                    setActivationError(parseActivationError(err as ApiError));
+                }
+            }
+            void runCourseAccessActivation();
             return;
         }
 
@@ -159,18 +185,17 @@ export function AuthCallbackPage() {
                     </a>
                 ) : (
                     <p className="text-sm text-muted-foreground">
-                        Contacta a tu docente para obtener un nuevo enlace de activación.
+                        Solicita un nuevo enlace si el problema persiste.
                     </p>
                 )}
             </div>
         );
     }
 
-    // Show spinner while waiting for PKCE exchange + actor resolution
     return (
         <div className="flex items-center justify-center py-24">
             <span className="text-sm text-muted-foreground">
-                Completando inicio de sesión…
+                Completando inicio de sesión...
             </span>
         </div>
     );

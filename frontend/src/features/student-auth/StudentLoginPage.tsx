@@ -1,21 +1,22 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+
+import { readActivationContext } from "@/shared/activationContext";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 
 /**
- * Student login page — Issue #39.
+ * Student login page.
  *
  * Two paths:
- * A) Microsoft OAuth — signInWithOAuth redirects to /app/auth/callback,
- *    which handles role-based navigation via AuthContext.
- * B) Password — signInWithPassword; AuthContext onAuthStateChange fires
- *    SIGNED_IN and RequireRole reacts automatically.
+ * A) Microsoft OAuth -> signInWithOAuth redirects to /app/auth/callback.
+ * B) Password -> signInWithPassword; AuthContext onAuthStateChange fires SIGNED_IN.
  *
- * Non-negotiables:
- * - No "Forgot password" CTA
- * - No free registration CTA
- * - Password errors never reveal whether the email exists
+ * If the user arrived here from a course-access link that requires an existing
+ * password account, we resume the enrollment flow in /auth/callback after the
+ * password sign-in succeeds.
  */
 export function StudentLoginPage() {
+    const navigate = useNavigate();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [submitting, setSubmitting] = useState(false);
@@ -28,11 +29,10 @@ export function StudentLoginPage() {
             provider: "azure",
             options: { redirectTo: import.meta.env.VITE_AUTH_CALLBACK_URL },
         });
-        // signInWithOAuth redirects — no code after this
     }
 
-    async function handlePasswordSubmit(e: React.FormEvent) {
-        e.preventDefault();
+    async function handlePasswordSubmit(event: React.FormEvent) {
+        event.preventDefault();
         setLoginError(null);
         setSubmitting(true);
 
@@ -42,19 +42,21 @@ export function StudentLoginPage() {
                 setLoginError("Credenciales incorrectas. Verifica tu correo y contraseña.");
                 return;
             }
+
             const { error } = await supabase.auth.signInWithPassword({
                 email,
                 password,
             });
 
             if (error) {
-                // Never reveal whether the email exists
-                setLoginError(
-                    "Credenciales incorrectas. Verifica tu correo y contraseña.",
-                );
+                setLoginError("Credenciales incorrectas. Verifica tu correo y contraseña.");
+                return;
             }
-            // On success: AuthContext onAuthStateChange fires SIGNED_IN → actor updates
-            // → RequireRole or RootRedirect reacts automatically
+
+            const activationContext = readActivationContext();
+            if (activationContext?.flow === "student_join_course_access") {
+                navigate("/auth/callback", { replace: true });
+            }
         } finally {
             setSubmitting(false);
         }
@@ -67,7 +69,6 @@ export function StudentLoginPage() {
                     <h1 className="text-xl font-semibold">Acceso estudiantes</h1>
                 </div>
 
-                {/* Opción A — Microsoft */}
                 <button
                     type="button"
                     onClick={() => void handleMicrosoftLogin()}
@@ -87,14 +88,13 @@ export function StudentLoginPage() {
                     </div>
                 </div>
 
-                {/* Opción B — Password */}
-                <form onSubmit={(e) => void handlePasswordSubmit(e)} className="space-y-4">
+                <form onSubmit={(event) => void handlePasswordSubmit(event)} className="space-y-4">
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Correo electrónico</label>
                         <input
                             type="email"
                             value={email}
-                            onChange={(e) => setEmail(e.target.value)}
+                            onChange={(event) => setEmail(event.target.value)}
                             required
                             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                         />
@@ -105,15 +105,13 @@ export function StudentLoginPage() {
                         <input
                             type="password"
                             value={password}
-                            onChange={(e) => setPassword(e.target.value)}
+                            onChange={(event) => setPassword(event.target.value)}
                             required
                             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                         />
                     </div>
 
-                    {loginError && (
-                        <p className="text-sm text-danger">{loginError}</p>
-                    )}
+                    {loginError && <p className="text-sm text-danger">{loginError}</p>}
 
                     <button
                         type="submit"

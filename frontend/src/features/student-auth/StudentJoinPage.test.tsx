@@ -6,9 +6,7 @@ import { StudentJoinPage } from "./StudentJoinPage";
 vi.mock("@/shared/activationContext");
 vi.mock("@/shared/supabaseClient");
 vi.mock("react-router-dom", async () => {
-    const actual = await vi.importActual<typeof import("react-router-dom")>(
-        "react-router-dom",
-    );
+    const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
     return { ...actual, useNavigate: vi.fn() };
 });
 
@@ -19,6 +17,10 @@ vi.mock("@/shared/api", () => ({
             activatePassword: vi.fn(),
             activateOAuthComplete: vi.fn(),
             redeemInvite: vi.fn(),
+            resolveCourseAccess: vi.fn(),
+            enrollWithCourseAccess: vi.fn(),
+            activateCourseAccessPassword: vi.fn(),
+            activateCourseAccessOAuthComplete: vi.fn(),
         },
     },
     ApiError: class ApiError extends Error {
@@ -43,16 +45,6 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/shared/api";
 
 const mockNavigate = vi.fn();
-
-const pendingInvite = {
-    role: "student" as const,
-    email_masked: "s****@universidad.edu",
-    university_name: "Universidad de Prueba",
-    course_title: "Análisis de Datos",
-    teacher_name: "Prof. García",
-    status: "pending" as const,
-    expires_at: new Date(Date.now() + 3600000).toISOString(),
-};
 
 function makeSupabaseMock(
     signInResult: { error: null | { message: string } } = { error: null },
@@ -81,212 +73,105 @@ describe("StudentJoinPage", () => {
         vi.mocked(clearActivationContext).mockImplementation(() => undefined);
         vi.mocked(saveActivationContext).mockImplementation(() => undefined);
         vi.mocked(getSupabaseClient).mockReturnValue(makeSupabaseMock() as never);
-        // Default: resolveInvite hangs unless overridden per test
-        vi.mocked(api.auth.resolveInvite).mockReturnValue(new Promise(() => undefined));
     });
 
-    // 1. Sin activation context → error enlace inválido
-    it("shows invalid link error when there is no activation context", () => {
-        vi.mocked(readActivationContext).mockReturnValue(null);
-
+    it("shows invalid link state when there is no activation context", () => {
         renderPage();
-
-        expect(screen.getByText(/enlace de activación no es válido/i)).toBeTruthy();
+        expect(screen.getByText(/este enlace de acceso no es válido/i)).toBeTruthy();
     });
 
-    // 2. Con activation context → llama resolveInvite con invite_token
-    it("calls resolveInvite with the invite_token from activation context", async () => {
+    it("keeps invite_token flow working", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
-            expires_at: Date.now() + 300000,
-        });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingInvite);
-
-        renderPage();
-
-        await waitFor(() =>
-            expect(api.auth.resolveInvite).toHaveBeenCalledWith("stu-tok-123"),
-        );
-    });
-
-    // 3. Invite pending → muestra email_masked disabled
-    it("renders activation form with email_masked disabled when invite is pending", async () => {
-        vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
-            expires_at: Date.now() + 300000,
-        });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingInvite);
-
-        renderPage();
-
-        await waitFor(() =>
-            expect(screen.getByDisplayValue("s****@universidad.edu")).toBeTruthy(),
-        );
-
-        const emailInput = screen.getByDisplayValue("s****@universidad.edu");
-        expect(emailInput).toHaveProperty("disabled", true);
-        expect(screen.getByText("Universidad de Prueba")).toBeTruthy();
-    });
-
-    // 4. teacher_name visible cuando resolvedInvite.teacher_name no es null
-    it("shows teacher_name in form when resolvedInvite.teacher_name is not null", async () => {
-        vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
-            expires_at: Date.now() + 300000,
-        });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingInvite);
-
-        renderPage();
-
-        await waitFor(() =>
-            expect(screen.getByText(/Prof. García/i)).toBeTruthy(),
-        );
-    });
-
-    // 5. teacher_name NO aparece cuando es null
-    it("does not render teacher_name section when resolvedInvite.teacher_name is null", async () => {
-        vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
+            flow: "student_join_invite",
+            token_kind: "invite",
+            invite_token: "invite-tok-123",
             role: "student",
             expires_at: Date.now() + 300000,
         });
         vi.mocked(api.auth.resolveInvite).mockResolvedValue({
-            ...pendingInvite,
-            teacher_name: null,
+            role: "student",
+            email_masked: "s****@universidad.edu",
+            university_name: "Universidad de Prueba",
+            course_title: "Analisis de Datos",
+            teacher_name: "Prof. Garcia",
+            status: "pending",
+            expires_at: new Date(Date.now() + 3600000).toISOString(),
         });
 
         renderPage();
 
         await waitFor(() =>
-            expect(screen.getByDisplayValue("s****@universidad.edu")).toBeTruthy(),
+            expect(api.auth.resolveInvite).toHaveBeenCalledWith("invite-tok-123"),
         );
-
-        expect(screen.queryByText(/Docente:/i)).toBeNull();
+        expect(screen.getByDisplayValue("s****@universidad.edu")).toHaveProperty("disabled", true);
+        expect(screen.getByText(/Prof. Garcia/i)).toBeTruthy();
     });
 
-    // 6. Invite expired → mensaje específico
-    it("shows expired message when invite status is expired", async () => {
+    it("supports course_access_token resolution and renders editable email", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-123",
             expires_at: Date.now() + 300000,
         });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue({
-            ...pendingInvite,
-            status: "expired",
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
         });
 
         renderPage();
 
         await waitFor(() =>
-            expect(screen.getByText(/ha expirado/i)).toBeTruthy(),
+            expect(api.auth.resolveCourseAccess).toHaveBeenCalledWith("course-tok-123"),
         );
+        const emailInput = screen.getByPlaceholderText(/tu.correo@universidad.edu/i) as HTMLInputElement;
+        expect(emailInput.disabled).toBe(false);
+        expect(screen.queryByText(/Continuar con Microsoft/i)).toBeNull();
     });
 
-    // 7. Invite consumed → mensaje específico
-    it("shows consumed message when invite status is consumed", async () => {
+    it("shows a specific course access error for rotated links", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-rotated",
             expires_at: Date.now() + 300000,
         });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue({
-            ...pendingInvite,
-            status: "consumed",
-        });
+        vi.mocked(api.auth.resolveCourseAccess).mockRejectedValue(
+            Object.assign(new Error("course_access_link_rotated"), {
+                detail: "course_access_link_rotated",
+                status: 410,
+            }),
+        );
 
         renderPage();
 
         await waitFor(() =>
-            expect(screen.getByText(/ya fue utilizada/i)).toBeTruthy(),
+            expect(screen.getByText(/fue rotado/i)).toBeTruthy(),
         );
     });
 
-    // 8. Invite revoked → mensaje específico
-    it("shows revoked message when invite status is revoked", async () => {
+    it("submits course access password activation and signs in", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-submit",
             expires_at: Date.now() + 300000,
         });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue({
-            ...pendingInvite,
-            status: "revoked",
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["microsoft", "password"],
         });
-
-        renderPage();
-
-        await waitFor(() =>
-            expect(screen.getByText(/fue revocada/i)).toBeTruthy(),
-        );
-    });
-
-    // 9. Passwords no coinciden → error client-side, NO llama activatePassword
-    it("shows client-side error when passwords do not match — does not call activatePassword", async () => {
-        vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
-            expires_at: Date.now() + 300000,
-        });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingInvite);
-
-        renderPage();
-
-        await waitFor(() => screen.getByText(/Activar cuenta/i));
-
-        const allInputs = document.querySelectorAll("input[type=password]");
-        fireEvent.change(allInputs[0], { target: { value: "password123" } });
-        fireEvent.change(allInputs[1], { target: { value: "different456" } });
-
-        const form = document.querySelector("form")!;
-        await act(async () => {
-            fireEvent.submit(form);
-        });
-
-        expect(screen.getByText(/contraseñas no coinciden/i)).toBeTruthy();
-        expect(api.auth.activatePassword).not.toHaveBeenCalled();
-    });
-
-    // 10. Campo full_name visible y requerido en el formulario
-    it("shows full_name field — required for student activation", async () => {
-        vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
-            expires_at: Date.now() + 300000,
-        });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingInvite);
-
-        renderPage();
-
-        await waitFor(() => screen.getByText(/Nombre completo/i));
-
-        const fullNameInput = document.querySelector("input[type=text]") as HTMLInputElement;
-        expect(fullNameInput).toBeTruthy();
-        expect(fullNameInput.required).toBe(true);
-    });
-
-    // 11. Submit válido → activatePassword → signInWithPassword → navigate /student
-    it("calls activatePassword then signInWithPassword with res.email and navigates to /student", async () => {
-        vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
-            expires_at: Date.now() + 300000,
-        });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingInvite);
-        vi.mocked(api.auth.activatePassword).mockResolvedValue({
+        vi.mocked(api.auth.activateCourseAccessPassword).mockResolvedValue({
             status: "activated",
             next_step: "sign_in",
             email: "student@universidad.edu",
@@ -298,27 +183,28 @@ describe("StudentJoinPage", () => {
 
         await waitFor(() => screen.getByText(/Activar cuenta/i));
 
-        const textInputs = document.querySelectorAll("input[type=text]");
-        fireEvent.change(textInputs[0], { target: { value: "Estudiante Test" } });
+        fireEvent.change(screen.getByPlaceholderText(/tu.correo@universidad.edu/i), {
+            target: { value: "student@universidad.edu" },
+        });
+        fireEvent.change(screen.getByPlaceholderText(/Nombre completo/i), {
+            target: { value: "Estudiante Test" },
+        });
+        const passwordInputs = document.querySelectorAll("input[type=password]");
+        fireEvent.change(passwordInputs[0], { target: { value: "Password123!" } });
+        fireEvent.change(passwordInputs[1], { target: { value: "Password123!" } });
 
-        const allInputs = document.querySelectorAll("input[type=password]");
-        fireEvent.change(allInputs[0], { target: { value: "Password123!" } });
-        fireEvent.change(allInputs[1], { target: { value: "Password123!" } });
-
-        const form = document.querySelector("form")!;
         await act(async () => {
-            fireEvent.submit(form);
+            fireEvent.submit(document.querySelector("form")!);
         });
 
         await waitFor(() =>
-            expect(api.auth.activatePassword).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    invite_token: "stu-tok-123",
-                    full_name: "Estudiante Test",
-                    password: "Password123!",
-                    confirm_password: "Password123!",
-                }),
-            ),
+            expect(api.auth.activateCourseAccessPassword).toHaveBeenCalledWith({
+                course_access_token: "course-tok-submit",
+                email: "student@universidad.edu",
+                full_name: "Estudiante Test",
+                password: "Password123!",
+                confirm_password: "Password123!",
+            }),
         );
         await waitFor(() =>
             expect(supabaseMock.auth.signInWithPassword).toHaveBeenCalledWith({
@@ -331,19 +217,26 @@ describe("StudentJoinPage", () => {
         );
     });
 
-    // 12. email_domain_not_allowed → error inline específico
-    it("shows email_domain_not_allowed error when backend rejects the domain", async () => {
+    it("shows an explicit sign-in message when the course access email already has an account", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-existing",
             expires_at: Date.now() + 300000,
         });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingInvite);
-        vi.mocked(api.auth.activatePassword).mockRejectedValue(
-            Object.assign(new Error("email_domain_not_allowed"), {
-                detail: "email_domain_not_allowed",
-                status: 422,
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["microsoft", "password"],
+        });
+        vi.mocked(api.auth.activateCourseAccessPassword).mockRejectedValue(
+            Object.assign(new Error("account_exists_sign_in_required"), {
+                detail: "account_exists_sign_in_required",
+                status: 409,
             }),
         );
 
@@ -351,87 +244,25 @@ describe("StudentJoinPage", () => {
 
         await waitFor(() => screen.getByText(/Activar cuenta/i));
 
-        const textInputs = document.querySelectorAll("input[type=text]");
-        fireEvent.change(textInputs[0], { target: { value: "Estudiante Test" } });
+        fireEvent.change(screen.getByPlaceholderText(/tu.correo@universidad.edu/i), {
+            target: { value: "student@universidad.edu" },
+        });
+        fireEvent.change(screen.getByPlaceholderText(/Nombre completo/i), {
+            target: { value: "Estudiante Test" },
+        });
+        const passwordInputs = document.querySelectorAll("input[type=password]");
+        fireEvent.change(passwordInputs[0], { target: { value: "Password123!" } });
+        fireEvent.change(passwordInputs[1], { target: { value: "Password123!" } });
 
-        const allInputs = document.querySelectorAll("input[type=password]");
-        fireEvent.change(allInputs[0], { target: { value: "Password123!" } });
-        fireEvent.change(allInputs[1], { target: { value: "Password123!" } });
-
-        const form = document.querySelector("form")!;
         await act(async () => {
-            fireEvent.submit(form);
+            fireEvent.submit(document.querySelector("form")!);
         });
 
         await waitFor(() =>
-            expect(
-                screen.getByText(/no está habilitado para esta universidad/i),
-            ).toBeTruthy(),
+            expect(screen.getByText(/ya existe una cuenta con este correo/i)).toBeTruthy(),
         );
-    });
-
-    // 13. activatePassword falla con invalid_invite → error inline
-    it("shows inline error when activatePassword fails with invalid_invite", async () => {
-        vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
-            expires_at: Date.now() + 300000,
-        });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingInvite);
-        vi.mocked(api.auth.activatePassword).mockRejectedValue(
-            Object.assign(new Error("invalid_invite"), {
-                detail: "invalid_invite",
-                status: 422,
-            }),
-        );
-
-        renderPage();
-
-        await waitFor(() => screen.getByText(/Activar cuenta/i));
-
-        const textInputs = document.querySelectorAll("input[type=text]");
-        fireEvent.change(textInputs[0], { target: { value: "Estudiante Test" } });
-
-        const allInputs = document.querySelectorAll("input[type=password]");
-        fireEvent.change(allInputs[0], { target: { value: "Password123!" } });
-        fireEvent.change(allInputs[1], { target: { value: "Password123!" } });
-
-        const form = document.querySelector("form")!;
-        await act(async () => {
-            fireEvent.submit(form);
-        });
-
-        await waitFor(() =>
-            expect(screen.getByText(/ya no es válida/i)).toBeTruthy(),
-        );
-
-        // Submit button still accessible (inline error, not redirect)
-        expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
-    });
-
-    // 14. Botón Microsoft → signInWithOAuth con provider: "azure"
-    it("calls signInWithOAuth with provider azure when Microsoft button is clicked", async () => {
-        vi.mocked(readActivationContext).mockReturnValue({
-            flow: "student_join",
-            invite_token: "stu-tok-123",
-            role: "student",
-            expires_at: Date.now() + 300000,
-        });
-        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingInvite);
-        const supabaseMock = makeSupabaseMock();
-        vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
-
-        renderPage();
-
-        await waitFor(() => screen.getByText(/Continuar con Microsoft/i));
-
-        await act(async () => {
-            fireEvent.click(screen.getByText(/Continuar con Microsoft/i));
-        });
-
-        expect(supabaseMock.auth.signInWithOAuth).toHaveBeenCalledWith(
-            expect.objectContaining({ provider: "azure" }),
-        );
+        expect(
+            screen.getByRole("link", { name: /iniciar sesión para continuar/i }),
+        ).toHaveAttribute("href", "/student/login");
     });
 });

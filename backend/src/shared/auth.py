@@ -15,8 +15,8 @@ from jwt import PyJWKClient
 from jwt.exceptions import InvalidTokenError, PyJWKClientError
 from fastapi import Depends, Header
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, joinedload
 from supabase import Client, create_client
 
@@ -189,6 +189,7 @@ def audit_event(
     auth_user_id: str | None = None,
     invite_id: str | None = None,
     invite_hash_prefix: str | None = None,
+    token_hash_prefix: str | None = None,
     job_id: str | None = None,
     assignment_id: str | None = None,
     university_id: str | None = None,
@@ -204,6 +205,7 @@ def audit_event(
         "auth_user_id": auth_user_id,
         "invite_id": invite_id,
         "invite_hash_prefix": invite_hash_prefix,
+        "token_hash_prefix": token_hash_prefix,
         "job_id": job_id,
         "assignment_id": assignment_id,
         "university_id": university_id,
@@ -223,6 +225,7 @@ def audit_log(event: str, outcome: str, **fields: Any) -> None:
         auth_user_id=fields.get("auth_user_id"),
         invite_id=fields.get("invite_id"),
         invite_hash_prefix=fields.get("invite_hash_prefix"),
+        token_hash_prefix=fields.get("token_hash_prefix"),
         job_id=fields.get("job_id"),
         assignment_id=fields.get("assignment_id"),
         university_id=fields.get("university_id"),
@@ -377,7 +380,13 @@ class SupabaseAdminAuthClient:
         if admin is None:
             raise RuntimeError("Supabase admin API is unavailable")
 
-        response = admin.create_user({"email": email, "password": password, "email_confirm": True})
+        try:
+            response = admin.create_user({"email": email, "password": password, "email_confirm": True})
+        except Exception:
+            existing_after_conflict = self.get_user_by_email(email)
+            if existing_after_conflict is not None:
+                return AdminUserResult(user=existing_after_conflict, created=False)
+            raise
         user = self._extract_single_user(response)
         return AdminUserResult(user=user, created=True)
 
@@ -576,14 +585,19 @@ def consume_invite(db: Session, invite: Invite) -> bool:
 
 
 def ensure_profile(db: Session, *, user_id: str, full_name: str) -> Profile:
-    profile = db.query(Profile).filter(Profile.id == user_id).first()
-    if profile is None:
-        profile = Profile(id=user_id, full_name=full_name)
-        db.add(profile)
-        db.flush()
-        return profile
-    profile.full_name = full_name
-    db.flush()
+    inserted_id = db.execute(
+        pg_insert(Profile)
+        .values(id=user_id, full_name=full_name)
+        .on_conflict_do_update(
+            index_elements=[Profile.id],
+            set_={"full_name": full_name},
+        )
+        .returning(Profile.id)
+    ).scalar_one()
+
+    profile = db.get(Profile, inserted_id)
+    if profile is None:  # pragma: no cover
+        raise RuntimeError("profile_upsert_failed")
     return profile
 
 
@@ -595,56 +609,53 @@ def ensure_membership(
     role: str,
     must_rotate_password: bool = False,
 ) -> Membership:
-    membership = (
-        db.query(Membership)
-        .filter(
-            Membership.user_id == user_id,
-            Membership.university_id == university_id,
-            Membership.role == role,
-        )
-        .first()
-    )
-    if membership is None:
-        membership = Membership(
+    inserted_id = db.execute(
+        pg_insert(Membership)
+        .values(
             user_id=user_id,
             university_id=university_id,
             role=role,
             status="active",
             must_rotate_password=must_rotate_password,
         )
-        db.add(membership)
-        db.flush()
-        return membership
+        .on_conflict_do_update(
+            constraint="uix_membership_user_university_role",
+            set_={
+                "status": "active",
+                "must_rotate_password": must_rotate_password,
+            },
+        )
+        .returning(Membership.id)
+    ).scalar_one()
 
-    membership.status = "active"
-    membership.must_rotate_password = must_rotate_password
-    db.flush()
+    membership = db.get(Membership, inserted_id)
+    if membership is None:  # pragma: no cover
+        raise RuntimeError("membership_upsert_failed")
     return membership
 
 
 def ensure_course_membership(db: Session, *, course_id: str, membership_id: str) -> tuple[CourseMembership, bool]:
-    existing = (
-        db.query(CourseMembership)
-        .filter(CourseMembership.course_id == course_id, CourseMembership.membership_id == membership_id)
-        .first()
-    )
-    if existing is not None:
-        return existing, False
+    inserted_id = db.execute(
+        pg_insert(CourseMembership)
+        .values(course_id=course_id, membership_id=membership_id)
+        .on_conflict_do_nothing(constraint="uix_course_membership")
+        .returning(CourseMembership.id)
+    ).scalar_one_or_none()
 
-    enrollment = CourseMembership(course_id=course_id, membership_id=membership_id)
-    db.add(enrollment)
-    try:
-        db.flush()
-    except IntegrityError:
-        db.rollback()
-        existing = (
-            db.query(CourseMembership)
-            .filter(CourseMembership.course_id == course_id, CourseMembership.membership_id == membership_id)
-            .first()
+    if inserted_id is None:
+        existing = db.scalar(
+            select(CourseMembership).where(
+                CourseMembership.course_id == course_id,
+                CourseMembership.membership_id == membership_id,
+            )
         )
         if existing is None:  # pragma: no cover
-            raise
+            raise RuntimeError("course_membership_upsert_failed")
         return existing, False
+
+    enrollment = db.get(CourseMembership, inserted_id)
+    if enrollment is None:  # pragma: no cover
+        raise RuntimeError("course_membership_inserted_but_missing")
     return enrollment, True
 
 
