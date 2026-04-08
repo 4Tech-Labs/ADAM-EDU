@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-import secrets
 import re
+import secrets
 from typing import Any, Literal, NoReturn
 
 from fastapi import HTTPException, status
