@@ -63,6 +63,8 @@ export function AuthoringForm({
     const modules = selectedCourse?.syllabus ?? [];
     const selectedModule = modules.find((m) => m.id === syllabusModule);
     const units = selectedModule?.units ?? [];
+    const selectedUnit = units.find((u) => u.id === topicUnit);
+    const selectedIndustry = INDUSTRIAS_OPTIONS.find((option) => option.value === industry);
 
     // ── EDA depth + notebook toggle logic ──
     // business + harvard_with_eda → edaDepth="charts_plus_explanation", no UI
@@ -112,8 +114,8 @@ export function AuthoringForm({
             const selectedCourseForAI = professorDB.courses.find(c => c.id === subject);
             const modulesForAI = selectedCourseForAI?.syllabus ?? [];
             const moduleName = modulesForAI.find(m => m.id === syllabusModule)?.name ?? "";
-            const unitName = units.find(u => u.id === topicUnit)?.name ?? "";
-            const industryLabel = INDUSTRIAS_OPTIONS.find(i => i.value === industry)?.label ?? industry;
+            const unitName = selectedUnit?.name ?? "";
+            const industryLabel = selectedIndustry?.label ?? industry;
 
             const data = await api.suggest(intent, {
                 subject: selectedCourseForAI?.name ?? "",
@@ -219,8 +221,7 @@ export function AuthoringForm({
         markStale();
     };
     // ── Submit ──
-    const handleSubmit = useCallback(
-        (e: FormEvent) => {
+    const handleSubmit = (e: FormEvent) => {
             e.preventDefault();
             const newErrors: Record<string, boolean> = {};
             if (!subject) newErrors.asignatura = true;
@@ -247,18 +248,13 @@ export function AuthoringForm({
                 return;
             }
 
-            const courseName = selectedCourse?.name ?? "";
-            const moduleName = modules.find((m) => m.id === syllabusModule)?.name ?? "";
-            const unitName = units.find(u => u.id === topicUnit)?.name ?? "";
-            const industryLabel = INDUSTRIAS_OPTIONS.find((i) => i.value === industry)?.label ?? industry;
-
             const formData: CaseFormData = {
-                subject: courseName,
-                academicLevel: academicLevel,
-                targetGroups: targetGroups,
-                syllabusModule: moduleName,
-                topicUnit: unitName,
-                industry: industryLabel,
+                subject: selectedCourse?.name ?? "",
+                academicLevel,
+                targetGroups,
+                syllabusModule: selectedModule?.name ?? "",
+                topicUnit: selectedUnit?.name ?? "",
+                industry: selectedIndustry?.label ?? industry,
                 studentProfile,
                 caseType,
                 edaDepth,
@@ -271,9 +267,7 @@ export function AuthoringForm({
             };
 
             onSubmit(formData);
-        },
-        [subject, syllabusModule, selectedCourse, modules, units, topicUnit, targetGroups, academicLevel, industry, studentProfile, caseType, edaDepth, includePythonCode, scenarioDescription, guidingQuestion, suggestedTechniques, availableFrom, dueAt, onSubmit]
-    );
+        };
 
     // ── Clear ──
     const clearForm = () => {

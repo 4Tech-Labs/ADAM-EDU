@@ -1,7 +1,6 @@
 /** ADAM v8 - Portal Profesor: Builder Mode (Native SSE Flow) */
 
-import { useCallback, useEffect, useState } from "react";
-import { CasePreview } from "@/features/case-preview/CasePreview";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import type { CaseFormData, CanonicalCaseOutput } from "@/shared/adam-types";
 import { EMPTY_FORM } from "@/shared/adam-types";
 
@@ -11,6 +10,22 @@ import { AuthoringProgressTimeline } from "./AuthoringProgressTimeline";
 import { useAuthoringJobProgress } from "./useAuthoringJobProgress";
 
 type AppState = "idle" | "generating" | "editing" | "error" | "success" | "paused";
+
+const CasePreview = lazy(() =>
+  import("@/features/case-preview/CasePreview").then((module) => ({
+    default: module.CasePreview,
+  })),
+);
+
+function CasePreviewFallback() {
+  return (
+    <div className="flex items-center justify-center py-24">
+      <span className="text-sm text-muted-foreground">
+        Cargando vista previa...
+      </span>
+    </div>
+  );
+}
 
 export function TeacherAuthoringPage() {
   const [appState, setAppState] = useState<AppState>("idle");
@@ -78,12 +93,14 @@ export function TeacherAuthoringPage() {
       )}
 
       {(appState === "success" || appState === "paused") && caseResult && (
-        <CasePreview
-          caseData={caseResult}
-          onEditParams={() => setAppState("editing")}
-          isPausedWaitingForApproval={appState === "paused"}
-          onResumeEDA={handleResumeEDA}
-        />
+        <Suspense fallback={<CasePreviewFallback />}>
+          <CasePreview
+            caseData={caseResult}
+            onEditParams={() => setAppState("editing")}
+            isPausedWaitingForApproval={appState === "paused"}
+            onResumeEDA={handleResumeEDA}
+          />
+        </Suspense>
       )}
 
       {appState === "error" && (

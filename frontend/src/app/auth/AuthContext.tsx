@@ -1,17 +1,8 @@
-import {
-    createContext,
-    useCallback,
-    useEffect,
-    useState,
-    type ReactNode,
-} from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 import { apiFetch } from "@/shared/api";
-import type { AuthContextValue, AuthMeActor, Session } from "./auth-types";
-
-export const AuthContext = createContext<AuthContextValue | undefined>(
-    undefined,
-);
+import type { AuthMeActor, Session } from "./auth-types";
+import { AuthContext } from "./auth-context";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [session, setSession] = useState<Session | null>(null);
@@ -41,6 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         let cancelled = false;
+        let actorRefreshTimeoutId: number | null = null;
 
         async function bootstrap() {
             const { data, error: sessionError } =
@@ -91,7 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                         // PKCE storage lock: onAuthStateChange fires while the
                         // lock is still held, so calling getSession() here
                         // (via getBearerToken) blocks forever.
-                        setTimeout(() => {
+                        actorRefreshTimeoutId = window.setTimeout(() => {
                             if (cancelled) return;
                             void fetchActor().then((resolvedActor) => {
                                 if (!cancelled) {
@@ -111,6 +103,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         return () => {
             cancelled = true;
+            if (actorRefreshTimeoutId !== null) {
+                window.clearTimeout(actorRefreshTimeoutId);
+            }
             listenerData.subscription.unsubscribe();
         };
     }, [fetchActor]);

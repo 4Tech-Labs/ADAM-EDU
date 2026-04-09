@@ -1,7 +1,13 @@
+import { lazy, Suspense } from "react";
 import type { CaseModuleProps } from "./types";
 import { percentPyToIpynb } from "@/shared/notebookUtils";
 import { PlotlyChartsRenderer } from "../PlotlyChartsRenderer";
-import { NotebookViewer } from "../NotebookViewer";
+
+const NotebookViewer = lazy(() =>
+    import("../NotebookViewer").then((module) => ({
+        default: module.NotebookViewer,
+    })),
+);
 
 export function M3AuditSection({ result, content, md, isMLDS, renderPreguntas }: CaseModuleProps) {
     return (
@@ -38,7 +44,15 @@ export function M3AuditSection({ result, content, md, isMLDS, renderPreguntas }:
             {/* Notebook Python — Experiment Engineer (solo ml_ds + visual_plus_notebook) */}
             {isMLDS && content.m3NotebookCode && (
                 <div className="mt-8">
-                    <NotebookViewer code={content.m3NotebookCode} />
+                    <Suspense
+                        fallback={
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-400">
+                                Cargando notebook...
+                            </div>
+                        }
+                    >
+                        <NotebookViewer code={content.m3NotebookCode} />
+                    </Suspense>
                     <div className="mt-3 flex items-center justify-between gap-3">
                         <p className="type-caption text-slate-400">
                             Sube el <code className="bg-slate-100 px-1 rounded">.ipynb</code> a{" "}
