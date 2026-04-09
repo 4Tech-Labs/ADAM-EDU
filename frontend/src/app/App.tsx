@@ -58,7 +58,7 @@ function RouteFallback() {
     return (
         <div className="flex items-center justify-center py-24">
             <span className="text-sm text-muted-foreground">
-                Cargando pagina...
+                Cargando página...
             </span>
         </div>
     );
@@ -112,7 +112,7 @@ function App() {
                                     <div className="flex flex-col items-center justify-center gap-4 px-4 py-24 text-center">
                                         <h1 className="text-xl font-semibold">Panel del estudiante</h1>
                                         <p className="max-w-xs text-sm text-muted-foreground">
-                                            El panel completo estara disponible en la proxima version.
+                                            El panel completo estará disponible en la próxima versión.
                                         </p>
                                     </div>
                                 </RequireRole>

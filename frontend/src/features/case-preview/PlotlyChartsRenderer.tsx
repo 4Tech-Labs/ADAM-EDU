@@ -49,7 +49,7 @@ function PlotlyChartCard({ spec }: { spec: EDAChartSpec }) {
                         style={{ height: chartHeight }}
                     >
                         <p className="px-6 text-center text-sm text-slate-400">
-                            Datos de la matriz no disponibles para este grafico.
+                            Datos de la matriz no disponibles para este gráfico.
                         </p>
                     </div>
                 ) : (
@@ -59,7 +59,7 @@ function PlotlyChartCard({ spec }: { spec: EDAChartSpec }) {
                                 <div className="flex flex-col items-center gap-3">
                                     <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-slate-400" />
                                     <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                                        Cargando Grafico...
+                                        Cargando Gráfico...
                                     </span>
                                 </div>
                             </div>
@@ -105,7 +105,7 @@ export function PlotlyChartsRenderer({ charts, onRetry }: PlotlyChartsRendererPr
                         d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
                     />
                 </svg>
-                <p className="text-sm">No se generaron graficos en esta seccion.</p>
+                <p className="text-sm">No se generaron gráficos en esta sección.</p>
                 {onRetry && (
                     <button
                         type="button"
