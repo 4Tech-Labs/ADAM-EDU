@@ -4,6 +4,17 @@ import { useNavigate } from "react-router-dom";
 import { readActivationContext, saveActivationContext } from "@/shared/activationContext";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 
+/**
+ * Student login page.
+ *
+ * Two paths:
+ * A) Microsoft OAuth -> signInWithOAuth redirects to /app/auth/callback.
+ * B) Password -> signInWithPassword; AuthContext onAuthStateChange fires SIGNED_IN.
+ *
+ * If the user arrived here from a course-access link that requires an existing
+ * password account, we resume the enrollment flow in /auth/callback after the
+ * password sign-in succeeds.
+ */
 export function StudentLoginPage() {
     const navigate = useNavigate();
     const [email, setEmail] = useState("");
@@ -39,7 +50,7 @@ export function StudentLoginPage() {
         try {
             const supabase = getSupabaseClient();
             if (!supabase) {
-                setLoginError("Credenciales incorrectas. Verifica tu correo y contrasena.");
+                setLoginError("Credenciales incorrectas. Verifica tu correo y contraseña.");
                 return;
             }
 
@@ -49,7 +60,7 @@ export function StudentLoginPage() {
             });
 
             if (error) {
-                setLoginError("Credenciales incorrectas. Verifica tu correo y contrasena.");
+                setLoginError("Credenciales incorrectas. Verifica tu correo y contraseña.");
                 return;
             }
 
@@ -89,14 +100,14 @@ export function StudentLoginPage() {
                     </div>
                     <div className="relative flex justify-center">
                         <span className="bg-background px-2 text-xs text-muted-foreground">
-                            o usa contrasena
+                            o usa contraseña
                         </span>
                     </div>
                 </div>
 
                 <form onSubmit={(event) => void handlePasswordSubmit(event)} className="space-y-4">
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Correo electronico</label>
+                        <label className="text-sm font-medium">Correo electrónico</label>
                         <input
                             type="email"
                             value={email}
@@ -107,7 +118,7 @@ export function StudentLoginPage() {
                     </div>
 
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Contrasena</label>
+                        <label className="text-sm font-medium">Contraseña</label>
                         <input
                             type="password"
                             value={password}
@@ -124,12 +135,12 @@ export function StudentLoginPage() {
                         disabled={submitting}
                         className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
                     >
-                        {submitting ? "Iniciando sesion..." : "Iniciar sesion"}
+                        {submitting ? "Iniciando sesión…" : "Iniciar sesión"}
                     </button>
                 </form>
 
                 <p className="text-center text-xs text-muted-foreground">
-                    Si recibiste un enlace de activacion, usalo directamente.
+                    ¿Nuevo estudiante? Si recibiste un enlace de activación, úsalo directamente.
                 </p>
             </div>
         </div>

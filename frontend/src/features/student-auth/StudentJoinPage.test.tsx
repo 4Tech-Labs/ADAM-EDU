@@ -76,7 +76,7 @@ describe("StudentJoinPage", () => {
     it("shows invalid link state when there is no activation context", () => {
         renderPage();
 
-        expect(screen.getByText(/este enlace de acceso no es valido/i)).toBeTruthy();
+        expect(screen.getByText(/este enlace de acceso no es válido/i)).toBeTruthy();
     });
 
     it("keeps invite_token flow working", async () => {
@@ -265,7 +265,7 @@ describe("StudentJoinPage", () => {
             expect(screen.getByText(/ya existe una cuenta con este correo/i)).toBeTruthy();
         });
         expect(
-            screen.getByRole("link", { name: /Iniciar sesion para continuar/i }),
+            screen.getByRole("link", { name: /Iniciar sesión para continuar/i }),
         ).toHaveAttribute("href", "/student/login");
     });
 

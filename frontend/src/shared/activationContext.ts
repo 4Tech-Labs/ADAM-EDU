@@ -3,6 +3,13 @@
  *
  * Used to carry invite_token or course_access_token across an OAuth redirect without placing it
  * in the URL, OAuth state param, localStorage, or any server-side store.
+ *
+ * TTL is hard-coded at 5 minutes. Expired contexts are silently dropped and
+ * treated as non-existent. The token is cleared by AuthCallbackPage after
+ * the activation flow completes (success or terminal error).
+ *
+ * Tokens MUST NOT appear in query strings, path params, OAuth state,
+ * breadcrumbs, or logs at any point.
  */
 
 import type { ActivationContext } from "./adam-types";

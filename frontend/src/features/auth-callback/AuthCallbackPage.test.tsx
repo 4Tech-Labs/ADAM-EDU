@@ -94,7 +94,7 @@ describe("AuthCallbackPage", () => {
             </MemoryRouter>,
         );
 
-        expect(screen.getByText(/completando inicio de sesion/i)).toBeTruthy();
+        expect(screen.getByText(/completando inicio de sesión/i)).toBeTruthy();
     });
 
     it("handles teacher invite oauth activation", async () => {

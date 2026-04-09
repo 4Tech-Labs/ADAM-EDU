@@ -16,18 +16,18 @@ import { getSupabaseClient } from "@/shared/supabaseClient";
 
 function resolveInviteErrorMessage(err: ApiError | null, inviteStatus?: string): string {
     if (inviteStatus === "expired") {
-        return "Tu invitacion ha expirado. Solicita una nueva al docente.";
+        return "Tu invitación ha expirado. Solicita una nueva al docente.";
     }
     if (inviteStatus === "consumed") {
-        return "Esta invitacion ya fue utilizada. Intenta iniciar sesion directamente.";
+        return "Esta invitación ya fue utilizada. Intenta iniciar sesión directamente.";
     }
     if (inviteStatus === "revoked") {
-        return "Esta invitacion fue revocada. Contacta a tu docente.";
+        return "Esta invitación fue revocada. Contacta a tu docente.";
     }
     if (err) {
-        return "No se pudo verificar la invitacion. El enlace puede ser invalido.";
+        return "No se pudo verificar la invitación. El enlace puede ser inválido.";
     }
-    return "No se pudo verificar la invitacion. El enlace puede ser invalido.";
+    return "No se pudo verificar la invitación. El enlace puede ser inválido.";
 }
 
 function resolveCourseAccessErrorMessage(err: ApiError | null): string {
@@ -37,37 +37,37 @@ function resolveCourseAccessErrorMessage(err: ApiError | null): string {
         case "course_access_link_revoked":
             return "Este enlace de acceso fue revocado. Solicita uno nuevo.";
         case "course_inactive":
-            return "Este curso no esta disponible en este momento.";
+            return "Este curso no está disponible en este momento.";
         case "invalid_course_access_token":
-            return "No se pudo verificar el acceso al curso. El enlace puede ser invalido.";
+            return "No se pudo verificar el acceso al curso. El enlace puede ser inválido.";
         default:
-            return "No se pudo verificar el acceso al curso. El enlace puede ser invalido.";
+            return "No se pudo verificar el acceso al curso. El enlace puede ser inválido.";
     }
 }
 
 function resolveSubmitError(err: ApiError, tokenKind: "invite" | "course_access"): string {
     switch (err.detail) {
         case "invalid_invite":
-            return "Esta invitacion ya no es valida. Solicita una nueva.";
+            return "Esta invitación ya no es válida. Solicita una nueva.";
         case "invalid_course_access_token":
-            return "Este enlace de acceso ya no es valido.";
+            return "Este enlace de acceso ya no es válido.";
         case "course_access_link_rotated":
             return "Este enlace fue rotado. Solicita el enlace actualizado.";
         case "course_access_link_revoked":
             return "Este enlace fue revocado. Solicita uno nuevo.";
         case "course_inactive":
-            return "Este curso no esta disponible en este momento.";
+            return "Este curso no está disponible en este momento.";
         case "full_name_required":
             return "El nombre completo es requerido.";
         case "course_access_email_required":
-            return "Debes ingresar tu correo electronico.";
+            return "Debes ingresar tu correo electrónico.";
         case "email_domain_not_allowed":
-            return "Tu correo institucional no esta habilitado para esta universidad.";
+            return "Tu correo institucional no está habilitado para esta universidad.";
         case "account_exists_sign_in_required":
-            return "Ya existe una cuenta con este correo. Inicia sesion para continuar.";
+            return "Ya existe una cuenta con este correo. Inicia sesión para completar la inscripción.";
         default:
             return tokenKind === "invite"
-                ? "No se pudo completar la activacion. Intenta de nuevo."
+                ? "No se pudo completar la activación. Intenta de nuevo."
                 : "No se pudo completar el acceso al curso. Intenta de nuevo.";
     }
 }
@@ -216,15 +216,15 @@ export function StudentJoinPage() {
         setSubmitError(null);
 
         if (!joinContext) {
-            setSubmitError("No se encontro un contexto de acceso valido.");
+            setSubmitError("No se encontró un contexto de acceso válido.");
             return;
         }
         if (password !== confirmPassword) {
-            setSubmitError("Las contrasenas no coinciden.");
+            setSubmitError("Las contraseñas no coinciden.");
             return;
         }
         if (password.length < 8) {
-            setSubmitError("La contrasena debe tener al menos 8 caracteres.");
+            setSubmitError("La contraseña debe tener al menos 8 caracteres.");
             return;
         }
 
@@ -247,7 +247,7 @@ export function StudentJoinPage() {
 
             const supabase = getSupabaseClient();
             if (!supabase) {
-                setSubmitError("No se pudo iniciar sesion. Recarga la pagina e intenta de nuevo.");
+                setSubmitError("No se pudo iniciar sesión. Recarga la página e intenta de nuevo.");
                 return;
             }
             const { error } = await supabase.auth.signInWithPassword({
@@ -256,7 +256,7 @@ export function StudentJoinPage() {
             });
 
             if (error) {
-                setSubmitError("No se pudo iniciar sesion despues de la activacion. Intenta de nuevo.");
+                setSubmitError("No se pudo iniciar sesión después de la activación. Intenta de nuevo.");
                 return;
             }
 
@@ -274,7 +274,7 @@ export function StudentJoinPage() {
             <div className="flex flex-col items-center justify-center gap-6 px-4 py-24 text-center">
                 <h1 className="text-xl font-semibold">Unirse a un curso</h1>
                 <p className="text-sm text-danger max-w-sm">
-                    Este enlace de acceso no es valido. Solicita un nuevo enlace.
+                    Este enlace de acceso no es válido. Solicita un nuevo enlace.
                 </p>
             </div>
         );
@@ -323,7 +323,7 @@ export function StudentJoinPage() {
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-sm font-medium">Correo electronico</label>
+                    <label className="text-sm font-medium">Correo electrónico</label>
                     {isInviteFlow ? (
                         <input
                             type="email"
@@ -363,7 +363,7 @@ export function StudentJoinPage() {
                         </div>
                         <div className="relative flex justify-center">
                             <span className="bg-background px-2 text-xs text-muted-foreground">
-                                o crea una contrasena
+                                o crea una contraseña
                             </span>
                         </div>
                     </div>
@@ -385,7 +385,7 @@ export function StudentJoinPage() {
                     </div>
 
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Contrasena</label>
+                        <label className="text-sm font-medium">Contraseña</label>
                         <input
                             type="password"
                             value={password}
@@ -396,7 +396,7 @@ export function StudentJoinPage() {
                     </div>
 
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Confirmar contrasena</label>
+                        <label className="text-sm font-medium">Confirmar contraseña</label>
                         <input
                             type="password"
                             value={confirmPassword}
@@ -409,12 +409,12 @@ export function StudentJoinPage() {
                     {submitError && (
                         <div className="space-y-2">
                             <p className="text-sm text-danger">{submitError}</p>
-                            {submitError.includes("Inicia sesion") && (
+                            {submitError.includes("Inicia sesión") && (
                                 <Link
                                     to="/student/login"
                                     className="inline-flex text-sm font-medium underline hover:opacity-80"
                                 >
-                                    Iniciar sesion para continuar
+                                    Iniciar sesión para continuar
                                 </Link>
                             )}
                         </div>

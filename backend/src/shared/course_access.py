@@ -14,8 +14,8 @@ from shared.identity_activation import (
     allowed_auth_methods_for_university,
     derive_activation_full_name,
     derive_oauth_full_name,
-    ensure_course_membership,
     ensure_email_domain_allowed,
+    ensure_course_membership,
     upsert_membership as ensure_membership,
     upsert_profile as ensure_profile,
 )
@@ -107,6 +107,7 @@ def _resolve_teacher_display_name(db: Session, course: Course) -> str | None:
 
 
 def _resolve_course_access_context(db: Session, course_access_token: str) -> CourseAccessContext:
+    token_hash_prefix = _course_access_hash_prefix(course_access_token)
     access_link = db.scalar(
         select(CourseAccessLink).where(
             CourseAccessLink.token_hash == hash_course_access_token(course_access_token),
@@ -132,6 +133,14 @@ def _resolve_course_access_context(db: Session, course_access_token: str) -> Cou
 
     course = db.get(Course, access_link.course_id)
     if course is None:  # pragma: no cover
+        audit_log(
+            "course_access.resolve",
+            "invalid",
+            token_hash_prefix=token_hash_prefix,
+            link_id=access_link.id,
+            http_status=status.HTTP_404_NOT_FOUND,
+            reason="invalid_course_access_token",
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="invalid_course_access_token",
@@ -170,7 +179,7 @@ def _require_course_access_context(db: Session, course_access_token: str, *, eve
         audit_log(
             event,
             "denied" if exc.status_code in {status.HTTP_403_FORBIDDEN, status.HTTP_409_CONFLICT} else "invalid",
-            invite_hash_prefix=_course_access_hash_prefix(course_access_token),
+            token_hash_prefix=_course_access_hash_prefix(course_access_token),
             http_status=exc.status_code,
             reason=str(exc.detail),
         )
@@ -237,7 +246,7 @@ def resolve_course_access(
         university_id=context.course.university_id,
         course_id=context.course.id,
         link_id=context.link.id,
-        invite_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+        token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
         http_status=status.HTTP_200_OK,
         reason="active",
     )
@@ -266,7 +275,7 @@ def enroll_with_course_access(
             university_id=context.course.university_id,
             course_id=context.course.id,
             link_id=context.link.id,
-            invite_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+            token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
             http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
             reason="course_access_email_required",
         )
@@ -293,7 +302,7 @@ def enroll_with_course_access(
         course_id=context.course.id,
         link_id=context.link.id,
         membership_id=membership_id,
-        invite_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+        token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
         http_status=status.HTTP_200_OK,
         reason=enrollment_status,
     )
@@ -344,7 +353,7 @@ def activate_course_access_password(
             university_id=context.course.university_id,
             course_id=context.course.id,
             link_id=context.link.id,
-            invite_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+            token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
             http_status=status.HTTP_201_CREATED,
             reason="already_activated",
         )
@@ -362,7 +371,7 @@ def activate_course_access_password(
             university_id=context.course.university_id,
             course_id=context.course.id,
             link_id=context.link.id,
-            invite_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+            token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
             http_status=status.HTTP_409_CONFLICT,
             reason="account_exists_sign_in_required",
         )
@@ -408,7 +417,7 @@ def activate_course_access_password(
                     university_id=context.course.university_id,
                     course_id=context.course.id,
                     link_id=context.link.id,
-                    invite_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+                    token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
                     http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     reason="compensation_failed",
                 )
@@ -424,7 +433,7 @@ def activate_course_access_password(
         university_id=context.course.university_id,
         course_id=context.course.id,
         link_id=context.link.id,
-        invite_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+        token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
         http_status=status.HTTP_201_CREATED,
         reason="activated",
     )
@@ -502,7 +511,7 @@ def _activate_course_access_authenticated(
             university_id=context.course.university_id,
             course_id=context.course.id,
             link_id=context.link.id,
-            invite_hash_prefix=_course_access_hash_prefix(course_access_token),
+            token_hash_prefix=_course_access_hash_prefix(course_access_token),
             http_status=status.HTTP_200_OK,
             reason="already_activated",
         )
@@ -539,7 +548,7 @@ def _activate_course_access_authenticated(
         university_id=context.course.university_id,
         course_id=context.course.id,
         link_id=context.link.id,
-        invite_hash_prefix=_course_access_hash_prefix(course_access_token),
+        token_hash_prefix=_course_access_hash_prefix(course_access_token),
         http_status=status.HTTP_200_OK,
         reason="activated",
     )

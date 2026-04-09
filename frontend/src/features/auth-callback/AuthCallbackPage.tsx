@@ -8,27 +8,27 @@ import { clearActivationContext, readActivationContext } from "@/shared/activati
 function parseActivationError(err: ApiError): string {
     switch (err.detail) {
         case "invalid_invite":
-            return "Esta invitacion ya no es valida. Solicita una nueva.";
+            return "Esta invitación ya no es válida. Solicita una nueva.";
         case "invalid_course_access_token":
-            return "Este enlace de acceso ya no es valido.";
+            return "Este enlace de acceso ya no es válido.";
         case "course_access_link_rotated":
             return "Este enlace fue rotado. Solicita el enlace actualizado.";
         case "course_access_link_revoked":
             return "Este enlace fue revocado. Solicita uno nuevo.";
         case "course_inactive":
-            return "Este curso no esta disponible en este momento.";
+            return "Este curso no está disponible en este momento.";
         case "email_mismatch":
         case "invite_email_mismatch":
-            return "El correo de tu cuenta Microsoft no coincide con la invitacion.";
+            return "El correo de tu cuenta Microsoft no coincide con la invitación.";
         case "email_domain_not_allowed":
-            return "Tu correo institucional no esta habilitado para esta universidad.";
+            return "Tu correo institucional no está habilitado para esta universidad.";
         case "membership_required":
         case "student_membership_required":
-            return "No tienes una membresia activa para este curso.";
+            return "No tienes una membresía activa para este curso.";
         case "auth_method_not_allowed":
-            return "Microsoft no esta habilitado para este curso.";
+            return "Microsoft no está habilitado para este curso.";
         default:
-            return "No se pudo completar la activacion. Intenta de nuevo.";
+            return "No se pudo completar la activación. Intenta de nuevo.";
     }
 }
 
@@ -77,13 +77,13 @@ export function AuthCallbackPage() {
         }
 
         if (ctx?.flow === "student_join_invite") {
-            const studentInviteCtx = ctx;
+            const inviteCtx = ctx;
             async function runStudentInviteActivation() {
                 try {
                     if (!actor) {
-                        await api.auth.activateOAuthComplete(studentInviteCtx.invite_token);
+                        await api.auth.activateOAuthComplete(inviteCtx.invite_token);
                     } else {
-                        await api.auth.redeemInvite(studentInviteCtx.invite_token);
+                        await api.auth.redeemInvite(inviteCtx.invite_token);
                     }
                     clearActivationContext();
                     await refreshActor();
@@ -170,7 +170,7 @@ export function AuthCallbackPage() {
         return (
             <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
                 <p className="text-sm text-danger">
-                    No se pudo completar el inicio de sesion. Intenta de nuevo.
+                    No se pudo completar el inicio de sesión. Intenta de nuevo.
                 </p>
                 <a href="/app/" className="text-sm underline hover:opacity-80">
                     Volver al inicio
@@ -188,7 +188,7 @@ export function AuthCallbackPage() {
                         href="/app/teacher/activate"
                         className="text-sm underline hover:opacity-80"
                     >
-                        Volver a activacion
+                        Volver a activación
                     </a>
                 ) : (
                     <p className="text-sm text-muted-foreground">
@@ -202,7 +202,7 @@ export function AuthCallbackPage() {
     return (
         <div className="flex items-center justify-center py-24">
             <span className="text-sm text-muted-foreground">
-                Completando inicio de sesion...
+                Completando inicio de sesión...
             </span>
         </div>
     );
