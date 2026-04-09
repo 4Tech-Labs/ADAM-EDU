@@ -1,6 +1,4 @@
-/** ADAM — Toast notification system with useToast hook */
-
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type ToastType = "success" | "error" | "default";
 export type ShowToast = (message: string, type?: ToastType) => void;
@@ -15,36 +13,53 @@ let nextId = 0;
 
 export function useToast() {
     const [toasts, setToasts] = useState<ToastItem[]>([]);
+    const timeoutIdsRef = useRef<number[]>([]);
+
+    useEffect(() => {
+        return () => {
+            timeoutIdsRef.current.forEach((timeoutId) => {
+                window.clearTimeout(timeoutId);
+            });
+            timeoutIdsRef.current = [];
+        };
+    }, []);
 
     const showToast = useCallback<ShowToast>((message, type = "default") => {
         const id = nextId++;
         setToasts((prev) => [...prev, { id, message, type }]);
-        setTimeout(() => {
-            setToasts((prev) => prev.filter((t) => t.id !== id));
+
+        const timeoutId = window.setTimeout(() => {
+            setToasts((prev) => prev.filter((toast) => toast.id !== id));
+            timeoutIdsRef.current = timeoutIdsRef.current.filter(
+                (activeTimeoutId) => activeTimeoutId !== timeoutId,
+            );
         }, 2800);
+
+        timeoutIdsRef.current.push(timeoutId);
     }, []);
 
     const ToastContainer = useCallback(
         () => (
             <div className="fixed bottom-4 right-4 z-[300] flex flex-col gap-2">
-                {toasts.map((t) => (
+                {toasts.map((toast) => (
                     <div
-                        key={t.id}
+                        key={toast.id}
                         role="status"
                         aria-live="polite"
-                        className={`animate-toast-in rounded-input px-4 py-2.5 text-sm font-medium text-white shadow-lg ${t.type === "success"
+                        className={`animate-toast-in rounded-input px-4 py-2.5 text-sm font-medium text-white shadow-lg ${
+                            toast.type === "success"
                                 ? "bg-adam-accent"
-                                : t.type === "error"
-                                    ? "bg-danger"
-                                    : "bg-ink"
-                            }`}
+                                : toast.type === "error"
+                                  ? "bg-danger"
+                                  : "bg-ink"
+                        }`}
                     >
-                        {t.message}
+                        {toast.message}
                     </div>
                 ))}
             </div>
         ),
-        [toasts]
+        [toasts],
     );
 
     return { showToast, ToastContainer } as const;
