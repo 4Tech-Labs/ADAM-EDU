@@ -191,6 +191,41 @@ def test_issue56_create_course_rejects_stale_pending_teacher_invite(
     assert response.json()["detail"] == "stale_pending_teacher_invite"
 
 
+def test_issue56_create_course_rejects_pending_teacher_invite_locked_by_activation(
+    client,
+    seed_identity,
+    seed_invite,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000624"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    invite, _ = seed_invite(
+        email="locked-create@example.edu",
+        university_id=university_id,
+        role="teacher",
+        full_name="Locked Create",
+    )
+
+    blocking_session = SessionLocal()
+    try:
+        locked_invite = blocking_session.scalar(
+            select(Invite).where(Invite.id == invite.id).with_for_update()
+        )
+        assert locked_invite is not None
+
+        response = client.post(
+            "/api/admin/courses",
+            json=_course_payload(teacher_assignment={"kind": "pending_invite", "invite_id": invite.id}),
+            headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+        )
+    finally:
+        blocking_session.rollback()
+        blocking_session.close()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "stale_pending_teacher_invite"
+
+
 def test_issue56_create_course_translates_duplicate_code_and_semester_conflict(
     client,
     seed_identity,
@@ -534,6 +569,56 @@ def test_issue56_patch_course_rejects_stale_pending_teacher_invite(
         ),
         headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
     )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "stale_pending_teacher_invite"
+
+
+def test_issue56_patch_course_rejects_pending_teacher_invite_locked_by_activation(
+    client,
+    seed_identity,
+    seed_course,
+    seed_invite,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000625"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="locked-patch-teacher@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    invite, _ = seed_invite(
+        email="locked-patch@example.edu",
+        university_id=university_id,
+        role="teacher",
+        full_name="Locked Patch",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Locked Patch Course",
+        code="LOCKED-PATCH-001",
+    )
+
+    blocking_session = SessionLocal()
+    try:
+        locked_invite = blocking_session.scalar(
+            select(Invite).where(Invite.id == invite.id).with_for_update()
+        )
+        assert locked_invite is not None
+
+        response = client.patch(
+            f"/api/admin/courses/{course.id}",
+            json=_course_payload(
+                teacher_assignment={"kind": "pending_invite", "invite_id": invite.id}
+            ),
+            headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+        )
+    finally:
+        blocking_session.rollback()
+        blocking_session.close()
 
     assert response.status_code == 409
     assert response.json()["detail"] == "stale_pending_teacher_invite"

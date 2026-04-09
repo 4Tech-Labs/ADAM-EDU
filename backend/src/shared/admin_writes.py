@@ -9,7 +9,7 @@ from typing import Any, Literal, NoReturn
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from shared.admin_context import AdminContext
@@ -195,13 +195,21 @@ def _resolve_teacher_assignment(
             membership_id=membership.id,
         )
 
-    invite = db.scalar(
-        select(Invite).where(
-            Invite.id == reference_id,
-            Invite.university_id == context.university_id,
-            Invite.role == "teacher",
+    try:
+        invite = db.scalar(
+            select(Invite)
+            .where(
+                Invite.id == reference_id,
+                Invite.university_id == context.university_id,
+                Invite.role == "teacher",
+            )
+            .with_for_update(nowait=True)
         )
-    )
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="stale_pending_teacher_invite",
+        ) from exc
     if invite is None or invite_effective_status(invite) != "pending":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

@@ -38,15 +38,11 @@ type ActivationFlow =
     | "student_join_course_access"
     | null;
 
-const SESSION_RETRY_LIMIT = 5;
-const SESSION_RETRY_DELAY_MS = 150;
-
 export function AuthCallbackPage() {
     const { session, actor, loading, error, refreshActor } = useAuth();
     const navigate = useNavigate();
     const handled = useRef(false);
-    const sessionRetryCount = useRef(0);
-    const [sessionRetryTick, setSessionRetryTick] = useState(0);
+    const [activationExpiryTick, setActivationExpiryTick] = useState(0);
     const [activationError, setActivationError] = useState<string | null>(null);
     const [activationFlow, setActivationFlow] = useState<ActivationFlow>(null);
 
@@ -57,11 +53,17 @@ export function AuthCallbackPage() {
         const ctx = readActivationContext();
 
         if (!session) {
-            if (ctx && sessionRetryCount.current < SESSION_RETRY_LIMIT) {
-                sessionRetryCount.current += 1;
+            if (error) {
+                handled.current = true;
+                clearActivationContext();
+                return;
+            }
+
+            if (ctx) {
+                const remainingMs = Math.max(ctx.expires_at - Date.now(), 0);
                 const timeoutId = window.setTimeout(() => {
-                    setSessionRetryTick((current) => current + 1);
-                }, SESSION_RETRY_DELAY_MS);
+                    setActivationExpiryTick((current) => current + 1);
+                }, remainingMs + 1);
                 return () => {
                     window.clearTimeout(timeoutId);
                 };
@@ -72,8 +74,6 @@ export function AuthCallbackPage() {
             navigate("/", { replace: true });
             return;
         }
-
-        sessionRetryCount.current = 0;
 
         if (ctx?.flow === "teacher_activate") {
             handled.current = true;
@@ -185,7 +185,7 @@ export function AuthCallbackPage() {
             default:
                 navigate("/", { replace: true });
         }
-    }, [actor, loading, navigate, refreshActor, session, sessionRetryTick]);
+    }, [actor, error, loading, navigate, refreshActor, session, activationExpiryTick]);
 
     if (error) {
         return (

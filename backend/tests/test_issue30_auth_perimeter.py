@@ -13,7 +13,7 @@ from jwt.exceptions import PyJWKClientError
 from sqlalchemy import select
 
 from shared.auth import AuthError, AuthSettings, JwtVerifier, SupabaseAdminAuthClient
-from shared.models import Assignment, AuthoringJob, CourseMembership, Membership, Profile, Tenant
+from shared.models import Assignment, AuthoringJob, Course, CourseMembership, Membership, Profile, Tenant, User
 
 
 def build_auth_settings(*, environment: str = "development", jwt_secret: str = "test-jwt-secret-with-sufficient-length-123") -> AuthSettings:
@@ -961,7 +961,7 @@ def test_activate_password_promotes_pending_teacher_courses(
     assert [item["code"] for item in promoted_courses] == ["PROMOTE-001", "PROMOTE-002"]
     assert all(item["teacher_state"] == "active" for item in promoted_courses)
     assert all(item["teacher_assignment"] == {"kind": "membership", "membership_id": membership.id} for item in promoted_courses)
-    assert all(item["teacher_display_name"] == "teacher.promote" for item in promoted_courses)
+    assert all(item["teacher_display_name"] == "Teacher Promote" for item in promoted_courses)
 
     summary_response = client.get("/api/admin/dashboard/summary", headers=admin_headers)
     assert summary_response.status_code == 200, summary_response.text
@@ -979,7 +979,7 @@ def test_activate_password_promotes_pending_teacher_courses(
     assert teacher_options_payload["active_teachers"] == [
         {
             "membership_id": membership.id,
-            "full_name": "teacher.promote",
+            "full_name": "Teacher Promote",
             "email": "teacher.promote@example.edu",
         }
     ]
@@ -1091,7 +1091,7 @@ def test_activate_oauth_full_name_from_user_metadata_key(
 ) -> None:
     """JWT with user_metadata.full_name → Profile uses that name.
 
-    derive_oauth_full_name tries ("full_name", "name") in order.
+    derive_oauth_full_name tries metadata keys ("full_name", "name") in order.
     The existing success test covers "name"; this covers the higher-priority "full_name".
     """
     tenant = Tenant(id=str(uuid.uuid4()), name="OAuth FullName University")
@@ -1113,14 +1113,19 @@ def test_activate_oauth_full_name_from_user_metadata_key(
     assert profile.full_name == "Ana García"
 
 
-def test_activate_oauth_full_name_fallback_to_email_prefix(
+def test_activate_oauth_full_name_fallback_to_invite_full_name(
     client, seed_invite, auth_headers_factory, db
 ) -> None:
     """JWT with no user_metadata → Profile.full_name falls back to email prefix."""
     tenant = Tenant(id=str(uuid.uuid4()), name="OAuth Fallback University")
     db.add(tenant)
     db.commit()
-    _, token = seed_invite(email="fallback-teacher@example.edu", university_id=tenant.id, role="teacher")
+    _, token = seed_invite(
+        email="fallback-teacher@example.edu",
+        university_id=tenant.id,
+        role="teacher",
+        full_name="Fallback Invite Teacher",
+    )
     user_id = str(uuid.uuid4())
     headers = auth_headers_factory(sub=user_id, email="fallback-teacher@example.edu")
 
@@ -1129,4 +1134,294 @@ def test_activate_oauth_full_name_fallback_to_email_prefix(
     assert response.status_code == 200
     profile = db.get(Profile, user_id)
     assert profile is not None
-    assert profile.full_name == "fallback-teacher"
+    assert profile.full_name == "Fallback Invite Teacher"
+
+
+def test_activate_password_repairs_consumed_teacher_invite_without_legacy_bridge(
+    client,
+    db,
+    fake_admin_client,
+    seed_identity,
+    seed_invite,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000075"
+    db.add(Tenant(id=university_id, name="Consumed Repair Password University"))
+    db.commit()
+    auth_user = fake_admin_client.create_password_user("repair.password.teacher@example.edu", "unused-password")
+    seed_identity(
+        user_id=auth_user.id,
+        email="repair.password.teacher@example.edu",
+        role="teacher",
+        university_id=university_id,
+        full_name="Repair Password Teacher",
+        create_legacy_user=False,
+    )
+    invite, token = seed_invite(
+        email="repair.password.teacher@example.edu",
+        university_id=university_id,
+        role="teacher",
+        status="consumed",
+        full_name="Repair Password Teacher",
+    )
+
+    response = client.post(
+        "/api/auth/activate/password",
+        json={
+            "invite_token": token,
+            "password": "super-secret",
+            "confirm_password": "super-secret",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    repaired_legacy_user = db.get(User, auth_user.id)
+    assert repaired_legacy_user is not None
+    assert repaired_legacy_user.tenant_id == university_id
+    assert repaired_legacy_user.email == invite.email
+    assert repaired_legacy_user.role == "teacher"
+
+
+def test_activate_oauth_complete_repairs_consumed_teacher_invite_without_legacy_bridge(
+    client,
+    db,
+    seed_identity,
+    seed_invite,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000076"
+    db.add(Tenant(id=university_id, name="Consumed Repair OAuth University"))
+    db.commit()
+    auth_user_id = str(uuid.uuid4())
+    seed_identity(
+        user_id=auth_user_id,
+        email="repair.oauth.teacher@example.edu",
+        role="teacher",
+        university_id=university_id,
+        full_name="Repair OAuth Teacher",
+        create_legacy_user=False,
+    )
+    _, token = seed_invite(
+        email="repair.oauth.teacher@example.edu",
+        university_id=university_id,
+        role="teacher",
+        status="consumed",
+        full_name="Repair OAuth Teacher",
+    )
+
+    response = client.post(
+        "/api/auth/activate/oauth/complete",
+        json={"invite_token": token},
+        headers=auth_headers_factory(
+            sub=auth_user_id,
+            email="repair.oauth.teacher@example.edu",
+            claims={"user_metadata": {}},
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    repaired_legacy_user = db.get(User, auth_user_id)
+    assert repaired_legacy_user is not None
+    assert repaired_legacy_user.tenant_id == university_id
+    assert repaired_legacy_user.email == "repair.oauth.teacher@example.edu"
+    assert repaired_legacy_user.role == "teacher"
+
+
+def test_activate_password_repairs_consumed_teacher_courses_left_pending(
+    client,
+    db,
+    fake_admin_client,
+    seed_identity,
+    seed_invite,
+    seed_course,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000077"
+    db.add(Tenant(id=university_id, name="Consumed Course Repair University"))
+    db.commit()
+    auth_user = fake_admin_client.create_password_user("repair.course.teacher@example.edu", "unused-password")
+    teacher_seed = seed_identity(
+        user_id=auth_user.id,
+        email="repair.course.teacher@example.edu",
+        role="teacher",
+        university_id=university_id,
+        full_name="Repair Course Teacher",
+        create_legacy_user=False,
+    )
+    invite, token = seed_invite(
+        email="repair.course.teacher@example.edu",
+        university_id=university_id,
+        role="teacher",
+        status="consumed",
+        full_name="Repair Course Teacher",
+    )
+    course = seed_course(
+        university_id=university_id,
+        pending_teacher_invite_id=invite.id,
+        title="Repair Pending Course",
+        code="REPAIR-PENDING-001",
+    )
+
+    response = client.post(
+        "/api/auth/activate/password",
+        json={
+            "invite_token": token,
+            "password": "super-secret",
+            "confirm_password": "super-secret",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    db.expire_all()
+    refreshed_course = db.get(Course, course.id)
+    assert refreshed_course is not None
+    assert refreshed_course.teacher_membership_id == teacher_seed["membership"].id
+    assert refreshed_course.pending_teacher_invite_id is None
+
+
+def test_activate_oauth_complete_keeps_first_tenant_bridge_and_admin_reads_work_across_universities(
+    client,
+    db,
+    seed_identity,
+    seed_invite,
+    seed_course,
+    auth_headers_factory,
+) -> None:
+    first_university_id = "10000000-0000-0000-0000-000000000078"
+    second_university_id = "10000000-0000-0000-0000-000000000079"
+    db.add_all(
+        [
+            Tenant(id=first_university_id, name="First Teacher University"),
+            Tenant(id=second_university_id, name="Second Teacher University"),
+        ]
+    )
+    db.commit()
+    first_admin_id, first_admin_email = _seed_admin(seed_identity, university_id=first_university_id)
+    second_admin_id, second_admin_email = _seed_admin(seed_identity, university_id=second_university_id)
+    teacher_user_id = str(uuid.uuid4())
+    first_teacher = seed_identity(
+        user_id=teacher_user_id,
+        email="multi.university.teacher@example.edu",
+        role="teacher",
+        university_id=first_university_id,
+        full_name="Multi University Teacher",
+    )
+    first_course = seed_course(
+        university_id=first_university_id,
+        teacher_membership_id=first_teacher["membership"].id,
+        title="First University Course",
+        code="MULTI-UNI-001",
+    )
+    invite, token = seed_invite(
+        email="multi.university.teacher@example.edu",
+        university_id=second_university_id,
+        role="teacher",
+        full_name="Multi University Teacher",
+    )
+    second_course = seed_course(
+        university_id=second_university_id,
+        pending_teacher_invite_id=invite.id,
+        title="Second University Course",
+        code="MULTI-UNI-002",
+    )
+
+    response = client.post(
+        "/api/auth/activate/oauth/complete",
+        json={"invite_token": token},
+        headers=auth_headers_factory(
+            sub=teacher_user_id,
+            email="multi.university.teacher@example.edu",
+            claims={"user_metadata": {}},
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    second_membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == teacher_user_id,
+            Membership.university_id == second_university_id,
+            Membership.role == "teacher",
+        )
+    )
+    assert second_membership is not None
+    legacy_user = db.get(User, teacher_user_id)
+    assert legacy_user is not None
+    assert legacy_user.tenant_id == first_university_id
+
+    first_courses_response = client.get(
+        "/api/admin/courses",
+        headers=auth_headers_factory(sub=first_admin_id, email=first_admin_email),
+    )
+    assert first_courses_response.status_code == 200, first_courses_response.text
+    assert first_courses_response.json()["items"] == [
+        {
+            "id": first_course.id,
+            "title": "First University Course",
+            "code": "MULTI-UNI-001",
+            "semester": "2026-I",
+            "academic_level": "Pregrado",
+            "status": "active",
+            "teacher_display_name": "Multi University Teacher",
+            "teacher_state": "active",
+            "teacher_assignment": {
+                "kind": "membership",
+                "membership_id": first_teacher["membership"].id,
+            },
+            "students_count": 0,
+            "max_students": 30,
+            "occupancy_percent": 0,
+            "access_link": None,
+            "access_link_status": "missing",
+        }
+    ]
+
+    second_courses_response = client.get(
+        "/api/admin/courses",
+        headers=auth_headers_factory(sub=second_admin_id, email=second_admin_email),
+    )
+    assert second_courses_response.status_code == 200, second_courses_response.text
+    assert second_courses_response.json()["items"] == [
+        {
+            "id": second_course.id,
+            "title": "Second University Course",
+            "code": "MULTI-UNI-002",
+            "semester": "2026-I",
+            "academic_level": "Pregrado",
+            "status": "active",
+            "teacher_display_name": "Multi University Teacher",
+            "teacher_state": "active",
+            "teacher_assignment": {
+                "kind": "membership",
+                "membership_id": second_membership.id,
+            },
+            "students_count": 0,
+            "max_students": 30,
+            "occupancy_percent": 0,
+            "access_link": None,
+            "access_link_status": "missing",
+        }
+    ]
+
+    first_options_response = client.get(
+        "/api/admin/teacher-options",
+        headers=auth_headers_factory(sub=first_admin_id, email=first_admin_email),
+    )
+    assert first_options_response.status_code == 200, first_options_response.text
+    assert first_options_response.json()["active_teachers"] == [
+        {
+            "membership_id": first_teacher["membership"].id,
+            "full_name": "Multi University Teacher",
+            "email": "multi.university.teacher@example.edu",
+        }
+    ]
+
+    second_options_response = client.get(
+        "/api/admin/teacher-options",
+        headers=auth_headers_factory(sub=second_admin_id, email=second_admin_email),
+    )
+    assert second_options_response.status_code == 200, second_options_response.text
+    assert second_options_response.json()["active_teachers"] == [
+        {
+            "membership_id": second_membership.id,
+            "full_name": "Multi University Teacher",
+            "email": "multi.university.teacher@example.edu",
+        }
+    ]

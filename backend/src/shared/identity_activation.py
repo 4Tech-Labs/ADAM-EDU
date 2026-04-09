@@ -73,11 +73,6 @@ def derive_oauth_full_name(identity: Any) -> str | None:
                 value = user_metadata.get(key)
                 if isinstance(value, str) and value.strip():
                     return value.strip()
-
-    identity_email = getattr(identity, "email", None)
-    normalized_email = normalize_email(identity_email)
-    if normalized_email:
-        return normalized_email.split("@", maxsplit=1)[0]
     return None
 
 

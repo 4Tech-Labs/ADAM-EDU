@@ -102,6 +102,14 @@ def get_invite_by_token(db: Session, invite_token: str) -> Invite | None:
     return db.scalar(select(Invite).where(Invite.token_hash == hash_invite_token(invite_token)))
 
 
+def get_invite_by_token_for_update(db: Session, invite_token: str) -> Invite | None:
+    return db.scalar(
+        select(Invite)
+        .where(Invite.token_hash == hash_invite_token(invite_token))
+        .with_for_update()
+    )
+
+
 def require_invite_email_match(invite: Invite, email: str | None) -> None:
     if normalize_email(invite.email) != normalize_email(email):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid_invite_actor")
@@ -128,7 +136,6 @@ def upsert_legacy_teacher_user(db: Session, *, auth_user_id: str, university_id:
         db.flush()
         return legacy_user
 
-    legacy_user.tenant_id = university_id
     legacy_user.email = email
     legacy_user.role = "teacher"
     db.flush()
@@ -183,6 +190,37 @@ def activation_state_exists(db: Session, invite: Invite, auth_user_id: str) -> b
         return course_membership is not None
 
     return True
+
+
+def _get_activation_membership(db: Session, invite: Invite, auth_user_id: str) -> Membership | None:
+    return db.scalar(
+        select(Membership).where(
+            Membership.user_id == auth_user_id,
+            Membership.university_id == invite.university_id,
+            Membership.role == invite.role,
+        )
+    )
+
+
+def repair_consumed_activation_state(
+    db: Session,
+    *,
+    invite: Invite,
+    auth_user_id: str,
+    email: str,
+) -> None:
+    membership = _get_activation_membership(db, invite, auth_user_id)
+    if membership is None:
+        raise RuntimeError("activation_membership_missing_during_repair")
+
+    if invite.role == "teacher":
+        upsert_legacy_teacher_user(
+            db,
+            auth_user_id=auth_user_id,
+            university_id=invite.university_id,
+            email=email,
+        )
+        promote_pending_teacher_courses(db, invite.id, membership.id, invite.university_id)
 
 def _check_student_email_domain(db: Session, invite: Invite) -> None:
     """Raise 422 if the invite email domain is not in the university's allow-list.
@@ -825,7 +863,7 @@ def activate_password(
     if req.password != req.confirm_password:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="password_mismatch")
 
-    invite = get_invite_by_token(db, req.invite_token)
+    invite = get_invite_by_token_for_update(db, req.invite_token)
     if invite is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
 
@@ -833,6 +871,20 @@ def activate_password(
     existing_user = admin_client.find_user_by_email(invite.email)
     effective_status = invite_effective_status(invite)
     if effective_status == "consumed" and existing_user and activation_state_exists(db, invite, existing_user.id):
+        try:
+            repair_consumed_activation_state(
+                db,
+                invite=invite,
+                auth_user_id=existing_user.id,
+                email=invite.email,
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="activation_failed",
+            ) from exc
         return ActivatePasswordResponse(status="activated", next_step="sign_in", email=invite.email)
     if effective_status != "pending":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
@@ -856,7 +908,7 @@ def activate_password(
         upsert_profile(
             db,
             auth_user.id,
-            derive_activation_full_name(req.full_name, invite.email),
+            derive_activation_full_name(req.full_name or invite.full_name, invite.email),
         )
         membership = upsert_membership(
             db,
@@ -875,9 +927,16 @@ def activate_password(
         if invite.role == "student" and invite.course_id:
             upsert_course_membership(db, invite.course_id, membership.id)
         if not consume_invite_if_pending(db, invite):
-            db.rollback()
             if activation_state_exists(db, invite, auth_user.id):
+                repair_consumed_activation_state(
+                    db,
+                    invite=invite,
+                    auth_user_id=auth_user.id,
+                    email=invite.email,
+                )
+                db.commit()
                 return ActivatePasswordResponse(status="activated", next_step="sign_in", email=invite.email)
+            db.rollback()
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
         db.commit()
     except HTTPException:
@@ -926,12 +985,26 @@ def activate_oauth_complete(
     identity: VerifiedIdentity = Depends(require_verified_identity),
     db: Session = Depends(get_db),
 ) -> ActivateOAuthCompleteResponse:
-    invite = get_invite_by_token(db, req.invite_token)
+    invite = get_invite_by_token_for_update(db, req.invite_token)
     if invite is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
 
     effective_status = invite_effective_status(invite)
     if effective_status == "consumed" and activation_state_exists(db, invite, identity.auth_user_id):
+        try:
+            repair_consumed_activation_state(
+                db,
+                invite=invite,
+                auth_user_id=identity.auth_user_id,
+                email=invite.email,
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="activation_failed",
+            ) from exc
         return ActivateOAuthCompleteResponse(status="activated")
     if effective_status != "pending":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
@@ -956,7 +1029,7 @@ def activate_oauth_complete(
         upsert_profile(
             db,
             identity.auth_user_id,
-            derive_oauth_full_name(identity) or invite.email.split("@", maxsplit=1)[0],
+            derive_oauth_full_name(identity) or invite.full_name or invite.email.split("@", maxsplit=1)[0],
         )
         membership = upsert_membership(
             db,
@@ -975,9 +1048,16 @@ def activate_oauth_complete(
         if invite.role == "student" and invite.course_id:
             upsert_course_membership(db, invite.course_id, membership.id)
         if not consume_invite_if_pending(db, invite):
-            db.rollback()
             if activation_state_exists(db, invite, identity.auth_user_id):
+                repair_consumed_activation_state(
+                    db,
+                    invite=invite,
+                    auth_user_id=identity.auth_user_id,
+                    email=invite.email,
+                )
+                db.commit()
                 return ActivateOAuthCompleteResponse(status="activated")
+            db.rollback()
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
         db.commit()
     except HTTPException:
