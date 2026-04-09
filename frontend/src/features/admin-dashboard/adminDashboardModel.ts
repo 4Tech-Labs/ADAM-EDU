@@ -8,10 +8,11 @@ import type {
     AdminTeacherInviteResponse,
     AdminTeacherOptionsResponse,
 } from "@/shared/adam-types";
+import { NIVELES } from "@/shared/adam-types";
 import { ApiError } from "@/shared/api";
 
 export const ADMIN_PAGE_SIZE = 8;
-const ACADEMIC_LEVEL_CANONICAL = ["Pregrado", "Especialización", "Maestría", "MBA", "Doctorado"] as const;
+const ACADEMIC_LEVEL_CANONICAL = NIVELES;
 const ACADEMIC_LEVEL_ALIASES: Record<string, (typeof ACADEMIC_LEVEL_CANONICAL)[number]> = {
     Especializacion: "Especialización",
     Maestria: "Maestría",
@@ -113,13 +114,24 @@ export function buildCoursePayload(form: CourseFormState): AdminCourseMutationRe
         code: form.code.trim(),
         semester: form.semester.trim(),
         academic_level: normalizeAcademicLevel(form.academic_level),
-        max_students: Number.parseInt(form.max_students, 10),
+        max_students: parseMaxStudents(form.max_students),
         status: form.status,
         teacher_assignment: teacherAssignment,
     };
 }
 
 export function getAdminErrorMessage(error: unknown, fallback: string): string {
+    if (error instanceof Error) {
+        switch (error.message) {
+            case "teacher_assignment_required":
+                return "Selecciona un docente activo o una invitación pendiente antes de continuar.";
+            case "invalid_max_students":
+                return "La capacidad máxima debe ser un número entero mayor o igual a 1.";
+            default:
+                break;
+        }
+    }
+
     if (!(error instanceof ApiError)) return fallback;
 
     switch (error.detail) {
@@ -251,4 +263,18 @@ export function teacherInviteToPendingOption(response: AdminTeacherInviteRespons
         email: response.email,
         status: "pending",
     };
+}
+
+function parseMaxStudents(rawValue: string): number {
+    const normalized = rawValue.trim();
+    if (!/^\d+$/.test(normalized)) {
+        throw new Error("invalid_max_students");
+    }
+
+    const parsed = Number.parseInt(normalized, 10);
+    if (!Number.isSafeInteger(parsed) || parsed < 1) {
+        throw new Error("invalid_max_students");
+    }
+
+    return parsed;
 }

@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import pathlib
-import sys
 import time
 from typing import Any
 import uuid
@@ -49,6 +48,7 @@ from shared.identity_activation import (
     derive_oauth_full_name,
     ensure_course_membership as ensure_course_membership_impl,
     ensure_email_domain_allowed,
+    promote_pending_teacher_courses as promote_pending_teacher_courses_impl,
     upsert_membership as upsert_membership_impl,
     upsert_profile as upsert_profile_impl,
 )
@@ -115,17 +115,33 @@ def upsert_membership(db: Session, auth_user_id: str, university_id: str, role: 
     return upsert_membership_impl(db, auth_user_id, university_id, role)
 
 
-def promote_pending_teacher_courses(db: Session, invite_id: str, membership_id: str, university_id: str) -> None:
-    courses = db.scalars(
-        select(Course).where(
-            Course.university_id == university_id,
-            Course.pending_teacher_invite_id == invite_id,
+def upsert_legacy_teacher_user(db: Session, *, auth_user_id: str, university_id: str, email: str) -> User:
+    legacy_user = db.get(User, auth_user_id)
+    if legacy_user is None:
+        legacy_user = User(
+            id=auth_user_id,
+            tenant_id=university_id,
+            email=email,
+            role="teacher",
         )
-    ).all()
-    for course in courses:
-        course.teacher_membership_id = membership_id
-        course.pending_teacher_invite_id = None
+        db.add(legacy_user)
+        db.flush()
+        return legacy_user
+
+    legacy_user.tenant_id = university_id
+    legacy_user.email = email
+    legacy_user.role = "teacher"
     db.flush()
+    return legacy_user
+
+
+def promote_pending_teacher_courses(db: Session, invite_id: str, membership_id: str, university_id: str) -> None:
+    promote_pending_teacher_courses_impl(
+        db,
+        invite_id=invite_id,
+        membership_id=membership_id,
+        university_id=university_id,
+    )
 
 
 def upsert_course_membership(db: Session, course_id: str, membership_id: str) -> tuple[CourseMembership, bool]:
@@ -837,22 +853,27 @@ def activate_password(
         created_new_user = admin_user_result.created
 
     try:
-        current_module = sys.modules[__name__]
-        current_module.upsert_profile(
+        upsert_profile(
             db,
             auth_user.id,
             derive_activation_full_name(req.full_name, invite.email),
         )
-        membership = current_module.upsert_membership(
+        membership = upsert_membership(
             db,
             auth_user.id,
             invite.university_id,
             invite.role,
         )
         if invite.role == "teacher":
+            upsert_legacy_teacher_user(
+                db,
+                auth_user_id=auth_user.id,
+                university_id=invite.university_id,
+                email=invite.email,
+            )
             promote_pending_teacher_courses(db, invite.id, membership.id, invite.university_id)
         if invite.role == "student" and invite.course_id:
-            current_module.upsert_course_membership(db, invite.course_id, membership.id)
+            upsert_course_membership(db, invite.course_id, membership.id)
         if not consume_invite_if_pending(db, invite):
             db.rollback()
             if activation_state_exists(db, invite, auth_user.id):
@@ -932,22 +953,27 @@ def activate_oauth_complete(
         _check_student_email_domain(db, invite)
 
     try:
-        current_module = sys.modules[__name__]
-        current_module.upsert_profile(
+        upsert_profile(
             db,
             identity.auth_user_id,
-            derive_oauth_full_name(identity) or identity.auth_user_id,
+            derive_oauth_full_name(identity) or invite.email.split("@", maxsplit=1)[0],
         )
-        membership = current_module.upsert_membership(
+        membership = upsert_membership(
             db,
             identity.auth_user_id,
             invite.university_id,
             invite.role,
         )
         if invite.role == "teacher":
+            upsert_legacy_teacher_user(
+                db,
+                auth_user_id=identity.auth_user_id,
+                university_id=invite.university_id,
+                email=invite.email,
+            )
             promote_pending_teacher_courses(db, invite.id, membership.id, invite.university_id)
         if invite.role == "student" and invite.course_id:
-            current_module.upsert_course_membership(db, invite.course_id, membership.id)
+            upsert_course_membership(db, invite.course_id, membership.id)
         if not consume_invite_if_pending(db, invite):
             db.rollback()
             if activation_state_exists(db, invite, identity.auth_user_id):

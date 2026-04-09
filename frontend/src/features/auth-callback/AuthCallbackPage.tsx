@@ -38,27 +38,45 @@ type ActivationFlow =
     | "student_join_course_access"
     | null;
 
+const SESSION_RETRY_LIMIT = 5;
+const SESSION_RETRY_DELAY_MS = 150;
+
 export function AuthCallbackPage() {
     const { session, actor, loading, error, refreshActor } = useAuth();
     const navigate = useNavigate();
     const handled = useRef(false);
+    const sessionRetryCount = useRef(0);
+    const [sessionRetryTick, setSessionRetryTick] = useState(0);
     const [activationError, setActivationError] = useState<string | null>(null);
     const [activationFlow, setActivationFlow] = useState<ActivationFlow>(null);
 
     useEffect(() => {
         if (loading) return;
         if (handled.current) return;
-        handled.current = true;
 
         const ctx = readActivationContext();
 
         if (!session) {
+            if (ctx && sessionRetryCount.current < SESSION_RETRY_LIMIT) {
+                sessionRetryCount.current += 1;
+                const timeoutId = window.setTimeout(() => {
+                    setSessionRetryTick((current) => current + 1);
+                }, SESSION_RETRY_DELAY_MS);
+                return () => {
+                    window.clearTimeout(timeoutId);
+                };
+            }
+
+            handled.current = true;
             clearActivationContext();
             navigate("/", { replace: true });
             return;
         }
 
+        sessionRetryCount.current = 0;
+
         if (ctx?.flow === "teacher_activate") {
+            handled.current = true;
             const teacherCtx = ctx;
             async function runTeacherActivation() {
                 try {
@@ -77,6 +95,7 @@ export function AuthCallbackPage() {
         }
 
         if (ctx?.flow === "student_join_invite") {
+            handled.current = true;
             const inviteCtx = ctx;
             async function runStudentInviteActivation() {
                 try {
@@ -99,6 +118,7 @@ export function AuthCallbackPage() {
         }
 
         if (ctx?.flow === "student_join_course_access") {
+            handled.current = true;
             const courseAccessCtx = ctx;
             async function runCourseAccessActivation() {
                 try {
@@ -141,6 +161,7 @@ export function AuthCallbackPage() {
             return;
         }
 
+        handled.current = true;
         if (!actor) {
             navigate("/", { replace: true });
             return;
@@ -164,7 +185,7 @@ export function AuthCallbackPage() {
             default:
                 navigate("/", { replace: true });
         }
-    }, [loading, session, actor, navigate, refreshActor]);
+    }, [actor, loading, navigate, refreshActor, session, sessionRetryTick]);
 
     if (error) {
         return (

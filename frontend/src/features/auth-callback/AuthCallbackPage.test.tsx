@@ -97,6 +97,43 @@ describe("AuthCallbackPage", () => {
         expect(screen.getByText(/completando inicio de sesión/i)).toBeTruthy();
     });
 
+    it("waits for a transient session before clearing a valid course-access context", async () => {
+        const authState = {
+            ...baseCtx,
+            session: null,
+            actor: null,
+        };
+        vi.mocked(useAuth).mockImplementation(() => authState as never);
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-transient",
+            auth_path: "password_sign_in",
+            expires_at: Date.now() + 300000,
+        });
+
+        const view = render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        expect(clearActivationContext).not.toHaveBeenCalled();
+        expect(mockNavigate).not.toHaveBeenCalled();
+        expect(api.auth.activateCourseAccessComplete).not.toHaveBeenCalled();
+
+        authState.session = { access_token: "jwt" } as never;
+        view.rerender(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(api.auth.activateCourseAccessComplete).toHaveBeenCalledWith("course-access-transient"),
+        );
+    });
+
     it("handles teacher invite oauth activation", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "teacher_activate",

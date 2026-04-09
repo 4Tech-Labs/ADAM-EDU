@@ -25,6 +25,20 @@ def build_auth_settings(*, environment: str = "development", jwt_secret: str = "
     )
 
 
+def _seed_admin(seed_identity, *, university_id: str) -> tuple[str, str]:
+    user_id = str(uuid.uuid4())
+    email = f"admin-{uuid.uuid4().hex[:8]}@example.edu"
+    seed_identity(
+        user_id=user_id,
+        email=email,
+        role="university_admin",
+        university_id=university_id,
+        create_legacy_user=False,
+        full_name="Admin Reviewer",
+    )
+    return user_id, email
+
+
 def test_health_returns_ok(client) -> None:
     response = client.get("/health")
 
@@ -882,11 +896,13 @@ def test_activate_password_promotes_pending_teacher_courses(
     seed_course,
     seed_identity,
     seed_invite,
+    auth_headers_factory,
 ) -> None:
     teacher_university = "10000000-0000-0000-0000-000000000073"
     tenant = Tenant(id=teacher_university, name="Teacher Promotion University")
     db.add(tenant)
     db.commit()
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=teacher_university)
     invite, token = seed_invite(
         email="teacher.promote@example.edu",
         university_id=teacher_university,
@@ -937,6 +953,37 @@ def test_activate_password_promotes_pending_teacher_courses(
     assert refreshed_first.pending_teacher_invite_id is None
     assert refreshed_second.pending_teacher_invite_id is None
 
+    admin_headers = auth_headers_factory(sub=admin_id, email=admin_email)
+    courses_response = client.get("/api/admin/courses", headers=admin_headers)
+    assert courses_response.status_code == 200, courses_response.text
+    courses_payload = courses_response.json()
+    promoted_courses = sorted(courses_payload["items"], key=lambda item: item["code"])
+    assert [item["code"] for item in promoted_courses] == ["PROMOTE-001", "PROMOTE-002"]
+    assert all(item["teacher_state"] == "active" for item in promoted_courses)
+    assert all(item["teacher_assignment"] == {"kind": "membership", "membership_id": membership.id} for item in promoted_courses)
+    assert all(item["teacher_display_name"] == "teacher.promote" for item in promoted_courses)
+
+    summary_response = client.get("/api/admin/dashboard/summary", headers=admin_headers)
+    assert summary_response.status_code == 200, summary_response.text
+    assert summary_response.json() == {
+        "active_courses": 2,
+        "active_teachers": 1,
+        "enrolled_students": 0,
+        "average_occupancy": 0,
+    }
+
+    teacher_options_response = client.get("/api/admin/teacher-options", headers=admin_headers)
+    assert teacher_options_response.status_code == 200, teacher_options_response.text
+    teacher_options_payload = teacher_options_response.json()
+    assert teacher_options_payload["pending_invites"] == []
+    assert teacher_options_payload["active_teachers"] == [
+        {
+            "membership_id": membership.id,
+            "full_name": "teacher.promote",
+            "email": "teacher.promote@example.edu",
+        }
+    ]
+
 
 def test_activate_oauth_complete_promotes_pending_teacher_courses(
     client,
@@ -944,11 +991,13 @@ def test_activate_oauth_complete_promotes_pending_teacher_courses(
     seed_course,
     seed_invite,
     auth_headers_factory,
+    seed_identity,
 ) -> None:
     teacher_university = "10000000-0000-0000-0000-000000000074"
     tenant = Tenant(id=teacher_university, name="Teacher OAuth Promotion University")
     db.add(tenant)
     db.commit()
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=teacher_university)
     invite, token = seed_invite(
         email="teacher.oauth.promote@example.edu",
         university_id=teacher_university,
@@ -988,6 +1037,53 @@ def test_activate_oauth_complete_promotes_pending_teacher_courses(
     assert refreshed_course is not None
     assert refreshed_course.teacher_membership_id == membership.id
     assert refreshed_course.pending_teacher_invite_id is None
+
+    admin_headers = auth_headers_factory(sub=admin_id, email=admin_email)
+    courses_response = client.get("/api/admin/courses", headers=admin_headers)
+    assert courses_response.status_code == 200, courses_response.text
+    assert courses_response.json()["items"] == [
+        {
+            "id": course.id,
+            "title": "Pending OAuth Promotion",
+            "code": "PROMOTE-OAUTH-001",
+            "semester": "2026-I",
+            "academic_level": "Pregrado",
+            "status": "active",
+            "teacher_display_name": "Teacher OAuth Promote",
+            "teacher_state": "active",
+            "teacher_assignment": {
+                "kind": "membership",
+                "membership_id": membership.id,
+            },
+            "students_count": 0,
+            "max_students": 30,
+            "occupancy_percent": 0,
+            "access_link": None,
+            "access_link_status": "missing",
+        }
+    ]
+
+    summary_response = client.get("/api/admin/dashboard/summary", headers=admin_headers)
+    assert summary_response.status_code == 200, summary_response.text
+    assert summary_response.json() == {
+        "active_courses": 1,
+        "active_teachers": 1,
+        "enrolled_students": 0,
+        "average_occupancy": 0,
+    }
+
+    teacher_options_response = client.get("/api/admin/teacher-options", headers=admin_headers)
+    assert teacher_options_response.status_code == 200, teacher_options_response.text
+    assert teacher_options_response.json() == {
+        "active_teachers": [
+            {
+                "membership_id": membership.id,
+                "full_name": "Teacher OAuth Promote",
+                "email": "teacher.oauth.promote@example.edu",
+            }
+        ],
+        "pending_invites": [],
+    }
 
 
 def test_activate_oauth_full_name_from_user_metadata_key(
