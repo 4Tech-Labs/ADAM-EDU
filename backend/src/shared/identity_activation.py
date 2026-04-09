@@ -6,12 +6,12 @@ from typing import Any
 
 from cachetools import TTLCache
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from shared.auth import normalize_email
-from shared.models import AllowedEmailDomain, CourseMembership, Membership, Profile, UniversitySsoConfig
+from shared.models import AllowedEmailDomain, Course, CourseMembership, Membership, Profile, UniversitySsoConfig
 
 
 def utc_now() -> datetime:
@@ -73,11 +73,6 @@ def derive_oauth_full_name(identity: Any) -> str | None:
                 value = user_metadata.get(key)
                 if isinstance(value, str) and value.strip():
                     return value.strip()
-
-    identity_email = getattr(identity, "email", None)
-    normalized_email = normalize_email(identity_email)
-    if normalized_email:
-        return normalized_email.split("@", maxsplit=1)[0]
     return None
 
 
@@ -179,6 +174,41 @@ def ensure_course_membership(db: Session, *, course_id: str, membership_id: str)
     if course_membership is None:  # pragma: no cover
         raise RuntimeError("course_membership_inserted_but_missing")
     return course_membership, True
+
+
+def promote_pending_teacher_courses(
+    db: Session,
+    *,
+    invite_id: str,
+    membership_id: str,
+    university_id: str,
+) -> int:
+    promoted_courses = db.execute(
+        update(Course)
+        .where(
+            Course.university_id == university_id,
+            Course.pending_teacher_invite_id == invite_id,
+            Course.teacher_membership_id.is_(None),
+        )
+        .values(
+            teacher_membership_id=membership_id,
+            pending_teacher_invite_id=None,
+        )
+        .returning(Course.id)
+    ).scalars().all()
+
+    remaining_pending_courses = db.scalar(
+        select(Course.id)
+        .where(
+            Course.university_id == university_id,
+            Course.pending_teacher_invite_id == invite_id,
+        )
+        .limit(1)
+    )
+    if remaining_pending_courses is not None:  # pragma: no cover
+        raise RuntimeError("pending_teacher_course_promotion_incomplete")
+
+    return len(promoted_courses)
 
 
 def allowed_auth_methods_for_university(db: Session, university_id: str) -> list[str]:

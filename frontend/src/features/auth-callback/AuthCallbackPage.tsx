@@ -42,23 +42,41 @@ export function AuthCallbackPage() {
     const { session, actor, loading, error, refreshActor } = useAuth();
     const navigate = useNavigate();
     const handled = useRef(false);
+    const [activationExpiryTick, setActivationExpiryTick] = useState(0);
     const [activationError, setActivationError] = useState<string | null>(null);
     const [activationFlow, setActivationFlow] = useState<ActivationFlow>(null);
 
     useEffect(() => {
         if (loading) return;
         if (handled.current) return;
-        handled.current = true;
 
         const ctx = readActivationContext();
 
         if (!session) {
+            if (error) {
+                handled.current = true;
+                clearActivationContext();
+                return;
+            }
+
+            if (ctx) {
+                const remainingMs = Math.max(ctx.expires_at - Date.now(), 0);
+                const timeoutId = window.setTimeout(() => {
+                    setActivationExpiryTick((current) => current + 1);
+                }, remainingMs + 1);
+                return () => {
+                    window.clearTimeout(timeoutId);
+                };
+            }
+
+            handled.current = true;
             clearActivationContext();
             navigate("/", { replace: true });
             return;
         }
 
         if (ctx?.flow === "teacher_activate") {
+            handled.current = true;
             const teacherCtx = ctx;
             async function runTeacherActivation() {
                 try {
@@ -77,6 +95,7 @@ export function AuthCallbackPage() {
         }
 
         if (ctx?.flow === "student_join_invite") {
+            handled.current = true;
             const inviteCtx = ctx;
             async function runStudentInviteActivation() {
                 try {
@@ -99,6 +118,7 @@ export function AuthCallbackPage() {
         }
 
         if (ctx?.flow === "student_join_course_access") {
+            handled.current = true;
             const courseAccessCtx = ctx;
             async function runCourseAccessActivation() {
                 try {
@@ -141,6 +161,7 @@ export function AuthCallbackPage() {
             return;
         }
 
+        handled.current = true;
         if (!actor) {
             navigate("/", { replace: true });
             return;
@@ -164,7 +185,7 @@ export function AuthCallbackPage() {
             default:
                 navigate("/", { replace: true });
         }
-    }, [loading, session, actor, navigate, refreshActor]);
+    }, [actor, error, loading, navigate, refreshActor, session, activationExpiryTick]);
 
     if (error) {
         return (

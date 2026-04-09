@@ -5,7 +5,7 @@ import uuid
 
 from sqlalchemy import select
 
-from shared.models import Course, Membership, Tenant
+from shared.models import Course, Membership, Tenant, User
 
 
 def _auth_headers(auth_headers_factory, *, user_id: str, email: str) -> dict[str, str]:
@@ -669,3 +669,93 @@ def test_issue55_teacher_options_fail_explicitly_if_email_is_unavailable(
 
     assert response.status_code == 500
     assert response.json()["detail"] == "teacher_email_unavailable"
+
+
+def test_issue55_teacher_options_and_courses_ignore_legacy_tenant_mismatch_for_teacher_email(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    auth_headers_factory,
+) -> None:
+    first_university_id = "10000000-0000-0000-0000-000000000566"
+    second_university_id = "10000000-0000-0000-0000-000000000567"
+    _seed_admin(seed_identity, university_id=first_university_id)
+    second_admin_id, second_admin_email = _seed_admin(seed_identity, university_id=second_university_id)
+    teacher_user_id = str(uuid.uuid4())
+    seed_identity(
+        user_id=teacher_user_id,
+        email="shared.teacher@example.edu",
+        role="teacher",
+        university_id=first_university_id,
+        full_name="Shared Teacher",
+    )
+    db.add(
+        Membership(
+            user_id=teacher_user_id,
+            university_id=second_university_id,
+            role="teacher",
+            status="active",
+            must_rotate_password=False,
+        )
+    )
+    db.commit()
+    second_membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == teacher_user_id,
+            Membership.university_id == second_university_id,
+            Membership.role == "teacher",
+        )
+    )
+    assert second_membership is not None
+    legacy_user = db.get(User, teacher_user_id)
+    assert legacy_user is not None
+    assert legacy_user.tenant_id == first_university_id
+    second_course = seed_course(
+        university_id=second_university_id,
+        teacher_membership_id=second_membership.id,
+        title="Second Tenant Shared Teacher",
+        code="SHARED-TEACHER-001",
+    )
+
+    teacher_options_response = client.get(
+        "/api/admin/teacher-options",
+        headers=_auth_headers(auth_headers_factory, user_id=second_admin_id, email=second_admin_email),
+    )
+
+    assert teacher_options_response.status_code == 200, teacher_options_response.text
+    assert teacher_options_response.json()["active_teachers"] == [
+        {
+            "membership_id": second_membership.id,
+            "full_name": "Shared Teacher",
+            "email": "shared.teacher@example.edu",
+        }
+    ]
+
+    courses_response = client.get(
+        "/api/admin/courses",
+        headers=_auth_headers(auth_headers_factory, user_id=second_admin_id, email=second_admin_email),
+    )
+
+    assert courses_response.status_code == 200, courses_response.text
+    assert courses_response.json()["items"] == [
+        {
+            "id": second_course.id,
+            "title": "Second Tenant Shared Teacher",
+            "code": "SHARED-TEACHER-001",
+            "semester": "2026-I",
+            "academic_level": "Pregrado",
+            "status": "active",
+            "teacher_display_name": "Shared Teacher",
+            "teacher_state": "active",
+            "teacher_assignment": {
+                "kind": "membership",
+                "membership_id": second_membership.id,
+            },
+            "students_count": 0,
+            "max_students": 30,
+            "occupancy_percent": 0,
+            "access_link": None,
+            "access_link_status": "missing",
+        }
+    ]

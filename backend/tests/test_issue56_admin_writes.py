@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from shared.course_access_links import course_regeneration_lock_key
 from shared.database import SessionLocal
 from shared.invite_status import utc_now
-from shared.models import Course, CourseAccessLink, Invite
+from shared.models import Course, CourseAccessLink, CourseMembership, Invite, Membership, UniversitySsoConfig
 
 
 def _auth_headers(auth_headers_factory, *, user_id: str, email: str) -> dict[str, str]:
@@ -191,6 +191,41 @@ def test_issue56_create_course_rejects_stale_pending_teacher_invite(
     assert response.json()["detail"] == "stale_pending_teacher_invite"
 
 
+def test_issue56_create_course_rejects_pending_teacher_invite_locked_by_activation(
+    client,
+    seed_identity,
+    seed_invite,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000624"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    invite, _ = seed_invite(
+        email="locked-create@example.edu",
+        university_id=university_id,
+        role="teacher",
+        full_name="Locked Create",
+    )
+
+    blocking_session = SessionLocal()
+    try:
+        locked_invite = blocking_session.scalar(
+            select(Invite).where(Invite.id == invite.id).with_for_update()
+        )
+        assert locked_invite is not None
+
+        response = client.post(
+            "/api/admin/courses",
+            json=_course_payload(teacher_assignment={"kind": "pending_invite", "invite_id": invite.id}),
+            headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+        )
+    finally:
+        blocking_session.rollback()
+        blocking_session.close()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "stale_pending_teacher_invite"
+
+
 def test_issue56_create_course_translates_duplicate_code_and_semester_conflict(
     client,
     seed_identity,
@@ -319,6 +354,69 @@ def test_issue56_patch_course_switches_from_pending_invite_to_membership(
         "membership_id": teacher["membership"].id,
     }
     assert payload["teacher_state"] == "active"
+
+
+def test_issue56_create_course_accepts_legacy_ascii_academic_level_alias(
+    client,
+    db,
+    seed_identity,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000630"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="create-alias-teacher@example.edu",
+        role="teacher",
+        university_id=university_id,
+        full_name="Create Alias Teacher",
+    )
+
+    response = client.post(
+        "/api/admin/courses",
+        json=_course_payload(
+            teacher_assignment={"kind": "membership", "membership_id": teacher["membership"].id},
+            title="Legacy Alias Create",
+            code="ALIAS-CREATE-001",
+            academic_level="Especializacion",
+        ),
+        headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["academic_level"] == "Especialización"
+    db.expire_all()
+    created = db.get(Course, response.json()["id"])
+    assert created is not None
+    assert created.academic_level == "Especialización"
+
+
+def test_issue56_create_course_rejects_invalid_academic_level(
+    client,
+    seed_identity,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000632"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="invalid-level-teacher@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+
+    response = client.post(
+        "/api/admin/courses",
+        json=_course_payload(
+            teacher_assignment={"kind": "membership", "membership_id": teacher["membership"].id},
+            academic_level="Posdoctorado",
+        ),
+        headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+    )
+
+    assert response.status_code == 422
+    assert "academic_level" in response.text
+    assert "invalid" in response.text
 
 
 def test_issue56_patch_course_accepts_legacy_ascii_academic_level_alias(
@@ -476,6 +574,56 @@ def test_issue56_patch_course_rejects_stale_pending_teacher_invite(
     assert response.json()["detail"] == "stale_pending_teacher_invite"
 
 
+def test_issue56_patch_course_rejects_pending_teacher_invite_locked_by_activation(
+    client,
+    seed_identity,
+    seed_course,
+    seed_invite,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000625"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="locked-patch-teacher@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    invite, _ = seed_invite(
+        email="locked-patch@example.edu",
+        university_id=university_id,
+        role="teacher",
+        full_name="Locked Patch",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Locked Patch Course",
+        code="LOCKED-PATCH-001",
+    )
+
+    blocking_session = SessionLocal()
+    try:
+        locked_invite = blocking_session.scalar(
+            select(Invite).where(Invite.id == invite.id).with_for_update()
+        )
+        assert locked_invite is not None
+
+        response = client.patch(
+            f"/api/admin/courses/{course.id}",
+            json=_course_payload(
+                teacher_assignment={"kind": "pending_invite", "invite_id": invite.id}
+            ),
+            headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+        )
+    finally:
+        blocking_session.rollback()
+        blocking_session.close()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "stale_pending_teacher_invite"
+
+
 def test_issue56_teacher_invite_persists_full_name_returns_activation_link_and_keeps_course_links_untouched(
     client,
     db,
@@ -551,6 +699,155 @@ def test_issue56_regenerate_course_access_link_rotates_previous_link_and_keeps_o
     rotated = next(link for link in links if link.id == original_link.id)
     assert rotated.status == "rotated"
     assert rotated.rotated_at is not None
+
+
+def test_issue56_regenerate_course_access_link_supports_password_runtime_end_to_end(
+    client,
+    db,
+    fake_admin_client,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000622"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="regenerate-password@example.edu",
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Password Regenerate",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Rotate Runtime Password",
+        code="ROTATE-RUNTIME-PASSWORD-001",
+    )
+    _, original_raw = seed_course_access_link(course_id=course.id, status="active")
+
+    regenerate_response = client.post(
+        f"/api/admin/courses/{course.id}/access-link/regenerate",
+        headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+    )
+
+    assert regenerate_response.status_code == 200, regenerate_response.text
+    new_link = regenerate_response.json()["access_link"]
+    new_raw = new_link.split("=", maxsplit=1)[1]
+
+    old_resolve = client.post("/api/course-access/resolve", json={"course_access_token": original_raw})
+    assert old_resolve.status_code == 410
+    assert old_resolve.json()["detail"] == "course_access_link_rotated"
+
+    new_resolve = client.post("/api/course-access/resolve", json={"course_access_token": new_raw})
+    assert new_resolve.status_code == 200
+    assert new_resolve.json()["course_id"] == course.id
+
+    activate_response = client.post(
+        "/api/course-access/activate/password",
+        json={
+            "course_access_token": new_raw,
+            "email": "student.rotated.password@example.edu",
+            "full_name": "Student Rotated Password",
+            "password": "Secure1234!",
+            "confirm_password": "Secure1234!",
+        },
+    )
+    assert activate_response.status_code == 201, activate_response.text
+
+    auth_user = fake_admin_client.find_user_by_email("student.rotated.password@example.edu")
+    assert auth_user is not None
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == auth_user.id,
+            Membership.university_id == university_id,
+            Membership.role == "student",
+        )
+    )
+    assert membership is not None
+    enrollment = db.scalar(
+        select(CourseMembership).where(
+            CourseMembership.course_id == course.id,
+            CourseMembership.membership_id == membership.id,
+        )
+    )
+    assert enrollment is not None
+
+
+def test_issue56_regenerate_course_access_link_supports_oauth_runtime_end_to_end(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000623"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="regenerate-oauth@example.edu",
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher OAuth Regenerate",
+    )
+    db.add(
+        UniversitySsoConfig(
+            university_id=university_id,
+            provider="azure",
+            azure_tenant_id="azure-tenant",
+            client_id="client-id",
+            enabled=True,
+        )
+    )
+    db.commit()
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Rotate Runtime OAuth",
+        code="ROTATE-RUNTIME-OAUTH-001",
+    )
+    _, original_raw = seed_course_access_link(course_id=course.id, status="active")
+
+    regenerate_response = client.post(
+        f"/api/admin/courses/{course.id}/access-link/regenerate",
+        headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+    )
+
+    assert regenerate_response.status_code == 200, regenerate_response.text
+    new_link = regenerate_response.json()["access_link"]
+    new_raw = new_link.split("=", maxsplit=1)[1]
+
+    old_resolve = client.post("/api/course-access/resolve", json={"course_access_token": original_raw})
+    assert old_resolve.status_code == 410
+    assert old_resolve.json()["detail"] == "course_access_link_rotated"
+
+    activate_response = client.post(
+        "/api/course-access/activate/oauth/complete",
+        json={"course_access_token": new_raw},
+        headers=auth_headers_factory(
+            sub=str(uuid.uuid4()),
+            email="student.rotated.oauth@example.edu",
+            claims={"user_metadata": {"name": "Student Rotated OAuth"}},
+        ),
+    )
+    assert activate_response.status_code == 200, activate_response.text
+
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.university_id == university_id,
+            Membership.role == "student",
+        )
+    )
+    assert membership is not None
+    enrollment = db.scalar(
+        select(CourseMembership).where(
+            CourseMembership.course_id == course.id,
+            CourseMembership.membership_id == membership.id,
+        )
+    )
+    assert enrollment is not None
 
 
 def test_issue56_regenerate_course_access_link_rejects_inactive_course(

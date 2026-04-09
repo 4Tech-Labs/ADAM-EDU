@@ -79,6 +79,34 @@ describe("StudentJoinPage", () => {
         expect(screen.getByText(/este enlace de acceso no es válido/i)).toBeTruthy();
     });
 
+    it("captures a realistic course_access_token from the hash fragment before resolving", async () => {
+        window.history.replaceState(null, "", "/join#course_access_token=course-hash-123");
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+
+        renderPage();
+
+        await waitFor(() => {
+            expect(saveActivationContext).toHaveBeenCalledWith({
+                flow: "student_join_course_access",
+                token_kind: "course_access",
+                course_access_token: "course-hash-123",
+            });
+        });
+        await waitFor(() => {
+            expect(api.auth.resolveCourseAccess).toHaveBeenCalledWith("course-hash-123");
+        });
+
+        window.history.replaceState(null, "", "/join");
+    });
+
     it("keeps invite_token flow working", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "student_join_invite",

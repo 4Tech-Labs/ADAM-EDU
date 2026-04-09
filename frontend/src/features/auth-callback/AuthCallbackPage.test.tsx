@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthMeActor } from "@/app/auth/auth-types";
 
@@ -81,6 +81,10 @@ describe("AuthCallbackPage", () => {
         vi.mocked(api.auth.activateCourseAccessOAuthComplete).mockResolvedValue({ status: "activated" });
     });
 
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("shows loading state while auth is loading", () => {
         vi.mocked(useAuth).mockReturnValue({
             ...baseCtx,
@@ -95,6 +99,97 @@ describe("AuthCallbackPage", () => {
         );
 
         expect(screen.getByText(/completando inicio de sesión/i)).toBeTruthy();
+    });
+
+    it("keeps the activation context intact while auth is unresolved and resumes once session arrives", async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+        const authState = {
+            ...baseCtx,
+            session: null,
+            actor: null,
+        };
+        vi.mocked(useAuth).mockImplementation(() => authState as never);
+        const expiresAt = Date.now() + 5000;
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-transient",
+            auth_path: "password_sign_in",
+            expires_at: expiresAt,
+        });
+
+        const view = render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        expect(clearActivationContext).not.toHaveBeenCalled();
+        expect(mockNavigate).not.toHaveBeenCalled();
+        expect(api.auth.activateCourseAccessComplete).not.toHaveBeenCalled();
+
+        act(() => {
+            vi.advanceTimersByTime(4000);
+        });
+
+        expect(clearActivationContext).not.toHaveBeenCalled();
+        expect(mockNavigate).not.toHaveBeenCalled();
+
+        vi.useRealTimers();
+        authState.session = { access_token: "jwt" } as never;
+        view.rerender(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(api.auth.activateCourseAccessComplete).toHaveBeenCalledWith("course-access-transient"),
+        );
+    });
+
+    it("waits until the activation context really expires before clearing and redirecting", () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+        const expiresAt = Date.now() + 5000;
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseCtx,
+            session: null,
+            actor: null,
+        });
+        vi.mocked(readActivationContext).mockImplementation(() => {
+            if (Date.now() > expiresAt) {
+                return null;
+            }
+            return {
+                flow: "student_join_course_access",
+                token_kind: "course_access",
+                course_access_token: "course-access-expiry",
+                auth_path: "oauth",
+                expires_at: expiresAt,
+            };
+        });
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        act(() => {
+            vi.advanceTimersByTime(4900);
+        });
+
+        expect(clearActivationContext).not.toHaveBeenCalled();
+        expect(mockNavigate).not.toHaveBeenCalled();
+
+        act(() => {
+            vi.advanceTimersByTime(200);
+        });
+
+        expect(clearActivationContext).toHaveBeenCalledTimes(1);
+        expect(mockNavigate).toHaveBeenCalledWith("/", { replace: true });
     });
 
     it("handles teacher invite oauth activation", async () => {

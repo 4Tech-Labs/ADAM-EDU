@@ -277,6 +277,21 @@ describe("AdminDashboardPage", () => {
         });
     });
 
+    it("blocks invalid max_students locally before calling the backend", async () => {
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.click(screen.getByText("Crear Nuevo Curso"));
+        fillCreateCourseForm("membership:teacher-membership-1");
+        fireEvent.change(screen.getByLabelText("Capacidad maxima"), {
+            target: { value: "3.5" },
+        });
+        fireEvent.submit(screen.getByTestId("create-course-modal").querySelector("form")!);
+
+        expect(await screen.findByText("La capacidad máxima debe ser un número entero mayor o igual a 1.")).toBeTruthy();
+        expect(api.admin.createCourse).not.toHaveBeenCalled();
+    });
+
     it("shows and copies the teacher invite activation link", async () => {
         renderPage();
         await screen.findByText("Directorio de Cursos");
@@ -396,11 +411,15 @@ describe("AdminDashboardPage", () => {
         renderPage();
         await screen.findByText("Directorio de Cursos");
 
+        expect(api.admin.getDashboardSummary).toHaveBeenCalledTimes(1);
         expect(api.admin.listCourses).toHaveBeenCalledTimes(1);
         expect(api.admin.getTeacherOptions).toHaveBeenCalledTimes(1);
 
         fireEvent.focus(window);
 
+        await waitFor(() => {
+            expect(api.admin.getDashboardSummary).toHaveBeenCalledTimes(2);
+        });
         await waitFor(() => {
             expect(api.admin.listCourses).toHaveBeenCalledTimes(2);
         });

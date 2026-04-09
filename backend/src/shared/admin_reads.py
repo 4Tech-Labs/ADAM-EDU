@@ -258,8 +258,6 @@ def _build_courses_query(
             teacher_user,
             and_(
                 teacher_membership.user_id == teacher_user.id,
-                teacher_user.tenant_id == context.university_id,
-                teacher_user.role == "teacher",
             ),
         )
         .outerjoin(
@@ -508,11 +506,7 @@ def list_teacher_options(db: Session, context: AdminContext) -> TeacherOptionsRe
             .join(Profile, Membership.user_id == Profile.id)
             .outerjoin(
                 User,
-                and_(
-                    User.id == Membership.user_id,
-                    User.tenant_id == context.university_id,
-                    User.role == "teacher",
-                ),
+                User.id == Membership.user_id,
             )
             .where(
                 Membership.university_id == context.university_id,
