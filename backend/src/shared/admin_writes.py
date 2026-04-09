@@ -26,6 +26,10 @@ from shared.models import Course, Invite, Membership
 
 
 ACADEMIC_LEVELS = frozenset({"Pregrado", "Especialización", "Maestría", "MBA", "Doctorado"})
+ACADEMIC_LEVEL_ALIASES = {
+    "Especializacion": "Especialización",
+    "Maestria": "Maestría",
+}
 SEMESTER_PATTERN = re.compile(r"^\d{4}-(I|II)$")
 TEACHER_INVITE_TTL = timedelta(days=7)
 _DUPLICATE_COURSE_CONSTRAINT = "uix_courses_university_code_semester"
@@ -66,9 +70,10 @@ class AdminCourseMutationRequest(BaseModel):
     @field_validator("academic_level")
     @classmethod
     def _validate_academic_level(cls, value: str) -> str:
-        if value not in ACADEMIC_LEVELS:
+        normalized_value = ACADEMIC_LEVEL_ALIASES.get(value, value)
+        if normalized_value not in ACADEMIC_LEVELS:
             raise ValueError("academic_level is invalid")
-        return value
+        return normalized_value
 
 
 class CreateTeacherInviteRequest(BaseModel):

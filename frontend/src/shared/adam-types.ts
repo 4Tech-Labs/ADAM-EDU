@@ -245,6 +245,31 @@ export interface InviteRedeemResponse {
     status: "redeemed" | "already_enrolled";
 }
 
+export type AllowedAuthMethod = "password" | "microsoft";
+
+export type ActivationContext =
+    | {
+        flow: "teacher_activate";
+        token_kind: "invite";
+        invite_token: string;
+        role: "teacher";
+        expires_at: number;
+    }
+    | {
+        flow: "student_join_invite";
+        token_kind: "invite";
+        invite_token: string;
+        role: "student";
+        expires_at: number;
+    }
+    | {
+        flow: "student_join_course_access";
+        token_kind: "course_access";
+        course_access_token: string;
+        auth_path?: "oauth" | "password_sign_in";
+        expires_at: number;
+    };
+
 export interface ActivatePasswordRequest {
     invite_token: string;
     password: string;
@@ -260,6 +285,42 @@ export interface ActivatePasswordResponse {
 
 export interface ActivateOAuthCompleteResponse {
     status: string;
+}
+
+export interface CourseAccessResolveResponse {
+    course_id: string;
+    course_title: string;
+    university_name: string;
+    teacher_display_name: string | null;
+    course_status: "active";
+    link_status: "active";
+    allowed_auth_methods: AllowedAuthMethod[];
+}
+
+export interface CourseAccessEnrollResponse {
+    status: "enrolled" | "already_enrolled";
+}
+
+export interface CourseAccessActivatePasswordRequest {
+    course_access_token: string;
+    email?: string;
+    full_name?: string;
+    password: string;
+    confirm_password: string;
+}
+
+export interface CourseAccessActivatePasswordResponse {
+    status: "activated";
+    next_step: "sign_in";
+    email: string;
+}
+
+export interface CourseAccessActivateCompleteResponse {
+    status: "activated";
+}
+
+export interface CourseAccessActivateOAuthCompleteResponse {
+    status: "activated";
 }
 
 // Admin password rotation (Issue #8)

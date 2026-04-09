@@ -11,7 +11,13 @@ import type {
 import { ApiError } from "@/shared/api";
 
 export const ADMIN_PAGE_SIZE = 8;
-export const ACADEMIC_LEVEL_OPTIONS = ["Pregrado", "Especializacion", "Maestria", "MBA", "Doctorado"] as const;
+const ACADEMIC_LEVEL_CANONICAL = ["Pregrado", "Especialización", "Maestría", "MBA", "Doctorado"] as const;
+const ACADEMIC_LEVEL_ALIASES: Record<string, (typeof ACADEMIC_LEVEL_CANONICAL)[number]> = {
+    Especializacion: "Especialización",
+    Maestria: "Maestría",
+};
+
+export const ACADEMIC_LEVEL_OPTIONS = ACADEMIC_LEVEL_CANONICAL;
 export const COURSE_STATUS_OPTIONS: Array<{ value: AdminCourseStatus; label: string }> = [
     { value: "active", label: "Activo" },
     { value: "inactive", label: "Inactivo" },
@@ -68,6 +74,10 @@ export function buildDefaultSemester(): string {
     return `${year}-${now.getMonth() < 6 ? "I" : "II"}`;
 }
 
+export function normalizeAcademicLevel(value: string): string {
+    return ACADEMIC_LEVEL_ALIASES[value] ?? value;
+}
+
 export function createEmptyCourseForm(): CourseFormState {
     return {
         title: "",
@@ -85,7 +95,7 @@ export function buildCourseFormFromItem(item: AdminCourseListItem): CourseFormSt
         title: item.title,
         code: item.code,
         semester: item.semester,
-        academic_level: item.academic_level,
+        academic_level: normalizeAcademicLevel(item.academic_level),
         max_students: String(item.max_students),
         status: item.status,
         teacher_option_value: encodeTeacherOptionValue(item.teacher_assignment),
@@ -102,7 +112,7 @@ export function buildCoursePayload(form: CourseFormState): AdminCourseMutationRe
         title: form.title.trim(),
         code: form.code.trim(),
         semester: form.semester.trim(),
-        academic_level: form.academic_level,
+        academic_level: normalizeAcademicLevel(form.academic_level),
         max_students: Number.parseInt(form.max_students, 10),
         status: form.status,
         teacher_assignment: teacherAssignment,

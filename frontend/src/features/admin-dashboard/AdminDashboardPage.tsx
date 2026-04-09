@@ -19,6 +19,7 @@ import {
     useEffect,
     useId,
     useMemo,
+    useRef,
     useState,
     type Dispatch,
     type FormEvent,
@@ -112,6 +113,7 @@ export function AdminDashboardPage({ showToast }: Props) {
     const [regeneratingCourseId, setRegeneratingCourseId] = useState<string | null>(null);
     const [courseFormError, setCourseFormError] = useState<string | null>(null);
     const [inviteFormError, setInviteFormError] = useState<string | null>(null);
+    const lastExternalRefreshAtRef = useRef(0);
 
     const currentItems = useMemo(() => coursesResponse?.items ?? EMPTY_COURSES, [coursesResponse]);
     const editingCourse = editingCourseId
@@ -141,7 +143,7 @@ export function AdminDashboardPage({ showToast }: Props) {
             page_size: ADMIN_PAGE_SIZE,
         }), [academicLevelFilter, deferredSearch, page, semesterFilter, statusFilter]);
 
-    async function refreshTeacherOptions() {
+    const refreshTeacherOptions = useCallback(async () => {
         setTeacherOptionsState((prev) => ({ ...prev, loading: true, error: null }));
         try {
             const data = await api.admin.getTeacherOptions();
@@ -153,7 +155,7 @@ export function AdminDashboardPage({ showToast }: Props) {
                 error: getAdminErrorMessage(error, "No se pudieron cargar las opciones de docentes para los formularios."),
             });
         }
-    }
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -183,7 +185,38 @@ export function AdminDashboardPage({ showToast }: Props) {
 
     useEffect(() => {
         void refreshTeacherOptions();
-    }, []);
+    }, [refreshTeacherOptions]);
+
+    const requestExternalRefresh = useCallback(() => {
+        const now = Date.now();
+        if (now - lastExternalRefreshAtRef.current < 750) {
+            return;
+        }
+        lastExternalRefreshAtRef.current = now;
+        setReloadTick((prev) => prev + 1);
+        void refreshTeacherOptions();
+    }, [refreshTeacherOptions]);
+
+    useEffect(() => {
+        function handleWindowFocus() {
+            if (document.visibilityState === "visible") {
+                requestExternalRefresh();
+            }
+        }
+
+        function handleVisibilityChange() {
+            if (document.visibilityState === "visible") {
+                requestExternalRefresh();
+            }
+        }
+
+        window.addEventListener("focus", handleWindowFocus);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+        return () => {
+            window.removeEventListener("focus", handleWindowFocus);
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
+        };
+    }, [requestExternalRefresh]);
 
     async function refreshSummaryAndCourses(nextPage = page) {
         const [summaryResponse, courses] = await Promise.all([

@@ -65,6 +65,7 @@ export function TeacherActivatePage() {
         if (token) {
             saveActivationContext({
                 flow: "teacher_activate",
+                token_kind: "invite",
                 invite_token: token,
                 role: "teacher",
             });

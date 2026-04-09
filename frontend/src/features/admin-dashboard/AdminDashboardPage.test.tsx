@@ -49,7 +49,7 @@ const activeCourse: AdminCourseListItem = {
     title: "Finanzas Corporativas",
     code: "FIN-401",
     semester: "2026-I",
-    academic_level: "Maestria",
+    academic_level: "Maestría",
     status: "active",
     teacher_display_name: "Julio Cesar Paz",
     teacher_state: "active",
@@ -229,6 +229,36 @@ describe("AdminDashboardPage", () => {
         });
     });
 
+    it("normalizes legacy ascii academic levels when editing a course", async () => {
+        vi.mocked(api.admin.listCourses).mockResolvedValueOnce({
+            ...coursesResponse,
+            items: [{ ...activeCourse, academic_level: "Maestria" }],
+        });
+        vi.mocked(api.admin.updateCourse).mockResolvedValue({
+            ...activeCourse,
+            academic_level: "Maestría",
+        });
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.click(screen.getByLabelText("Editar Finanzas Corporativas"));
+        fireEvent.change(screen.getByLabelText("Nombre del curso"), {
+            target: { value: "Finanzas Corporativas Avanzadas" },
+        });
+        fireEvent.submit(screen.getByTestId("edit-course-modal").querySelector("form")!);
+
+        await waitFor(() => {
+            expect(api.admin.updateCourse).toHaveBeenCalledWith(
+                "course-1",
+                expect.objectContaining({
+                    academic_level: "Maestría",
+                    title: "Finanzas Corporativas Avanzadas",
+                }),
+            );
+        });
+    });
+
     it("submits create course with pending_invite teacher_assignment", async () => {
         renderPage();
         await screen.findByText("Directorio de Cursos");
@@ -359,6 +389,23 @@ describe("AdminDashboardPage", () => {
             expect(api.admin.listCourses).toHaveBeenLastCalledWith(expect.objectContaining({
                 page: 2,
             }));
+        });
+    });
+
+    it("refreshes summary, courses, and teacher options when the tab regains focus", async () => {
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        expect(api.admin.listCourses).toHaveBeenCalledTimes(1);
+        expect(api.admin.getTeacherOptions).toHaveBeenCalledTimes(1);
+
+        fireEvent.focus(window);
+
+        await waitFor(() => {
+            expect(api.admin.listCourses).toHaveBeenCalledTimes(2);
+        });
+        await waitFor(() => {
+            expect(api.admin.getTeacherOptions).toHaveBeenCalledTimes(2);
         });
     });
 

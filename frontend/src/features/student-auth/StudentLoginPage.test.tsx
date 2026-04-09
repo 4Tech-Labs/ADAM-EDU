@@ -1,9 +1,24 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import { StudentLoginPage } from "./StudentLoginPage";
 
 vi.mock("@/shared/supabaseClient");
+vi.mock("@/shared/activationContext", () => ({
+    readActivationContext: vi.fn(),
+    saveActivationContext: vi.fn(),
+}));
+vi.mock("react-router-dom", async () => {
+    const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+    return { ...actual, useNavigate: vi.fn() };
+});
+
+import { readActivationContext, saveActivationContext } from "@/shared/activationContext";
+import { getSupabaseClient } from "@/shared/supabaseClient";
+import { useNavigate } from "react-router-dom";
+
+const mockNavigate = vi.fn();
 
 function makeSupabaseMock(
     signInResult: { error: null | { message: string } } = { error: null },
@@ -24,15 +39,14 @@ function renderPage() {
     );
 }
 
-import { getSupabaseClient } from "@/shared/supabaseClient";
-
 describe("StudentLoginPage", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         vi.mocked(getSupabaseClient).mockReturnValue(makeSupabaseMock() as never);
+        vi.mocked(readActivationContext).mockReturnValue(null);
+        vi.mocked(useNavigate).mockReturnValue(mockNavigate);
     });
 
-    // 1. Botón Microsoft → signInWithOAuth con provider: "azure"
     it("calls signInWithOAuth with provider azure when Microsoft button is clicked", async () => {
         const supabaseMock = makeSupabaseMock();
         vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
@@ -48,7 +62,30 @@ describe("StudentLoginPage", () => {
         );
     });
 
-    // 2. Password form → llama signInWithPassword con email y password
+    it("stores oauth auth_path when resuming a course-access login with Microsoft", async () => {
+        const supabaseMock = makeSupabaseMock();
+        vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-tok",
+            expires_at: Date.now() + 300000,
+        });
+
+        renderPage();
+
+        await act(async () => {
+            fireEvent.click(screen.getByText(/Continuar con Microsoft/i));
+        });
+
+        expect(saveActivationContext).toHaveBeenCalledWith({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-tok",
+            auth_path: "oauth",
+        });
+    });
+
     it("calls signInWithPassword when password form is submitted", async () => {
         const supabaseMock = makeSupabaseMock({ error: null });
         vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
@@ -58,23 +95,57 @@ describe("StudentLoginPage", () => {
         fireEvent.change(screen.getByRole("textbox"), {
             target: { value: "student@universidad.edu" },
         });
-        const passwordInput = document.querySelector("input[type=password]")!;
-        fireEvent.change(passwordInput, { target: { value: "MyPassword123!" } });
+        fireEvent.change(document.querySelector("input[type=password]")!, {
+            target: { value: "MyPassword123!" },
+        });
 
         await act(async () => {
             fireEvent.submit(document.querySelector("form")!);
         });
 
-        await waitFor(() =>
+        await waitFor(() => {
             expect(supabaseMock.auth.signInWithPassword).toHaveBeenCalledWith({
                 email: "student@universidad.edu",
                 password: "MyPassword123!",
-            }),
-        );
+            });
+        });
     });
 
-    // 3. signInWithPassword falla → error genérico (nunca revela existencia del email)
-    it("shows generic error when signInWithPassword fails — never reveals email existence", async () => {
+    it("resumes course access completion after a successful password login", async () => {
+        const supabaseMock = makeSupabaseMock({ error: null });
+        vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-tok",
+            expires_at: Date.now() + 300000,
+        });
+
+        renderPage();
+
+        fireEvent.change(screen.getByRole("textbox"), {
+            target: { value: "student@universidad.edu" },
+        });
+        fireEvent.change(document.querySelector("input[type=password]")!, {
+            target: { value: "MyPassword123!" },
+        });
+
+        await act(async () => {
+            fireEvent.submit(document.querySelector("form")!);
+        });
+
+        expect(saveActivationContext).toHaveBeenCalledWith({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-tok",
+            auth_path: "password_sign_in",
+        });
+        await waitFor(() => {
+            expect(mockNavigate).toHaveBeenCalledWith("/auth/callback", { replace: true });
+        });
+    });
+
+    it("shows generic error when signInWithPassword fails and never reveals email existence", async () => {
         const supabaseMock = makeSupabaseMock({ error: { message: "Invalid login credentials" } });
         vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
 
@@ -83,28 +154,24 @@ describe("StudentLoginPage", () => {
         fireEvent.change(screen.getByRole("textbox"), {
             target: { value: "noexiste@universidad.edu" },
         });
-        const passwordInput = document.querySelector("input[type=password]")!;
-        fireEvent.change(passwordInput, { target: { value: "wrongpassword" } });
+        fireEvent.change(document.querySelector("input[type=password]")!, {
+            target: { value: "wrongpassword" },
+        });
 
         await act(async () => {
             fireEvent.submit(document.querySelector("form")!);
         });
 
-        await waitFor(() =>
-            expect(
-                screen.getByText(/credenciales incorrectas/i),
-            ).toBeTruthy(),
-        );
-
-        // Must NOT reveal the email-specific error from Supabase
+        await waitFor(() => {
+            expect(screen.getByText(/credenciales incorrectas/i)).toBeTruthy();
+        });
         expect(screen.queryByText(/Invalid login credentials/i)).toBeNull();
     });
 
-    // 4. No hay CTA de "Olvidé mi contraseña" en ninguna parte de la página
     it("does not render a forgot-password CTA anywhere in the page", () => {
         renderPage();
 
-        expect(screen.queryByText(/olvidé/i)).toBeNull();
+        expect(screen.queryByText(/olvide/i)).toBeNull();
         expect(screen.queryByText(/olvidaste/i)).toBeNull();
         expect(screen.queryByText(/forgot/i)).toBeNull();
         expect(screen.queryByText(/recuperar/i)).toBeNull();

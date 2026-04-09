@@ -32,6 +32,7 @@ from sse_starlette.sse import EventSourceResponse
 from case_generator.core.authoring import AuthoringService
 from case_generator.suggest_service import SuggestRequest, SuggestResponse, generate_suggestion
 from shared.admin_router import router as admin_router
+from shared.course_access_router import router as course_access_router
 from shared.auth import (
     AuthError,
     CurrentActor,
@@ -143,6 +144,19 @@ def upsert_membership(db: Session, auth_user_id: str, university_id: str, role: 
     db.add(membership)
     db.flush()
     return membership
+
+
+def promote_pending_teacher_courses(db: Session, invite_id: str, membership_id: str, university_id: str) -> None:
+    courses = db.scalars(
+        select(Course).where(
+            Course.university_id == university_id,
+            Course.pending_teacher_invite_id == invite_id,
+        )
+    ).all()
+    for course in courses:
+        course.teacher_membership_id = membership_id
+        course.pending_teacher_invite_id = None
+    db.flush()
 
 
 def upsert_course_membership(db: Session, course_id: str, membership_id: str) -> tuple[CourseMembership, bool]:
@@ -283,6 +297,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="adam-v8.0 - Case Generation API", lifespan=lifespan)
 app.include_router(admin_router)
+app.include_router(course_access_router)
 
 
 @app.middleware("http")
@@ -931,6 +946,8 @@ def activate_password(
     try:
         upsert_profile(db, auth_user.id, derive_activation_full_name(req.full_name, invite.email))
         membership = upsert_membership(db, auth_user.id, invite.university_id, invite.role)
+        if invite.role == "teacher":
+            promote_pending_teacher_courses(db, invite.id, membership.id, invite.university_id)
         if invite.role == "student" and invite.course_id:
             upsert_course_membership(db, invite.course_id, membership.id)
         if not consume_invite_if_pending(db, invite):
@@ -1014,6 +1031,8 @@ def activate_oauth_complete(
     try:
         upsert_profile(db, identity.auth_user_id, derive_oauth_full_name(identity))
         membership = upsert_membership(db, identity.auth_user_id, invite.university_id, invite.role)
+        if invite.role == "teacher":
+            promote_pending_teacher_courses(db, invite.id, membership.id, invite.university_id)
         if invite.role == "student" and invite.course_id:
             upsert_course_membership(db, invite.course_id, membership.id)
         if not consume_invite_if_pending(db, invite):
