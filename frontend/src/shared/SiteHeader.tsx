@@ -14,7 +14,10 @@ export function SiteHeader() {
     const roleLabel = actor ? ROLE_LABEL[actor.primary_role] : "ADAM-EDU";
 
     return (
-        <header className="sticky top-0 z-50 flex h-[58px] items-center justify-between bg-[#0144a0] px-5 shadow-md">
+        <header
+            className="sticky top-0 z-50 flex h-[58px] items-center justify-between bg-[#0144a0] px-5 shadow-md"
+            data-testid="site-header"
+        >
             {/* Logo */}
             <div className="flex items-center gap-2.5">
                 <div className="flex h-8 w-8 items-center justify-center rounded-md bg-white">
