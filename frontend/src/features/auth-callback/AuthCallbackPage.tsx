@@ -105,6 +105,7 @@ export function AuthCallbackPage() {
                     const hasStudentMembership = actor?.memberships.some(
                         (membership) => membership.role === "student" && membership.status === "active",
                     ) ?? false;
+                    const useOauthComplete = (courseAccessCtx.auth_path ?? "oauth") === "oauth";
 
                     if (hasStudentMembership) {
                         try {
@@ -112,11 +113,17 @@ export function AuthCallbackPage() {
                         } catch (err: unknown) {
                             const apiErr = err as ApiError;
                             if (apiErr.detail === "student_membership_required") {
-                                await api.auth.activateCourseAccessComplete(courseAccessCtx.course_access_token);
+                                if (useOauthComplete) {
+                                    await api.auth.activateCourseAccessOAuthComplete(courseAccessCtx.course_access_token);
+                                } else {
+                                    await api.auth.activateCourseAccessComplete(courseAccessCtx.course_access_token);
+                                }
                             } else {
                                 throw err;
                             }
                         }
+                    } else if (useOauthComplete) {
+                        await api.auth.activateCourseAccessOAuthComplete(courseAccessCtx.course_access_token);
                     } else {
                         await api.auth.activateCourseAccessComplete(courseAccessCtx.course_access_token);
                     }

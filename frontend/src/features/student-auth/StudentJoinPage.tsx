@@ -1,17 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+
 import { api, ApiError } from "@/shared/api";
-import { getSupabaseClient } from "@/shared/supabaseClient";
 import {
-    saveActivationContext,
-    readActivationContext,
     clearActivationContext,
+    readActivationContext,
+    saveActivationContext,
 } from "@/shared/activationContext";
 import type {
     ActivationContext,
     CourseAccessResolveResponse,
     InviteResolveResponse,
 } from "@/shared/adam-types";
+import { getSupabaseClient } from "@/shared/supabaseClient";
 
 function resolveInviteErrorMessage(err: ApiError | null, inviteStatus?: string): string {
     if (inviteStatus === "expired") {
@@ -193,15 +194,25 @@ export function StudentJoinPage() {
 
     async function handleMicrosoftJoin() {
         const supabase = getSupabaseClient();
-        if (!supabase) return;
+        if (!supabase || !joinContext) return;
+
+        if (joinContext.token_kind === "course_access") {
+            saveActivationContext({
+                flow: "student_join_course_access",
+                token_kind: "course_access",
+                course_access_token: joinContext.course_access_token,
+                auth_path: "oauth",
+            });
+        }
+
         await supabase.auth.signInWithOAuth({
             provider: "azure",
             options: { redirectTo: import.meta.env.VITE_AUTH_CALLBACK_URL },
         });
     }
 
-    async function handlePasswordSubmit(e: React.FormEvent) {
-        e.preventDefault();
+    async function handlePasswordSubmit(event: React.FormEvent) {
+        event.preventDefault();
         setSubmitError(null);
 
         if (!joinContext) {

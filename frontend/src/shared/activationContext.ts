@@ -34,6 +34,7 @@ type ActivationContextInput =
         flow: "student_join_course_access";
         token_kind: "course_access";
         course_access_token: string;
+        auth_path?: "oauth" | "password_sign_in";
     };
 
 export function saveActivationContext(
@@ -108,10 +109,15 @@ function normalizeActivationContext(raw: Record<string, unknown>): ActivationCon
         raw.flow === "student_join_course_access"
         && typeof raw.course_access_token === "string"
     ) {
+        const authPath =
+            raw.auth_path === "oauth" || raw.auth_path === "password_sign_in"
+                ? raw.auth_path
+                : undefined;
         return {
             flow: "student_join_course_access",
             token_kind: "course_access",
             course_access_token: raw.course_access_token,
+            auth_path: authPath,
             expires_at: expiresAt,
         };
     }

@@ -321,6 +321,48 @@ def test_issue56_patch_course_switches_from_pending_invite_to_membership(
     assert payload["teacher_state"] == "active"
 
 
+def test_issue56_patch_course_accepts_legacy_ascii_academic_level_alias(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000631"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="ascii-alias-teacher@example.edu",
+        role="teacher",
+        university_id=university_id,
+        full_name="Alias Teacher",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Legacy Alias Course",
+        code="LEGACY-ALIAS-001",
+        academic_level="Pregrado",
+    )
+
+    response = client.patch(
+        f"/api/admin/courses/{course.id}",
+        json=_course_payload(
+            teacher_assignment={"kind": "membership", "membership_id": teacher["membership"].id},
+            title="Legacy Alias Updated",
+            academic_level="Maestria",
+        ),
+        headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["academic_level"] == "Maestría"
+    db.expire_all()
+    refreshed = db.get(Course, course.id)
+    assert refreshed is not None
+    assert refreshed.academic_level == "Maestría"
+
+
 def test_issue56_patch_course_archives_via_inactive_status(
     client,
     db,

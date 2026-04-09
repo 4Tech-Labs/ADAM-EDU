@@ -150,6 +150,7 @@ describe("AuthCallbackPage", () => {
             flow: "student_join_course_access",
             token_kind: "course_access",
             course_access_token: "course-access-tok",
+            auth_path: "oauth",
             expires_at: Date.now() + 300000,
         });
         vi.mocked(useAuth).mockReturnValue({ ...baseCtx, actor: studentActor });
@@ -168,11 +169,12 @@ describe("AuthCallbackPage", () => {
         );
     });
 
-    it("uses authenticated course access completion when no student membership exists yet", async () => {
+    it("uses oauth-specific course access completion when coming from Microsoft", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "student_join_course_access",
             token_kind: "course_access",
-            course_access_token: "course-access-complete",
+            course_access_token: "course-access-oauth",
+            auth_path: "oauth",
             expires_at: Date.now() + 300000,
         });
         vi.mocked(useAuth).mockReturnValue({ ...baseCtx, actor: null });
@@ -184,18 +186,39 @@ describe("AuthCallbackPage", () => {
         );
 
         await waitFor(() =>
-            expect(api.auth.activateCourseAccessComplete).toHaveBeenCalledWith("course-access-complete"),
+            expect(api.auth.activateCourseAccessOAuthComplete).toHaveBeenCalledWith("course-access-oauth"),
         );
-        await waitFor(() =>
-            expect(mockNavigate).toHaveBeenCalledWith("/student", { replace: true }),
-        );
+        expect(api.auth.activateCourseAccessComplete).not.toHaveBeenCalled();
     });
 
-    it("falls back to authenticated course access completion when enroll reports missing membership", async () => {
+    it("uses generic course access completion when resuming after password sign-in", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-password",
+            auth_path: "password_sign_in",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(useAuth).mockReturnValue({ ...baseCtx, actor: null });
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(api.auth.activateCourseAccessComplete).toHaveBeenCalledWith("course-access-password"),
+        );
+        expect(api.auth.activateCourseAccessOAuthComplete).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the right completion endpoint when enroll reports missing membership", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "student_join_course_access",
             token_kind: "course_access",
             course_access_token: "course-access-fallback",
+            auth_path: "password_sign_in",
             expires_at: Date.now() + 300000,
         });
         vi.mocked(useAuth).mockReturnValue({ ...baseCtx, actor: studentActor });
@@ -222,10 +245,11 @@ describe("AuthCallbackPage", () => {
             flow: "student_join_course_access",
             token_kind: "course_access",
             course_access_token: "course-access-rotated",
+            auth_path: "oauth",
             expires_at: Date.now() + 300000,
         });
         vi.mocked(useAuth).mockReturnValue({ ...baseCtx, actor: null });
-        vi.mocked(api.auth.activateCourseAccessComplete).mockRejectedValue(
+        vi.mocked(api.auth.activateCourseAccessOAuthComplete).mockRejectedValue(
             Object.assign(new Error("course_access_link_rotated"), {
                 detail: "course_access_link_rotated",
                 status: 410,

@@ -115,6 +115,19 @@ def upsert_membership(db: Session, auth_user_id: str, university_id: str, role: 
     return upsert_membership_impl(db, auth_user_id, university_id, role)
 
 
+def promote_pending_teacher_courses(db: Session, invite_id: str, membership_id: str, university_id: str) -> None:
+    courses = db.scalars(
+        select(Course).where(
+            Course.university_id == university_id,
+            Course.pending_teacher_invite_id == invite_id,
+        )
+    ).all()
+    for course in courses:
+        course.teacher_membership_id = membership_id
+        course.pending_teacher_invite_id = None
+    db.flush()
+
+
 def upsert_course_membership(db: Session, course_id: str, membership_id: str) -> tuple[CourseMembership, bool]:
     return ensure_course_membership_impl(db, course_id=course_id, membership_id=membership_id)
 
@@ -836,6 +849,8 @@ def activate_password(
             invite.university_id,
             invite.role,
         )
+        if invite.role == "teacher":
+            promote_pending_teacher_courses(db, invite.id, membership.id, invite.university_id)
         if invite.role == "student" and invite.course_id:
             current_module.upsert_course_membership(db, invite.course_id, membership.id)
         if not consume_invite_if_pending(db, invite):
@@ -929,6 +944,8 @@ def activate_oauth_complete(
             invite.university_id,
             invite.role,
         )
+        if invite.role == "teacher":
+            promote_pending_teacher_courses(db, invite.id, membership.id, invite.university_id)
         if invite.role == "student" and invite.course_id:
             current_module.upsert_course_membership(db, invite.course_id, membership.id)
         if not consume_invite_if_pending(db, invite):

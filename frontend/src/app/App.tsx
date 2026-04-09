@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { SiteHeader } from "@/shared/SiteHeader";
 import { useToast } from "@/shared/Toast";
 
@@ -10,6 +10,7 @@ import { StudentLoginPage } from "@/features/student-auth/StudentLoginPage";
 import { StudentJoinPage } from "@/features/student-auth/StudentJoinPage";
 import { AdminLoginPage } from "@/features/admin-auth/AdminLoginPage";
 import { AdminChangePasswordPage } from "@/features/admin-auth/AdminChangePasswordPage";
+import { AdminDashboardPage } from "@/features/admin-dashboard/AdminDashboardPage";
 
 import { RootRedirect } from "./auth/RootRedirect";
 import { RequireRole } from "./auth/RequireRole";
@@ -17,11 +18,13 @@ import { RequirePasswordRotation } from "./auth/RequirePasswordRotation";
 import { GuestOnlyRoute } from "./auth/GuestOnlyRoute";
 
 function App() {
-    const { ToastContainer } = useToast();
+    const { ToastContainer, showToast } = useToast();
+    const location = useLocation();
+    const isAdminDashboardRoute = location.pathname.startsWith("/admin/dashboard");
 
     return (
         <div className="flex min-h-screen flex-col bg-bg-page font-sans type-body">
-            <SiteHeader />
+            {!isAdminDashboardRoute && <SiteHeader />}
 
             <main className="flex-1">
                 <Routes>
@@ -65,6 +68,14 @@ function App() {
                             <RequirePasswordRotation>
                                 <AdminChangePasswordPage />
                             </RequirePasswordRotation>
+                        }
+                    />
+                    <Route
+                        path="/admin/dashboard"
+                        element={
+                            <RequireRole role="university_admin">
+                                <AdminDashboardPage showToast={showToast} />
+                            </RequireRole>
                         }
                     />
 

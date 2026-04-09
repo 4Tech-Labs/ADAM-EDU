@@ -7,13 +7,14 @@ import { StudentLoginPage } from "./StudentLoginPage";
 vi.mock("@/shared/supabaseClient");
 vi.mock("@/shared/activationContext", () => ({
     readActivationContext: vi.fn(),
+    saveActivationContext: vi.fn(),
 }));
 vi.mock("react-router-dom", async () => {
     const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
     return { ...actual, useNavigate: vi.fn() };
 });
 
-import { readActivationContext } from "@/shared/activationContext";
+import { readActivationContext, saveActivationContext } from "@/shared/activationContext";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 import { useNavigate } from "react-router-dom";
 
@@ -61,6 +62,30 @@ describe("StudentLoginPage", () => {
         );
     });
 
+    it("stores oauth auth_path when resuming a course-access login with Microsoft", async () => {
+        const supabaseMock = makeSupabaseMock();
+        vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-tok",
+            expires_at: Date.now() + 300000,
+        });
+
+        renderPage();
+
+        await act(async () => {
+            fireEvent.click(screen.getByText(/Continuar con Microsoft/i));
+        });
+
+        expect(saveActivationContext).toHaveBeenCalledWith({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-tok",
+            auth_path: "oauth",
+        });
+    });
+
     it("calls signInWithPassword when password form is submitted", async () => {
         const supabaseMock = makeSupabaseMock({ error: null });
         vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
@@ -78,12 +103,12 @@ describe("StudentLoginPage", () => {
             fireEvent.submit(document.querySelector("form")!);
         });
 
-        await waitFor(() =>
+        await waitFor(() => {
             expect(supabaseMock.auth.signInWithPassword).toHaveBeenCalledWith({
                 email: "student@universidad.edu",
                 password: "MyPassword123!",
-            }),
-        );
+            });
+        });
     });
 
     it("resumes course access completion after a successful password login", async () => {
@@ -109,9 +134,15 @@ describe("StudentLoginPage", () => {
             fireEvent.submit(document.querySelector("form")!);
         });
 
-        await waitFor(() =>
-            expect(mockNavigate).toHaveBeenCalledWith("/auth/callback", { replace: true }),
-        );
+        expect(saveActivationContext).toHaveBeenCalledWith({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-tok",
+            auth_path: "password_sign_in",
+        });
+        await waitFor(() => {
+            expect(mockNavigate).toHaveBeenCalledWith("/auth/callback", { replace: true });
+        });
     });
 
     it("shows generic error when signInWithPassword fails and never reveals email existence", async () => {
@@ -131,16 +162,16 @@ describe("StudentLoginPage", () => {
             fireEvent.submit(document.querySelector("form")!);
         });
 
-        await waitFor(() =>
-            expect(screen.getByText(/credenciales incorrectas/i)).toBeTruthy(),
-        );
+        await waitFor(() => {
+            expect(screen.getByText(/credenciales incorrectas/i)).toBeTruthy();
+        });
         expect(screen.queryByText(/Invalid login credentials/i)).toBeNull();
     });
 
     it("does not render a forgot-password CTA anywhere in the page", () => {
         renderPage();
 
-        expect(screen.queryByText(/olvidé/i)).toBeNull();
+        expect(screen.queryByText(/olvide/i)).toBeNull();
         expect(screen.queryByText(/olvidaste/i)).toBeNull();
         expect(screen.queryByText(/forgot/i)).toBeNull();
         expect(screen.queryByText(/recuperar/i)).toBeNull();

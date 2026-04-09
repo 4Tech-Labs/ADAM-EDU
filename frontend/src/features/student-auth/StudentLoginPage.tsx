@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { readActivationContext } from "@/shared/activationContext";
+import { readActivationContext, saveActivationContext } from "@/shared/activationContext";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 
 /**
@@ -25,6 +25,17 @@ export function StudentLoginPage() {
     async function handleMicrosoftLogin() {
         const supabase = getSupabaseClient();
         if (!supabase) return;
+
+        const activationContext = readActivationContext();
+        if (activationContext?.flow === "student_join_course_access") {
+            saveActivationContext({
+                flow: "student_join_course_access",
+                token_kind: "course_access",
+                course_access_token: activationContext.course_access_token,
+                auth_path: "oauth",
+            });
+        }
+
         await supabase.auth.signInWithOAuth({
             provider: "azure",
             options: { redirectTo: import.meta.env.VITE_AUTH_CALLBACK_URL },
@@ -55,6 +66,12 @@ export function StudentLoginPage() {
 
             const activationContext = readActivationContext();
             if (activationContext?.flow === "student_join_course_access") {
+                saveActivationContext({
+                    flow: "student_join_course_access",
+                    token_kind: "course_access",
+                    course_access_token: activationContext.course_access_token,
+                    auth_path: "password_sign_in",
+                });
                 navigate("/auth/callback", { replace: true });
             }
         } finally {

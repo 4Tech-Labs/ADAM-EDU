@@ -2,7 +2,8 @@
 
 import { useCallback, useState } from "react";
 
-type ToastType = "success" | "error" | "default";
+export type ToastType = "success" | "error" | "default";
+export type ShowToast = (message: string, type?: ToastType) => void;
 
 interface ToastItem {
     id: number;
@@ -15,7 +16,7 @@ let nextId = 0;
 export function useToast() {
     const [toasts, setToasts] = useState<ToastItem[]>([]);
 
-    const showToast = useCallback((message: string, type: ToastType = "default") => {
+    const showToast = useCallback<ShowToast>((message, type = "default") => {
         const id = nextId++;
         setToasts((prev) => [...prev, { id, message, type }]);
         setTimeout(() => {

@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import {
-    saveActivationContext,
-    readActivationContext,
     clearActivationContext,
+    readActivationContext,
+    saveActivationContext,
 } from "./activationContext";
 
 describe("activationContext", () => {
@@ -77,7 +78,9 @@ describe("activationContext", () => {
             token_kind: "course_access",
             course_access_token: "course_tok_xyz",
         });
+
         clearActivationContext();
+
         expect(readActivationContext()).toBeNull();
     });
 
@@ -98,6 +101,7 @@ describe("activationContext", () => {
 
     it("returns null and removes malformed payloads", () => {
         sessionStorage.setItem("adam_activation_ctx", "{invalid-json}");
+
         expect(readActivationContext()).toBeNull();
         expect(sessionStorage.getItem("adam_activation_ctx")).toBeNull();
     });

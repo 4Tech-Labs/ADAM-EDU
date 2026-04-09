@@ -119,4 +119,67 @@ describe("api auth + stream glue", () => {
             "Tu cuenta no tiene membresia activa para usar esta accion.",
         );
     });
+
+    it("serializes admin course filters into the expected query string", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ items: [], page: 1, page_size: 8, total: 0, total_pages: 0 }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.admin.listCourses({
+            search: " finanzas ",
+            semester: "2026-I",
+            status: "active",
+            academic_level: "Maestría",
+            page: 2,
+            page_size: 8,
+        });
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe(
+            "/api/admin/courses?search=finanzas&semester=2026-I&status=active&academic_level=Maestr%C3%ADa&page=2&page_size=8",
+        );
+    });
+
+    it("posts the exact admin course payload without flattening teacher_assignment", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ id: "course-1" }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.admin.createCourse({
+            title: "Gobierno de Datos",
+            code: "DAT-550",
+            semester: "2026-II",
+            academic_level: "Doctorado",
+            max_students: 42,
+            status: "active",
+            teacher_assignment: {
+                kind: "pending_invite",
+                invite_id: "invite-123",
+            },
+        });
+
+        const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
+        expect(options.method).toBe("POST");
+        expect(options.body).toBe(
+            JSON.stringify({
+                title: "Gobierno de Datos",
+                code: "DAT-550",
+                semester: "2026-II",
+                academic_level: "Doctorado",
+                max_students: 42,
+                status: "active",
+                teacher_assignment: {
+                    kind: "pending_invite",
+                    invite_id: "invite-123",
+                },
+            }),
+        );
+    });
 });

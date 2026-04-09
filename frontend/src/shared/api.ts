@@ -4,6 +4,14 @@ import type {
     ActivateOAuthCompleteResponse,
     ActivatePasswordRequest,
     ActivatePasswordResponse,
+    AdminCourseAccessLinkRegenerateResponse,
+    AdminCourseListItem,
+    AdminCourseListResponse,
+    AdminCourseMutationRequest,
+    AdminDashboardSummaryResponse,
+    AdminTeacherInviteRequest,
+    AdminTeacherInviteResponse,
+    AdminTeacherOptionsResponse,
     AuthoringJobCreateRequest,
     AuthoringJobCreateResponse,
     AuthoringJobResultResponse,
@@ -364,6 +372,79 @@ export const api = {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(req),
             });
+        },
+    },
+    admin: {
+        async getDashboardSummary(): Promise<AdminDashboardSummaryResponse> {
+            return parseJsonResponse<AdminDashboardSummaryResponse>("/admin/dashboard/summary");
+        },
+        async listCourses(filters: {
+            search?: string;
+            semester?: string;
+            status?: string;
+            academic_level?: string;
+            page?: number;
+            page_size?: number;
+        }): Promise<AdminCourseListResponse> {
+            const params = new URLSearchParams();
+            if (filters.search?.trim()) {
+                params.set("search", filters.search.trim());
+            }
+            if (filters.semester?.trim()) {
+                params.set("semester", filters.semester.trim());
+            }
+            if (filters.status?.trim()) {
+                params.set("status", filters.status.trim());
+            }
+            if (filters.academic_level?.trim()) {
+                params.set("academic_level", filters.academic_level.trim());
+            }
+            if (typeof filters.page === "number") {
+                params.set("page", String(filters.page));
+            }
+            if (typeof filters.page_size === "number") {
+                params.set("page_size", String(filters.page_size));
+            }
+
+            const query = params.toString();
+            return parseJsonResponse<AdminCourseListResponse>(`/admin/courses${query ? `?${query}` : ""}`);
+        },
+        async getTeacherOptions(): Promise<AdminTeacherOptionsResponse> {
+            return parseJsonResponse<AdminTeacherOptionsResponse>("/admin/teacher-options");
+        },
+        async createCourse(req: AdminCourseMutationRequest): Promise<AdminCourseListItem> {
+            return parseJsonResponse<AdminCourseListItem>("/admin/courses", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(req),
+            });
+        },
+        async updateCourse(
+            courseId: string,
+            req: AdminCourseMutationRequest,
+        ): Promise<AdminCourseListItem> {
+            return parseJsonResponse<AdminCourseListItem>(`/admin/courses/${courseId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(req),
+            });
+        },
+        async createTeacherInvite(req: AdminTeacherInviteRequest): Promise<AdminTeacherInviteResponse> {
+            return parseJsonResponse<AdminTeacherInviteResponse>("/admin/teacher-invites", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(req),
+            });
+        },
+        async regenerateCourseAccessLink(
+            courseId: string,
+        ): Promise<AdminCourseAccessLinkRegenerateResponse> {
+            return parseJsonResponse<AdminCourseAccessLinkRegenerateResponse>(
+                `/admin/courses/${courseId}/access-link/regenerate`,
+                {
+                    method: "POST",
+                },
+            );
         },
     },
 };

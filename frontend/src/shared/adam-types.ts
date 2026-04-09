@@ -266,6 +266,7 @@ export type ActivationContext =
         flow: "student_join_course_access";
         token_kind: "course_access";
         course_access_token: string;
+        auth_path?: "oauth" | "password_sign_in";
         expires_at: number;
     };
 
@@ -329,6 +330,103 @@ export interface ChangePasswordRequest {
 
 export interface ChangePasswordResponse {
     status: string;
+}
+
+export interface AdminDashboardSummaryResponse {
+    active_courses: number;
+    active_teachers: number;
+    enrolled_students: number;
+    average_occupancy: number;
+}
+
+export interface AdminTeacherMembershipAssignment {
+    kind: "membership";
+    membership_id: string;
+}
+
+export interface AdminTeacherPendingInviteAssignment {
+    kind: "pending_invite";
+    invite_id: string;
+}
+
+export type AdminTeacherAssignment =
+    | AdminTeacherMembershipAssignment
+    | AdminTeacherPendingInviteAssignment;
+
+export type AdminTeacherState = "active" | "pending" | "stale_pending_invite";
+export type AdminCourseStatus = "active" | "inactive";
+export type AdminCourseAccessLinkStatus = "active" | "missing";
+
+export interface AdminCourseListItem {
+    id: string;
+    title: string;
+    code: string;
+    semester: string;
+    academic_level: string;
+    status: AdminCourseStatus;
+    teacher_display_name: string;
+    teacher_state: AdminTeacherState;
+    teacher_assignment: AdminTeacherAssignment;
+    students_count: number;
+    max_students: number;
+    occupancy_percent: number;
+    access_link: string | null;
+    access_link_status: AdminCourseAccessLinkStatus;
+}
+
+export interface AdminCourseListResponse {
+    items: AdminCourseListItem[];
+    page: number;
+    page_size: number;
+    total: number;
+    total_pages: number;
+}
+
+export interface AdminTeacherOption {
+    membership_id: string;
+    full_name: string;
+    email: string;
+}
+
+export interface AdminPendingTeacherInviteOption {
+    invite_id: string;
+    full_name: string;
+    email: string;
+    status: "pending";
+}
+
+export interface AdminTeacherOptionsResponse {
+    active_teachers: AdminTeacherOption[];
+    pending_invites: AdminPendingTeacherInviteOption[];
+}
+
+export interface AdminCourseMutationRequest {
+    title: string;
+    code: string;
+    semester: string;
+    academic_level: string;
+    max_students: number;
+    status: AdminCourseStatus;
+    teacher_assignment: AdminTeacherAssignment;
+}
+
+export interface AdminTeacherInviteRequest {
+    full_name: string;
+    email: string;
+}
+
+export interface AdminTeacherInviteResponse {
+    invite_id: string;
+    full_name: string;
+    email: string;
+    status: "pending";
+    activation_link: string;
+}
+
+export interface AdminCourseAccessLinkRegenerateResponse {
+    course_id: string;
+    access_link: string;
+    access_link_status: "active";
 }
 
 export const EMPTY_FORM: CaseFormData = {

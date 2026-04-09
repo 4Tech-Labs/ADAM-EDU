@@ -875,6 +875,121 @@ def test_activate_oauth_complete_success(client, seed_invite, auth_headers_facto
     assert membership is not None
 
 
+def test_activate_password_promotes_pending_teacher_courses(
+    client,
+    db,
+    fake_admin_client,
+    seed_course,
+    seed_identity,
+    seed_invite,
+) -> None:
+    teacher_university = "10000000-0000-0000-0000-000000000073"
+    tenant = Tenant(id=teacher_university, name="Teacher Promotion University")
+    db.add(tenant)
+    db.commit()
+    invite, token = seed_invite(
+        email="teacher.promote@example.edu",
+        university_id=teacher_university,
+        role="teacher",
+        full_name="Teacher Promote",
+    )
+    first_course = seed_course(
+        university_id=teacher_university,
+        pending_teacher_invite_id=invite.id,
+        title="Pending Promotion 1",
+        code="PROMOTE-001",
+    )
+    second_course = seed_course(
+        university_id=teacher_university,
+        pending_teacher_invite_id=invite.id,
+        title="Pending Promotion 2",
+        code="PROMOTE-002",
+    )
+
+    response = client.post(
+        "/api/auth/activate/password",
+        json={
+            "invite_token": token,
+            "password": "super-secret",
+            "confirm_password": "super-secret",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    auth_user = fake_admin_client.find_user_by_email("teacher.promote@example.edu")
+    assert auth_user is not None
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == auth_user.id,
+            Membership.university_id == teacher_university,
+            Membership.role == "teacher",
+        )
+    )
+    assert membership is not None
+
+    db.expire_all()
+    refreshed_first = db.get(type(first_course), first_course.id)
+    refreshed_second = db.get(type(second_course), second_course.id)
+    assert refreshed_first is not None
+    assert refreshed_second is not None
+    assert refreshed_first.teacher_membership_id == membership.id
+    assert refreshed_second.teacher_membership_id == membership.id
+    assert refreshed_first.pending_teacher_invite_id is None
+    assert refreshed_second.pending_teacher_invite_id is None
+
+
+def test_activate_oauth_complete_promotes_pending_teacher_courses(
+    client,
+    db,
+    seed_course,
+    seed_invite,
+    auth_headers_factory,
+) -> None:
+    teacher_university = "10000000-0000-0000-0000-000000000074"
+    tenant = Tenant(id=teacher_university, name="Teacher OAuth Promotion University")
+    db.add(tenant)
+    db.commit()
+    invite, token = seed_invite(
+        email="teacher.oauth.promote@example.edu",
+        university_id=teacher_university,
+        role="teacher",
+        full_name="Teacher OAuth Promote",
+    )
+    course = seed_course(
+        university_id=teacher_university,
+        pending_teacher_invite_id=invite.id,
+        title="Pending OAuth Promotion",
+        code="PROMOTE-OAUTH-001",
+    )
+    auth_user_id = str(uuid.uuid4())
+
+    response = client.post(
+        "/api/auth/activate/oauth/complete",
+        json={"invite_token": token},
+        headers=auth_headers_factory(
+            sub=auth_user_id,
+            email="teacher.oauth.promote@example.edu",
+            claims={"user_metadata": {"name": "Teacher OAuth Promote"}},
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == auth_user_id,
+            Membership.university_id == teacher_university,
+            Membership.role == "teacher",
+        )
+    )
+    assert membership is not None
+
+    db.expire_all()
+    refreshed_course = db.get(type(course), course.id)
+    assert refreshed_course is not None
+    assert refreshed_course.teacher_membership_id == membership.id
+    assert refreshed_course.pending_teacher_invite_id is None
+
+
 def test_activate_oauth_full_name_from_user_metadata_key(
     client, seed_invite, auth_headers_factory, db
 ) -> None:
