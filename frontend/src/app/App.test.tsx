@@ -14,6 +14,15 @@ vi.mock("@/features/admin-dashboard/AdminDashboardPage", () => ({
 vi.mock("@/features/admin-auth/AdminLoginPage", () => ({
     AdminLoginPage: () => <div data-testid="admin-login-page">Admin login</div>,
 }));
+vi.mock("@/features/auth-callback/AuthCallbackPage", () => ({
+    AuthCallbackPage: () => <div data-testid="auth-callback-page">Auth callback</div>,
+}));
+vi.mock("@/features/student-auth/StudentJoinPage", () => ({
+    StudentJoinPage: () => <div data-testid="student-join-page">Student join</div>,
+}));
+vi.mock("@/features/student-auth/StudentLoginPage", () => ({
+    StudentLoginPage: () => <div data-testid="student-login-page">Student login</div>,
+}));
 vi.mock("@/app/AppLanding", () => ({
     AppLanding: () => <div data-testid="app-landing">Landing</div>,
 }));
@@ -123,5 +132,41 @@ describe("App admin shell layout", () => {
         );
 
         expect(screen.getByTestId("site-header")).toBeTruthy();
+    });
+
+    it("resolves the lazy auth callback route", async () => {
+        vi.mocked(useAuth).mockReturnValue(baseContext);
+
+        render(
+            <MemoryRouter initialEntries={["/auth/callback"]}>
+                <App />
+            </MemoryRouter>,
+        );
+
+        expect(await screen.findByTestId("auth-callback-page")).toBeTruthy();
+    });
+
+    it("resolves the lazy student join route with an access token", async () => {
+        vi.mocked(useAuth).mockReturnValue(baseContext);
+
+        render(
+            <MemoryRouter initialEntries={["/join?course_access_token=test-token"]}>
+                <App />
+            </MemoryRouter>,
+        );
+
+        expect(await screen.findByTestId("student-join-page")).toBeTruthy();
+    });
+
+    it("resolves the lazy student login route with an access token", async () => {
+        vi.mocked(useAuth).mockReturnValue(baseContext);
+
+        render(
+            <MemoryRouter initialEntries={["/student/login?course_access_token=test-token"]}>
+                <App />
+            </MemoryRouter>,
+        );
+
+        expect(await screen.findByTestId("student-login-page")).toBeTruthy();
     });
 });
