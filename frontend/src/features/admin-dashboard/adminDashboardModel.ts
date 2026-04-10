@@ -3,6 +3,7 @@ import type {
     AdminCourseListResponse,
     AdminCourseMutationRequest,
     AdminCourseStatus,
+    AdminDashboardSummaryResponse,
     AdminPendingTeacherInviteOption,
     AdminTeacherAssignment,
     AdminTeacherInviteResponse,
@@ -45,7 +46,8 @@ export interface CourseFormState {
 
 export interface TeacherOptionsState {
     data: AdminTeacherOptionsResponse | null;
-    loading: boolean;
+    isInitialLoading: boolean;
+    isRefreshing: boolean;
     error: string | null;
 }
 
@@ -165,6 +167,93 @@ export function buildCoursePayload(form: CourseFormState): AdminCourseMutationRe
         status: form.status,
         teacher_assignment: teacherAssignment,
     };
+}
+
+export function reconcileDashboardSummary(
+    previous: AdminDashboardSummaryResponse | null,
+    next: AdminDashboardSummaryResponse,
+): AdminDashboardSummaryResponse {
+    if (
+        previous &&
+        previous.active_courses === next.active_courses &&
+        previous.active_teachers === next.active_teachers &&
+        previous.enrolled_students === next.enrolled_students &&
+        previous.average_occupancy === next.average_occupancy
+    ) {
+        return previous;
+    }
+
+    return next;
+}
+
+export function reconcileCourseListResponse(
+    previous: AdminCourseListResponse | null,
+    next: AdminCourseListResponse,
+): AdminCourseListResponse {
+    if (!previous) return next;
+
+    const previousItemsById = new Map(previous.items.map((item) => [item.id, item]));
+    let itemsChanged = previous.items.length !== next.items.length;
+
+    const items = next.items.map((item) => {
+        const previousItem = previousItemsById.get(item.id);
+        if (previousItem && areCourseItemsEqual(previousItem, item)) {
+            return previousItem;
+        }
+
+        itemsChanged = true;
+        return item;
+    });
+
+    if (
+        !itemsChanged &&
+        previous.page === next.page &&
+        previous.page_size === next.page_size &&
+        previous.total === next.total &&
+        previous.total_pages === next.total_pages
+    ) {
+        return previous;
+    }
+
+    return {
+        ...next,
+        items,
+    };
+}
+
+function areCourseItemsEqual(left: AdminCourseListItem, right: AdminCourseListItem): boolean {
+    return (
+        left.id === right.id &&
+        left.title === right.title &&
+        left.code === right.code &&
+        left.semester === right.semester &&
+        left.academic_level === right.academic_level &&
+        left.status === right.status &&
+        left.teacher_display_name === right.teacher_display_name &&
+        left.teacher_state === right.teacher_state &&
+        left.students_count === right.students_count &&
+        left.max_students === right.max_students &&
+        left.occupancy_percent === right.occupancy_percent &&
+        left.access_link === right.access_link &&
+        left.access_link_status === right.access_link_status &&
+        areTeacherAssignmentsEqual(left.teacher_assignment, right.teacher_assignment)
+    );
+}
+
+function areTeacherAssignmentsEqual(
+    left: AdminTeacherAssignment,
+    right: AdminTeacherAssignment,
+): boolean {
+    if (left.kind !== right.kind) return false;
+    if (left.kind === "membership" && right.kind === "membership") {
+        return left.membership_id === right.membership_id;
+    }
+
+    if (left.kind === "pending_invite" && right.kind === "pending_invite") {
+        return left.invite_id === right.invite_id;
+    }
+
+    return false;
 }
 
 export function getAdminErrorMessage(error: unknown, fallback: string): string {

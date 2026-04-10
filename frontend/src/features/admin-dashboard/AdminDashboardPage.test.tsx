@@ -1,5 +1,6 @@
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { AdminDashboardPage } from "./AdminDashboardPage";
 import type {
@@ -130,6 +131,17 @@ function renderPage() {
     return render(<AdminDashboardPage showToast={showToast} />);
 }
 
+function createDeferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+
+    return { promise, resolve, reject };
+}
+
 function fillCreateCourseForm(teacherValue: string) {
     fireEvent.change(screen.getByLabelText("Nombre del curso"), {
         target: { value: "Gobierno de Datos" },
@@ -206,6 +218,38 @@ describe("AdminDashboardPage", () => {
         expect(screen.getByText("Enlace activo oculto por seguridad")).toBeTruthy();
         expect(screen.getByText("Regenera para obtener un enlace copiable.")).toBeTruthy();
         expect(screen.getByText("Invitacion pendiente")).toBeTruthy();
+    });
+
+    it("shows the initial loading shell only until the first dashboard payload resolves", async () => {
+        const summaryDeferred = createDeferred<AdminDashboardSummaryResponse>();
+        const coursesDeferred = createDeferred<AdminCourseListResponse>();
+
+        vi.mocked(api.admin.getDashboardSummary).mockReturnValueOnce(summaryDeferred.promise);
+        vi.mocked(api.admin.listCourses).mockReturnValueOnce(coursesDeferred.promise);
+
+        renderPage();
+
+        expect(screen.getByTestId("admin-dashboard-loading")).toBeTruthy();
+
+        await act(async () => {
+            summaryDeferred.resolve(summaryResponse);
+            coursesDeferred.resolve(coursesResponse);
+        });
+
+        expect(await screen.findByText("Directorio de Cursos")).toBeTruthy();
+        expect(screen.queryByTestId("admin-dashboard-loading")).toBeNull();
+    });
+
+    it("loads dashboard data correctly inside StrictMode", async () => {
+        render(
+            <StrictMode>
+                <AdminDashboardPage showToast={showToast} />
+            </StrictMode>,
+        );
+
+        expect(await screen.findByText("Directorio de Cursos")).toBeTruthy();
+        expect(screen.queryByTestId("admin-dashboard-loading")).toBeNull();
+        expect(screen.getByText("62%")).toBeTruthy();
     });
 
     it("submits create course with membership teacher_assignment", async () => {
@@ -486,6 +530,126 @@ describe("AdminDashboardPage", () => {
         await waitFor(() => {
             expect(api.admin.getTeacherOptions).toHaveBeenCalledTimes(2);
         });
+    });
+
+    it("keeps the current dashboard mounted while a focus revalidation is pending and updates KPIs in place", async () => {
+        const refreshSummaryDeferred = createDeferred<AdminDashboardSummaryResponse>();
+        const refreshCoursesDeferred = createDeferred<AdminCourseListResponse>();
+
+        vi.mocked(api.admin.getDashboardSummary)
+            .mockResolvedValueOnce(summaryResponse)
+            .mockReturnValueOnce(refreshSummaryDeferred.promise);
+        vi.mocked(api.admin.listCourses)
+            .mockResolvedValueOnce(coursesResponse)
+            .mockReturnValueOnce(refreshCoursesDeferred.promise);
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.focus(window);
+
+        expect(screen.queryByTestId("admin-dashboard-loading")).toBeNull();
+        expect(screen.getByText("62%")).toBeTruthy();
+        expect(screen.getByText("Finanzas Corporativas")).toBeTruthy();
+        expect(screen.getByTestId("dashboard-refresh-status").textContent).toContain("Actualizando datos");
+
+        await act(async () => {
+            refreshSummaryDeferred.resolve({
+                ...summaryResponse,
+                average_occupancy: 78,
+            });
+            refreshCoursesDeferred.resolve(coursesResponse);
+        });
+
+        expect(await screen.findByText("78%")).toBeTruthy();
+        expect(screen.queryByTestId("admin-dashboard-loading")).toBeNull();
+    });
+
+    it("keeps unrelated course rows visible while only the changed row refreshes in place", async () => {
+        const refreshSummaryDeferred = createDeferred<AdminDashboardSummaryResponse>();
+        const refreshCoursesDeferred = createDeferred<AdminCourseListResponse>();
+
+        vi.mocked(api.admin.getDashboardSummary)
+            .mockResolvedValueOnce(summaryResponse)
+            .mockReturnValueOnce(refreshSummaryDeferred.promise);
+        vi.mocked(api.admin.listCourses)
+            .mockResolvedValueOnce(coursesResponse)
+            .mockReturnValueOnce(refreshCoursesDeferred.promise);
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.focus(window);
+
+        expect(screen.getByText("Estrategia Operativa")).toBeTruthy();
+        expect(screen.getByText("Finanzas Corporativas")).toBeTruthy();
+
+        await act(async () => {
+            refreshSummaryDeferred.resolve(summaryResponse);
+            refreshCoursesDeferred.resolve({
+                ...coursesResponse,
+                items: [
+                    { ...activeCourse, title: "Finanzas Corporativas Avanzadas" },
+                    inactiveCourse,
+                ],
+            });
+        });
+
+        expect(await screen.findByText("Finanzas Corporativas Avanzadas")).toBeTruthy();
+        expect(screen.getByText("Estrategia Operativa")).toBeTruthy();
+        expect(screen.queryByTestId("admin-dashboard-loading")).toBeNull();
+    });
+
+    it("keeps the teacher selector mounted while teacher options refresh in the background", async () => {
+        const refreshTeacherOptionsDeferred = createDeferred<AdminTeacherOptionsResponse>();
+
+        vi.mocked(api.admin.getTeacherOptions)
+            .mockResolvedValueOnce(teacherOptionsResponse)
+            .mockReturnValueOnce(refreshTeacherOptionsDeferred.promise);
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.click(screen.getByText("Crear Nuevo Curso"));
+        expect(screen.getByLabelText("Docente asignado")).toBeTruthy();
+
+        fireEvent.focus(window);
+
+        expect(screen.getByLabelText("Docente asignado")).toBeTruthy();
+        expect(screen.queryByText(/No se pudo cargar el selector de docentes/i)).toBeNull();
+        expect(screen.getByText("Actualizando docentes...")).toBeTruthy();
+
+        await act(async () => {
+            refreshTeacherOptionsDeferred.resolve(teacherOptionsResponse);
+        });
+
+        await waitFor(() => {
+            expect(screen.queryByText("Actualizando docentes...")).toBeNull();
+        });
+        expect(screen.getByLabelText("Docente asignado")).toBeTruthy();
+    });
+
+    it("preserves visible dashboard data when a background refresh fails", async () => {
+        vi.mocked(api.admin.getDashboardSummary)
+            .mockResolvedValueOnce(summaryResponse)
+            .mockRejectedValueOnce(new ApiError(500, "refresh failed", "teacher_email_unavailable"));
+        vi.mocked(api.admin.listCourses)
+            .mockResolvedValueOnce(coursesResponse)
+            .mockResolvedValueOnce(coursesResponse);
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.focus(window);
+
+        await waitFor(() => {
+            expect(screen.getByTestId("dashboard-refresh-status").textContent).toContain("No se pudo actualizar");
+        });
+
+        expect(screen.getByText("62%")).toBeTruthy();
+        expect(screen.getByText("Finanzas Corporativas")).toBeTruthy();
+        expect(screen.queryByTestId("global-page-error")).toBeNull();
+        expect(screen.queryByTestId("admin-dashboard-loading")).toBeNull();
     });
 
     it("regenerates a hidden active link and keeps the new raw link visible after refresh", async () => {
