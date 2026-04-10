@@ -12,6 +12,7 @@ import {
     TriangleAlert,
     Users,
     X,
+    Check,
 } from "lucide-react";
 import {
     memo,
@@ -39,6 +40,15 @@ import type {
 } from "@/shared/adam-types";
 import { ApiError, api } from "@/shared/api";
 import type { ShowToast } from "@/shared/Toast";
+import {
+    Select,
+    SelectContent,
+    SelectGroup,
+    SelectItem,
+    SelectLabel,
+    SelectTrigger,
+    SelectValue,
+} from "@/shared/ui/select";
 import {
     ADMIN_PAGE_SIZE,
     ACADEMIC_LEVEL_OPTIONS,
@@ -80,10 +90,12 @@ interface Props {
 }
 
 type RefreshMode = "initial" | "background";
+const ALL_FILTER_VALUE = "all";
+const UI_UNSET_SELECT_VALUE = "__unset_select_value__";
+const UI_UNASSIGNED_TEACHER_VALUE = "__unassigned_teacher_value__";
 
 export function AdminDashboardPage({ showToast }: Props) {
     const { actor, signOut } = useAuth();
-    const semesterFilterListId = useId();
 
     const [summary, setSummary] = useState<AdminDashboardSummaryResponse | null>(null);
     const [coursesResponse, setCoursesResponse] = useState<AdminCourseListResponse | null>(null);
@@ -101,9 +113,9 @@ export function AdminDashboardPage({ showToast }: Props) {
     const [transientAccessLinks, setTransientAccessLinks] = useState<Record<string, string>>({});
     const [search, setSearch] = useState("");
     const deferredSearch = useDeferredValue(search);
-    const [semesterFilter, setSemesterFilter] = useState("");
-    const [statusFilter, setStatusFilter] = useState("all");
-    const [academicLevelFilter, setAcademicLevelFilter] = useState("all");
+    const [semesterFilter, setSemesterFilter] = useState(ALL_FILTER_VALUE);
+    const [statusFilter, setStatusFilter] = useState(ALL_FILTER_VALUE);
+    const [academicLevelFilter, setAcademicLevelFilter] = useState(ALL_FILTER_VALUE);
     const [page, setPage] = useState(1);
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [isEditOpen, setIsEditOpen] = useState(false);
@@ -161,9 +173,9 @@ export function AdminDashboardPage({ showToast }: Props) {
 
     const buildCourseFilters = useCallback((nextPage = page) => ({
             search: deferredSearch,
-            semester: semesterFilter.trim() || undefined,
-            status: statusFilter === "all" ? undefined : statusFilter,
-            academic_level: academicLevelFilter === "all" ? undefined : academicLevelFilter,
+            semester: semesterFilter === ALL_FILTER_VALUE ? undefined : semesterFilter,
+            status: statusFilter === ALL_FILTER_VALUE ? undefined : statusFilter,
+            academic_level: academicLevelFilter === ALL_FILTER_VALUE ? undefined : academicLevelFilter,
             page: nextPage,
             page_size: ADMIN_PAGE_SIZE,
         }), [academicLevelFilter, deferredSearch, page, semesterFilter, statusFilter]);
@@ -569,9 +581,17 @@ export function AdminDashboardPage({ showToast }: Props) {
                                 <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
                                 <input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Buscar curso, codigo o docente..." className="w-full rounded-[11px] border-[1.5px] border-slate-200 bg-white py-3 pl-11 pr-4 text-[14.5px] text-slate-800 shadow-sm outline-none transition focus:border-[#0144a0] focus:ring-4 focus:ring-[#0144a0]/10" />
                             </div>
-                            <FilterTextField listId={semesterFilterListId} value={semesterFilter} onChange={(value) => { setSemesterFilter(value); setPage(1); }} options={semesterSuggestions} placeholder="Semestre (ej. 2026-I)" />
-                            <FilterSelect value={statusFilter} onChange={(value) => { setStatusFilter(value); setPage(1); }} options={[{ value: "all", label: "Todos los estados" }, { value: "active", label: "Activos" }, { value: "inactive", label: "Inactivos" }]} />
-                            <FilterSelect value={academicLevelFilter} onChange={(value) => { setAcademicLevelFilter(value); setPage(1); }} options={[{ value: "all", label: "Todos los niveles" }, ...ACADEMIC_LEVEL_OPTIONS.map((value) => ({ value, label: value }))]} />
+                            <FilterSelect
+                                ariaLabel="Filtrar por semestre"
+                                value={semesterFilter}
+                                onChange={(value) => { setSemesterFilter(value); setPage(1); }}
+                                options={[
+                                    { value: ALL_FILTER_VALUE, label: "Todos los semestres" },
+                                    ...semesterSuggestions.map((value) => ({ value, label: value })),
+                                ]}
+                            />
+                            <FilterSelect ariaLabel="Filtrar por estado" value={statusFilter} onChange={(value) => { setStatusFilter(value); setPage(1); }} options={[{ value: ALL_FILTER_VALUE, label: "Todos los estados" }, { value: "active", label: "Activos" }, { value: "inactive", label: "Inactivos" }]} />
+                            <FilterSelect ariaLabel="Filtrar por nivel academico" value={academicLevelFilter} onChange={(value) => { setAcademicLevelFilter(value); setPage(1); }} options={[{ value: ALL_FILTER_VALUE, label: "Todos los niveles" }, ...ACADEMIC_LEVEL_OPTIONS.map((value) => ({ value, label: value }))]} />
                         </section>
 
                         <section>
@@ -591,13 +611,13 @@ export function AdminDashboardPage({ showToast }: Props) {
                                 <div className="overflow-x-auto">
                                     <table className="w-full border-collapse text-left">
                                         <thead>
-                                            <tr className="border-b border-slate-200 bg-slate-50">
-                                                <th className="px-5 py-3.5 text-[12px] font-bold uppercase tracking-[0.18em] text-slate-500">Asignatura / Codigo</th>
-                                                <th className="px-5 py-3.5 text-[12px] font-bold uppercase tracking-[0.18em] text-slate-500">Docente Asignado</th>
-                                                <th className="px-5 py-3.5 text-[12px] font-bold uppercase tracking-[0.18em] text-slate-500">Estado</th>
-                                                <th className="px-5 py-3.5 text-[12px] font-bold uppercase tracking-[0.18em] text-slate-500">Capacidad</th>
-                                                <th className="w-[240px] px-5 py-3.5 text-[12px] font-bold uppercase tracking-[0.18em] text-slate-500">Link de Invitacion</th>
-                                                <th className="px-5 py-3.5 text-right text-[12px] font-bold uppercase tracking-[0.18em] text-slate-500">Acciones</th>
+                                            <tr className="border-b border-slate-200 bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800">
+                                                <th className="px-5 py-3.5 text-right text-[12px] font-bold uppercase tracking-[0.18em] text-white">Acciones</th>
+                                                <th className="px-5 py-3.5 text-[12px] font-bold uppercase tracking-[0.18em] text-white">Asignatura / Codigo</th>
+                                                <th className="px-5 py-3.5 text-[12px] font-bold uppercase tracking-[0.18em] text-white">Docente Asignado</th>
+                                                <th className="px-5 py-3.5 text-[12px] font-bold uppercase tracking-[0.18em] text-white">Estado</th>
+                                                <th className="px-5 py-3.5 text-[12px] font-bold uppercase tracking-[0.18em] text-white">Capacidad</th>
+                                                <th className="w-[240px] px-5 py-3.5 text-[12px] font-bold uppercase tracking-[0.18em] text-white">Link de Invitacion</th>        
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100 text-[14px] text-slate-700">
@@ -610,6 +630,8 @@ export function AdminDashboardPage({ showToast }: Props) {
                                                         item={item}
                                                         transientAccessLink={transientAccessLinks[item.id]}
                                                         onCopy={handleCopyLink}
+                                                        onRegenerate={handleRegenerateLink}
+                                                        isRegenerating={regeneratingCourseId === item.id}
                                                         onEdit={openEditModal}
                                                         onArchive={openArchiveModal}
                                                     />
@@ -775,41 +797,34 @@ function ActionCard({
 }
 
 function FilterSelect({
+    ariaLabel,
     value,
     onChange,
     options,
 }: {
+    ariaLabel: string;
     value: string;
     onChange: (value: string) => void;
     options: Array<{ value: string; label: string }>;
 }) {
     return (
-        <select value={value} onChange={(event) => onChange(event.target.value)} className="min-w-[160px] rounded-[11px] border-[1.5px] border-slate-200 bg-white px-4 py-3 pr-10 text-sm text-slate-700 shadow-sm outline-none transition focus:border-[#0144a0] focus:ring-4 focus:ring-[#0144a0]/10">
-            {options.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-        </select>
-    );
-}
-
-function FilterTextField({
-    listId,
-    value,
-    onChange,
-    options,
-    placeholder,
-}: {
-    listId: string;
-    value: string;
-    onChange: (value: string) => void;
-    options: string[];
-    placeholder: string;
-}) {
-    return (
-        <div className="min-w-[180px]">
-            <input list={listId} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="w-full rounded-[11px] border-[1.5px] border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm outline-none transition focus:border-[#0144a0] focus:ring-4 focus:ring-[#0144a0]/10" />
-            <datalist id={listId}>{options.map((option) => <option key={option} value={option} />)}</datalist>
-        </div>
+        <Select value={value} onValueChange={onChange}>
+            <SelectTrigger
+                aria-label={ariaLabel}
+                className="min-w-[160px] rounded-[11px] border-[1.5px] border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm outline-none transition focus-visible:border-[#0144a0] focus-visible:ring-4 focus-visible:ring-[#0144a0]/10 data-[placeholder]:text-slate-500"
+            >
+                <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+                <SelectGroup>
+                    {options.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                        </SelectItem>
+                    ))}
+                </SelectGroup>
+            </SelectContent>
+        </Select>
     );
 }
 
@@ -817,12 +832,16 @@ const CourseRow = memo(function CourseRow({
     item,
     transientAccessLink,
     onCopy,
+    onRegenerate,
+    isRegenerating,
     onEdit,
     onArchive,
 }: {
     item: AdminCourseListItem;
     transientAccessLink?: string;
     onCopy: (item: AdminCourseListItem) => void | Promise<void>;
+    onRegenerate: (item: AdminCourseListItem) => void | Promise<void>;
+    isRegenerating: boolean;
     onEdit: (item: AdminCourseListItem) => void;
     onArchive: (item: AdminCourseListItem) => void;
 }) {
@@ -833,15 +852,30 @@ const CourseRow = memo(function CourseRow({
         () => buildLinkPresentation(item, transientAccessLink ? { [item.id]: transientAccessLink } : {}),
         [item, transientAccessLink],
     );
+    const showRegenerateAction = !linkState.rawLink && linkState.canRegenerate && item.access_link_status === "active";
 
     return (
         <tr className="group transition-colors hover:bg-slate-50/80">
+            <td className="px-5 py-3.5 align-middle">
+                <ActionsCell
+                    item={item}
+                    onEdit={() => onEdit(item)}
+                    onArchive={() => onArchive(item)}
+                    onRegenerate={showRegenerateAction ? (() => onRegenerate(item)) : null}
+                    isRegenerating={isRegenerating}
+                />
+            </td>
             <td className="px-5 py-3.5 align-middle"><CourseCell item={item} /></td>
             <td className="px-5 py-3.5 align-middle"><TeacherCell item={item} teacherState={teacherState} /></td>
             <td className="px-5 py-3.5 align-middle"><StatusCell courseStatus={courseStatus} /></td>
             <td className="min-w-[130px] px-5 py-3.5 align-middle"><CapacityCell item={item} capacityColor={capacityColor} /></td>
-            <td className="px-5 py-3.5 align-middle"><LinkCell item={item} linkState={linkState} onCopy={() => void onCopy(item)} /></td>
-            <td className="px-5 py-3.5 align-middle"><ActionsCell item={item} onEdit={() => onEdit(item)} onArchive={() => onArchive(item)} /></td>
+            <td className="px-5 py-3.5 align-middle max-w-[220px]">
+                <LinkCell
+                    item={item}
+                    linkState={linkState}
+                    onCopy={() => void onCopy(item)}
+                />
+            </td>
         </tr>
     );
 });
@@ -920,18 +954,50 @@ function LinkCell({
     linkState: LinkPresentation;
     onCopy: () => void;
 }) {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = () => {
+        if (!linkState.rawLink) return;
+        onCopy();
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+
     return (
-        <>
-            <div className="rounded-lg border border-slate-200 bg-slate-50">
-                <div className="flex items-center overflow-hidden">
-                    <span className="min-w-0 flex-1 truncate px-3 py-2 font-mono text-[12.5px] text-slate-600" title={linkState.text}>{linkState.text}</span>
-                    <button type="button" onClick={onCopy} disabled={!linkState.rawLink} className="border-l border-slate-300 bg-slate-200 px-2.5 py-2 text-slate-700 transition hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Copiar enlace de ${item.title}`}>
+        <div className="flex flex-col gap-1.5">
+            <div className="flex items-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 transition-colors focus-within:border-slate-300 focus-within:ring-1 focus-within:ring-slate-300">
+                {/* Texto a la izquierda */}
+                <span
+                    className="min-w-0 flex-1 truncate px-3 py-2 font-mono text-[12px] text-slate-500"
+                    title={linkState.text}
+                >
+                    {linkState.text}
+                </span>
+
+                {/* Botón a la derecha con estado de copiado */}
+                <button
+                    type="button"
+                    onClick={handleCopy}
+                    disabled={!linkState.rawLink}
+                    aria-label={`Copiar enlace de ${item.title}`}
+                    title={copied ? "¡Copiado!" : "Copiar enlace"}
+                    className={`flex shrink-0 items-center justify-center border-l px-2.5 py-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                                    copied
+                                        ? "border-emerald-200 bg-emerald-50 text-emerald-600"
+                                        : "border-slate-200 bg-white text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                                }`}
+                >
+                    {copied ? (
+                        <Check className="h-4 w-4" />
+                    ) : (
                         <Copy className="h-4 w-4" />
-                    </button>
-                </div>
+                    )}
+                </button>
             </div>
-            <p className="mt-2 text-xs text-slate-400">{linkState.helper}</p>
-        </>
+
+            {/* Helper text */}
+            <p className="text-[11px] text-slate-400">{linkState.helper}</p>
+        </div>
     );
 }
 
@@ -939,16 +1005,31 @@ function ActionsCell({
     item,
     onEdit,
     onArchive,
+    onRegenerate,
+    isRegenerating,
 }: {
     item: AdminCourseListItem;
     onEdit: () => void;
     onArchive: () => void;
+    onRegenerate: (() => void) | null;
+    isRegenerating: boolean;
 }) {
     return (
-        <div className="flex items-center justify-end gap-1 opacity-70 transition-opacity group-hover:opacity-100">
+        <div className="flex items-center justify-start gap-1 opacity-70 transition-opacity group-hover:opacity-100">
             <button type="button" onClick={onEdit} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-blue-50 hover:text-[#0144a0]" aria-label={`Editar ${item.title}`}>
                 <Pencil className="h-5 w-5" />
             </button>
+            {onRegenerate ? (
+                <button
+                    type="button"
+                    onClick={onRegenerate}
+                    disabled={isRegenerating}
+                    className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-amber-50 hover:text-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label={`Regenerar enlace de ${item.title}`}
+                >
+                    <ExternalLink className="h-5 w-5" />
+                </button>
+            ) : null}
             <button type="button" disabled={item.status === "inactive"} onClick={onArchive} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40" aria-label={`Archivar ${item.title}`}>
                 <Archive className="h-5 w-5" />
             </button>
@@ -1168,7 +1249,7 @@ function CourseModal({
 
                     <div className="space-y-2">
                         <div className="flex items-center justify-between gap-3">
-                            <label htmlFor={teacherFieldId} className="text-sm font-bold text-slate-700">Docente asignado</label>
+                            <span id={`${teacherFieldId}-label`} className="text-sm font-bold text-slate-700">Docente asignado</span>
                             <button type="button" onClick={onOpenInviteTeacher} className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-[12px] font-bold text-[#0144a0] transition hover:text-[#00337a]">
                                 <MailPlus className="h-3.5 w-3.5" />
                                 Invitar docente
@@ -1178,23 +1259,46 @@ function CourseModal({
                             <TeacherOptionsErrorState isLoading={teacherOptionsState.isInitialLoading} error={teacherOptionsState.error} onRetry={onRetryTeacherOptions} />
                         ) : (
                             <div className="space-y-2">
-                                <select id={teacherFieldId} value={form.teacher_option_value} onChange={(event) => onChange((prev) => ({ ...prev, teacher_option_value: event.target.value }))} className="w-full rounded-[9px] border-[1.5px] border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#0144a0] focus:ring-4 focus:ring-[#0144a0]/10">
-                                    <option value="">Selecciona un docente</option>
-                                    {(teacherOptions?.active_teachers.length ?? 0) > 0 && (
-                                        <optgroup label="Docentes activos">
-                                            {teacherOptions?.active_teachers.map((option) => (
-                                                <option key={option.membership_id} value={`membership:${option.membership_id}`}>{option.full_name} ({option.email})</option>
-                                            ))}
-                                        </optgroup>
-                                    )}
-                                    {(teacherOptions?.pending_invites.length ?? 0) > 0 && (
-                                        <optgroup label="Invitaciones pendientes">
-                                            {teacherOptions?.pending_invites.map((option) => (
-                                                <option key={option.invite_id} value={`pending_invite:${option.invite_id}`}>{option.full_name} ({option.email}) - Pendiente</option>
-                                            ))}
-                                        </optgroup>
-                                    )}
-                                </select>
+                                <Select
+                                    value={form.teacher_option_value === "" ? UI_UNASSIGNED_TEACHER_VALUE : form.teacher_option_value}
+                                    onValueChange={(value) => onChange((prev) => ({
+                                        ...prev,
+                                        teacher_option_value: value === UI_UNASSIGNED_TEACHER_VALUE ? "" : value,
+                                    }))}
+                                >
+                                    <SelectTrigger
+                                        id={teacherFieldId}
+                                        aria-labelledby={`${teacherFieldId}-label`}
+                                        className="h-auto w-full rounded-[9px] border-[1.5px] border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 shadow-sm outline-none transition focus-visible:border-[#0144a0] focus-visible:ring-4 focus-visible:ring-[#0144a0]/10 data-[placeholder]:text-slate-500"
+                                    >
+                                        <SelectValue placeholder="Selecciona un docente" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectGroup>
+                                            <SelectItem value={UI_UNASSIGNED_TEACHER_VALUE}>Selecciona un docente</SelectItem>
+                                        </SelectGroup>
+                                        {(teacherOptions?.active_teachers.length ?? 0) > 0 && (
+                                            <SelectGroup>
+                                                <SelectLabel>Docentes activos</SelectLabel>
+                                                {teacherOptions?.active_teachers.map((option) => (
+                                                    <SelectItem key={option.membership_id} value={`membership:${option.membership_id}`}>
+                                                        {option.full_name} ({option.email})
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectGroup>
+                                        )}
+                                        {(teacherOptions?.pending_invites.length ?? 0) > 0 && (
+                                            <SelectGroup>
+                                                <SelectLabel>Invitaciones pendientes</SelectLabel>
+                                                {teacherOptions?.pending_invites.map((option) => (
+                                                    <SelectItem key={option.invite_id} value={`pending_invite:${option.invite_id}`}>
+                                                        {option.full_name} ({option.email}) - Pendiente
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectGroup>
+                                        )}
+                                    </SelectContent>
+                                </Select>
                                 <TeacherOptionsRefreshNotice
                                     isRefreshing={teacherOptionsState.isRefreshing}
                                     error={teacherOptionsState.error}
@@ -1434,16 +1538,36 @@ function SelectField({
     helper?: string;
 }) {
     const selectId = useId();
+    const uiValue = value === "" ? UI_UNSET_SELECT_VALUE : value;
     return (
-        <label className="block space-y-1.5">
+        <div className="block space-y-1.5">
             <span className="text-sm font-bold text-slate-700" id={`${selectId}-label`}>{label}</span>
-            <select id={selectId} aria-labelledby={`${selectId}-label`} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="w-full rounded-[9px] border-[1.5px] border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#0144a0] focus:ring-4 focus:ring-[#0144a0]/10 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500">
-                {value === "" && <option value="">Selecciona una opcion</option>}
-                {options.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-            </select>
+            <Select
+                value={uiValue}
+                disabled={disabled}
+                onValueChange={(nextValue) => onChange(nextValue === UI_UNSET_SELECT_VALUE ? "" : nextValue)}
+            >
+                <SelectTrigger
+                    id={selectId}
+                    aria-labelledby={`${selectId}-label`}
+                    className="h-auto w-full rounded-[9px] border-[1.5px] border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 shadow-sm outline-none transition focus-visible:border-[#0144a0] focus-visible:ring-4 focus-visible:ring-[#0144a0]/10 data-[placeholder]:text-slate-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                >
+                    <SelectValue placeholder="Selecciona una opcion" />
+                </SelectTrigger>
+                <SelectContent>
+                    <SelectGroup>
+                        {value === "" ? (
+                            <SelectItem value={UI_UNSET_SELECT_VALUE}>Selecciona una opcion</SelectItem>
+                        ) : null}
+                        {options.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                            </SelectItem>
+                        ))}
+                    </SelectGroup>
+                </SelectContent>
+            </Select>
             {helper && <p className="text-xs text-slate-400">{helper}</p>}
-        </label>
+        </div>
     );
 }
