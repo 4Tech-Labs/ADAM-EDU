@@ -137,8 +137,11 @@ function fillCreateCourseForm(teacherValue: string) {
     fireEvent.change(screen.getByLabelText("Codigo"), {
         target: { value: "DAT-550" },
     });
-    fireEvent.change(screen.getByLabelText("Semestre"), {
-        target: { value: "2026-II" },
+    fireEvent.change(screen.getByLabelText("Año"), {
+        target: { value: "2026" },
+    });
+    fireEvent.change(screen.getByLabelText("Periodo"), {
+        target: { value: "II" },
     });
     fireEvent.change(screen.getByLabelText("Nivel academico"), {
         target: { value: "Doctorado" },
@@ -290,6 +293,63 @@ describe("AdminDashboardPage", () => {
 
         expect(await screen.findByText("La capacidad máxima debe ser un número entero mayor o igual a 1.")).toBeTruthy();
         expect(api.admin.createCourse).not.toHaveBeenCalled();
+    });
+
+    it("uses guided semester selectors when creating a course", async () => {
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.click(screen.getByText("Crear Nuevo Curso"));
+        fillCreateCourseForm("membership:teacher-membership-1");
+        fireEvent.submit(screen.getByTestId("create-course-modal").querySelector("form")!);
+
+        await waitFor(() => {
+            expect(api.admin.createCourse).toHaveBeenCalledWith(expect.objectContaining({
+                semester: "2026-II",
+            }));
+        });
+    });
+
+    it("blocks editing when a course arrives with an invalid inherited semester", async () => {
+        vi.mocked(api.admin.listCourses).mockResolvedValueOnce({
+            ...coursesResponse,
+            items: [{ ...activeCourse, semester: "2026-2" }],
+        });
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.click(screen.getByLabelText("Editar Finanzas Corporativas"));
+        fireEvent.submit(screen.getByTestId("edit-course-modal").querySelector("form")!);
+
+        expect(await screen.findByText("Este curso tiene un semestre invalido en origen. Corrigelo antes de guardar.")).toBeTruthy();
+        expect(api.admin.updateCourse).not.toHaveBeenCalled();
+    });
+
+    it("surfaces structured 422 semester validation errors from the backend", async () => {
+        vi.mocked(api.admin.updateCourse).mockRejectedValueOnce(new ApiError(422, "Value error, semester must use YYYY-I or YYYY-II", [
+            {
+                type: "value_error",
+                loc: ["body", "semester"],
+                msg: "Value error, semester must use YYYY-I or YYYY-II",
+                input: "2026-2",
+                ctx: { error: {} },
+            },
+        ]));
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.click(screen.getByLabelText("Editar Finanzas Corporativas"));
+        fireEvent.change(screen.getByLabelText("Año"), {
+            target: { value: "2026" },
+        });
+        fireEvent.change(screen.getByLabelText("Periodo"), {
+            target: { value: "II" },
+        });
+        fireEvent.submit(screen.getByTestId("edit-course-modal").querySelector("form")!);
+
+        expect(await screen.findByText("El semestre debe usar el formato YYYY-I o YYYY-II. Ejemplo: 2026-I.")).toBeTruthy();
     });
 
     it("shows and copies the teacher invite activation link", async () => {
