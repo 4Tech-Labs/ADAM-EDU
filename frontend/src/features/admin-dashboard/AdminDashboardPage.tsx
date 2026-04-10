@@ -14,6 +14,7 @@ import {
     X,
 } from "lucide-react";
 import {
+    memo,
     useCallback,
     useDeferredValue,
     useEffect,
@@ -56,6 +57,8 @@ import {
     getCourseStatusMeta,
     getInitials,
     getTeacherStateMeta,
+    reconcileCourseListResponse,
+    reconcileDashboardSummary,
     sortPendingInvites,
     summarizePageRange,
     teacherInviteToPendingOption,
@@ -76,17 +79,23 @@ interface Props {
     showToast: ShowToast;
 }
 
+type RefreshMode = "initial" | "background";
+
 export function AdminDashboardPage({ showToast }: Props) {
     const { actor, signOut } = useAuth();
     const semesterFilterListId = useId();
 
     const [summary, setSummary] = useState<AdminDashboardSummaryResponse | null>(null);
     const [coursesResponse, setCoursesResponse] = useState<AdminCourseListResponse | null>(null);
-    const [pageLoading, setPageLoading] = useState(true);
+    const [isInitialLoading, setIsInitialLoading] = useState(true);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [pageError, setPageError] = useState<string | null>(null);
+    const [refreshError, setRefreshError] = useState<string | null>(null);
+    const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
     const [teacherOptionsState, setTeacherOptionsState] = useState<TeacherOptionsState>({
         data: null,
-        loading: false,
+        isInitialLoading: false,
+        isRefreshing: false,
         error: null,
     });
     const [transientAccessLinks, setTransientAccessLinks] = useState<Record<string, string>>({});
@@ -96,7 +105,6 @@ export function AdminDashboardPage({ showToast }: Props) {
     const [statusFilter, setStatusFilter] = useState("all");
     const [academicLevelFilter, setAcademicLevelFilter] = useState("all");
     const [page, setPage] = useState(1);
-    const [reloadTick, setReloadTick] = useState(0);
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [isEditOpen, setIsEditOpen] = useState(false);
     const [isArchiveOpen, setIsArchiveOpen] = useState(false);
@@ -116,9 +124,22 @@ export function AdminDashboardPage({ showToast }: Props) {
     const [regeneratingCourseId, setRegeneratingCourseId] = useState<string | null>(null);
     const [courseFormError, setCourseFormError] = useState<string | null>(null);
     const [inviteFormError, setInviteFormError] = useState<string | null>(null);
+    const isMountedRef = useRef(true);
+    const didLoadDashboardRef = useRef(false);
+    const didLoadTeacherOptionsRef = useRef(false);
+    const dashboardRequestIdRef = useRef(0);
+    const teacherOptionsRequestIdRef = useRef(0);
     const lastExternalRefreshAtRef = useRef(0);
 
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
     const currentItems = useMemo(() => coursesResponse?.items ?? EMPTY_COURSES, [coursesResponse]);
+    const hasDashboardData = summary !== null && coursesResponse !== null;
     const editingCourse = editingCourseId
         ? currentItems.find((item) => item.id === editingCourseId) ?? null
         : null;
@@ -147,59 +168,128 @@ export function AdminDashboardPage({ showToast }: Props) {
             page_size: ADMIN_PAGE_SIZE,
         }), [academicLevelFilter, deferredSearch, page, semesterFilter, statusFilter]);
 
-    const refreshTeacherOptions = useCallback(async () => {
-        setTeacherOptionsState((prev) => ({ ...prev, loading: true, error: null }));
+    const applyDashboardSnapshot = useCallback((
+        summaryResponse: AdminDashboardSummaryResponse,
+        courses: AdminCourseListResponse,
+    ) => {
+        didLoadDashboardRef.current = true;
+        setSummary((prev) => reconcileDashboardSummary(prev, summaryResponse));
+        setCoursesResponse((prev) => reconcileCourseListResponse(prev, courses));
+        setPageError(null);
+        setRefreshError(null);
+        setLastSyncedAt(Date.now());
+    }, []);
+
+    const refreshTeacherOptions = useCallback(async ({ mode }: { mode?: RefreshMode } = {}) => {
+        const requestId = ++teacherOptionsRequestIdRef.current;
+        const refreshMode = mode ?? (didLoadTeacherOptionsRef.current ? "background" : "initial");
+        const isBlocking = refreshMode === "initial" && !didLoadTeacherOptionsRef.current;
+
+        setTeacherOptionsState((prev) => ({
+            data: prev.data,
+            isInitialLoading: isBlocking,
+            isRefreshing: !isBlocking && prev.data !== null,
+            error: isBlocking ? null : prev.error,
+        }));
+
         try {
             const data = await api.admin.getTeacherOptions();
-            setTeacherOptionsState({ data, loading: false, error: null });
-        } catch (error) {
+            if (!isMountedRef.current || requestId !== teacherOptionsRequestIdRef.current) {
+                return data;
+            }
+
+            didLoadTeacherOptionsRef.current = true;
             setTeacherOptionsState({
-                data: null,
-                loading: false,
-                error: getAdminErrorMessage(error, "No se pudieron cargar las opciones de docentes para los formularios."),
+                data,
+                isInitialLoading: false,
+                isRefreshing: false,
+                error: null,
             });
+            return data;
+        } catch (error) {
+            if (!isMountedRef.current || requestId !== teacherOptionsRequestIdRef.current) {
+                throw error;
+            }
+
+            setTeacherOptionsState((prev) => ({
+                data: prev.data,
+                isInitialLoading: false,
+                isRefreshing: false,
+                error: getAdminErrorMessage(error, "No se pudieron cargar las opciones de docentes para los formularios."),
+            }));
+            throw error;
         }
     }, []);
 
-    useEffect(() => {
-        let cancelled = false;
-        async function loadDashboard() {
-            setPageLoading(true);
+    const refreshDashboard = useCallback(async (
+        { nextPage = page, mode }: { nextPage?: number; mode?: RefreshMode } = {},
+    ) => {
+        const requestId = ++dashboardRequestIdRef.current;
+        const refreshMode = mode ?? (didLoadDashboardRef.current ? "background" : "initial");
+        const isBlocking = refreshMode === "initial" && !didLoadDashboardRef.current;
+
+        if (isBlocking) {
+            setIsInitialLoading(true);
             setPageError(null);
-            try {
-                const [summaryResponse, courses] = await Promise.all([
-                    api.admin.getDashboardSummary(),
-                    api.admin.listCourses(buildCourseFilters()),
-                ]);
-                if (cancelled) return;
-                setSummary(summaryResponse);
-                setCoursesResponse(courses);
-            } catch (error) {
-                if (cancelled) return;
-                setPageError(getAdminErrorMessage(error, "No se pudo cargar el dashboard administrativo."));
-            } finally {
-                if (!cancelled) setPageLoading(false);
+        } else {
+            setIsRefreshing(true);
+            setRefreshError(null);
+        }
+
+        try {
+            const [summaryResponse, courses] = await Promise.all([
+                api.admin.getDashboardSummary(),
+                api.admin.listCourses(buildCourseFilters(nextPage)),
+            ]);
+            if (!isMountedRef.current || requestId !== dashboardRequestIdRef.current) {
+                return;
+            }
+
+            applyDashboardSnapshot(summaryResponse, courses);
+        } catch (error) {
+            if (!isMountedRef.current || requestId !== dashboardRequestIdRef.current) {
+                throw error;
+            }
+
+            const message = getAdminErrorMessage(error, "No se pudo cargar el dashboard administrativo.");
+            if (isBlocking) {
+                setPageError(message);
+            } else {
+                setRefreshError(message);
+            }
+            throw error;
+        } finally {
+            if (isMountedRef.current && requestId === dashboardRequestIdRef.current) {
+                if (isBlocking) {
+                    setIsInitialLoading(false);
+                } else {
+                    setIsRefreshing(false);
+                }
             }
         }
-        void loadDashboard();
-        return () => {
-            cancelled = true;
-        };
-    }, [buildCourseFilters, reloadTick]);
+    }, [applyDashboardSnapshot, buildCourseFilters, page]);
 
     useEffect(() => {
-        void refreshTeacherOptions();
+        void refreshDashboard().catch(() => undefined);
+    }, [refreshDashboard]);
+
+    useEffect(() => {
+        void refreshTeacherOptions({ mode: "initial" }).catch(() => undefined);
     }, [refreshTeacherOptions]);
 
     const requestExternalRefresh = useCallback(() => {
+        if (!didLoadDashboardRef.current) {
+            return;
+        }
+
         const now = Date.now();
         if (now - lastExternalRefreshAtRef.current < 750) {
             return;
         }
         lastExternalRefreshAtRef.current = now;
-        setReloadTick((prev) => prev + 1);
-        void refreshTeacherOptions();
-    }, [refreshTeacherOptions]);
+        void refreshDashboard({ mode: "background" }).catch(() => undefined);
+        void refreshTeacherOptions({ mode: "background" }).catch(() => undefined);
+    }, [refreshDashboard, refreshTeacherOptions]);
 
     useEffect(() => {
         function handleWindowFocus() {
@@ -222,35 +312,32 @@ export function AdminDashboardPage({ showToast }: Props) {
         };
     }, [requestExternalRefresh]);
 
-    async function refreshSummaryAndCourses(nextPage = page) {
-        const [summaryResponse, courses] = await Promise.all([
-            api.admin.getDashboardSummary(),
-            api.admin.listCourses(buildCourseFilters(nextPage)),
-        ]);
-        setSummary(summaryResponse);
-        setCoursesResponse(courses);
-        setPageError(null);
-    }
+    const refreshSummaryAndCourses = useCallback(async (nextPage = page) => {
+        await refreshDashboard({
+            nextPage,
+            mode: didLoadDashboardRef.current ? "background" : "initial",
+        });
+    }, [page, refreshDashboard]);
 
-    function openCreateModal() {
+    const openCreateModal = useCallback(() => {
         setCourseFormError(null);
         setCreateForm(createEmptyCourseForm());
         setIsCreateOpen(true);
-    }
+    }, []);
 
-    function openEditModal(item: AdminCourseListItem) {
+    const openEditModal = useCallback((item: AdminCourseListItem) => {
         setCourseFormError(null);
         setEditingCourseId(item.id);
         setEditForm(buildCourseFormFromItem(item));
         setIsEditOpen(true);
-    }
+    }, []);
 
-    function openArchiveModal(item: AdminCourseListItem) {
+    const openArchiveModal = useCallback((item: AdminCourseListItem) => {
         if (item.status === "inactive") return;
         setCourseFormError(null);
         setArchivingCourseId(item.id);
         setIsArchiveOpen(true);
-    }
+    }, []);
 
     function openInviteModal(target: ModalInviteTarget) {
         setInviteTarget(target);
@@ -360,7 +447,8 @@ export function AdminDashboardPage({ showToast }: Props) {
                         teacherInviteToPendingOption(createdInvite),
                     ]),
                 },
-                loading: false,
+                isInitialLoading: false,
+                isRefreshing: false,
                 error: null,
             }));
             const encodedValue = encodeTeacherOptionValue({
@@ -384,7 +472,7 @@ export function AdminDashboardPage({ showToast }: Props) {
         }
     }
 
-    async function handleCopyLink(item: AdminCourseListItem) {
+    const handleCopyLink = useCallback(async (item: AdminCourseListItem) => {
         const linkState = buildLinkPresentation(item, transientAccessLinks);
         if (!linkState.rawLink) {
             showToast("Este curso no tiene un enlace copiable disponible todavia.", "error");
@@ -392,7 +480,7 @@ export function AdminDashboardPage({ showToast }: Props) {
         }
         const copied = await copyToClipboard(linkState.rawLink);
         showToast(copied ? "Enlace copiado." : "No se pudo copiar el enlace.", copied ? "success" : "error");
-    }
+    }, [showToast, transientAccessLinks]);
 
     async function handleCopyInviteActivationLink() {
         if (!inviteSuccess) return;
@@ -452,15 +540,13 @@ export function AdminDashboardPage({ showToast }: Props) {
             </header>
 
             <main className="mx-auto w-full max-w-7xl px-6 py-8">
-                {pageLoading ? (
+                {!hasDashboardData && isInitialLoading ? (
                     <DashboardLoadingState />
-                ) : pageError ? (
+                ) : !hasDashboardData && pageError ? (
                     <PageErrorState
                         message={pageError}
                         onRetry={() => {
-                            setPageError(null);
-                            setPageLoading(true);
-                            setReloadTick((prev) => prev + 1);
+                            void refreshDashboard({ mode: "initial" }).catch(() => undefined);
                         }}
                     />
                 ) : (
@@ -491,6 +577,14 @@ export function AdminDashboardPage({ showToast }: Props) {
                         <section>
                             <div className="mb-4 flex items-center gap-4">
                                 <h2 className="text-xl font-bold tracking-tight text-slate-900">Directorio de Cursos</h2>
+                                <DashboardRefreshStatus
+                                    isRefreshing={isRefreshing}
+                                    refreshError={refreshError}
+                                    lastSyncedAt={lastSyncedAt}
+                                    onRetry={() => {
+                                        void refreshDashboard({ mode: "background" }).catch(() => undefined);
+                                    }}
+                                />
                                 <div className="h-[2px] flex-1 rounded-full bg-gradient-to-r from-slate-200 to-transparent" />
                             </div>
                             <div className="overflow-hidden rounded-2xl border-[1.5px] border-slate-200 bg-white shadow-sm">
@@ -510,22 +604,16 @@ export function AdminDashboardPage({ showToast }: Props) {
                                             {currentItems.length === 0 ? (
                                                 <tr><td colSpan={6} className="px-6 py-14"><EmptyCourseState /></td></tr>
                                             ) : (
-                                                currentItems.map((item) => {
-                                                    const courseStatus = getCourseStatusMeta(item.status);
-                                                    const teacherState = getTeacherStateMeta(item.teacher_state);
-                                                    const capacityColor = getCapacityColor(item.occupancy_percent);
-                                                    const linkState = buildLinkPresentation(item, transientAccessLinks);
-                                                    return (
-                                                        <tr key={item.id} className="group transition-colors hover:bg-slate-50/80">
-                                                            <td className="px-5 py-3.5 align-middle"><CourseCell item={item} /></td>
-                                                            <td className="px-5 py-3.5 align-middle"><TeacherCell item={item} teacherState={teacherState} /></td>
-                                                            <td className="px-5 py-3.5 align-middle"><StatusCell courseStatus={courseStatus} /></td>
-                                                            <td className="min-w-[130px] px-5 py-3.5 align-middle"><CapacityCell item={item} capacityColor={capacityColor} /></td>
-                                                            <td className="px-5 py-3.5 align-middle"><LinkCell item={item} linkState={linkState} onCopy={() => void handleCopyLink(item)} /></td>
-                                                            <td className="px-5 py-3.5 align-middle"><ActionsCell item={item} onEdit={() => openEditModal(item)} onArchive={() => openArchiveModal(item)} /></td>
-                                                        </tr>
-                                                    );
-                                                })
+                                                currentItems.map((item) => (
+                                                    <CourseRow
+                                                        key={item.id}
+                                                        item={item}
+                                                        transientAccessLink={transientAccessLinks[item.id]}
+                                                        onCopy={handleCopyLink}
+                                                        onEdit={openEditModal}
+                                                        onArchive={openArchiveModal}
+                                                    />
+                                                ))
                                             )}
                                         </tbody>
                                     </table>
@@ -725,6 +813,39 @@ function FilterTextField({
     );
 }
 
+const CourseRow = memo(function CourseRow({
+    item,
+    transientAccessLink,
+    onCopy,
+    onEdit,
+    onArchive,
+}: {
+    item: AdminCourseListItem;
+    transientAccessLink?: string;
+    onCopy: (item: AdminCourseListItem) => void | Promise<void>;
+    onEdit: (item: AdminCourseListItem) => void;
+    onArchive: (item: AdminCourseListItem) => void;
+}) {
+    const courseStatus = useMemo(() => getCourseStatusMeta(item.status), [item.status]);
+    const teacherState = useMemo(() => getTeacherStateMeta(item.teacher_state), [item.teacher_state]);
+    const capacityColor = useMemo(() => getCapacityColor(item.occupancy_percent), [item.occupancy_percent]);
+    const linkState = useMemo(
+        () => buildLinkPresentation(item, transientAccessLink ? { [item.id]: transientAccessLink } : {}),
+        [item, transientAccessLink],
+    );
+
+    return (
+        <tr className="group transition-colors hover:bg-slate-50/80">
+            <td className="px-5 py-3.5 align-middle"><CourseCell item={item} /></td>
+            <td className="px-5 py-3.5 align-middle"><TeacherCell item={item} teacherState={teacherState} /></td>
+            <td className="px-5 py-3.5 align-middle"><StatusCell courseStatus={courseStatus} /></td>
+            <td className="min-w-[130px] px-5 py-3.5 align-middle"><CapacityCell item={item} capacityColor={capacityColor} /></td>
+            <td className="px-5 py-3.5 align-middle"><LinkCell item={item} linkState={linkState} onCopy={() => void onCopy(item)} /></td>
+            <td className="px-5 py-3.5 align-middle"><ActionsCell item={item} onEdit={() => onEdit(item)} onArchive={() => onArchive(item)} /></td>
+        </tr>
+    );
+});
+
 function CourseCell({ item }: { item: AdminCourseListItem }) {
     return (
         <>
@@ -875,6 +996,47 @@ function PageButton({
     );
 }
 
+function DashboardRefreshStatus({
+    isRefreshing,
+    refreshError,
+    lastSyncedAt,
+    onRetry,
+}: {
+    isRefreshing: boolean;
+    refreshError: string | null;
+    lastSyncedAt: number | null;
+    onRetry: () => void;
+}) {
+    const syncLabel = useMemo(() => {
+        if (!lastSyncedAt) {
+            return "Cargando estado";
+        }
+
+        return `Sincronizado ${new Intl.DateTimeFormat("es-CO", {
+            hour: "2-digit",
+            minute: "2-digit",
+        }).format(lastSyncedAt)}`;
+    }, [lastSyncedAt]);
+
+    return (
+        <div className="inline-flex min-h-7 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-500" aria-live="polite" data-testid="dashboard-refresh-status">
+            <span className={`h-2 w-2 rounded-full ${isRefreshing ? "animate-pulse bg-blue-500" : refreshError ? "bg-amber-500" : "bg-emerald-500"}`} />
+            {isRefreshing ? (
+                <span>Actualizando datos...</span>
+            ) : refreshError ? (
+                <>
+                    <span>No se pudo actualizar. Mostrando la ultima version.</span>
+                    <button type="button" onClick={onRetry} className="text-[#0144a0] transition hover:text-[#00337a]">
+                        Reintentar
+                    </button>
+                </>
+            ) : (
+                <span>{syncLabel}</span>
+            )}
+        </div>
+    );
+}
+
 function DashboardLoadingState() {
     return (
         <div className="space-y-6" data-testid="admin-dashboard-loading">
@@ -966,7 +1128,7 @@ function CourseModal({
     isRegenerating: boolean;
 }) {
     const teacherFieldId = useId();
-    const teacherOptionsBlocked = teacherOptionsState.loading || Boolean(teacherOptionsState.error);
+    const teacherOptionsBlocked = teacherOptionsState.isInitialLoading || (!teacherOptions && Boolean(teacherOptionsState.error));
     const modalTestId = title.toLowerCase().includes("crear") ? "create-course-modal" : "edit-course-modal";
 
     if (!isOpen) return null;
@@ -1013,25 +1175,32 @@ function CourseModal({
                             </button>
                         </div>
                         {teacherOptionsBlocked ? (
-                            <TeacherOptionsErrorState loading={teacherOptionsState.loading} error={teacherOptionsState.error} onRetry={onRetryTeacherOptions} />
+                            <TeacherOptionsErrorState isLoading={teacherOptionsState.isInitialLoading} error={teacherOptionsState.error} onRetry={onRetryTeacherOptions} />
                         ) : (
-                            <select id={teacherFieldId} value={form.teacher_option_value} onChange={(event) => onChange((prev) => ({ ...prev, teacher_option_value: event.target.value }))} className="w-full rounded-[9px] border-[1.5px] border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#0144a0] focus:ring-4 focus:ring-[#0144a0]/10">
-                                <option value="">Selecciona un docente</option>
-                                {(teacherOptions?.active_teachers.length ?? 0) > 0 && (
-                                    <optgroup label="Docentes activos">
-                                        {teacherOptions?.active_teachers.map((option) => (
-                                            <option key={option.membership_id} value={`membership:${option.membership_id}`}>{option.full_name} ({option.email})</option>
-                                        ))}
-                                    </optgroup>
-                                )}
-                                {(teacherOptions?.pending_invites.length ?? 0) > 0 && (
-                                    <optgroup label="Invitaciones pendientes">
-                                        {teacherOptions?.pending_invites.map((option) => (
-                                            <option key={option.invite_id} value={`pending_invite:${option.invite_id}`}>{option.full_name} ({option.email}) - Pendiente</option>
-                                        ))}
-                                    </optgroup>
-                                )}
-                            </select>
+                            <div className="space-y-2">
+                                <select id={teacherFieldId} value={form.teacher_option_value} onChange={(event) => onChange((prev) => ({ ...prev, teacher_option_value: event.target.value }))} className="w-full rounded-[9px] border-[1.5px] border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#0144a0] focus:ring-4 focus:ring-[#0144a0]/10">
+                                    <option value="">Selecciona un docente</option>
+                                    {(teacherOptions?.active_teachers.length ?? 0) > 0 && (
+                                        <optgroup label="Docentes activos">
+                                            {teacherOptions?.active_teachers.map((option) => (
+                                                <option key={option.membership_id} value={`membership:${option.membership_id}`}>{option.full_name} ({option.email})</option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                                    {(teacherOptions?.pending_invites.length ?? 0) > 0 && (
+                                        <optgroup label="Invitaciones pendientes">
+                                            {teacherOptions?.pending_invites.map((option) => (
+                                                <option key={option.invite_id} value={`pending_invite:${option.invite_id}`}>{option.full_name} ({option.email}) - Pendiente</option>
+                                            ))}
+                                        </optgroup>
+                                    )}
+                                </select>
+                                <TeacherOptionsRefreshNotice
+                                    isRefreshing={teacherOptionsState.isRefreshing}
+                                    error={teacherOptionsState.error}
+                                    onRetry={onRetryTeacherOptions}
+                                />
+                            </div>
                         )}
                     </div>
 
@@ -1069,19 +1238,50 @@ function CourseModal({
 }
 
 function TeacherOptionsErrorState({
-    loading,
+    isLoading,
     error,
     onRetry,
 }: {
-    loading: boolean;
+    isLoading: boolean;
     error: string | null;
     onRetry: () => void;
 }) {
     return (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-            <p className="text-sm font-semibold text-amber-900">{loading ? "Cargando selector de docentes..." : "No se pudo cargar el selector de docentes"}</p>
+            <p className="text-sm font-semibold text-amber-900">{isLoading ? "Cargando selector de docentes..." : "No se pudo cargar el selector de docentes"}</p>
             {error && <p className="mt-1 text-sm text-amber-800">{error}</p>}
-            {!loading && <button type="button" onClick={onRetry} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-900 transition hover:bg-amber-100">Reintentar</button>}
+            {!isLoading && <button type="button" onClick={onRetry} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-900 transition hover:bg-amber-100">Reintentar</button>}
+        </div>
+    );
+}
+
+function TeacherOptionsRefreshNotice({
+    isRefreshing,
+    error,
+    onRetry,
+}: {
+    isRefreshing: boolean;
+    error: string | null;
+    onRetry: () => void;
+}) {
+    if (isRefreshing) {
+        return (
+            <p className="text-xs font-semibold text-slate-500" aria-live="polite">
+                Actualizando docentes...
+            </p>
+        );
+    }
+
+    if (!error) {
+        return null;
+    }
+
+    return (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-amber-800" aria-live="polite">
+            <span>No se pudieron refrescar los docentes. Sigues viendo la ultima lista disponible.</span>
+            <button type="button" onClick={onRetry} className="font-semibold text-[#0144a0] transition hover:text-[#00337a]">
+                Reintentar
+            </button>
         </div>
     );
 }
