@@ -358,9 +358,9 @@ export function buildLinkPresentation(
 
     if (item.access_link_status === "active") {
         return {
-            text: "Enlace activo oculto por seguridad",
+            text: "Enlace no visible",
             helper: item.status === "active"
-                ? "Regenera para obtener un enlace copiable."
+                ? "El enlace anterior ya no puede copiarse. Regenera para crear uno nuevo."
                 : "El curso esta inactivo. No se puede regenerar hasta reactivarlo en backend.",
             rawLink: null,
             canRegenerate: item.status === "active",

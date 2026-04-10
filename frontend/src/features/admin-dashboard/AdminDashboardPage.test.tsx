@@ -37,6 +37,7 @@ import { api } from "@/shared/api";
 
 const showToast = vi.fn();
 const signOut = vi.fn();
+const nativeFireEventChange = fireEvent.change.bind(fireEvent);
 
 const summaryResponse: AdminDashboardSummaryResponse = {
     active_courses: 2,
@@ -131,6 +132,46 @@ function renderPage() {
     return render(<AdminDashboardPage showToast={showToast} />);
 }
 
+function getElementLabel(element: Element): string {
+    const labelledBy = element.getAttribute("aria-labelledby");
+    if (!labelledBy) {
+        return element.getAttribute("aria-label") ?? "";
+    }
+
+    return labelledBy
+        .split(/\s+/)
+        .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
+        .filter(Boolean)
+        .join(" ");
+}
+
+function resolveSelectOptionLabel(label: string, value: string): string {
+    if (label === "Docente asignado") {
+        switch (value) {
+            case "membership:teacher-membership-1":
+                return "Julio Cesar Paz (julio@example.edu)";
+            case "pending_invite:invite-2":
+                return "Diana Lopez (diana@example.edu) - Pendiente";
+            case "":
+                return "Selecciona un docente";
+            default:
+                return value;
+        }
+    }
+
+    if (label === "Estado") {
+        if (value === "active") return "Activo";
+        if (value === "inactive") return "Inactivo";
+    }
+
+    return value;
+}
+
+function selectLabeledOption(label: string, value: string) {
+    fireEvent.click(screen.getByLabelText(label));
+    fireEvent.click(screen.getByRole("option", { name: resolveSelectOptionLabel(label, value) }));
+}
+
 function createDeferred<T>() {
     let resolve!: (value: T) => void;
     let reject!: (reason?: unknown) => void;
@@ -169,6 +210,29 @@ function fillCreateCourseForm(teacherValue: string) {
 describe("AdminDashboardPage", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+            configurable: true,
+            value: vi.fn(),
+            writable: true,
+        });
+        vi.spyOn(fireEvent, "change").mockImplementation((element, init) => {
+            if (
+                element instanceof HTMLElement &&
+                element.getAttribute("role") === "combobox" &&
+                typeof init === "object" &&
+                init !== null &&
+                "target" in init &&
+                typeof init.target === "object" &&
+                init.target !== null &&
+                "value" in init.target &&
+                typeof init.target.value === "string"
+            ) {
+                selectLabeledOption(getElementLabel(element), init.target.value);
+                return true;
+            }
+
+            return nativeFireEventChange(element, init);
+        });
         vi.mocked(useAuth).mockReturnValue({
             session: { access_token: "jwt" } as never,
             actor: adminActor,
@@ -215,8 +279,9 @@ describe("AdminDashboardPage", () => {
         expect(await screen.findByText("Directorio de Cursos")).toBeTruthy();
         expect(screen.getByText("62%")).toBeTruthy();
         expect(screen.getByText("Finanzas Corporativas")).toBeTruthy();
-        expect(screen.getByText("Enlace activo oculto por seguridad")).toBeTruthy();
-        expect(screen.getByText("Regenera para obtener un enlace copiable.")).toBeTruthy();
+        expect(screen.getByText("Enlace no visible")).toBeTruthy();
+        expect(screen.getByText("El enlace anterior ya no puede copiarse. Regenera para crear uno nuevo.")).toBeTruthy();
+        expect(screen.getByLabelText("Regenerar enlace de Finanzas Corporativas")).toBeTruthy();
         expect(screen.getByText("Invitacion pendiente")).toBeTruthy();
     });
 
@@ -274,7 +339,7 @@ describe("AdminDashboardPage", () => {
                 },
             });
         });
-    });
+    }, 20_000);
 
     it("normalizes legacy ascii academic levels when editing a course", async () => {
         vi.mocked(api.admin.listCourses).mockResolvedValueOnce({
@@ -482,21 +547,70 @@ describe("AdminDashboardPage", () => {
         });
     });
 
-    it("filters by a manual semester value instead of relying on current-page options only", async () => {
+    it("filters by semester using only the created-course options from the select", async () => {
         renderPage();
         await screen.findByText("Directorio de Cursos");
 
-        fireEvent.change(screen.getByPlaceholderText("Semestre (ej. 2026-I)"), {
-            target: { value: "2024-II" },
-        });
+        fireEvent.click(screen.getByLabelText("Filtrar por semestre"));
+        fireEvent.click(screen.getByRole("option", { name: "2026-I" }));
 
         await waitFor(() => {
             expect(api.admin.listCourses).toHaveBeenLastCalledWith(expect.objectContaining({
-                semester: "2024-II",
+                semester: "2026-I",
                 page: 1,
             }));
         });
-    });
+
+        fireEvent.click(screen.getByLabelText("Filtrar por semestre"));
+        expect(screen.getByRole("option", { name: "Todos los semestres" })).toBeTruthy();
+        expect(screen.getByRole("option", { name: "2026-I" })).toBeTruthy();
+        expect(screen.queryByRole("option", { name: "2024-II" })).toBeNull();
+
+        fireEvent.click(screen.getByRole("option", { name: "Todos los semestres" }));
+        await waitFor(() => {
+            expect(api.admin.listCourses).toHaveBeenLastCalledWith(expect.objectContaining({
+                semester: undefined,
+                page: 1,
+            }));
+        });
+    }, 20_000);
+
+    it("filters by status and academic level using shadcn selects and clears all values before sending to backend", async () => {
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.click(screen.getByLabelText("Filtrar por estado"));
+        fireEvent.click(screen.getByRole("option", { name: "Activos" }));
+        await waitFor(() => {
+            expect(api.admin.listCourses).toHaveBeenLastCalledWith(expect.objectContaining({
+                status: "active",
+                academic_level: undefined,
+                page: 1,
+            }));
+        });
+
+        fireEvent.click(screen.getByLabelText("Filtrar por nivel academico"));
+        fireEvent.click(screen.getByRole("option", { name: "Pregrado" }));
+        await waitFor(() => {
+            expect(api.admin.listCourses).toHaveBeenLastCalledWith(expect.objectContaining({
+                status: "active",
+                academic_level: "Pregrado",
+                page: 1,
+            }));
+        });
+
+        fireEvent.click(screen.getByLabelText("Filtrar por estado"));
+        fireEvent.click(screen.getByRole("option", { name: "Todos los estados" }));
+        fireEvent.click(screen.getByLabelText("Filtrar por nivel academico"));
+        fireEvent.click(screen.getByRole("option", { name: "Todos los niveles" }));
+        await waitFor(() => {
+            expect(api.admin.listCourses).toHaveBeenLastCalledWith(expect.objectContaining({
+                status: undefined,
+                academic_level: undefined,
+                page: 1,
+            }));
+        });
+    }, 20_000);
 
     it("requests the selected pagination page from the backend", async () => {
         renderPage();
@@ -509,7 +623,7 @@ describe("AdminDashboardPage", () => {
                 page: 2,
             }));
         });
-    });
+    }, 20_000);
 
     it("refreshes summary, courses, and teacher options when the tab regains focus", async () => {
         renderPage();
@@ -627,7 +741,20 @@ describe("AdminDashboardPage", () => {
             expect(screen.queryByText("Actualizando docentes...")).toBeNull();
         });
         expect(screen.getByLabelText("Docente asignado")).toBeTruthy();
-    });
+    }, 20_000);
+
+    it("keeps the teacher placeholder selectable without leaking the UI sentinel into create payloads", async () => {
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.click(screen.getByText("Crear Nuevo Curso"));
+        fillCreateCourseForm("membership:teacher-membership-1");
+        selectLabeledOption("Docente asignado", "");
+        fireEvent.submit(screen.getByTestId("create-course-modal").querySelector("form")!);
+
+        expect(await screen.findByText(/Selecciona un docente activo o una invitaci/i)).toBeTruthy();
+        expect(api.admin.createCourse).not.toHaveBeenCalled();
+    }, 20_000);
 
     it("preserves visible dashboard data when a background refresh fails", async () => {
         vi.mocked(api.admin.getDashboardSummary)
@@ -664,6 +791,28 @@ describe("AdminDashboardPage", () => {
         });
 
         expect(await screen.findAllByText("/app/join#course_access_token=rotated-token")).toHaveLength(2);
+    }, 20_000);
+
+    it("regenerates a hidden active link directly from the table cell", async () => {
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.click(screen.getByLabelText("Regenerar enlace de Finanzas Corporativas"));
+
+        await waitFor(() => {
+            expect(api.admin.regenerateCourseAccessLink).toHaveBeenCalledWith("course-1");
+        });
+
+        expect(await screen.findByText("/app/join#course_access_token=rotated-token")).toBeTruthy();
+    }, 20_000);
+
+    it("does not show the inline regenerate CTA for missing or inactive links", async () => {
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        expect(screen.getByText("Sin enlace activo")).toBeTruthy();
+        expect(screen.getByText("El curso esta inactivo y no puede regenerar enlaces.")).toBeTruthy();
+        expect(screen.getAllByLabelText(/Regenerar enlace de/i)).toHaveLength(1);
     });
 
     it("renders the empty state when the backend returns total_pages = 0", async () => {
