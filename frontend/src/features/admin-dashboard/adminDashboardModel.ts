@@ -12,6 +12,7 @@ import { NIVELES } from "@/shared/adam-types";
 import { ApiError } from "@/shared/api";
 
 export const ADMIN_PAGE_SIZE = 8;
+const SEMESTER_PATTERN = /^\d{4}-(I|II)$/;
 const ACADEMIC_LEVEL_CANONICAL = NIVELES;
 const ACADEMIC_LEVEL_ALIASES: Record<string, (typeof ACADEMIC_LEVEL_CANONICAL)[number]> = {
     Especializacion: "Especialización",
@@ -19,16 +20,23 @@ const ACADEMIC_LEVEL_ALIASES: Record<string, (typeof ACADEMIC_LEVEL_CANONICAL)[n
 };
 
 export const ACADEMIC_LEVEL_OPTIONS = ACADEMIC_LEVEL_CANONICAL;
+export const SEMESTER_TERM_OPTIONS = [
+    { value: "I", label: "I" },
+    { value: "II", label: "II" },
+] as const;
 export const COURSE_STATUS_OPTIONS: Array<{ value: AdminCourseStatus; label: string }> = [
     { value: "active", label: "Activo" },
     { value: "inactive", label: "Inactivo" },
 ];
 export const EMPTY_COURSES: AdminCourseListItem[] = [];
+export type SemesterTerm = (typeof SEMESTER_TERM_OPTIONS)[number]["value"];
 
 export interface CourseFormState {
     title: string;
     code: string;
-    semester: string;
+    semester_year: string;
+    semester_term: SemesterTerm;
+    invalid_semester_value: string | null;
     academic_level: string;
     max_students: string;
     status: AdminCourseStatus;
@@ -71,8 +79,40 @@ export function parseTeacherOptionValue(value: string): AdminTeacherAssignment |
 
 export function buildDefaultSemester(): string {
     const now = new Date();
-    const year = now.getFullYear();
-    return `${year}-${now.getMonth() < 6 ? "I" : "II"}`;
+    return composeSemester(String(now.getFullYear()), getDefaultSemesterTerm());
+}
+
+export function getDefaultSemesterTerm(): SemesterTerm {
+    return new Date().getMonth() < 6 ? "I" : "II";
+}
+
+export function buildSemesterYearOptions(now = new Date()): string[] {
+    const currentYear = now.getFullYear();
+    return Array.from({ length: 4 }, (_, index) => String(currentYear - 1 + index));
+}
+
+export function composeSemester(year: string, term: SemesterTerm): string {
+    return `${year.trim()}-${term}`;
+}
+
+export function parseSemesterForForm(
+    semester: string,
+): Pick<CourseFormState, "semester_year" | "semester_term" | "invalid_semester_value"> {
+    const normalized = semester.trim();
+    const match = normalized.match(SEMESTER_PATTERN);
+    if (!match) {
+        return {
+            semester_year: "",
+            semester_term: getDefaultSemesterTerm(),
+            invalid_semester_value: normalized || semester,
+        };
+    }
+
+    return {
+        semester_year: normalized.slice(0, 4),
+        semester_term: match[1] as SemesterTerm,
+        invalid_semester_value: null,
+    };
 }
 
 export function normalizeAcademicLevel(value: string): string {
@@ -80,10 +120,13 @@ export function normalizeAcademicLevel(value: string): string {
 }
 
 export function createEmptyCourseForm(): CourseFormState {
+    const defaultSemester = parseSemesterForForm(buildDefaultSemester());
     return {
         title: "",
         code: "",
-        semester: buildDefaultSemester(),
+        semester_year: defaultSemester.semester_year,
+        semester_term: defaultSemester.semester_term,
+        invalid_semester_value: null,
         academic_level: "Pregrado",
         max_students: "30",
         status: "active",
@@ -92,10 +135,13 @@ export function createEmptyCourseForm(): CourseFormState {
 }
 
 export function buildCourseFormFromItem(item: AdminCourseListItem): CourseFormState {
+    const semester = parseSemesterForForm(item.semester);
     return {
         title: item.title,
         code: item.code,
-        semester: item.semester,
+        semester_year: semester.semester_year,
+        semester_term: semester.semester_term,
+        invalid_semester_value: semester.invalid_semester_value,
         academic_level: normalizeAcademicLevel(item.academic_level),
         max_students: String(item.max_students),
         status: item.status,
@@ -108,11 +154,12 @@ export function buildCoursePayload(form: CourseFormState): AdminCourseMutationRe
     if (!teacherAssignment) {
         throw new Error("teacher_assignment_required");
     }
+    const semester = parseSemesterValue(form);
 
     return {
         title: form.title.trim(),
         code: form.code.trim(),
-        semester: form.semester.trim(),
+        semester,
         academic_level: normalizeAcademicLevel(form.academic_level),
         max_students: parseMaxStudents(form.max_students),
         status: form.status,
@@ -127,12 +174,25 @@ export function getAdminErrorMessage(error: unknown, fallback: string): string {
                 return "Selecciona un docente activo o una invitación pendiente antes de continuar.";
             case "invalid_max_students":
                 return "La capacidad máxima debe ser un número entero mayor o igual a 1.";
+            case "invalid_semester":
+                return "El semestre debe usar el formato YYYY-I o YYYY-II. Ejemplo: 2026-I.";
+            case "legacy_invalid_semester":
+                return "Este curso tiene un semestre invalido en origen. Corrigelo antes de guardar.";
             default:
                 break;
         }
     }
 
     if (!(error instanceof ApiError)) return fallback;
+
+    if (Array.isArray(error.detail)) {
+        const semesterIssue = error.detail.find((issue) =>
+            Array.isArray(issue.loc) && issue.loc.includes("semester"),
+        );
+        if (semesterIssue) {
+            return "El semestre debe usar el formato YYYY-I o YYYY-II. Ejemplo: 2026-I.";
+        }
+    }
 
     switch (error.detail) {
         case "invalid_token":
@@ -277,4 +337,22 @@ function parseMaxStudents(rawValue: string): number {
     }
 
     return parsed;
+}
+
+function parseSemesterValue(form: CourseFormState): string {
+    if (form.invalid_semester_value) {
+        throw new Error("legacy_invalid_semester");
+    }
+
+    const normalizedYear = form.semester_year.trim();
+    if (!/^\d{4}$/.test(normalizedYear)) {
+        throw new Error("invalid_semester");
+    }
+
+    const semester = composeSemester(normalizedYear, form.semester_term);
+    if (!SEMESTER_PATTERN.test(semester)) {
+        throw new Error("invalid_semester");
+    }
+
+    return semester;
 }

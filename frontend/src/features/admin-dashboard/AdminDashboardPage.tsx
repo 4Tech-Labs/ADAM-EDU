@@ -41,8 +41,10 @@ import type { ShowToast } from "@/shared/Toast";
 import {
     ADMIN_PAGE_SIZE,
     ACADEMIC_LEVEL_OPTIONS,
+    SEMESTER_TERM_OPTIONS,
     COURSE_STATUS_OPTIONS,
     EMPTY_COURSES,
+    buildSemesterYearOptions,
     buildCourseFormFromItem,
     buildCoursePayload,
     buildLinkPresentation,
@@ -59,6 +61,7 @@ import {
     teacherInviteToPendingOption,
     type CourseFormState,
     type LinkPresentation,
+    type SemesterTerm,
     type TeacherOptionsState,
 } from "./adminDashboardModel";
 
@@ -130,6 +133,7 @@ export function AdminDashboardPage({ showToast }: Props) {
         }
         return Array.from(values).sort((left, right) => right.localeCompare(left));
     }, [currentItems]);
+    const semesterYearOptions = useMemo(() => buildSemesterYearOptions(), []);
 
     const adminName = actor?.profile.full_name ?? "Administrador ADAM";
     const adminInitials = getInitials(adminName);
@@ -554,6 +558,7 @@ export function AdminDashboardPage({ showToast }: Props) {
                 onOpenInviteTeacher={() => openInviteModal("create")}
                 formError={courseFormError}
                 hideStatusMutation={false}
+                semesterYearOptions={semesterYearOptions}
                 activeLinkPresentation={null}
                 onCopyLink={null}
                 onRegenerateLink={null}
@@ -579,6 +584,7 @@ export function AdminDashboardPage({ showToast }: Props) {
                 onOpenInviteTeacher={() => openInviteModal("edit")}
                 formError={courseFormError}
                 hideStatusMutation
+                semesterYearOptions={semesterYearOptions}
                 activeLinkPresentation={editingCourse ? buildLinkPresentation(editingCourse, transientAccessLinks) : null}
                 onCopyLink={editingCourse ? (() => void handleCopyLink(editingCourse)) : null}
                 onRegenerateLink={editingCourse ? (() => void handleRegenerateLink(editingCourse)) : null}
@@ -932,6 +938,7 @@ function CourseModal({
     onOpenInviteTeacher,
     formError,
     hideStatusMutation,
+    semesterYearOptions,
     activeLinkPresentation,
     onCopyLink,
     onRegenerateLink,
@@ -952,6 +959,7 @@ function CourseModal({
     onOpenInviteTeacher: () => void;
     formError: string | null;
     hideStatusMutation: boolean;
+    semesterYearOptions: string[];
     activeLinkPresentation: LinkPresentation | null;
     onCopyLink: (() => void) | null;
     onRegenerateLink: (() => void) | null;
@@ -979,7 +987,18 @@ function CourseModal({
                     <div className="grid gap-5 md:grid-cols-2">
                         <Field label="Nombre del curso" value={form.title} onChange={(value) => onChange((prev) => ({ ...prev, title: value }))} placeholder="Ej. Finanzas Corporativas" />
                         <Field label="Codigo" value={form.code} onChange={(value) => onChange((prev) => ({ ...prev, code: value }))} placeholder="FIN-401" />
-                        <Field label="Semestre" value={form.semester} onChange={(value) => onChange((prev) => ({ ...prev, semester: value }))} placeholder="2026-I" />
+                        <div className="space-y-1.5 md:col-span-2">
+                            <span className="text-sm font-bold text-slate-700">Semestre</span>
+                            <div className="grid gap-5 sm:grid-cols-2">
+                                <SelectField label="Año" value={form.semester_year} onChange={(value) => onChange((prev) => ({ ...prev, semester_year: value, invalid_semester_value: null }))} options={semesterYearOptions.map((option) => ({ value: option, label: option }))} />
+                                <SelectField label="Periodo" value={form.semester_term} onChange={(value) => onChange((prev) => ({ ...prev, semester_term: value as SemesterTerm, invalid_semester_value: null }))} options={SEMESTER_TERM_OPTIONS.map((option) => ({ value: option.value, label: option.label }))} />
+                            </div>
+                            <p className={`text-xs ${form.invalid_semester_value ? "text-red-600" : "text-slate-400"}`}>
+                                {form.invalid_semester_value
+                                    ? `Valor heredado invalido: ${form.invalid_semester_value}. Selecciona un año y periodo validos.`
+                                    : "El backend solo acepta semestres con formato YYYY-I o YYYY-II."}
+                            </p>
+                        </div>
                         <SelectField label="Nivel academico" value={form.academic_level} onChange={(value) => onChange((prev) => ({ ...prev, academic_level: value }))} options={ACADEMIC_LEVEL_OPTIONS.map((value) => ({ value, label: value }))} />
                         <Field label="Capacidad maxima" type="number" min={1} value={form.max_students} onChange={(value) => onChange((prev) => ({ ...prev, max_students: value }))} placeholder="30" />
                         <SelectField label="Estado" value={form.status} onChange={(value) => onChange((prev) => ({ ...prev, status: value as AdminCourseStatus }))} options={COURSE_STATUS_OPTIONS} disabled={hideStatusMutation} helper={hideStatusMutation ? "El estado se cambia desde la accion Archivar para evitar restores accidentales." : undefined} />
@@ -1219,6 +1238,7 @@ function SelectField({
         <label className="block space-y-1.5">
             <span className="text-sm font-bold text-slate-700" id={`${selectId}-label`}>{label}</span>
             <select id={selectId} aria-labelledby={`${selectId}-label`} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="w-full rounded-[9px] border-[1.5px] border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#0144a0] focus:ring-4 focus:ring-[#0144a0]/10 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500">
+                {value === "" && <option value="">Selecciona una opcion</option>}
                 {options.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                 ))}

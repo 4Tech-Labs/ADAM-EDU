@@ -120,6 +120,15 @@ describe("api auth + stream glue", () => {
         );
     });
 
+    it("surfaces validation messages from structured FastAPI 422 errors", () => {
+        expect(formatHttpError(422, [{
+            type: "value_error",
+            loc: ["body", "semester"],
+            msg: "Value error, semester must use YYYY-I or YYYY-II",
+            input: "2026-2",
+        }])).toBe("Value error, semester must use YYYY-I or YYYY-II");
+    });
+
     it("serializes admin course filters into the expected query string", async () => {
         const fetchMock = vi.fn().mockResolvedValue(
             new Response(JSON.stringify({ items: [], page: 1, page_size: 8, total: 0, total_pages: 0 }), {

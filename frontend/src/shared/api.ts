@@ -52,11 +52,21 @@ export interface SseEvent {
     data: string;
 }
 
+export interface ApiValidationErrorDetail {
+    type: string;
+    loc: Array<string | number>;
+    msg: string;
+    input?: unknown;
+    ctx?: Record<string, unknown>;
+}
+
+export type ApiErrorDetail = string | ApiValidationErrorDetail[];
+
 export class ApiError extends Error {
     readonly status: number;
-    readonly detail?: string;
+    readonly detail?: ApiErrorDetail;
 
-    constructor(status: number, message: string, detail?: string) {
+    constructor(status: number, message: string, detail?: ApiErrorDetail) {
         super(message);
         this.name = "ApiError";
         this.status = status;
@@ -90,11 +100,14 @@ export async function createAuthorizedHeaders(init?: HeadersInit): Promise<Heade
     return headers;
 }
 
-function normalizeErrorDetail(detail?: string) {
-    return detail?.trim() || undefined;
+function normalizeErrorDetail(detail?: ApiErrorDetail) {
+    if (typeof detail !== "string") {
+        return undefined;
+    }
+    return detail.trim() || undefined;
 }
 
-export function formatHttpError(status: number, detail?: string) {
+export function formatHttpError(status: number, detail?: ApiErrorDetail) {
     const normalized = normalizeErrorDetail(detail);
     const code = normalized as ApiErrorCode | undefined;
 
@@ -117,10 +130,14 @@ export function formatHttpError(status: number, detail?: string) {
         }
     }
 
+    if (Array.isArray(detail)) {
+        return detail[0]?.msg || "Solicitud invalida.";
+    }
+
     return normalized || "Error del servidor";
 }
 
-async function readErrorDetail(res: Response): Promise<string | undefined> {
+async function readErrorDetail(res: Response): Promise<ApiErrorDetail | undefined> {
     const contentType = res.headers.get("Content-Type") ?? "";
 
     if (contentType.includes("application/json")) {
@@ -128,6 +145,9 @@ async function readErrorDetail(res: Response): Promise<string | undefined> {
             const payload = (await res.json()) as { detail?: unknown };
             if (typeof payload.detail === "string") {
                 return payload.detail;
+            }
+            if (Array.isArray(payload.detail)) {
+                return payload.detail as ApiValidationErrorDetail[];
             }
         } catch {
             return undefined;
