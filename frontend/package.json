@@ -13,6 +13,8 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",
     "@tailwindcss/vite": "^4.1.5",
+    "@tanstack/react-query": "^5.97.0",
+    "@tanstack/react-query-devtools": "^5.97.0",
     "clsx": "^2.1.1",
     "lucide-react": "^1.7.0",
     "marked": "^17.0.3",
