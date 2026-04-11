@@ -1,8 +1,9 @@
 /** ADAM v4.1 — AuthoringForm: formulario del profesor, fiel al mockup HtmlFormFrame.html */
 
 
-import { useState, useCallback, useEffect, type KeyboardEvent, type FormEvent } from "react";
-import type { CaseFormData, CaseType, EDADepth, StudentProfile, IntentType } from "@/shared/adam-types";
+import { useState, useCallback, useEffect, useRef, type KeyboardEvent, type FormEvent } from "react";
+import { useMutation } from "@tanstack/react-query";
+import type { CaseFormData, CaseType, EDADepth, StudentProfile, SuggestRequest } from "@/shared/adam-types";
 import {
     Select, SelectContent, SelectGroup,
     SelectItem, SelectTrigger, SelectValue,
@@ -49,9 +50,7 @@ export function AuthoringForm({
     const [dueAt, setDueAt] = useState("");
 
     // ── Estados IA ──
-    const [isSuggestingScenario, setIsSuggestingScenario] = useState(false);
-    const [isSuggestingTechniques, setIsSuggestingTechniques] = useState(false);
-    const [suggestError, setSuggestError] = useState<string | null>(null);
+    const [formAlertError, setFormAlertError] = useState<string | null>(null);
     const [areTechniquesStale, setAreTechniquesStale] = useState(false);
 
     // ── Validation ──
@@ -65,6 +64,7 @@ export function AuthoringForm({
     const units = selectedModule?.units ?? [];
     const selectedUnit = units.find((u) => u.id === topicUnit);
     const selectedIndustry = INDUSTRIAS_OPTIONS.find((option) => option.value === industry);
+    const suggestionGenerationRef = useRef({ scenario: 0, techniques: 0 });
 
     // ── EDA depth + notebook toggle logic ──
     // business + harvard_with_eda → edaDepth="charts_plus_explanation", no UI
@@ -93,6 +93,11 @@ export function AuthoringForm({
         }
     }, [suggestedTechniques]);
 
+    const invalidateSuggestionResponses = useCallback(() => {
+        suggestionGenerationRef.current.scenario += 1;
+        suggestionGenerationRef.current.techniques += 1;
+    }, []);
+
     // ── Validation CanSuggest ──
     const canSuggest =
         !!subject &&
@@ -100,57 +105,114 @@ export function AuthoringForm({
         !!syllabusModule &&
         !!industry;
 
-    const fetchSuggestion = async (intent: IntentType) => {
-        if (!canSuggest) return;
+    const buildSuggestPayload = useCallback((): SuggestRequest => {
+        const selectedCourseForAI = professorDB.courses.find((course) => course.id === subject);
+        const modulesForAI = selectedCourseForAI?.syllabus ?? [];
+        const moduleName = modulesForAI.find((module) => module.id === syllabusModule)?.name ?? "";
+        const unitName = selectedUnit?.name ?? "";
+        const industryLabel = selectedIndustry?.label ?? industry;
 
-        const isScenario = intent === "scenario" || intent === "both";
-        const isTechniques = intent === "techniques" || intent === "both";
+        return {
+            subject: selectedCourseForAI?.name ?? "",
+            academicLevel: selectedCourseForAI?.level ?? "",
+            targetGroups,
+            syllabusModule: moduleName,
+            topicUnit: unitName,
+            industry: industryLabel,
+            studentProfile,
+            caseType,
+            edaDepth,
+            includePythonCode,
+            scenarioDescription,
+            guidingQuestion,
+        };
+    }, [
+        caseType,
+        edaDepth,
+        guidingQuestion,
+        includePythonCode,
+        industry,
+        scenarioDescription,
+        selectedIndustry,
+        selectedUnit,
+        studentProfile,
+        subject,
+        syllabusModule,
+        targetGroups,
+    ]);
 
-        if (isScenario) setIsSuggestingScenario(true);
-        if (isTechniques) setIsSuggestingTechniques(true);
-        setSuggestError(null);
+    const scenarioMutation = useMutation({
+        mutationFn: (payload: SuggestRequest) => api.suggest("scenario", payload),
+    });
 
-        try {
-            const selectedCourseForAI = professorDB.courses.find(c => c.id === subject);
-            const modulesForAI = selectedCourseForAI?.syllabus ?? [];
-            const moduleName = modulesForAI.find(m => m.id === syllabusModule)?.name ?? "";
-            const unitName = selectedUnit?.name ?? "";
-            const industryLabel = selectedIndustry?.label ?? industry;
+    const techniquesMutation = useMutation({
+        mutationFn: (payload: SuggestRequest) => api.suggest("techniques", payload),
+    });
 
-            const data = await api.suggest(intent, {
-                subject: selectedCourseForAI?.name ?? "",
-                academicLevel: selectedCourseForAI?.level ?? "",
-                targetGroups,
-                syllabusModule: moduleName,
-                topicUnit: unitName,
-                industry: industryLabel,
-                studentProfile,
-                caseType,
-                edaDepth,
-                includePythonCode,
-                scenarioDescription,
-                guidingQuestion
-            });
+    const mutationError =
+        scenarioMutation.error instanceof Error
+            ? scenarioMutation.error.message
+            : techniquesMutation.error instanceof Error
+                ? techniquesMutation.error.message
+                : null;
 
-            if (isScenario) {
-                if (data.scenarioDescription) setScenarioDescription(data.scenarioDescription);
-                if (data.guidingQuestion) setGuidingQuestion(data.guidingQuestion);
-            }
-            if (isTechniques && data.suggestedTechniques.length > 0) {
-                setSuggestedTechniques(data.suggestedTechniques);
-                setAreTechniquesStale(false);
-            }
+    const resetSuggestionFeedback = useCallback(() => {
+        scenarioMutation.reset();
+        techniquesMutation.reset();
+        setFormAlertError(null);
+    }, [scenarioMutation, techniquesMutation]);
 
-        } catch (err: unknown) {
-            setSuggestError(err instanceof Error ? err.message : "Error generando sugerencia.");
-        } finally {
-            if (isScenario) setIsSuggestingScenario(false);
-            if (isTechniques) setIsSuggestingTechniques(false);
+    const handleSuggestScenario = useCallback(() => {
+        if (!canSuggest || scenarioMutation.isPending) {
+            return;
         }
-    };
+
+        resetSuggestionFeedback();
+        const generation = suggestionGenerationRef.current.scenario + 1;
+        suggestionGenerationRef.current.scenario = generation;
+
+        scenarioMutation.mutate(buildSuggestPayload(), {
+            onSuccess: (data) => {
+                if (suggestionGenerationRef.current.scenario !== generation) {
+                    return;
+                }
+
+                if (data.scenarioDescription) {
+                    setScenarioDescription(data.scenarioDescription);
+                }
+                if (data.guidingQuestion) {
+                    setGuidingQuestion(data.guidingQuestion);
+                }
+            },
+        });
+    }, [buildSuggestPayload, canSuggest, resetSuggestionFeedback, scenarioMutation]);
+
+    const handleSuggestTechniques = useCallback(() => {
+        if (!canSuggest || techniquesMutation.isPending) {
+            return;
+        }
+
+        resetSuggestionFeedback();
+        const generation = suggestionGenerationRef.current.techniques + 1;
+        suggestionGenerationRef.current.techniques = generation;
+
+        techniquesMutation.mutate(buildSuggestPayload(), {
+            onSuccess: (data) => {
+                if (suggestionGenerationRef.current.techniques !== generation) {
+                    return;
+                }
+
+                if (data.suggestedTechniques.length > 0) {
+                    setSuggestedTechniques(data.suggestedTechniques);
+                    setAreTechniquesStale(false);
+                }
+            },
+        });
+    }, [buildSuggestPayload, canSuggest, resetSuggestionFeedback, techniquesMutation]);
 
     // ── B6: Cascading resets ──
     const handleSubjectChange = (id: string) => {
+        invalidateSuggestionResponses();
         setSubject(id);
         setSyllabusModule("");
         setTopicUnit("");
@@ -159,12 +221,19 @@ export function AuthoringForm({
     };
 
     const handleSyllabusModuleChange = (id: string) => {
+        invalidateSuggestionResponses();
         setSyllabusModule(id);
         setTopicUnit("");
     };
 
+    const handleTopicUnitChange = (id: string) => {
+        invalidateSuggestionResponses();
+        setTopicUnit(id);
+    };
+
     // ── Group toggle ──
     const toggleGroup = (group: string) => {
+        invalidateSuggestionResponses();
         setTargetGroups((prev) => {
             return prev.includes(group)
                 ? prev.filter((g) => g !== group)
@@ -201,28 +270,42 @@ export function AuthoringForm({
 
     // ── Component Events Triggering Warning ──
     const onChangeScenarioDescription = (val: string) => {
+        invalidateSuggestionResponses();
         setScenarioDescription(val);
         markStale();
     };
     const onChangeGuidingQuestion = (val: string) => {
+        invalidateSuggestionResponses();
         setGuidingQuestion(val);
         markStale();
     };
     const onIndustryChange = (val: string) => {
+        invalidateSuggestionResponses();
         setIndustry(val);
         markStale();
     };
     const onStudentProfileChange = (val: string) => {
+        invalidateSuggestionResponses();
         setStudentProfile(val as StudentProfile);
         markStale();
     };
     const onCaseTypeChange = (val: CaseType) => {
+        invalidateSuggestionResponses();
         setCaseType(val);
         markStale();
+    };
+    const onChangeAvailableFrom = (val: string) => {
+        setAvailableFrom(val);
+        setFormAlertError(null);
+    };
+    const onChangeDueAt = (val: string) => {
+        setDueAt(val);
+        setFormAlertError(null);
     };
     // ── Submit ──
     const handleSubmit = (e: FormEvent) => {
             e.preventDefault();
+            setFormAlertError(null);
             const newErrors: Record<string, boolean> = {};
             if (!subject) newErrors.asignatura = true;
             if (!syllabusModule) newErrors.modulo = true;
@@ -235,7 +318,7 @@ export function AuthoringForm({
             // Validate dates implicitly relying on logical flow, highlight if reversed
             if (availableFrom && dueAt && new Date(dueAt) < new Date(availableFrom)) {
                 newErrors.dateOrder = true;
-                setSuggestError("La Fecha de Cierre no puede ser anterior a la Disponibilidad.");
+                setFormAlertError("La Fecha de Cierre no puede ser anterior a la Disponibilidad.");
             }
 
             if (Object.keys(newErrors).length > 0) {
@@ -247,6 +330,8 @@ export function AuthoringForm({
                 }
                 return;
             }
+
+            setErrors({});
 
             const formData: CaseFormData = {
                 subject: selectedCourse?.name ?? "",
@@ -271,6 +356,7 @@ export function AuthoringForm({
 
     // ── Clear ──
     const clearForm = () => {
+        invalidateSuggestionResponses();
         setSubject("");
         setSyllabusModule("");
         setTopicUnit("");
@@ -282,9 +368,9 @@ export function AuthoringForm({
         setSuggestedTechniques([]);
         setAlgoInput("");
         setErrors({});
-        setIsSuggestingScenario(false);
-        setIsSuggestingTechniques(false);
-        setSuggestError(null);
+        scenarioMutation.reset();
+        techniquesMutation.reset();
+        setFormAlertError(null);
         setAreTechniquesStale(false);
         setCaseType("harvard_only");
         setEdaDepth(undefined);
@@ -453,7 +539,7 @@ export function AuthoringForm({
                                             <Select
                                                 disabled={!syllabusModule}
                                                 value={topicUnit}
-                                                onValueChange={setTopicUnit}
+                                                onValueChange={handleTopicUnitChange}
                                             >
                                                 <SelectTrigger
                                                     id="field-unidad"
@@ -564,7 +650,10 @@ export function AuthoringForm({
                                                     type="button"
                                                     role="switch"
                                                     aria-checked={notebookToggle}
-                                                    onClick={() => setNotebookToggle((prev) => !prev)}
+                                                    onClick={() => {
+                                                        invalidateSuggestionResponses();
+                                                        setNotebookToggle((prev) => !prev);
+                                                    }}
                                                     className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${notebookToggle ? "bg-[#0144a0]" : "bg-slate-300"}`}
                                                 >
                                                     <span
@@ -605,12 +694,12 @@ export function AuthoringForm({
                                     </div>
 
                                     {/* Sugestión global error flag */}
-                                    {suggestError && (
+                                    {(formAlertError || mutationError) && (
                                         <div className="p-3 mb-2 rounded border border-red-200 bg-red-50 text-red-600 text-[13px] font-medium flex items-center gap-2">
                                             <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12A9 9 0 113 12a9 9 0 0118 0z" />
                                             </svg>
-                                            {suggestError}
+                                            {formAlertError ?? mutationError}
                                         </div>
                                     )}
 
@@ -621,11 +710,11 @@ export function AuthoringForm({
                                                 Descripción del Escenario (Obligatorio) <span className="text-red-500" aria-hidden="true">*</span>
                                                 <button
                                                     type="button"
-                                                    onClick={() => fetchSuggestion('scenario')}
-                                                    disabled={!canSuggest}
+                                                    onClick={handleSuggestScenario}
+                                                    disabled={!canSuggest || scenarioMutation.isPending}
                                                     className={`ml-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-bold text-[#0144a0] bg-blue-50 border border-blue-200 rounded-lg transition-all ${!canSuggest ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:bg-blue-100 hover:border-blue-300 hover:shadow-sm active:scale-[0.97]"}`}
                                                 >
-                                                    {isSuggestingScenario ? (
+                                                    {scenarioMutation.isPending ? (
                                                         <><span className="animate-spin w-3 h-3 border-2 border-[#0144a0] border-t-transparent rounded-full"></span> Generando...</>
                                                     ) : (
                                                         <>🪄 Sugerir Caso y Dilema</>
@@ -668,11 +757,11 @@ export function AuthoringForm({
                                                         Algoritmos / Técnicas Sugeridas
                                                         <button
                                                             type="button"
-                                                            onClick={() => fetchSuggestion('techniques')}
-                                                            disabled={!canSuggest}
+                                                            onClick={handleSuggestTechniques}
+                                                            disabled={!canSuggest || techniquesMutation.isPending}
                                                             className={`ml-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-bold text-[#0144a0] bg-blue-50 border border-blue-200 rounded-lg transition-all ${!canSuggest ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:bg-blue-100 hover:border-blue-300 hover:shadow-sm active:scale-[0.97]"}`}
                                                         >
-                                                            {isSuggestingTechniques ? (
+                                                            {techniquesMutation.isPending ? (
                                                                 <><span className="animate-spin w-3 h-3 border-2 border-[#0144a0] border-t-transparent rounded-full"></span> Pensando...</>
                                                             ) : (
                                                                 <>🪄 Sugerir Técnicas de Análisis</>
@@ -746,7 +835,7 @@ export function AuthoringForm({
                                             type="datetime-local"
                                             id="field-fecha-inicio"
                                             value={availableFrom}
-                                            onChange={(e) => setAvailableFrom(e.target.value)}
+                                            onChange={(e) => onChangeAvailableFrom(e.target.value)}
                                             className="input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 cursor-pointer"
                                         />
                                     </div>
@@ -763,7 +852,7 @@ export function AuthoringForm({
                                             type="datetime-local"
                                             id="field-fecha-cierre"
                                             value={dueAt}
-                                            onChange={(e) => setDueAt(e.target.value)}
+                                            onChange={(e) => onChangeDueAt(e.target.value)}
                                             className="input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 cursor-pointer"
                                         />
                                     </div>
