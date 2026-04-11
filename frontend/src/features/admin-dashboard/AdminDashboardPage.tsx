@@ -30,6 +30,7 @@ import {
     type ReactNode,
     type SetStateAction,
 } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "@/app/auth/useAuth";
 import type {
@@ -40,6 +41,7 @@ import type {
     AdminTeacherOptionsResponse,
 } from "@/shared/adam-types";
 import { ApiError, api } from "@/shared/api";
+import { queryKeys } from "@/shared/queryKeys";
 import type { ShowToast } from "@/shared/Toast";
 import {
     Select,
@@ -76,7 +78,6 @@ import {
     type CourseFormState,
     type LinkPresentation,
     type SemesterTerm,
-    type TeacherOptionsState,
 } from "./adminDashboardModel";
 
 type ModalInviteTarget = "create" | "edit";
@@ -97,6 +98,7 @@ const UI_UNASSIGNED_TEACHER_VALUE = "__unassigned_teacher_value__";
 
 export function AdminDashboardPage({ showToast }: Props) {
     const { actor, signOut } = useAuth();
+    const queryClient = useQueryClient();
 
     const [summary, setSummary] = useState<AdminDashboardSummaryResponse | null>(null);
     const [coursesResponse, setCoursesResponse] = useState<AdminCourseListResponse | null>(null);
@@ -105,12 +107,6 @@ export function AdminDashboardPage({ showToast }: Props) {
     const [pageError, setPageError] = useState<string | null>(null);
     const [refreshError, setRefreshError] = useState<string | null>(null);
     const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
-    const [teacherOptionsState, setTeacherOptionsState] = useState<TeacherOptionsState>({
-        data: null,
-        isInitialLoading: false,
-        isRefreshing: false,
-        error: null,
-    });
     const [transientAccessLinks, setTransientAccessLinks] = useState<Record<string, string>>({});
     const [search, setSearch] = useState("");
     const deferredSearch = useDeferredValue(search);
@@ -139,9 +135,7 @@ export function AdminDashboardPage({ showToast }: Props) {
     const [inviteFormError, setInviteFormError] = useState<string | null>(null);
     const isMountedRef = useRef(true);
     const didLoadDashboardRef = useRef(false);
-    const didLoadTeacherOptionsRef = useRef(false);
     const dashboardRequestIdRef = useRef(0);
-    const teacherOptionsRequestIdRef = useRef(0);
     const lastExternalRefreshAtRef = useRef(0);
 
     useEffect(() => {
@@ -159,7 +153,22 @@ export function AdminDashboardPage({ showToast }: Props) {
     const archivingCourse = archivingCourseId
         ? currentItems.find((item) => item.id === archivingCourseId) ?? null
         : null;
-    const teacherOptions = teacherOptionsState.data;
+    const teacherOptionsQuery = useQuery({
+        queryKey: queryKeys.admin.teacherOptions(),
+        queryFn: () => api.admin.getTeacherOptions(),
+        staleTime: 5 * 60_000,
+        refetchOnWindowFocus: "always",
+    });
+    const teacherOptions = teacherOptionsQuery.data ?? null;
+    const teacherOptionsInitialLoading = teacherOptionsQuery.isLoading;
+    const teacherOptionsRefreshing =
+        teacherOptionsQuery.isFetching && !teacherOptionsQuery.isLoading;
+    const teacherOptionsError = teacherOptionsQuery.error
+        ? getAdminErrorMessage(
+            teacherOptionsQuery.error,
+            "No se pudieron cargar las opciones de docentes para los formularios.",
+        )
+        : null;
     const semesterSuggestions = useMemo(() => {
         const values = new Set<string>();
         for (const item of currentItems) {
@@ -191,47 +200,6 @@ export function AdminDashboardPage({ showToast }: Props) {
         setPageError(null);
         setRefreshError(null);
         setLastSyncedAt(Date.now());
-    }, []);
-
-    const refreshTeacherOptions = useCallback(async ({ mode }: { mode?: RefreshMode } = {}) => {
-        const requestId = ++teacherOptionsRequestIdRef.current;
-        const refreshMode = mode ?? (didLoadTeacherOptionsRef.current ? "background" : "initial");
-        const isBlocking = refreshMode === "initial" && !didLoadTeacherOptionsRef.current;
-
-        setTeacherOptionsState((prev) => ({
-            data: prev.data,
-            isInitialLoading: isBlocking,
-            isRefreshing: !isBlocking && prev.data !== null,
-            error: isBlocking ? null : prev.error,
-        }));
-
-        try {
-            const data = await api.admin.getTeacherOptions();
-            if (!isMountedRef.current || requestId !== teacherOptionsRequestIdRef.current) {
-                return data;
-            }
-
-            didLoadTeacherOptionsRef.current = true;
-            setTeacherOptionsState({
-                data,
-                isInitialLoading: false,
-                isRefreshing: false,
-                error: null,
-            });
-            return data;
-        } catch (error) {
-            if (!isMountedRef.current || requestId !== teacherOptionsRequestIdRef.current) {
-                throw error;
-            }
-
-            setTeacherOptionsState((prev) => ({
-                data: prev.data,
-                isInitialLoading: false,
-                isRefreshing: false,
-                error: getAdminErrorMessage(error, "No se pudieron cargar las opciones de docentes para los formularios."),
-            }));
-            throw error;
-        }
     }, []);
 
     const refreshDashboard = useCallback(async (
@@ -286,10 +254,6 @@ export function AdminDashboardPage({ showToast }: Props) {
         void refreshDashboard().catch(() => undefined);
     }, [refreshDashboard]);
 
-    useEffect(() => {
-        void refreshTeacherOptions({ mode: "initial" }).catch(() => undefined);
-    }, [refreshTeacherOptions]);
-
     const requestExternalRefresh = useCallback(() => {
         if (!didLoadDashboardRef.current) {
             return;
@@ -301,8 +265,7 @@ export function AdminDashboardPage({ showToast }: Props) {
         }
         lastExternalRefreshAtRef.current = now;
         void refreshDashboard({ mode: "background" }).catch(() => undefined);
-        void refreshTeacherOptions({ mode: "background" }).catch(() => undefined);
-    }, [refreshDashboard, refreshTeacherOptions]);
+    }, [refreshDashboard]);
 
     useEffect(() => {
         function handleWindowFocus() {
@@ -324,6 +287,20 @@ export function AdminDashboardPage({ showToast }: Props) {
             document.removeEventListener("visibilitychange", handleVisibilityChange);
         };
     }, [requestExternalRefresh]);
+
+    const retryTeacherOptions = useCallback(() => {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.admin.teacherOptions() });
+    }, [queryClient]);
+
+    const clearPendingInviteSelection = useCallback((
+        setForm: Dispatch<SetStateAction<CourseFormState>>,
+    ) => {
+        setForm((prev) => (
+            prev.teacher_option_value.startsWith("pending_invite:")
+                ? { ...prev, teacher_option_value: "" }
+                : prev
+        ));
+    }, []);
 
     const refreshSummaryAndCourses = useCallback(async (nextPage = page) => {
         await refreshDashboard({
@@ -384,7 +361,8 @@ export function AdminDashboardPage({ showToast }: Props) {
         } catch (error) {
             setCourseFormError(getAdminErrorMessage(error, "No se pudo crear el curso."));
             if (error instanceof ApiError && error.detail === "stale_pending_teacher_invite") {
-                await refreshTeacherOptions();
+                clearPendingInviteSelection(setCreateForm);
+                await queryClient.invalidateQueries({ queryKey: queryKeys.admin.teacherOptions() });
             }
         } finally {
             setSubmittingCreate(false);
@@ -409,7 +387,8 @@ export function AdminDashboardPage({ showToast }: Props) {
         } catch (error) {
             setCourseFormError(getAdminErrorMessage(error, "No se pudo actualizar el curso."));
             if (error instanceof ApiError && error.detail === "stale_pending_teacher_invite") {
-                await refreshTeacherOptions();
+                clearPendingInviteSelection(setEditForm);
+                await queryClient.invalidateQueries({ queryKey: queryKeys.admin.teacherOptions() });
             }
         } finally {
             setSubmittingEdit(false);
@@ -452,18 +431,16 @@ export function AdminDashboardPage({ showToast }: Props) {
                 full_name: inviteName.trim(),
                 email: inviteEmail.trim(),
             });
-            setTeacherOptionsState((prev) => ({
-                data: {
-                    active_teachers: prev.data?.active_teachers ?? [],
+            queryClient.setQueryData(
+                queryKeys.admin.teacherOptions(),
+                (previous: AdminTeacherOptionsResponse | undefined): AdminTeacherOptionsResponse => ({
+                    active_teachers: previous?.active_teachers ?? [],
                     pending_invites: sortPendingInvites([
-                        ...(prev.data?.pending_invites ?? []),
+                        ...(previous?.pending_invites ?? []),
                         teacherInviteToPendingOption(createdInvite),
                     ]),
-                },
-                isInitialLoading: false,
-                isRefreshing: false,
-                error: null,
-            }));
+                }),
+            );
             const encodedValue = encodeTeacherOptionValue({
                 kind: "pending_invite",
                 invite_id: createdInvite.invite_id,
@@ -664,8 +641,10 @@ export function AdminDashboardPage({ showToast }: Props) {
                 submitLabel={submittingCreate ? "Creando..." : "Crear curso"}
                 isSubmitting={submittingCreate}
                 teacherOptions={teacherOptions}
-                teacherOptionsState={teacherOptionsState}
-                onRetryTeacherOptions={() => { void refreshTeacherOptions(); }}
+                teacherOptionsInitialLoading={teacherOptionsInitialLoading}
+                teacherOptionsRefreshing={teacherOptionsRefreshing}
+                teacherOptionsError={teacherOptionsError}
+                onRetryTeacherOptions={retryTeacherOptions}
                 onOpenInviteTeacher={() => openInviteModal("create")}
                 formError={courseFormError}
                 hideStatusMutation={false}
@@ -690,8 +669,10 @@ export function AdminDashboardPage({ showToast }: Props) {
                 submitLabel={submittingEdit ? "Guardando..." : "Guardar cambios"}
                 isSubmitting={submittingEdit}
                 teacherOptions={teacherOptions}
-                teacherOptionsState={teacherOptionsState}
-                onRetryTeacherOptions={() => { void refreshTeacherOptions(); }}
+                teacherOptionsInitialLoading={teacherOptionsInitialLoading}
+                teacherOptionsRefreshing={teacherOptionsRefreshing}
+                teacherOptionsError={teacherOptionsError}
+                onRetryTeacherOptions={retryTeacherOptions}
                 onOpenInviteTeacher={() => openInviteModal("edit")}
                 formError={courseFormError}
                 hideStatusMutation
@@ -1177,7 +1158,9 @@ function CourseModal({
     submitLabel,
     isSubmitting,
     teacherOptions,
-    teacherOptionsState,
+    teacherOptionsInitialLoading,
+    teacherOptionsRefreshing,
+    teacherOptionsError,
     onRetryTeacherOptions,
     onOpenInviteTeacher,
     formError,
@@ -1198,7 +1181,9 @@ function CourseModal({
     submitLabel: string;
     isSubmitting: boolean;
     teacherOptions: AdminTeacherOptionsResponse | null;
-    teacherOptionsState: TeacherOptionsState;
+    teacherOptionsInitialLoading: boolean;
+    teacherOptionsRefreshing: boolean;
+    teacherOptionsError: string | null;
     onRetryTeacherOptions: () => void;
     onOpenInviteTeacher: () => void;
     formError: string | null;
@@ -1210,7 +1195,8 @@ function CourseModal({
     isRegenerating: boolean;
 }) {
     const teacherFieldId = useId();
-    const teacherOptionsBlocked = teacherOptionsState.isInitialLoading || (!teacherOptions && Boolean(teacherOptionsState.error));
+    const teacherOptionsBlocked =
+        teacherOptionsInitialLoading || (!teacherOptions && Boolean(teacherOptionsError));
     const modalTestId = title.toLowerCase().includes("crear") ? "create-course-modal" : "edit-course-modal";
     useEffect(() => {
         if (isOpen) {
@@ -1275,7 +1261,11 @@ function CourseModal({
                             </button>
                         </div>
                         {teacherOptionsBlocked ? (
-                            <TeacherOptionsErrorState isLoading={teacherOptionsState.isInitialLoading} error={teacherOptionsState.error} onRetry={onRetryTeacherOptions} />
+                            <TeacherOptionsErrorState
+                                isLoading={teacherOptionsInitialLoading}
+                                error={teacherOptionsError}
+                                onRetry={onRetryTeacherOptions}
+                            />
                         ) : (
                             <div className="space-y-2">
                                 <Select
@@ -1319,8 +1309,8 @@ function CourseModal({
                                     </SelectContent>
                                 </Select>
                                 <TeacherOptionsRefreshNotice
-                                    isRefreshing={teacherOptionsState.isRefreshing}
-                                    error={teacherOptionsState.error}
+                                    isRefreshing={teacherOptionsRefreshing}
+                                    error={teacherOptionsError}
                                     onRetry={onRetryTeacherOptions}
                                 />
                             </div>

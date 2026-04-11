@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { focusManager } from "@tanstack/react-query";
 
 import { AdminDashboardPage } from "./AdminDashboardPage";
 import type {
@@ -152,6 +153,8 @@ function resolveSelectOptionLabel(label: string, value: string): string {
                 return "Julio Cesar Paz (julio@example.edu)";
             case "pending_invite:invite-2":
                 return "Diana Lopez (diana@example.edu) - Pendiente";
+            case "pending_invite:invite-3":
+                return "Maria Perez (maria@example.edu) - Pendiente";
             case "":
                 return "Selecciona un docente";
             default:
@@ -183,7 +186,7 @@ function createDeferred<T>() {
     return { promise, resolve, reject };
 }
 
-function fillCreateCourseForm(teacherValue: string) {
+async function fillCreateCourseForm(teacherValue: string) {
     fireEvent.change(screen.getByLabelText("Nombre del curso"), {
         target: { value: "Gobierno de Datos" },
     });
@@ -202,14 +205,29 @@ function fillCreateCourseForm(teacherValue: string) {
     fireEvent.change(screen.getByLabelText("Capacidad maxima"), {
         target: { value: "42" },
     });
+    await waitFor(() => {
+        expect(screen.queryByText("Cargando selector de docentes...")).toBeNull();
+        expect(screen.getByLabelText("Docente asignado")).toBeTruthy();
+    });
     fireEvent.change(screen.getByLabelText("Docente asignado"), {
         target: { value: teacherValue },
     });
 }
 
+function triggerWindowRefocus() {
+    Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+    });
+    fireEvent.focus(window);
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+}
+
 describe("AdminDashboardPage", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        focusManager.setFocused(true);
         Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
             configurable: true,
             value: vi.fn(),
@@ -320,7 +338,7 @@ describe("AdminDashboardPage", () => {
         await screen.findByText("Directorio de Cursos");
 
         fireEvent.click(screen.getByText("Crear Nuevo Curso"));
-        fillCreateCourseForm("membership:teacher-membership-1");
+        await fillCreateCourseForm("membership:teacher-membership-1");
         fireEvent.submit(screen.getByTestId("create-course-modal").querySelector("form")!);
 
         await waitFor(() => {
@@ -374,7 +392,7 @@ describe("AdminDashboardPage", () => {
         await screen.findByText("Directorio de Cursos");
 
         fireEvent.click(screen.getByText("Crear Nuevo Curso"));
-        fillCreateCourseForm("pending_invite:invite-2");
+        await fillCreateCourseForm("pending_invite:invite-2");
         fireEvent.submit(screen.getByTestId("create-course-modal").querySelector("form")!);
 
         await waitFor(() => {
@@ -392,7 +410,7 @@ describe("AdminDashboardPage", () => {
         await screen.findByText("Directorio de Cursos");
 
         fireEvent.click(screen.getByText("Crear Nuevo Curso"));
-        fillCreateCourseForm("membership:teacher-membership-1");
+        await fillCreateCourseForm("membership:teacher-membership-1");
         fireEvent.change(screen.getByLabelText("Capacidad maxima"), {
             target: { value: "3.5" },
         });
@@ -407,7 +425,7 @@ describe("AdminDashboardPage", () => {
         await screen.findByText("Directorio de Cursos");
 
         fireEvent.click(screen.getByText("Crear Nuevo Curso"));
-        fillCreateCourseForm("membership:teacher-membership-1");
+        await fillCreateCourseForm("membership:teacher-membership-1");
         fireEvent.submit(screen.getByTestId("create-course-modal").querySelector("form")!);
 
         await waitFor(() => {
@@ -482,6 +500,20 @@ describe("AdminDashboardPage", () => {
         await waitFor(() => {
             expect(navigator.clipboard.writeText).toHaveBeenCalledWith("/app/teacher/activate#invite_token=abc123");
         });
+
+        fireEvent.click(screen.getByLabelText("Cerrar modal de invitacion"));
+
+        await fillCreateCourseForm("pending_invite:invite-3");
+        fireEvent.submit(screen.getByTestId("create-course-modal").querySelector("form")!);
+
+        await waitFor(() => {
+            expect(api.admin.createCourse).toHaveBeenCalledWith(expect.objectContaining({
+                teacher_assignment: {
+                    kind: "pending_invite",
+                    invite_id: "invite-3",
+                },
+            }));
+        });
     });
 
     it("keeps dashboard quick actions as placeholders with no side effects", async () => {
@@ -535,7 +567,7 @@ describe("AdminDashboardPage", () => {
         await screen.findByText("Directorio de Cursos");
 
         fireEvent.click(screen.getByText("Crear Nuevo Curso"));
-        fillCreateCourseForm("pending_invite:invite-2");
+        await fillCreateCourseForm("pending_invite:invite-2");
         fireEvent.submit(screen.getByTestId("create-course-modal").querySelector("form")!);
 
         expect(await screen.findByText("La invitacion pendiente seleccionada ya no es valida. Actualiza el selector y elige otra opcion.")).toBeTruthy();
@@ -543,6 +575,7 @@ describe("AdminDashboardPage", () => {
         await waitFor(() => {
             expect(api.admin.getTeacherOptions).toHaveBeenCalledTimes(2);
         });
+        expect(screen.getByLabelText("Docente asignado")).toHaveTextContent("Selecciona un docente");
     });
 
     it("filters by semester using only the created-course options from the select", async () => {
@@ -631,7 +664,9 @@ describe("AdminDashboardPage", () => {
         expect(api.admin.listCourses).toHaveBeenCalledTimes(1);
         expect(api.admin.getTeacherOptions).toHaveBeenCalledTimes(1);
 
-        fireEvent.focus(window);
+        await act(async () => {
+            triggerWindowRefocus();
+        });
 
         await waitFor(() => {
             expect(api.admin.getDashboardSummary).toHaveBeenCalledTimes(2);
@@ -658,7 +693,9 @@ describe("AdminDashboardPage", () => {
         renderPage();
         await screen.findByText("Directorio de Cursos");
 
-        fireEvent.focus(window);
+        await act(async () => {
+            triggerWindowRefocus();
+        });
 
         expect(screen.queryByTestId("admin-dashboard-loading")).toBeNull();
         expect(screen.getByText("62%")).toBeTruthy();
@@ -725,11 +762,15 @@ describe("AdminDashboardPage", () => {
         fireEvent.click(screen.getByText("Crear Nuevo Curso"));
         expect(screen.getByLabelText("Docente asignado")).toBeTruthy();
 
-        fireEvent.focus(window);
+        await act(async () => {
+            triggerWindowRefocus();
+        });
 
         expect(screen.getByLabelText("Docente asignado")).toBeTruthy();
         expect(screen.queryByText(/No se pudo cargar el selector de docentes/i)).toBeNull();
-        expect(screen.getByText("Actualizando docentes...")).toBeTruthy();
+        await waitFor(() => {
+            expect(screen.getByText("Actualizando docentes...")).toBeTruthy();
+        });
 
         await act(async () => {
             refreshTeacherOptionsDeferred.resolve(teacherOptionsResponse);
@@ -746,7 +787,7 @@ describe("AdminDashboardPage", () => {
         await screen.findByText("Directorio de Cursos");
 
         fireEvent.click(screen.getByText("Crear Nuevo Curso"));
-        fillCreateCourseForm("membership:teacher-membership-1");
+        await fillCreateCourseForm("membership:teacher-membership-1");
         selectLabeledOption("Docente asignado", "");
         fireEvent.submit(screen.getByTestId("create-course-modal").querySelector("form")!);
 

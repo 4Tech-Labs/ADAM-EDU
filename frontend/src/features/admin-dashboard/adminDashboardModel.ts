@@ -7,7 +7,6 @@ import type {
     AdminPendingTeacherInviteOption,
     AdminTeacherAssignment,
     AdminTeacherInviteResponse,
-    AdminTeacherOptionsResponse,
 } from "@/shared/adam-types";
 import { NIVELES } from "@/shared/adam-types";
 import { ApiError } from "@/shared/api";
@@ -42,13 +41,6 @@ export interface CourseFormState {
     max_students: string;
     status: AdminCourseStatus;
     teacher_option_value: string;
-}
-
-export interface TeacherOptionsState {
-    data: AdminTeacherOptionsResponse | null;
-    isInitialLoading: boolean;
-    isRefreshing: boolean;
-    error: string | null;
 }
 
 export interface LinkPresentation {
