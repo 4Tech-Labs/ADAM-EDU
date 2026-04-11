@@ -134,11 +134,20 @@ describe("AuthProvider", () => {
             return { data: { subscription: { unsubscribe: vi.fn() } } };
         });
 
-        renderWithAuthProvider();
+        const queryClient = createTestQueryClient();
+        render(
+            <AuthProvider>
+                <Probe />
+            </AuthProvider>,
+            {
+                wrapper: createWrapper({ queryClient }),
+            },
+        );
 
         await waitFor(() =>
             expect(screen.getByTestId("actor").textContent).toBe("Test User"),
         );
+        queryClient.setQueryData(["admin", "summary"], { value: 1 });
 
         // Simulate sign-out event
         capturedCallback!("SIGNED_OUT", null);
@@ -147,5 +156,6 @@ describe("AuthProvider", () => {
             expect(screen.getByTestId("actor").textContent).toBe("none"),
         );
         expect(screen.getByTestId("session").textContent).toBe("no");
+        expect(queryClient.getQueryData(["admin", "summary"])).toBeUndefined();
     });
 });

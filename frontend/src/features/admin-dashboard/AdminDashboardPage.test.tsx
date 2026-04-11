@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { focusManager } from "@tanstack/react-query";
 
@@ -226,7 +226,7 @@ function triggerWindowRefocus() {
 
 describe("AdminDashboardPage", () => {
     beforeEach(() => {
-        vi.clearAllMocks();
+        vi.resetAllMocks();
         focusManager.setFocused(true);
         Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
             configurable: true,
@@ -289,6 +289,10 @@ describe("AdminDashboardPage", () => {
                 writeText: vi.fn().mockResolvedValue(undefined),
             },
         });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
     });
 
     it("renders KPIs and secure access-link placeholder states", async () => {
@@ -679,6 +683,26 @@ describe("AdminDashboardPage", () => {
         });
     });
 
+    it("auto-refreshes the summary every 30 seconds while the dashboard stays open", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        vi.mocked(api.admin.getDashboardSummary)
+            .mockResolvedValueOnce(summaryResponse)
+            .mockResolvedValueOnce({
+                ...summaryResponse,
+                average_occupancy: 78,
+            });
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(30_000);
+        });
+
+        expect(await screen.findByText("78%")).toBeTruthy();
+        expect(api.admin.getDashboardSummary).toHaveBeenCalledTimes(2);
+    }, 20_000);
+
     it("keeps the current dashboard mounted while a focus revalidation is pending and updates KPIs in place", async () => {
         const refreshSummaryDeferred = createDeferred<AdminDashboardSummaryResponse>();
         const refreshCoursesDeferred = createDeferred<AdminCourseListResponse>();
@@ -700,7 +724,9 @@ describe("AdminDashboardPage", () => {
         expect(screen.queryByTestId("admin-dashboard-loading")).toBeNull();
         expect(screen.getByText("62%")).toBeTruthy();
         expect(screen.getByText("Finanzas Corporativas")).toBeTruthy();
-        expect(screen.getByTestId("dashboard-refresh-status").textContent).toContain("Actualizando datos");
+        await waitFor(() => {
+            expect(screen.getByTestId("dashboard-refresh-status").textContent).toContain("Actualizando datos");
+        });
 
         await act(async () => {
             refreshSummaryDeferred.resolve({
@@ -728,7 +754,9 @@ describe("AdminDashboardPage", () => {
         renderPage();
         await screen.findByText("Directorio de Cursos");
 
-        fireEvent.focus(window);
+        await act(async () => {
+            triggerWindowRefocus();
+        });
 
         expect(screen.getByText("Estrategia Operativa")).toBeTruthy();
         expect(screen.getByText("Finanzas Corporativas")).toBeTruthy();
@@ -806,7 +834,9 @@ describe("AdminDashboardPage", () => {
         renderPage();
         await screen.findByText("Directorio de Cursos");
 
-        fireEvent.focus(window);
+        await act(async () => {
+            triggerWindowRefocus();
+        });
 
         await waitFor(() => {
             expect(screen.getByTestId("dashboard-refresh-status").textContent).toContain("No se pudo actualizar");
@@ -817,6 +847,76 @@ describe("AdminDashboardPage", () => {
         expect(screen.queryByTestId("global-page-error")).toBeNull();
         expect(screen.queryByTestId("admin-dashboard-loading")).toBeNull();
     });
+
+    it("applies fresh course rows even when the summary refetch fails", async () => {
+        vi.mocked(api.admin.getDashboardSummary)
+            .mockResolvedValueOnce(summaryResponse)
+            .mockRejectedValueOnce(new ApiError(500, "summary failed", "teacher_email_unavailable"));
+        vi.mocked(api.admin.listCourses)
+            .mockResolvedValueOnce(coursesResponse)
+            .mockResolvedValueOnce({
+                ...coursesResponse,
+                items: [
+                    { ...activeCourse, title: "Finanzas Corporativas Avanzadas" },
+                    inactiveCourse,
+                ],
+            });
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        await act(async () => {
+            triggerWindowRefocus();
+        });
+
+        expect(await screen.findByText("Finanzas Corporativas Avanzadas")).toBeTruthy();
+        expect(screen.getByText("62%")).toBeTruthy();
+    });
+
+    it("applies fresh summary KPIs even when the courses refetch fails", async () => {
+        vi.mocked(api.admin.getDashboardSummary)
+            .mockResolvedValueOnce(summaryResponse)
+            .mockResolvedValueOnce({
+                ...summaryResponse,
+                average_occupancy: 78,
+            });
+        vi.mocked(api.admin.listCourses)
+            .mockResolvedValueOnce(coursesResponse)
+            .mockRejectedValueOnce(new ApiError(500, "courses failed", "teacher_email_unavailable"));
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        await act(async () => {
+            triggerWindowRefocus();
+        });
+
+        expect(await screen.findByText("78%")).toBeTruthy();
+        expect(screen.getByText("Finanzas Corporativas")).toBeTruthy();
+    });
+
+    it("keeps create-course success visible even if the invalidated queries fail afterwards", async () => {
+        vi.mocked(api.admin.getDashboardSummary)
+            .mockResolvedValueOnce(summaryResponse)
+            .mockRejectedValueOnce(new ApiError(500, "summary failed", "teacher_email_unavailable"));
+        vi.mocked(api.admin.listCourses)
+            .mockResolvedValueOnce(coursesResponse)
+            .mockRejectedValueOnce(new ApiError(500, "courses failed", "teacher_email_unavailable"));
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        fireEvent.click(screen.getByText("Crear Nuevo Curso"));
+        await fillCreateCourseForm("membership:teacher-membership-1");
+        fireEvent.submit(screen.getByTestId("create-course-modal").querySelector("form")!);
+
+        await waitFor(() => {
+            expect(api.admin.createCourse).toHaveBeenCalledTimes(1);
+        });
+        expect(showToast).toHaveBeenCalledWith("Curso creado correctamente.", "success");
+        expect(screen.queryByTestId("create-course-modal")).toBeNull();
+        expect(screen.queryByText("No se pudo crear el curso.")).toBeNull();
+    }, 20_000);
 
     it("regenerates a hidden active link and keeps the new raw link visible after refresh", async () => {
         renderPage();

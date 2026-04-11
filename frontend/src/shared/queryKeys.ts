@@ -43,7 +43,12 @@ export const queryKeys = {
          * ["admin", "courses", filters?] — lista paginada de cursos con filtros.
          * Sin argumentos invalida todas las variantes de la lista.
          */
-        courses: (f?: CourseFilters) => ["admin", "courses", f] as const,
+        courses: (f?: CourseFilters) => {
+            if (f === undefined) {
+                return ["admin", "courses"] as const;
+            }
+            return ["admin", "courses", f] as const;
+        },
         /** ["admin", "teacher-options"] — opciones para el dropdown de asignación de docente */
         teacherOptions: () => ["admin", "teacher-options"] as const,
     },
