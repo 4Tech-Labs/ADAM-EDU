@@ -13,6 +13,7 @@ import {
     Users,
     X,
     Check,
+    GraduationCap,
 } from "lucide-react";
 import {
     memo,
@@ -566,13 +567,13 @@ export function AdminDashboardPage({ showToast }: Props) {
                         <section className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                             <KpiCard icon={<BookOpen className="h-5 w-5 text-blue-600" />} value={String(summary?.active_courses ?? 0)} label="Cursos activos" iconClassName="bg-blue-50" />
                             <KpiCard icon={<Users className="h-5 w-5 text-indigo-600" />} value={String(summary?.active_teachers ?? 0)} label="Docentes activos" iconClassName="bg-indigo-50" />
-                            <KpiCard icon={<Users className="h-5 w-5 text-emerald-600" />} value={String(summary?.enrolled_students ?? 0)} label="Estudiantes matriculados" iconClassName="bg-emerald-50" />
+                            <KpiCard icon={<GraduationCap className="h-5 w-5 text-emerald-600" />} value={String(summary?.enrolled_students ?? 0)} label="Estudiantes matriculados" iconClassName="bg-emerald-50" />
                             <KpiCard icon={<BarChart3 className="h-5 w-5 text-amber-600" />} value={`${summary?.average_occupancy ?? 0}%`} label="Ocupacion promedio" iconClassName="bg-amber-50" />
                         </section>
 
                         <section className="mb-7 grid grid-cols-1 gap-4 md:grid-cols-3">
                             <ActionCard title="Crear Nuevo Curso" subtitle="Asigna un docente y genera link" onClick={openCreateModal} variant="primary" icon={<Plus className="h-5 w-5 text-white" strokeWidth={2.4} />} />
-                            <ActionCard title="Gestion de Docentes" subtitle="Proximamente disponible" onClick={() => showToast("La gestion de docentes estara disponible proximamente.", "default")} variant="secondary" icon={<MailPlus className="h-5 w-5 text-slate-600" />} />
+                            <ActionCard title="Gestion de Docentes" subtitle="Proximamente disponible" onClick={() => showToast("La gestion de docentes estara disponible proximamente.", "default")} variant="primary" icon={<Users className="h-5 w-5 text-white" strokeWidth={2.4} />} />
                             <ActionCard title="Reportes Globales" subtitle="Proximamente disponible" onClick={() => showToast("Modulo de reportes proximamente disponible.", "default")} variant="placeholder" icon={<ExternalLink className="h-5 w-5 text-slate-400" />} />
                         </section>
 
@@ -1211,27 +1212,45 @@ function CourseModal({
     const teacherFieldId = useId();
     const teacherOptionsBlocked = teacherOptionsState.isInitialLoading || (!teacherOptions && Boolean(teacherOptionsState.error));
     const modalTestId = title.toLowerCase().includes("crear") ? "create-course-modal" : "edit-course-modal";
+    useEffect(() => {
+        if (isOpen) {
+            document.body.classList.add("overflow-hidden");
+        }
+        return () => {
+            document.body.classList.remove("overflow-hidden");
+        };
+    }, [isOpen]);
 
     if (!isOpen) return null;
 
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 px-4 py-6 backdrop-blur-sm">
-            <div className="w-full max-w-2xl overflow-hidden rounded-[20px] bg-white shadow-[0_24px_64px_rgba(0,0,0,0.22)]" data-testid={modalTestId}>
-                <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
+            <div className="w-full max-w-2xl flex flex-col max-h-[calc(100svh-3rem)] overflow-hidden rounded-[20px] bg-white shadow-[0_24px_64px_rgba(0,0,0,0.22)]" data-testid={modalTestId}>
+                <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5 bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800">
                     <div>
-                        <h2 className="text-xl font-bold tracking-tight text-slate-900">{title}</h2>
-                        <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
+                        <h2 className="text-xl font-bold tracking-tight text-white">{title}</h2>
+                        <p className="mt-1 text-sm text-slate-300">{subtitle}</p>
                     </div>
-                    <button type="button" onClick={onClose} className="rounded-lg p-1 text-slate-400 transition hover:text-slate-700" aria-label="Cerrar modal">
+                    <button type="button" onClick={onClose} className="rounded-lg p-1 text-white transition hover:text-slate-700" aria-label="Cerrar modal">
                         <X className="h-5 w-5" />
                     </button>
                 </div>
-                <form onSubmit={onSubmit} className="space-y-5 px-6 py-6">
+                <form
+                    onSubmit={onSubmit}
+                    className="
+                        space-y-5 px-6 py-6 overflow-y-auto flex-1 min-h-0
+                        scrollbar-gutter-stable
+                        [&::-webkit-scrollbar]:w-1.5
+                        [&::-webkit-scrollbar-track]:bg-transparent
+                        [&::-webkit-scrollbar-thumb]:rounded-full
+                        [&::-webkit-scrollbar-thumb]:bg-blue-400
+                        hover:[&::-webkit-scrollbar-thumb]:bg-indigo-400
+                    "
+                >
                     <div className="grid gap-5 md:grid-cols-2">
                         <Field label="Nombre del curso" value={form.title} onChange={(value) => onChange((prev) => ({ ...prev, title: value }))} placeholder="Ej. Finanzas Corporativas" />
                         <Field label="Codigo" value={form.code} onChange={(value) => onChange((prev) => ({ ...prev, code: value }))} placeholder="FIN-401" />
                         <div className="space-y-1.5 md:col-span-2">
-                            <span className="text-sm font-bold text-slate-700">Semestre</span>
                             <div className="grid gap-5 sm:grid-cols-2">
                                 <SelectField label="Año" value={form.semester_year} onChange={(value) => onChange((prev) => ({ ...prev, semester_year: value, invalid_semester_value: null }))} options={semesterYearOptions.map((option) => ({ value: option, label: option }))} />
                                 <SelectField label="Periodo" value={form.semester_term} onChange={(value) => onChange((prev) => ({ ...prev, semester_term: value as SemesterTerm, invalid_semester_value: null }))} options={SEMESTER_TERM_OPTIONS.map((option) => ({ value: option.value, label: option.label }))} />
@@ -1239,7 +1258,7 @@ function CourseModal({
                             <p className={`text-xs ${form.invalid_semester_value ? "text-red-600" : "text-slate-400"}`}>
                                 {form.invalid_semester_value
                                     ? `Valor heredado invalido: ${form.invalid_semester_value}. Selecciona un año y periodo validos.`
-                                    : "El backend solo acepta semestres con formato YYYY-I o YYYY-II."}
+                                    : "El semestre debe usar el formato YYYY-I o YYYY-II. Ejemplo: 2026-I."}
                             </p>
                         </div>
                         <SelectField label="Nivel academico" value={form.academic_level} onChange={(value) => onChange((prev) => ({ ...prev, academic_level: value }))} options={ACADEMIC_LEVEL_OPTIONS.map((value) => ({ value, label: value }))} />
@@ -1332,8 +1351,8 @@ function CourseModal({
                     {formError && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{formError}</div>}
 
                     <div className="flex items-center justify-end gap-3 border-t border-slate-200 pt-5">
-                        <button type="button" onClick={onClose} className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900">Cancelar</button>
-                        <button type="submit" disabled={isSubmitting || teacherOptionsBlocked} className="inline-flex items-center justify-center rounded-xl bg-[#0144a0] px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#00337a] disabled:cursor-not-allowed disabled:opacity-50">{submitLabel}</button>
+                        <button type="button" onClick={onClose} className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white bg-gradient-to-br from-red-500 via-red-600 to-rose-700 shadow-[0_2px_8px_rgba(220,38,38,0.35)] transition-all duration-200 hover:from-red-600 hover:via-red-700 hover:to-rose-800 hover:shadow-[0_4px_16px_rgba(220,38,38,0.45)] hover:-translate-y-px active:translate-y-0 active:shadow-none active:scale-[0.98]"><X className="h-4 w-4" />Cancelar</button>
+                        <button type="submit" disabled={isSubmitting || teacherOptionsBlocked} className="inline-flex items-center justify-center rounded-xl px-5 py-2.5 text-sm font-bold text-white bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 shadow-[0_2px_8px_rgba(1,68,160,0.35)] transition-all duration-200 hover:from-blue-700 hover:via-blue-800 hover:to-indigo-900 hover:shadow-[0_4px_16px_rgba(1,68,160,0.45)] hover:-translate-y-px active:translate-y-0 active:shadow-none active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-[0_2px_8px_rgba(1,68,160,0.35)]">{submitLabel}</button>
                     </div>
                 </form>
             </div>
