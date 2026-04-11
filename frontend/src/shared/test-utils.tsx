@@ -35,17 +35,20 @@ export function createWrapper(options: WrapperOptions = {}) {
     const authValue = options.authValue;
 
     return function Wrapper({ children }: { children: ReactNode }) {
-        const routerContent = (
-            <QueryClientProvider client={queryClient}>
-                <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
-            </QueryClientProvider>
-        );
-        const content = authValue ? (
+        const innerContent = authValue ? (
             <AuthContext.Provider value={authValue}>
-                {routerContent}
+                {children}
             </AuthContext.Provider>
         ) : (
-            routerContent
+            children
+        );
+
+        const content = (
+            <MemoryRouter initialEntries={initialEntries}>
+                <QueryClientProvider client={queryClient}>
+                    {innerContent}
+                </QueryClientProvider>
+            </MemoryRouter>
         );
 
         return strictMode ? <StrictMode>{content}</StrictMode> : content;
