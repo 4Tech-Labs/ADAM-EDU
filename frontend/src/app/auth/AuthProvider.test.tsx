@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { AuthProvider } from "./AuthContext";
 import { useAuth } from "./useAuth";
 import type { AuthMeActor } from "./auth-types";
+import { createTestQueryClient, createWrapper } from "@/shared/test-utils";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -74,14 +75,23 @@ describe("AuthProvider", () => {
         });
     });
 
-    it("starts with loading=true and resolves to loading=false when no session", async () => {
-        mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
-
-        render(
+    function renderWithAuthProvider() {
+        return render(
             <AuthProvider>
                 <Probe />
             </AuthProvider>,
+            {
+                wrapper: createWrapper({
+                    queryClient: createTestQueryClient(),
+                }),
+            },
         );
+    }
+
+    it("starts with loading=true and resolves to loading=false when no session", async () => {
+        mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
+
+        renderWithAuthProvider();
 
         // loading starts true
         expect(screen.getByTestId("loading").textContent).toBe("true");
@@ -100,11 +110,7 @@ describe("AuthProvider", () => {
             error: null,
         });
 
-        render(
-            <AuthProvider>
-                <Probe />
-            </AuthProvider>,
-        );
+        renderWithAuthProvider();
 
         await waitFor(() =>
             expect(screen.getByTestId("loading").textContent).toBe("false"),
@@ -128,11 +134,7 @@ describe("AuthProvider", () => {
             return { data: { subscription: { unsubscribe: vi.fn() } } };
         });
 
-        render(
-            <AuthProvider>
-                <Probe />
-            </AuthProvider>,
-        );
+        renderWithAuthProvider();
 
         await waitFor(() =>
             expect(screen.getByTestId("actor").textContent).toBe("Test User"),

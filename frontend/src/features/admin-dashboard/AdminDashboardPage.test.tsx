@@ -1,6 +1,5 @@
-import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 
 import { AdminDashboardPage } from "./AdminDashboardPage";
 import type {
@@ -34,6 +33,7 @@ vi.mock("@/shared/api", async () => {
 
 import { useAuth } from "@/app/auth/useAuth";
 import { api } from "@/shared/api";
+import { renderWithProviders } from "@/shared/test-utils";
 
 const showToast = vi.fn();
 const signOut = vi.fn();
@@ -129,7 +129,7 @@ const adminActor: AuthMeActor = {
 };
 
 function renderPage() {
-    return render(<AdminDashboardPage showToast={showToast} />);
+    return renderWithProviders(<AdminDashboardPage showToast={showToast} />);
 }
 
 function getElementLabel(element: Element): string {
@@ -306,11 +306,9 @@ describe("AdminDashboardPage", () => {
     });
 
     it("loads dashboard data correctly inside StrictMode", async () => {
-        render(
-            <StrictMode>
-                <AdminDashboardPage showToast={showToast} />
-            </StrictMode>,
-        );
+        renderWithProviders(<AdminDashboardPage showToast={showToast} />, {
+            strictMode: true,
+        });
 
         expect(await screen.findByText("Directorio de Cursos")).toBeTruthy();
         expect(screen.queryByTestId("admin-dashboard-loading")).toBeNull();

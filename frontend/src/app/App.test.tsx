@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { screen } from "@testing-library/react";
 
 import type { AuthMeActor } from "./auth/auth-types";
+import { renderWithProviders } from "@/shared/test-utils";
 
 vi.mock("@/app/auth/useAuth");
 vi.mock("@/features/teacher-authoring/TeacherAuthoringPage", () => ({
@@ -83,11 +83,9 @@ describe("App admin shell layout", () => {
             actor: adminActor,
         });
 
-        render(
-            <MemoryRouter initialEntries={["/admin/dashboard"]}>
-                <App />
-            </MemoryRouter>,
-        );
+        renderWithProviders(<App />, {
+            initialEntries: ["/admin/dashboard"],
+        });
 
         expect(await screen.findByTestId("admin-dashboard-page")).toBeTruthy();
         expect(screen.queryByTestId("site-header")).toBeNull();
@@ -100,11 +98,9 @@ describe("App admin shell layout", () => {
             actor: teacherActor,
         });
 
-        render(
-            <MemoryRouter initialEntries={["/admin/dashboard"]}>
-                <App />
-            </MemoryRouter>,
-        );
+        renderWithProviders(<App />, {
+            initialEntries: ["/admin/dashboard"],
+        });
 
         expect(await screen.findByTestId("teacher-authoring-page")).toBeTruthy();
         expect(screen.queryByTestId("admin-dashboard-page")).toBeNull();
@@ -113,11 +109,9 @@ describe("App admin shell layout", () => {
     it("redirects an anonymous user to the admin login route", async () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
-        render(
-            <MemoryRouter initialEntries={["/admin/dashboard"]}>
-                <App />
-            </MemoryRouter>,
-        );
+        renderWithProviders(<App />, {
+            initialEntries: ["/admin/dashboard"],
+        });
 
         expect(await screen.findByTestId("admin-login-page")).toBeTruthy();
     });
@@ -125,11 +119,9 @@ describe("App admin shell layout", () => {
     it("keeps the global SiteHeader on non-admin-dashboard routes", () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
-        render(
-            <MemoryRouter initialEntries={["/teacher/login"]}>
-                <App />
-            </MemoryRouter>,
-        );
+        renderWithProviders(<App />, {
+            initialEntries: ["/teacher/login"],
+        });
 
         expect(screen.getByTestId("site-header")).toBeTruthy();
     });
@@ -137,11 +129,9 @@ describe("App admin shell layout", () => {
     it("resolves the lazy auth callback route", async () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
-        render(
-            <MemoryRouter initialEntries={["/auth/callback"]}>
-                <App />
-            </MemoryRouter>,
-        );
+        renderWithProviders(<App />, {
+            initialEntries: ["/auth/callback"],
+        });
 
         expect(await screen.findByTestId("auth-callback-page")).toBeTruthy();
     });
@@ -149,11 +139,9 @@ describe("App admin shell layout", () => {
     it("resolves the lazy student join route with an access token", async () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
-        render(
-            <MemoryRouter initialEntries={["/join?course_access_token=test-token"]}>
-                <App />
-            </MemoryRouter>,
-        );
+        renderWithProviders(<App />, {
+            initialEntries: ["/join?course_access_token=test-token"],
+        });
 
         expect(await screen.findByTestId("student-join-page")).toBeTruthy();
     });
@@ -161,11 +149,9 @@ describe("App admin shell layout", () => {
     it("resolves the lazy student login route with an access token", async () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
-        render(
-            <MemoryRouter initialEntries={["/student/login?course_access_token=test-token"]}>
-                <App />
-            </MemoryRouter>,
-        );
+        renderWithProviders(<App />, {
+            initialEntries: ["/student/login?course_access_token=test-token"],
+        });
 
         expect(await screen.findByTestId("student-login-page")).toBeTruthy();
     });
