@@ -1,126 +1,147 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+
+import { queryKeys } from "@/shared/queryKeys";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 import { apiFetch } from "@/shared/api";
+
 import type { AuthMeActor, Session } from "./auth-types";
 import { AuthContext } from "./auth-context";
+
+const ACTOR_PROFILE_ERROR =
+    "No se pudo cargar tu perfil. Intenta iniciar sesión de nuevo.";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const queryClient = useQueryClient();
     const [session, setSession] = useState<Session | null>(null);
-    const [actor, setActor] = useState<AuthMeActor | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const [bootstrapComplete, setBootstrapComplete] = useState(false);
+    const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+    const [actorQueryEnabled, setActorQueryEnabled] = useState(false);
 
-    const fetchActor = useCallback(async (): Promise<AuthMeActor | null> => {
-        try {
-            const res = await apiFetch("/auth/me");
-            return (await res.json()) as AuthMeActor;
-        } catch {
-            return null;
-        }
+    const fetchActorOrThrow = useCallback(async (): Promise<AuthMeActor> => {
+        const res = await apiFetch("/auth/me");
+        return (await res.json()) as AuthMeActor;
     }, []);
 
+    const actorQuery = useQuery({
+        queryKey: queryKeys.auth.actor(),
+        queryFn: fetchActorOrThrow,
+        enabled: bootstrapComplete && !!session && actorQueryEnabled,
+        staleTime: 5 * 60_000,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: true,
+        retry: false,
+    });
+
+    const actor = actorQuery.data ?? null;
+    const loading =
+        !bootstrapComplete ||
+        (!!session && actorQuery.isPending && !actorQuery.data);
+    const error =
+        bootstrapError ??
+        (session && !actor && actorQuery.isError ? ACTOR_PROFILE_ERROR : null);
+
     const refreshActor = useCallback(async () => {
-        const next = await fetchActor();
-        setActor(next);
-    }, [fetchActor]);
+        if (!session) {
+            queryClient.removeQueries({ queryKey: queryKeys.auth.actor() });
+            return;
+        }
+
+        await queryClient.fetchQuery({
+            queryKey: queryKeys.auth.actor(),
+            queryFn: fetchActorOrThrow,
+            staleTime: 0,
+        });
+    }, [fetchActorOrThrow, queryClient, session]);
 
     useEffect(() => {
         const supabase = getSupabaseClient();
         if (!supabase) {
-            setLoading(false);
+            setBootstrapComplete(true);
             return;
         }
+        const auth = supabase.auth;
 
-        let cancelled = false;
         let actorRefreshTimeoutId: number | null = null;
 
         async function bootstrap() {
-            const { data, error: sessionError } =
-                await supabase!.auth.getSession();
-
-            if (cancelled) return;
+            const { data, error: sessionError } = await auth.getSession();
 
             if (sessionError) {
-                setError(sessionError.message);
-                setLoading(false);
+                setBootstrapError(sessionError.message);
+                setActorQueryEnabled(false);
+                setBootstrapComplete(true);
                 return;
             }
 
-            const currentSession = data.session ?? null;
-            setSession(currentSession);
-
-            if (currentSession) {
-                const resolvedActor = await fetchActor();
-                if (!cancelled) {
-                    setActor(resolvedActor);
-                    if (!resolvedActor) {
-                        setError(
-                            "No se pudo cargar tu perfil. Intenta iniciar sesión de nuevo.",
-                        );
-                    }
-                }
-            }
-
-            if (!cancelled) {
-                setLoading(false);
-            }
+            setBootstrapError(null);
+            setSession(data.session ?? null);
+            setActorQueryEnabled(!!data.session);
+            setBootstrapComplete(true);
         }
 
         void bootstrap();
 
-        const { data: listenerData } = supabase.auth.onAuthStateChange(
+        const { data: listenerData } = auth.onAuthStateChange(
             (event, nextSession) => {
-                if (cancelled) return;
-
-                if (
-                    event === "SIGNED_IN" ||
-                    event === "TOKEN_REFRESHED" ||
-                    event === "INITIAL_SESSION"
-                ) {
+                if (event === "SIGNED_IN") {
                     setSession(nextSession);
+                    setBootstrapError(null);
+                    setActorQueryEnabled(false);
+
                     if (nextSession) {
-                        // Defer fetchActor to avoid deadlocking on the Supabase
-                        // PKCE storage lock: onAuthStateChange fires while the
-                        // lock is still held, so calling getSession() here
-                        // (via getBearerToken) blocks forever.
+                        // Defer invalidation to the next macrotask so apiFetch()
+                        // does not re-enter Supabase getSession() while the PKCE
+                        // storage lock is still held inside onAuthStateChange.
                         actorRefreshTimeoutId = window.setTimeout(() => {
-                            if (cancelled) return;
-                            void fetchActor().then((resolvedActor) => {
-                                if (!cancelled) {
-                                    setActor(resolvedActor);
-                                    setError(null);
-                                }
+                            setActorQueryEnabled(true);
+                            void queryClient.fetchQuery({
+                                queryKey: queryKeys.auth.actor(),
+                                queryFn: fetchActorOrThrow,
+                                staleTime: 0,
                             });
                         }, 0);
                     }
-                } else if (event === "SIGNED_OUT") {
+
+                    return;
+                }
+
+                if (
+                    event === "INITIAL_SESSION" ||
+                    event === "TOKEN_REFRESHED"
+                ) {
+                    setSession(nextSession);
+                    setBootstrapError(null);
+                    setActorQueryEnabled(!!nextSession);
+                    return;
+                }
+
+                if (event === "SIGNED_OUT") {
                     setSession(null);
-                    setActor(null);
-                    setError(null);
+                    setBootstrapError(null);
+                    setActorQueryEnabled(false);
                     queryClient.clear();
                 }
             },
         );
 
         return () => {
-            cancelled = true;
             if (actorRefreshTimeoutId !== null) {
                 window.clearTimeout(actorRefreshTimeoutId);
             }
             listenerData.subscription.unsubscribe();
         };
-    }, [fetchActor, queryClient]);
+    }, [fetchActorOrThrow, queryClient]);
 
     const signOut = useCallback(async () => {
         const supabase = getSupabaseClient();
         if (supabase) {
             await supabase.auth.signOut();
         }
+
         setSession(null);
-        setActor(null);
-        setError(null);
+        setBootstrapError(null);
+        setActorQueryEnabled(false);
         queryClient.clear();
     }, [queryClient]);
 
