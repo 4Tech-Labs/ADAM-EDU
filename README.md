@@ -3,7 +3,7 @@
 ADAM EDU es un Teacher Authoring + Preview MVP en transicion a una plataforma multi-rol con autenticacion real. El repositorio incluye:
 
 - Flujo docente completo: sugerencias en formulario, generacion asincrona con LangGraph, timeline por SSE y preview del caso.
-- Shell frontend auth-aware (Issue #5): `AuthProvider`, guards por rol, rutas reales para teacher/student/admin, callback OAuth PKCE, helper `sessionStorage` de activacion con TTL 5 minutos.
+- Shell frontend auth-aware (Issue #5): `AuthProvider`, guards por rol, rutas reales para teacher/student/admin, callback OAuth PKCE, helper `sessionStorage` de activacion con TTL 5 minutos y landing docente en `/app/teacher/dashboard`.
 - Auth perimeter backend (Issue #3): verificacion JWT via JWKS, actor resolution por memberships, `GET /api/auth/me`, endpoints de activacion body-only.
 
 Los flujos de negocio completos de teacher activation, student join y admin provisioning siguen en Issues #6, #7 y #8 respectivamente. El shell actual deja listos los placeholders y contratos de routing para esas historias.

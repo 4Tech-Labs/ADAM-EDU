@@ -107,7 +107,7 @@ Nunca lleves `SUPABASE_SERVICE_ROLE_KEY` al browser ni a ejemplos frontend.
 - `GET /health` responde `200`
 - `GET /api/auth/me` sin bearer responde `401`
 - `http://localhost:5173/app/` sin sesion muestra la landing con 3 entrypoints por rol
-- `http://localhost:5173/app/teacher` sin sesion redirige a `/teacher/login`
+- `http://localhost:5173/app/teacher/dashboard` sin sesion redirige a `/teacher/login`
 - `http://localhost:5173/app/auth/callback` muestra spinner de "Completando inicio de sesion"
 
 ## Prerequisito manual para produccion
@@ -128,7 +128,7 @@ El scaffold local de `supabase/config.toml` deja preparado el bloque Azure, pero
 habilita en esta issue.
 
 - usa `localhost`, no `127.0.0.1`, para redirect URIs locales
-- las rutas activas hoy en el scaffold local son solo `/app/` y `/app/teacher`
+- las rutas activas hoy en el scaffold local incluyen `/app/`, `/app/teacher` y `/app/teacher/dashboard`
 - completa client id/secret y activa el provider antes de Issue 5
 - callback local esperado: `http://localhost:54321/auth/v1/callback`
 

@@ -83,7 +83,7 @@ export function AuthCallbackPage() {
                     await api.auth.activateOAuthComplete(teacherCtx.invite_token);
                     clearActivationContext();
                     await refreshActor();
-                    navigate("/teacher", { replace: true });
+                    navigate("/teacher/dashboard", { replace: true });
                 } catch (err: unknown) {
                     clearActivationContext();
                     setActivationFlow("teacher_activate");
@@ -177,7 +177,7 @@ export function AuthCallbackPage() {
                 navigate("/admin/dashboard", { replace: true });
                 break;
             case "teacher":
-                navigate("/teacher", { replace: true });
+                navigate("/teacher/dashboard", { replace: true });
                 break;
             case "student":
                 navigate("/student", { replace: true });

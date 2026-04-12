@@ -212,7 +212,7 @@ describe("AuthCallbackPage", () => {
             expect(api.auth.activateOAuthComplete).toHaveBeenCalledWith("teacher-tok"),
         );
         await waitFor(() =>
-            expect(mockNavigate).toHaveBeenCalledWith("/teacher", { replace: true }),
+            expect(mockNavigate).toHaveBeenCalledWith("/teacher/dashboard", { replace: true }),
         );
     });
 
@@ -359,6 +359,37 @@ describe("AuthCallbackPage", () => {
 
         await waitFor(() =>
             expect(screen.getByText(/fue rotado/i)).toBeTruthy(),
+        );
+    });
+
+    it("redirects a teacher actor without activation context to /teacher/dashboard", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseCtx,
+            actor: {
+                auth_user_id: "teacher-1",
+                profile: { id: "teacher-1", full_name: "Docente" },
+                memberships: [
+                    {
+                        id: "membership-1",
+                        university_id: "uni1",
+                        role: "teacher",
+                        status: "active",
+                        must_rotate_password: false,
+                    },
+                ],
+                must_rotate_password: false,
+                primary_role: "teacher",
+            },
+        });
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(mockNavigate).toHaveBeenCalledWith("/teacher/dashboard", { replace: true }),
         );
     });
 });

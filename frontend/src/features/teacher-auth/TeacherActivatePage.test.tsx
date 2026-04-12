@@ -211,7 +211,7 @@ describe("TeacherActivatePage", () => {
     });
 
     // 7. Submit válido → llama activatePassword, luego signInWithPassword con res.email, navega /teacher
-    it("calls activatePassword then signInWithPassword with res.email and navigates to /teacher", async () => {
+    it("calls activatePassword then signInWithPassword with res.email and navigates to /teacher/dashboard", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "teacher_activate",
             token_kind: "invite",
@@ -259,7 +259,7 @@ describe("TeacherActivatePage", () => {
         });
 
         await waitFor(() =>
-            expect(mockNavigate).toHaveBeenCalledWith("/teacher", { replace: true }),
+            expect(mockNavigate).toHaveBeenCalledWith("/teacher/dashboard", { replace: true }),
         );
     });
 

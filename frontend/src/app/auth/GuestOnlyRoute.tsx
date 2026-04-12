@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 type Role = MembershipSnapshot["role"];
 
 const ROLE_DASHBOARD: Record<Role, string> = {
-    teacher: "/teacher",
+    teacher: "/teacher/dashboard",
     student: "/student",
     university_admin: "/admin/dashboard",
 };
