@@ -29,7 +29,12 @@ import {
     type ReactNode,
     type SetStateAction,
 } from "react";
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+    keepPreviousData,
+    useMutation,
+    useQuery,
+    useQueryClient,
+} from "@tanstack/react-query";
 
 import { useAuth } from "@/app/auth/useAuth";
 import type {
@@ -113,11 +118,6 @@ export function AdminDashboardPage({ showToast }: Props) {
     const [inviteName, setInviteName] = useState("");
     const [inviteEmail, setInviteEmail] = useState("");
     const [inviteSuccess, setInviteSuccess] = useState<InviteSuccessState | null>(null);
-    const [submittingCreate, setSubmittingCreate] = useState(false);
-    const [submittingEdit, setSubmittingEdit] = useState(false);
-    const [submittingArchive, setSubmittingArchive] = useState(false);
-    const [submittingInvite, setSubmittingInvite] = useState(false);
-    const [regeneratingCourseId, setRegeneratingCourseId] = useState<string | null>(null);
     const [courseFormError, setCourseFormError] = useState<string | null>(null);
     const [inviteFormError, setInviteFormError] = useState<string | null>(null);
     const courseFilters = useMemo<CourseFilters>(() => ({
@@ -219,6 +219,73 @@ export function AdminDashboardPage({ showToast }: Props) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.admin.teacherOptions() });
     }, [queryClient]);
 
+    const createCourseMutation = useMutation({
+        mutationFn: api.admin.createCourse,
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.summary() });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
+        },
+        onError: (error) => {
+            if (error instanceof ApiError && error.detail === "stale_pending_teacher_invite") {
+                void queryClient.invalidateQueries({ queryKey: queryKeys.admin.teacherOptions() });
+            }
+        },
+    });
+    const editCourseMutation = useMutation({
+        mutationFn: ({
+            courseId,
+            payload,
+        }: {
+            courseId: string;
+            payload: Parameters<typeof api.admin.updateCourse>[1];
+        }) => api.admin.updateCourse(courseId, payload),
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
+        },
+        onError: (error) => {
+            if (error instanceof ApiError && error.detail === "stale_pending_teacher_invite") {
+                void queryClient.invalidateQueries({ queryKey: queryKeys.admin.teacherOptions() });
+            }
+        },
+    });
+    const archiveCourseMutation = useMutation({
+        mutationFn: ({
+            courseId,
+            payload,
+        }: {
+            courseId: string;
+            payload: Parameters<typeof api.admin.updateCourse>[1];
+        }) => api.admin.updateCourse(courseId, payload),
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.summary() });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
+        },
+    });
+    const inviteTeacherMutation = useMutation({
+        mutationFn: api.admin.createTeacherInvite,
+        onSettled: () => {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.teacherOptions() });
+        },
+    });
+    const regenerateLinkMutation = useMutation({
+        mutationFn: api.admin.regenerateCourseAccessLink,
+        onMutate: async () => {
+            await queryClient.cancelQueries({ queryKey: queryKeys.admin.courses() });
+            return { previousTransientLinks: { ...transientAccessLinks } };
+        },
+        onSuccess: (data) => {
+            setTransientAccessLinks((prev) => ({ ...prev, [data.course_id]: data.access_link }));
+        },
+        onError: (_error, _courseId, context) => {
+            if (context?.previousTransientLinks) {
+                setTransientAccessLinks(context.previousTransientLinks);
+            }
+        },
+        onSettled: () => {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
+        },
+    });
+
     const clearPendingInviteSelection = useCallback((
         setForm: Dispatch<SetStateAction<CourseFormState>>,
     ) => {
@@ -264,64 +331,72 @@ export function AdminDashboardPage({ showToast }: Props) {
         setIsInviteOpen(false);
     }
 
-    async function handleCreateCourse(event: FormEvent<HTMLFormElement>) {
+    function handleCreateCourse(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
         setCourseFormError(null);
-        setSubmittingCreate(true);
         try {
-            const createdItem = await api.admin.createCourse(buildCoursePayload(createForm));
-            const createdAccessLink = createdItem.access_link;
-            if (createdAccessLink) {
-                setTransientAccessLinks((prev) => ({ ...prev, [createdItem.id]: createdAccessLink }));
-            }
-            setIsCreateOpen(false);
-            setPage(1);
-            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.summary() });
-            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
-            showToast("Curso creado correctamente.", "success");
+            createCourseMutation.mutate(buildCoursePayload(createForm), {
+                onSuccess: (createdItem) => {
+                    if (createdItem.access_link) {
+                        setTransientAccessLinks((prev) => ({
+                            ...prev,
+                            [createdItem.id]: createdItem.access_link!,
+                        }));
+                    }
+                    setIsCreateOpen(false);
+                    setPage(1);
+                    showToast("Curso creado correctamente.", "success");
+                },
+                onError: (error) => {
+                    setCourseFormError(getAdminErrorMessage(error, "No se pudo crear el curso."));
+                    if (error instanceof ApiError && error.detail === "stale_pending_teacher_invite") {
+                        clearPendingInviteSelection(setCreateForm);
+                    }
+                },
+            });
         } catch (error) {
             setCourseFormError(getAdminErrorMessage(error, "No se pudo crear el curso."));
-            if (error instanceof ApiError && error.detail === "stale_pending_teacher_invite") {
-                clearPendingInviteSelection(setCreateForm);
-                await queryClient.invalidateQueries({ queryKey: queryKeys.admin.teacherOptions() });
-            }
-        } finally {
-            setSubmittingCreate(false);
         }
     }
 
-    async function handleEditCourse(event: FormEvent<HTMLFormElement>) {
+    function handleEditCourse(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
         if (!editingCourseId || !editingCourse) return;
         setCourseFormError(null);
-        setSubmittingEdit(true);
         try {
-            const updatedItem = await api.admin.updateCourse(editingCourseId, buildCoursePayload({ ...editForm, status: editingCourse.status }));
-            const updatedAccessLink = updatedItem.access_link;
-            if (updatedAccessLink) {
-                setTransientAccessLinks((prev) => ({ ...prev, [updatedItem.id]: updatedAccessLink }));
-            }
-            setEditingCourseId(null);
-            setIsEditOpen(false);
-            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
-            showToast("Curso actualizado correctamente.", "success");
+            editCourseMutation.mutate({
+                courseId: editingCourseId,
+                payload: buildCoursePayload({ ...editForm, status: editingCourse.status }),
+            }, {
+                onSuccess: (updatedItem) => {
+                    if (updatedItem.access_link) {
+                        setTransientAccessLinks((prev) => ({
+                            ...prev,
+                            [updatedItem.id]: updatedItem.access_link!,
+                        }));
+                    }
+                    setEditingCourseId(null);
+                    setIsEditOpen(false);
+                    showToast("Curso actualizado correctamente.", "success");
+                },
+                onError: (error) => {
+                    setCourseFormError(getAdminErrorMessage(error, "No se pudo actualizar el curso."));
+                    if (error instanceof ApiError && error.detail === "stale_pending_teacher_invite") {
+                        clearPendingInviteSelection(setEditForm);
+                    }
+                },
+            });
         } catch (error) {
             setCourseFormError(getAdminErrorMessage(error, "No se pudo actualizar el curso."));
-            if (error instanceof ApiError && error.detail === "stale_pending_teacher_invite") {
-                clearPendingInviteSelection(setEditForm);
-                await queryClient.invalidateQueries({ queryKey: queryKeys.admin.teacherOptions() });
-            }
-        } finally {
-            setSubmittingEdit(false);
         }
     }
 
-    async function handleArchiveCourse() {
+    function handleArchiveCourse() {
         if (!archivingCourse) return;
-        setSubmittingArchive(true);
         setCourseFormError(null);
-        try {
-            await api.admin.updateCourse(archivingCourse.id, {
+        archiveCourseMutation.mutate({
+            courseId: archivingCourse.id,
+            payload: {
                 title: archivingCourse.title,
                 code: archivingCourse.code,
                 semester: archivingCourse.semester,
@@ -329,59 +404,60 @@ export function AdminDashboardPage({ showToast }: Props) {
                 max_students: archivingCourse.max_students,
                 status: "inactive",
                 teacher_assignment: archivingCourse.teacher_assignment,
-            });
-            setArchivingCourseId(null);
-            setIsArchiveOpen(false);
-            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.summary() });
-            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
-            showToast("Curso archivado correctamente.", "success");
-        } catch (error) {
-            const message = getAdminErrorMessage(error, "No se pudo archivar el curso.");
-            setCourseFormError(message);
-            showToast(message, "error");
-        } finally {
-            setSubmittingArchive(false);
-        }
+            },
+        }, {
+            onSuccess: () => {
+                setArchivingCourseId(null);
+                setIsArchiveOpen(false);
+                showToast("Curso archivado correctamente.", "success");
+            },
+            onError: (error) => {
+                const message = getAdminErrorMessage(error, "No se pudo archivar el curso.");
+                setCourseFormError(message);
+                showToast(message, "error");
+            },
+        });
     }
 
-    async function handleInviteTeacher(event: FormEvent<HTMLFormElement>) {
+    function handleInviteTeacher(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
         setInviteFormError(null);
-        setSubmittingInvite(true);
-        try {
-            const createdInvite = await api.admin.createTeacherInvite({
-                full_name: inviteName.trim(),
-                email: inviteEmail.trim(),
-            });
-            queryClient.setQueryData(
-                queryKeys.admin.teacherOptions(),
-                (previous: AdminTeacherOptionsResponse | undefined): AdminTeacherOptionsResponse => ({
-                    active_teachers: previous?.active_teachers ?? [],
-                    pending_invites: sortPendingInvites([
-                        ...(previous?.pending_invites ?? []),
-                        teacherInviteToPendingOption(createdInvite),
-                    ]),
-                }),
-            );
-            const encodedValue = encodeTeacherOptionValue({
-                kind: "pending_invite",
-                invite_id: createdInvite.invite_id,
-            });
-            if (inviteTarget === "create") {
-                setCreateForm((prev) => ({ ...prev, teacher_option_value: encodedValue }));
-            } else {
-                setEditForm((prev) => ({ ...prev, teacher_option_value: encodedValue }));
-            }
-            setInviteSuccess({
-                email: createdInvite.email,
-                activationLink: createdInvite.activation_link,
-            });
-            showToast(`Invitacion enviada a ${createdInvite.email}.`, "success");
-        } catch (error) {
-            setInviteFormError(getAdminErrorMessage(error, "No se pudo enviar la invitacion docente."));
-        } finally {
-            setSubmittingInvite(false);
-        }
+        inviteTeacherMutation.mutate({
+            full_name: inviteName.trim(),
+            email: inviteEmail.trim(),
+        }, {
+            onSuccess: (createdInvite) => {
+                queryClient.setQueryData(
+                    queryKeys.admin.teacherOptions(),
+                    (previous: AdminTeacherOptionsResponse | undefined): AdminTeacherOptionsResponse => ({
+                        active_teachers: previous?.active_teachers ?? [],
+                        pending_invites: sortPendingInvites([
+                            ...(previous?.pending_invites ?? []),
+                            teacherInviteToPendingOption(createdInvite),
+                        ]),
+                    }),
+                );
+                const encodedValue = encodeTeacherOptionValue({
+                    kind: "pending_invite",
+                    invite_id: createdInvite.invite_id,
+                });
+                if (inviteTarget === "create") {
+                    setCreateForm((prev) => ({ ...prev, teacher_option_value: encodedValue }));
+                } else {
+                    setEditForm((prev) => ({ ...prev, teacher_option_value: encodedValue }));
+                }
+                setInviteSuccess({
+                    email: createdInvite.email,
+                    activationLink: createdInvite.activation_link,
+                });
+                showToast(`Invitacion enviada a ${createdInvite.email}.`, "success");
+            },
+            onError: (error) => {
+                setInviteFormError(
+                    getAdminErrorMessage(error, "No se pudo enviar la invitacion docente."),
+                );
+            },
+        });
     }
 
     const handleCopyLink = useCallback(async (item: AdminCourseListItem) => {
@@ -403,21 +479,18 @@ export function AdminDashboardPage({ showToast }: Props) {
         );
     }
 
-    async function handleRegenerateLink(item: AdminCourseListItem) {
+    function handleRegenerateLink(item: AdminCourseListItem) {
         setCourseFormError(null);
-        setRegeneratingCourseId(item.id);
-        try {
-            const regenerated = await api.admin.regenerateCourseAccessLink(item.id);
-            setTransientAccessLinks((prev) => ({ ...prev, [regenerated.course_id]: regenerated.access_link }));
-            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
-            showToast("Enlace regenerado correctamente.", "success");
-        } catch (error) {
-            const message = getAdminErrorMessage(error, "No se pudo regenerar el enlace del curso.");
-            setCourseFormError(message);
-            showToast(message, "error");
-        } finally {
-            setRegeneratingCourseId(null);
-        }
+        regenerateLinkMutation.mutate(item.id, {
+            onSuccess: () => {
+                showToast("Enlace regenerado correctamente.", "success");
+            },
+            onError: (error) => {
+                const message = getAdminErrorMessage(error, "No se pudo regenerar el enlace del curso.");
+                setCourseFormError(message);
+                showToast(message, "error");
+            },
+        });
     }
 
     return (
@@ -533,7 +606,10 @@ export function AdminDashboardPage({ showToast }: Props) {
                                                         transientAccessLink={transientAccessLinks[item.id]}
                                                         onCopy={handleCopyLink}
                                                         onRegenerate={handleRegenerateLink}
-                                                        isRegenerating={regeneratingCourseId === item.id}
+                                                        isRegenerating={
+                                                            regenerateLinkMutation.isPending &&
+                                                            regenerateLinkMutation.variables === item.id
+                                                        }
                                                         onEdit={openEditModal}
                                                         onArchive={openArchiveModal}
                                                     />
@@ -562,8 +638,8 @@ export function AdminDashboardPage({ showToast }: Props) {
                     setIsCreateOpen(false);
                 }}
                 onSubmit={handleCreateCourse}
-                submitLabel={submittingCreate ? "Creando..." : "Crear curso"}
-                isSubmitting={submittingCreate}
+                submitLabel={createCourseMutation.isPending ? "Creando..." : "Crear curso"}
+                isSubmitting={createCourseMutation.isPending}
                 teacherOptions={teacherOptions}
                 teacherOptionsInitialLoading={teacherOptionsInitialLoading}
                 teacherOptionsRefreshing={teacherOptionsRefreshing}
@@ -590,8 +666,8 @@ export function AdminDashboardPage({ showToast }: Props) {
                     setIsEditOpen(false);
                 }}
                 onSubmit={handleEditCourse}
-                submitLabel={submittingEdit ? "Guardando..." : "Guardar cambios"}
-                isSubmitting={submittingEdit}
+                submitLabel={editCourseMutation.isPending ? "Guardando..." : "Guardar cambios"}
+                isSubmitting={editCourseMutation.isPending}
                 teacherOptions={teacherOptions}
                 teacherOptionsInitialLoading={teacherOptionsInitialLoading}
                 teacherOptionsRefreshing={teacherOptionsRefreshing}
@@ -604,14 +680,17 @@ export function AdminDashboardPage({ showToast }: Props) {
                 activeLinkPresentation={editingCourse ? buildLinkPresentation(editingCourse, transientAccessLinks) : null}
                 onCopyLink={editingCourse ? (() => void handleCopyLink(editingCourse)) : null}
                 onRegenerateLink={editingCourse ? (() => void handleRegenerateLink(editingCourse)) : null}
-                isRegenerating={regeneratingCourseId === editingCourse?.id}
+                isRegenerating={
+                    regenerateLinkMutation.isPending &&
+                    regenerateLinkMutation.variables === editingCourse?.id
+                }
             />
             <ConfirmationModal
                 isOpen={isArchiveOpen}
                 title="Archivar Curso"
                 description={archivingCourse ? `El curso "${archivingCourse.title}" pasara a estado inactivo. No se eliminara informacion, pero el dashboard dejara de tratarlo como curso activo.` : ""}
-                confirmLabel={submittingArchive ? "Archivando..." : "Archivar curso"}
-                isSubmitting={submittingArchive}
+                confirmLabel={archiveCourseMutation.isPending ? "Archivando..." : "Archivar curso"}
+                isSubmitting={archiveCourseMutation.isPending}
                 onClose={() => {
                     setCourseFormError(null);
                     setArchivingCourseId(null);
@@ -625,7 +704,7 @@ export function AdminDashboardPage({ showToast }: Props) {
                 email={inviteEmail}
                 error={inviteFormError}
                 success={inviteSuccess}
-                isSubmitting={submittingInvite}
+                isSubmitting={inviteTeacherMutation.isPending}
                 onChangeFullName={setInviteName}
                 onChangeEmail={setInviteEmail}
                 onClose={closeInviteModal}
