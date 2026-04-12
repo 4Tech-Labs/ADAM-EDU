@@ -514,13 +514,21 @@ def remove_teacher_membership(
     context: AdminContext,
     membership_id: str,
 ) -> AdminRemoveTeacherResponse:
-    membership = db.scalar(
-        select(Membership).where(
-            Membership.id == membership_id,
-            Membership.university_id == context.university_id,
-            Membership.role == "teacher",
+    try:
+        membership = db.scalar(
+            select(Membership)
+            .where(
+                Membership.id == membership_id,
+                Membership.university_id == context.university_id,
+                Membership.role == "teacher",
+            )
+            .with_for_update(nowait=True)
         )
-    )
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="membership_update_in_progress",
+        ) from exc
     if membership is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

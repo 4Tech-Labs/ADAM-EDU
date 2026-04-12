@@ -340,6 +340,79 @@ def test_issue86_admin_courses_support_unassigned_shape_after_teacher_removal(
     assert item["teacher_assignment"] is None
 
 
+def test_issue86_remove_teacher_membership_cross_university_isolation(
+    client,
+    seed_identity,
+    auth_headers_factory,
+) -> None:
+    university_a = "10000000-0000-0000-0000-000000000870"
+    university_b = "10000000-0000-0000-0000-000000000871"
+    admin_b_id, admin_b_email = _seed_admin(seed_identity, university_id=university_b)
+    teacher_a = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher-isolation-a@example.edu",
+        role="teacher",
+        university_id=university_a,
+        full_name="Teacher Isolation A",
+    )
+
+    response = client.delete(
+        f"/api/admin/memberships/{teacher_a['membership'].id}",
+        headers=_auth_headers(auth_headers_factory, user_id=admin_b_id, email=admin_b_email),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "membership_not_found"
+
+
+def test_issue86_revoke_teacher_invite_cross_university_isolation(
+    client,
+    seed_identity,
+    seed_invite,
+    auth_headers_factory,
+) -> None:
+    university_a = "10000000-0000-0000-0000-000000000872"
+    university_b = "10000000-0000-0000-0000-000000000873"
+    admin_b_id, admin_b_email = _seed_admin(seed_identity, university_id=university_b)
+    invite_a, _ = seed_invite(
+        email="invite-isolation-a@example.edu",
+        university_id=university_a,
+        role="teacher",
+    )
+
+    response = client.delete(
+        f"/api/admin/teacher-invites/{invite_a.id}",
+        headers=_auth_headers(auth_headers_factory, user_id=admin_b_id, email=admin_b_email),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "invite_not_found"
+
+
+def test_issue86_resend_teacher_invite_rejects_revoked_invites(
+    client,
+    seed_identity,
+    seed_invite,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000874"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    invite, _ = seed_invite(
+        email="revoked-resend@example.edu",
+        university_id=university_id,
+        role="teacher",
+        status="revoked",
+    )
+
+    response = client.post(
+        f"/api/admin/teacher-invites/{invite.id}/resend",
+        headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "invite_not_found"
+
+
 def test_issue86_revoke_teacher_invite_allows_expired_pending_invites(
     client,
     db,
