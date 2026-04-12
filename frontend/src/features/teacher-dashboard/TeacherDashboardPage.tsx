@@ -36,7 +36,7 @@ export function TeacherDashboardPage({
                             onClick={() => void signOut()}
                             className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
                         >
-                            Cerrar sesiÃ³n
+                            Cerrar sesión
                         </button>
                     </div>
                 </div>
