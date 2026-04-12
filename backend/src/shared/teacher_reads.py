@@ -79,7 +79,7 @@ def list_teacher_courses(db: Session, context: TeacherContext) -> TeacherCourses
             academic_level=row["academic_level"],
             status=row["status"],
             students_count=int(row["students_count"]),
-            active_cases_count=0,
+            active_cases_count=0,  # TODO(#90): populate once Assignment gains course_id FK
         )
         for row in rows
     ]
