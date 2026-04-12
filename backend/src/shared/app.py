@@ -29,6 +29,7 @@ from case_generator.core.authoring import AuthoringService
 from case_generator.suggest_service import SuggestRequest, SuggestResponse, generate_suggestion
 from shared.admin_router import router as admin_router
 from shared.course_access_router import router as course_access_router
+from shared.teacher_router import router as teacher_router
 from shared.auth import (
     AuthError,
     CurrentActor,
@@ -245,6 +246,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="adam-v8.0 - Case Generation API", lifespan=lifespan)
 app.include_router(admin_router)
 app.include_router(course_access_router)
+app.include_router(teacher_router)
 
 
 @app.middleware("http")
