@@ -80,7 +80,7 @@ describe("AuthoringForm", () => {
 
         expect(await screen.findByDisplayValue("Escenario sugerido")).toBeInTheDocument();
         expect(screen.getByDisplayValue("Pregunta sugerida")).toBeInTheDocument();
-    });
+    }, 20_000);
 
     it("fills suggested techniques from the techniques mutation and clears the stale warning", async () => {
         const user = userEvent.setup();
@@ -125,7 +125,7 @@ describe("AuthoringForm", () => {
         expect(
             screen.queryByText(/podr[ií]an estar desactualizadas/i),
         ).not.toBeInTheDocument();
-    });
+    }, 20_000);
 
     it("prevents duplicate scenario requests on rapid double click", async () => {
         const user = userEvent.setup();

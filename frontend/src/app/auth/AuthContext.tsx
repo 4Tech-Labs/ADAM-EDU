@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 import { apiFetch } from "@/shared/api";
 import type { AuthMeActor, Session } from "./auth-types";
 import { AuthContext } from "./auth-context";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+    const queryClient = useQueryClient();
     const [session, setSession] = useState<Session | null>(null);
     const [actor, setActor] = useState<AuthMeActor | null>(null);
     const [loading, setLoading] = useState(true);
@@ -97,6 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     setSession(null);
                     setActor(null);
                     setError(null);
+                    queryClient.clear();
                 }
             },
         );
@@ -108,7 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
             listenerData.subscription.unsubscribe();
         };
-    }, [fetchActor]);
+    }, [fetchActor, queryClient]);
 
     const signOut = useCallback(async () => {
         const supabase = getSupabaseClient();
@@ -118,7 +121,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(null);
         setActor(null);
         setError(null);
-    }, []);
+        queryClient.clear();
+    }, [queryClient]);
 
     return (
         <AuthContext.Provider

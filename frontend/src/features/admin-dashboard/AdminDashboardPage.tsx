@@ -22,7 +22,6 @@ import {
     useEffect,
     useId,
     useMemo,
-    useRef,
     useState,
     type Dispatch,
     type FormEvent,
@@ -30,18 +29,16 @@ import {
     type ReactNode,
     type SetStateAction,
 } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "@/app/auth/useAuth";
 import type {
     AdminCourseListItem,
-    AdminCourseListResponse,
     AdminCourseStatus,
-    AdminDashboardSummaryResponse,
     AdminTeacherOptionsResponse,
 } from "@/shared/adam-types";
 import { ApiError, api } from "@/shared/api";
-import { queryKeys } from "@/shared/queryKeys";
+import { queryKeys, type CourseFilters } from "@/shared/queryKeys";
 import type { ShowToast } from "@/shared/Toast";
 import {
     Select,
@@ -70,8 +67,6 @@ import {
     getCourseStatusMeta,
     getInitials,
     getTeacherStateMeta,
-    reconcileCourseListResponse,
-    reconcileDashboardSummary,
     sortPendingInvites,
     summarizePageRange,
     teacherInviteToPendingOption,
@@ -91,7 +86,6 @@ interface Props {
     showToast: ShowToast;
 }
 
-type RefreshMode = "initial" | "background";
 const ALL_FILTER_VALUE = "all";
 const UI_UNSET_SELECT_VALUE = "__unset_select_value__";
 const UI_UNASSIGNED_TEACHER_VALUE = "__unassigned_teacher_value__";
@@ -100,13 +94,6 @@ export function AdminDashboardPage({ showToast }: Props) {
     const { actor, signOut } = useAuth();
     const queryClient = useQueryClient();
 
-    const [summary, setSummary] = useState<AdminDashboardSummaryResponse | null>(null);
-    const [coursesResponse, setCoursesResponse] = useState<AdminCourseListResponse | null>(null);
-    const [isInitialLoading, setIsInitialLoading] = useState(true);
-    const [isRefreshing, setIsRefreshing] = useState(false);
-    const [pageError, setPageError] = useState<string | null>(null);
-    const [refreshError, setRefreshError] = useState<string | null>(null);
-    const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
     const [transientAccessLinks, setTransientAccessLinks] = useState<Record<string, string>>({});
     const [search, setSearch] = useState("");
     const deferredSearch = useDeferredValue(search);
@@ -133,26 +120,30 @@ export function AdminDashboardPage({ showToast }: Props) {
     const [regeneratingCourseId, setRegeneratingCourseId] = useState<string | null>(null);
     const [courseFormError, setCourseFormError] = useState<string | null>(null);
     const [inviteFormError, setInviteFormError] = useState<string | null>(null);
-    const isMountedRef = useRef(true);
-    const didLoadDashboardRef = useRef(false);
-    const dashboardRequestIdRef = useRef(0);
-    const lastExternalRefreshAtRef = useRef(0);
-
-    useEffect(() => {
-        isMountedRef.current = true;
-        return () => {
-            isMountedRef.current = false;
-        };
-    }, []);
-
-    const currentItems = useMemo(() => coursesResponse?.items ?? EMPTY_COURSES, [coursesResponse]);
-    const hasDashboardData = summary !== null && coursesResponse !== null;
-    const editingCourse = editingCourseId
-        ? currentItems.find((item) => item.id === editingCourseId) ?? null
-        : null;
-    const archivingCourse = archivingCourseId
-        ? currentItems.find((item) => item.id === archivingCourseId) ?? null
-        : null;
+    const courseFilters = useMemo<CourseFilters>(() => ({
+        search: deferredSearch.trim() || undefined,
+        semester: semesterFilter === ALL_FILTER_VALUE ? undefined : semesterFilter,
+        status: statusFilter === ALL_FILTER_VALUE ? undefined : statusFilter,
+        academic_level:
+            academicLevelFilter === ALL_FILTER_VALUE ? undefined : academicLevelFilter,
+        page,
+        page_size: ADMIN_PAGE_SIZE,
+    }), [academicLevelFilter, deferredSearch, page, semesterFilter, statusFilter]);
+    const summaryQuery = useQuery({
+        queryKey: queryKeys.admin.summary(),
+        queryFn: () => api.admin.getDashboardSummary(),
+        staleTime: 30_000,
+        refetchInterval: 30_000,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: "always",
+    });
+    const coursesQuery = useQuery({
+        queryKey: queryKeys.admin.courses(courseFilters),
+        queryFn: () => api.admin.listCourses(courseFilters),
+        staleTime: 30_000,
+        placeholderData: keepPreviousData,
+        refetchOnWindowFocus: "always",
+    });
     const teacherOptionsQuery = useQuery({
         queryKey: queryKeys.admin.teacherOptions(),
         queryFn: () => api.admin.getTeacherOptions(),
@@ -169,6 +160,49 @@ export function AdminDashboardPage({ showToast }: Props) {
             "No se pudieron cargar las opciones de docentes para los formularios.",
         )
         : null;
+    const summary = summaryQuery.data ?? null;
+    const coursesResponse = coursesQuery.data ?? null;
+    const currentItems = useMemo(() => coursesResponse?.items ?? EMPTY_COURSES, [coursesResponse]);
+    const hasDashboardData = summary !== null && coursesResponse !== null;
+    const isDashboardRefreshing =
+        hasDashboardData && (summaryQuery.isFetching || coursesQuery.isFetching);
+    const editingCourse = editingCourseId
+        ? currentItems.find((item) => item.id === editingCourseId) ?? null
+        : null;
+    const archivingCourse = archivingCourseId
+        ? currentItems.find((item) => item.id === archivingCourseId) ?? null
+        : null;
+    const pageError = useMemo(() => {
+        if (summary === null && summaryQuery.error) {
+            return getAdminErrorMessage(
+                summaryQuery.error,
+                "No se pudo cargar el dashboard administrativo.",
+            );
+        }
+        if (coursesResponse === null && coursesQuery.error) {
+            return getAdminErrorMessage(
+                coursesQuery.error,
+                "No se pudo cargar el dashboard administrativo.",
+            );
+        }
+        return null;
+    }, [coursesQuery.error, coursesResponse, summary, summaryQuery.error]);
+    const refreshError = useMemo(() => {
+        if (summary !== null && summaryQuery.error) {
+            return getAdminErrorMessage(
+                summaryQuery.error,
+                "No se pudo actualizar el dashboard administrativo.",
+            );
+        }
+        if (coursesResponse !== null && coursesQuery.error) {
+            return getAdminErrorMessage(
+                coursesQuery.error,
+                "No se pudo actualizar el dashboard administrativo.",
+            );
+        }
+        return null;
+    }, [coursesQuery.error, coursesResponse, summary, summaryQuery.error]);
+    const lastSyncedAt = summaryQuery.dataUpdatedAt || coursesQuery.dataUpdatedAt || null;
     const semesterSuggestions = useMemo(() => {
         const values = new Set<string>();
         for (const item of currentItems) {
@@ -180,113 +214,6 @@ export function AdminDashboardPage({ showToast }: Props) {
 
     const adminName = actor?.profile.full_name ?? "Administrador ADAM";
     const adminInitials = getInitials(adminName);
-
-    const buildCourseFilters = useCallback((nextPage = page) => ({
-            search: deferredSearch,
-            semester: semesterFilter === ALL_FILTER_VALUE ? undefined : semesterFilter,
-            status: statusFilter === ALL_FILTER_VALUE ? undefined : statusFilter,
-            academic_level: academicLevelFilter === ALL_FILTER_VALUE ? undefined : academicLevelFilter,
-            page: nextPage,
-            page_size: ADMIN_PAGE_SIZE,
-        }), [academicLevelFilter, deferredSearch, page, semesterFilter, statusFilter]);
-
-    const applyDashboardSnapshot = useCallback((
-        summaryResponse: AdminDashboardSummaryResponse,
-        courses: AdminCourseListResponse,
-    ) => {
-        didLoadDashboardRef.current = true;
-        setSummary((prev) => reconcileDashboardSummary(prev, summaryResponse));
-        setCoursesResponse((prev) => reconcileCourseListResponse(prev, courses));
-        setPageError(null);
-        setRefreshError(null);
-        setLastSyncedAt(Date.now());
-    }, []);
-
-    const refreshDashboard = useCallback(async (
-        { nextPage = page, mode }: { nextPage?: number; mode?: RefreshMode } = {},
-    ) => {
-        const requestId = ++dashboardRequestIdRef.current;
-        const refreshMode = mode ?? (didLoadDashboardRef.current ? "background" : "initial");
-        const isBlocking = refreshMode === "initial" && !didLoadDashboardRef.current;
-
-        if (isBlocking) {
-            setIsInitialLoading(true);
-            setPageError(null);
-        } else {
-            setIsRefreshing(true);
-            setRefreshError(null);
-        }
-
-        try {
-            const [summaryResponse, courses] = await Promise.all([
-                api.admin.getDashboardSummary(),
-                api.admin.listCourses(buildCourseFilters(nextPage)),
-            ]);
-            if (!isMountedRef.current || requestId !== dashboardRequestIdRef.current) {
-                return;
-            }
-
-            applyDashboardSnapshot(summaryResponse, courses);
-        } catch (error) {
-            if (!isMountedRef.current || requestId !== dashboardRequestIdRef.current) {
-                throw error;
-            }
-
-            const message = getAdminErrorMessage(error, "No se pudo cargar el dashboard administrativo.");
-            if (isBlocking) {
-                setPageError(message);
-            } else {
-                setRefreshError(message);
-            }
-            throw error;
-        } finally {
-            if (isMountedRef.current && requestId === dashboardRequestIdRef.current) {
-                if (isBlocking) {
-                    setIsInitialLoading(false);
-                } else {
-                    setIsRefreshing(false);
-                }
-            }
-        }
-    }, [applyDashboardSnapshot, buildCourseFilters, page]);
-
-    useEffect(() => {
-        void refreshDashboard().catch(() => undefined);
-    }, [refreshDashboard]);
-
-    const requestExternalRefresh = useCallback(() => {
-        if (!didLoadDashboardRef.current) {
-            return;
-        }
-
-        const now = Date.now();
-        if (now - lastExternalRefreshAtRef.current < 750) {
-            return;
-        }
-        lastExternalRefreshAtRef.current = now;
-        void refreshDashboard({ mode: "background" }).catch(() => undefined);
-    }, [refreshDashboard]);
-
-    useEffect(() => {
-        function handleWindowFocus() {
-            if (document.visibilityState === "visible") {
-                requestExternalRefresh();
-            }
-        }
-
-        function handleVisibilityChange() {
-            if (document.visibilityState === "visible") {
-                requestExternalRefresh();
-            }
-        }
-
-        window.addEventListener("focus", handleWindowFocus);
-        document.addEventListener("visibilitychange", handleVisibilityChange);
-        return () => {
-            window.removeEventListener("focus", handleWindowFocus);
-            document.removeEventListener("visibilitychange", handleVisibilityChange);
-        };
-    }, [requestExternalRefresh]);
 
     const retryTeacherOptions = useCallback(() => {
         void queryClient.invalidateQueries({ queryKey: queryKeys.admin.teacherOptions() });
@@ -301,13 +228,6 @@ export function AdminDashboardPage({ showToast }: Props) {
                 : prev
         ));
     }, []);
-
-    const refreshSummaryAndCourses = useCallback(async (nextPage = page) => {
-        await refreshDashboard({
-            nextPage,
-            mode: didLoadDashboardRef.current ? "background" : "initial",
-        });
-    }, [page, refreshDashboard]);
 
     const openCreateModal = useCallback(() => {
         setCourseFormError(null);
@@ -356,7 +276,8 @@ export function AdminDashboardPage({ showToast }: Props) {
             }
             setIsCreateOpen(false);
             setPage(1);
-            await refreshSummaryAndCourses(1);
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.summary() });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
             showToast("Curso creado correctamente.", "success");
         } catch (error) {
             setCourseFormError(getAdminErrorMessage(error, "No se pudo crear el curso."));
@@ -380,9 +301,9 @@ export function AdminDashboardPage({ showToast }: Props) {
             if (updatedAccessLink) {
                 setTransientAccessLinks((prev) => ({ ...prev, [updatedItem.id]: updatedAccessLink }));
             }
-            await refreshSummaryAndCourses();
             setEditingCourseId(null);
             setIsEditOpen(false);
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
             showToast("Curso actualizado correctamente.", "success");
         } catch (error) {
             setCourseFormError(getAdminErrorMessage(error, "No se pudo actualizar el curso."));
@@ -411,7 +332,8 @@ export function AdminDashboardPage({ showToast }: Props) {
             });
             setArchivingCourseId(null);
             setIsArchiveOpen(false);
-            await refreshSummaryAndCourses();
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.summary() });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
             showToast("Curso archivado correctamente.", "success");
         } catch (error) {
             const message = getAdminErrorMessage(error, "No se pudo archivar el curso.");
@@ -487,7 +409,7 @@ export function AdminDashboardPage({ showToast }: Props) {
         try {
             const regenerated = await api.admin.regenerateCourseAccessLink(item.id);
             setTransientAccessLinks((prev) => ({ ...prev, [regenerated.course_id]: regenerated.access_link }));
-            await refreshSummaryAndCourses();
+            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
             showToast("Enlace regenerado correctamente.", "success");
         } catch (error) {
             const message = getAdminErrorMessage(error, "No se pudo regenerar el enlace del curso.");
@@ -530,13 +452,14 @@ export function AdminDashboardPage({ showToast }: Props) {
             </header>
 
             <main className="mx-auto w-full max-w-7xl px-6 py-8">
-                {!hasDashboardData && isInitialLoading ? (
+                {!hasDashboardData && (summaryQuery.isPending || coursesQuery.isPending) ? (
                     <DashboardLoadingState />
                 ) : !hasDashboardData && pageError ? (
                     <PageErrorState
                         message={pageError}
                         onRetry={() => {
-                            void refreshDashboard({ mode: "initial" }).catch(() => undefined);
+                            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.summary() });
+                            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
                         }}
                     />
                 ) : (
@@ -576,11 +499,12 @@ export function AdminDashboardPage({ showToast }: Props) {
                             <div className="mb-4 flex items-center gap-4">
                                 <h2 className="text-xl font-bold tracking-tight text-slate-900">Directorio de Cursos</h2>
                                 <DashboardRefreshStatus
-                                    isRefreshing={isRefreshing}
+                                    isRefreshing={isDashboardRefreshing}
                                     refreshError={refreshError}
                                     lastSyncedAt={lastSyncedAt}
                                     onRetry={() => {
-                                        void refreshDashboard({ mode: "background" }).catch(() => undefined);
+                                        void queryClient.invalidateQueries({ queryKey: queryKeys.admin.summary() });
+                                        void queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
                                     }}
                                 />
                                 <div className="h-[2px] flex-1 rounded-full bg-gradient-to-r from-slate-200 to-transparent" />
