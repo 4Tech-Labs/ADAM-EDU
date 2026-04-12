@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
+from shared.auth import CurrentActor, ensure_legacy_teacher_bridge
 from shared.models import Course, CourseMembership, Membership
 from shared.teacher_context import TeacherContext
+from shared.models import Assignment
 
 
 class TeacherCourseItemResponse(BaseModel):
@@ -24,6 +28,15 @@ class TeacherCourseItemResponse(BaseModel):
 class TeacherCoursesResponse(BaseModel):
     courses: list[TeacherCourseItemResponse]
     total: int
+
+
+@dataclass(slots=True)
+class TeacherCaseItem:
+    id: str
+    title: str
+    deadline: datetime | None
+    status: str
+    course_codes: list[str]
 
 
 def list_teacher_courses(db: Session, context: TeacherContext) -> TeacherCoursesResponse:
@@ -85,3 +98,30 @@ def list_teacher_courses(db: Session, context: TeacherContext) -> TeacherCourses
     ]
 
     return TeacherCoursesResponse(courses=courses, total=len(courses))
+
+
+def list_teacher_active_cases(db: Session, actor: CurrentActor) -> list[TeacherCaseItem]:
+    legacy_user = ensure_legacy_teacher_bridge(db, actor)
+    now = datetime.now(timezone.utc)
+
+    assignments = db.scalars(
+        select(Assignment)
+        .where(
+            Assignment.teacher_id == legacy_user.id,
+            Assignment.status == "published",
+            Assignment.deadline.is_not(None),
+            Assignment.deadline >= now,
+        )
+        .order_by(Assignment.deadline.asc(), Assignment.id.asc())
+    ).all()
+
+    return [
+        TeacherCaseItem(
+            id=assignment.id,
+            title=assignment.title,
+            deadline=assignment.deadline,
+            status=assignment.status,
+            course_codes=[],
+        )
+        for assignment in assignments
+    ]

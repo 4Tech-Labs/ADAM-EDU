@@ -87,6 +87,7 @@ En este corte no se renombran carpetas del frontend.
 
 1. `POST /api/suggest` ayuda a completar escenario y tecnicas del formulario.
 2. `POST /api/authoring/jobs` es teacher-only y requiere bearer JWT valido; crea `Assignment` + `AuthoringJob` sin confiar en `teacher_id` del cliente.
+   Si el payload incluye `due_at`, el backend lo interpreta como hora local `America/Bogota`, lo persiste en UTC en `Assignment.deadline` y conserva `task_payload["dueAt"]` como string ISO-8601 normalizado.
 3. `AuthoringService.run_job()` ejecuta el grafo y persiste el resultado.
 4. `GET /api/authoring/jobs/{job_id}/progress` emite progreso por SSE autenticado con ownership exacto por docente.
 5. `GET /api/authoring/jobs/{job_id}` permite polling autenticado del job.
@@ -95,6 +96,16 @@ En este corte no se renombran carpetas del frontend.
 8. `POST /api/invites/resolve`, `POST /api/invites/redeem`, `POST /api/auth/activate/password` y `POST /api/auth/activate/oauth/complete` consumen `invite_token` por body.
 
 El frontend usa ese flujo para renderizar el timeline y el `CasePreview` del profesor.
+
+### Deploy note for `Assignment.deadline`
+
+El rollout de cualquier cambio que escriba o lea `Assignment.deadline` exige este orden:
+
+1. aplicar `uv run --directory backend alembic upgrade head`
+2. desplegar backend
+3. desplegar frontend
+
+No despliegues backend antes de aplicar la migracion. `POST /api/authoring/jobs` y `GET /api/teacher/cases` dependen de que la columna exista.
 
 ## Setup local
 
