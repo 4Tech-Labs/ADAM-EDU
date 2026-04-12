@@ -6,11 +6,11 @@ import { AppLanding } from "@/app/AppLanding";
  * Handles the root route `/app/`.
  *
  * Redirect precedence (deterministic, per Issue #33):
- *  1. must_rotate_password=true      → /admin/change-password  (always wins)
- *  2. primary_role=university_admin  → /admin/dashboard (placeholder)
- *  3. primary_role=teacher           → /teacher
- *  4. primary_role=student           → /student
- *  5. no session or unknown role     → AppLanding (role entrypoints)
+ *  1. must_rotate_password=true      -> /admin/change-password (always wins)
+ *  2. primary_role=university_admin  -> /admin/dashboard (placeholder)
+ *  3. primary_role=teacher           -> /teacher/dashboard
+ *  4. primary_role=student           -> /student
+ *  5. no session or unknown role     -> AppLanding (role entrypoints)
  */
 export function RootRedirect() {
     const { session, actor, loading } = useAuth();
@@ -26,7 +26,7 @@ export function RootRedirect() {
         case "university_admin":
             return <Navigate to="/admin/dashboard" replace />;
         case "teacher":
-            return <Navigate to="/teacher" replace />;
+            return <Navigate to="/teacher/dashboard" replace />;
         case "student":
             return <Navigate to="/student" replace />;
         default:

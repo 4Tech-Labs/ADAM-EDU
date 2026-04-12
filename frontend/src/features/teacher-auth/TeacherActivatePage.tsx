@@ -155,7 +155,7 @@ export function TeacherActivatePage() {
             }
 
             // AuthContext onAuthStateChange fires SIGNED_IN → fetchActor automatically
-            navigate("/teacher", { replace: true });
+            navigate("/teacher/dashboard", { replace: true });
         } catch (err: unknown) {
             const apiErr = err as ApiError;
             if (apiErr.detail === "invalid_invite") {

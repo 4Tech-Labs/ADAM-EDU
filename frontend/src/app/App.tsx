@@ -13,6 +13,11 @@ const TeacherAuthoringPage = lazy(() =>
         (module) => ({ default: module.TeacherAuthoringPage }),
     ),
 );
+const TeacherDashboardPage = lazy(() =>
+    import("@/features/teacher-dashboard/TeacherDashboardPage").then(
+        (module) => ({ default: module.TeacherDashboardPage }),
+    ),
+);
 const AuthCallbackPage = lazy(() =>
     import("@/features/auth-callback/AuthCallbackPage").then((module) => ({
         default: module.AuthCallbackPage,
@@ -68,10 +73,12 @@ function App() {
     const { ToastContainer, showToast } = useToast();
     const location = useLocation();
     const isAdminDashboardRoute = location.pathname.startsWith("/admin/dashboard");
+    const isTeacherDashboardRoute =
+        location.pathname.startsWith("/teacher/dashboard");
 
     return (
         <div className="flex min-h-screen flex-col bg-bg-page font-sans type-body">
-            {!isAdminDashboardRoute && <SiteHeader />}
+            {!isAdminDashboardRoute && !isTeacherDashboardRoute && <SiteHeader />}
 
             <main className="flex-1">
                 <Suspense fallback={<RouteFallback />}>
@@ -87,6 +94,14 @@ function App() {
                             }
                         />
                         <Route path="/teacher/activate" element={<TeacherActivatePage />} />
+                        <Route
+                            path="/teacher/dashboard"
+                            element={
+                                <RequireRole role="teacher">
+                                    <TeacherDashboardPage showToast={showToast} />
+                                </RequireRole>
+                            }
+                        />
                         <Route
                             path="/teacher/*"
                             element={

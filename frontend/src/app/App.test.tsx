@@ -8,6 +8,12 @@ vi.mock("@/app/auth/useAuth");
 vi.mock("@/features/teacher-authoring/TeacherAuthoringPage", () => ({
     TeacherAuthoringPage: () => <div data-testid="teacher-authoring-page">Teacher area</div>,
 }));
+vi.mock("@/features/teacher-auth/TeacherLoginPage", () => ({
+    TeacherLoginPage: () => <div data-testid="teacher-login-page">Teacher login</div>,
+}));
+vi.mock("@/features/teacher-dashboard/TeacherDashboardPage", () => ({
+    TeacherDashboardPage: () => <div data-testid="teacher-dashboard-page">Teacher dashboard</div>,
+}));
 vi.mock("@/features/admin-dashboard/AdminDashboardPage", () => ({
     AdminDashboardPage: () => <div data-testid="admin-dashboard-page">Dashboard admin</div>,
 }));
@@ -102,7 +108,7 @@ describe("App admin shell layout", () => {
             initialEntries: ["/admin/dashboard"],
         });
 
-        expect(await screen.findByTestId("teacher-authoring-page")).toBeTruthy();
+        expect(await screen.findByTestId("teacher-dashboard-page")).toBeTruthy();
         expect(screen.queryByTestId("admin-dashboard-page")).toBeNull();
     });
 
@@ -116,6 +122,16 @@ describe("App admin shell layout", () => {
         expect(await screen.findByTestId("admin-login-page")).toBeTruthy();
     });
 
+    it("redirects an anonymous user to the teacher login route from /teacher/dashboard", async () => {
+        vi.mocked(useAuth).mockReturnValue(baseContext);
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/teacher/dashboard"],
+        });
+
+        expect(await screen.findByTestId("teacher-login-page")).toBeTruthy();
+    });
+
     it("keeps the global SiteHeader on non-admin-dashboard routes", () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
@@ -124,6 +140,51 @@ describe("App admin shell layout", () => {
         });
 
         expect(screen.getByTestId("site-header")).toBeTruthy();
+    });
+
+    it("does not render the global SiteHeader on /teacher/dashboard", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: teacherActor,
+        });
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/teacher/dashboard"],
+        });
+
+        expect(await screen.findByTestId("teacher-dashboard-page")).toBeTruthy();
+        expect(screen.queryByTestId("site-header")).toBeNull();
+    });
+
+    it("keeps /teacher routed to the existing authoring page", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: teacherActor,
+        });
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/teacher"],
+        });
+
+        expect(await screen.findByTestId("teacher-authoring-page")).toBeTruthy();
+        expect(screen.queryByTestId("teacher-dashboard-page")).toBeNull();
+    });
+
+    it("redirects a non-teacher actor away from /teacher/dashboard", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: adminActor,
+        });
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/teacher/dashboard"],
+        });
+
+        expect(await screen.findByTestId("admin-dashboard-page")).toBeTruthy();
+        expect(screen.queryByTestId("teacher-dashboard-page")).toBeNull();
     });
 
     it("resolves the lazy auth callback route", async () => {
