@@ -8,7 +8,11 @@ import type {
     AdminCourseListItem,
     AdminCourseListResponse,
     AdminCourseMutationRequest,
+    AdminRemoveTeacherResponse,
+    AdminResendInviteResponse,
+    AdminRevokeInviteResponse,
     AdminDashboardSummaryResponse,
+    AdminTeacherDirectoryResponse,
     AdminTeacherInviteRequest,
     AdminTeacherInviteResponse,
     AdminTeacherOptionsResponse,
@@ -432,6 +436,9 @@ export const api = {
         async getTeacherOptions(): Promise<AdminTeacherOptionsResponse> {
             return parseJsonResponse<AdminTeacherOptionsResponse>("/admin/teacher-options");
         },
+        async getTeacherDirectory(): Promise<AdminTeacherDirectoryResponse> {
+            return parseJsonResponse<AdminTeacherDirectoryResponse>("/admin/teacher-directory");
+        },
         async createCourse(req: AdminCourseMutationRequest): Promise<AdminCourseListItem> {
             return parseJsonResponse<AdminCourseListItem>("/admin/courses", {
                 method: "POST",
@@ -454,6 +461,21 @@ export const api = {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(req),
+            });
+        },
+        async resendInvite(inviteId: string): Promise<AdminResendInviteResponse> {
+            return parseJsonResponse<AdminResendInviteResponse>(`/admin/teacher-invites/${inviteId}/resend`, {
+                method: "POST",
+            });
+        },
+        async removeTeacher(membershipId: string): Promise<AdminRemoveTeacherResponse> {
+            return parseJsonResponse<AdminRemoveTeacherResponse>(`/admin/memberships/${membershipId}`, {
+                method: "DELETE",
+            });
+        },
+        async revokeInvite(inviteId: string): Promise<AdminRevokeInviteResponse> {
+            return parseJsonResponse<AdminRevokeInviteResponse>(`/admin/teacher-invites/${inviteId}`, {
+                method: "DELETE",
             });
         },
         async regenerateCourseAccessLink(

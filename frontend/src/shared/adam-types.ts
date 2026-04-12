@@ -353,7 +353,7 @@ export type AdminTeacherAssignment =
     | AdminTeacherMembershipAssignment
     | AdminTeacherPendingInviteAssignment;
 
-export type AdminTeacherState = "active" | "pending" | "stale_pending_invite";
+export type AdminTeacherState = "active" | "pending" | "stale_pending_invite" | "unassigned";
 export type AdminCourseStatus = "active" | "inactive";
 export type AdminCourseAccessLinkStatus = "active" | "missing";
 
@@ -366,7 +366,7 @@ export interface AdminCourseListItem {
     status: AdminCourseStatus;
     teacher_display_name: string;
     teacher_state: AdminTeacherState;
-    teacher_assignment: AdminTeacherAssignment;
+    teacher_assignment: AdminTeacherAssignment | null;
     students_count: number;
     max_students: number;
     occupancy_percent: number;
@@ -427,6 +427,51 @@ export interface AdminCourseAccessLinkRegenerateResponse {
     course_id: string;
     access_link: string;
     access_link_status: "active";
+}
+
+export interface AdminCourseRef {
+    course_id: string;
+    title: string;
+    code: string;
+    semester: string;
+    status: AdminCourseStatus;
+}
+
+export interface AdminTeacherDirectoryEntry {
+    membership_id: string;
+    full_name: string;
+    email: string;
+    assigned_courses: AdminCourseRef[];
+}
+
+export interface AdminTeacherDirectoryInvite {
+    invite_id: string;
+    full_name: string;
+    email: string;
+    status: "pending";
+    expires_at: string;
+    assigned_courses: AdminCourseRef[];
+}
+
+export interface AdminTeacherDirectoryResponse {
+    active_teachers: AdminTeacherDirectoryEntry[];
+    pending_invites: AdminTeacherDirectoryInvite[];
+}
+
+export interface AdminRemoveTeacherResponse {
+    removed_membership_id: string;
+    affected_course_ids: string[];
+}
+
+export interface AdminRevokeInviteResponse {
+    revoked_invite_id: string;
+    affected_course_ids: string[];
+}
+
+export interface AdminResendInviteResponse {
+    invite_id: string;
+    activation_link: string;
+    expires_at: string;
 }
 
 export const EMPTY_FORM: CaseFormData = {

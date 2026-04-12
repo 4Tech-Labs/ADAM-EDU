@@ -138,7 +138,7 @@ export function buildCourseFormFromItem(item: AdminCourseListItem): CourseFormSt
         academic_level: normalizeAcademicLevel(item.academic_level),
         max_students: String(item.max_students),
         status: item.status,
-        teacher_option_value: encodeTeacherOptionValue(item.teacher_assignment),
+        teacher_option_value: item.teacher_assignment ? encodeTeacherOptionValue(item.teacher_assignment) : "",
     };
 }
 
@@ -216,6 +216,14 @@ export function getAdminErrorMessage(error: unknown, fallback: string): string {
             return "Ya hay una regeneracion de enlace en curso para este curso.";
         case "course_not_found":
             return "El curso ya no existe o pertenece a otra universidad.";
+        case "invite_already_consumed":
+            return "La invitacion ya fue utilizada y no puede reenviarse ni revocarse.";
+        case "teacher_has_active_cases":
+            return "No se puede eliminar este docente porque tiene casos con authoring activo.";
+        case "invite_not_found":
+            return "La invitacion ya no existe o pertenece a otra universidad.";
+        case "membership_not_found":
+            return "La membresia docente ya no existe o pertenece a otra universidad.";
         default:
             return error.message || fallback;
     }
@@ -231,6 +239,8 @@ export function getTeacherStateMeta(
             return { label: "Invitacion pendiente", classes: "bg-amber-100 text-amber-800" };
         case "stale_pending_invite":
             return { label: "Invitacion vencida", classes: "bg-red-100 text-red-700" };
+        case "unassigned":
+            return { label: "Sin docente", classes: "bg-slate-200 text-slate-600" };
     }
 }
 

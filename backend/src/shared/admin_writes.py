@@ -8,7 +8,7 @@ from typing import Any, Literal, NoReturn
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -22,7 +22,7 @@ from shared.course_access_links import (
     try_acquire_course_regeneration_lock,
 )
 from shared.invite_status import invite_effective_status, utc_now
-from shared.models import Course, Invite, Membership
+from shared.models import Assignment, AuthoringJob, Course, Invite, Membership
 
 
 ACADEMIC_LEVELS = frozenset({"Pregrado", "Especialización", "Maestría", "MBA", "Doctorado"})
@@ -116,6 +116,22 @@ class CourseAccessLinkRegenerateResponse(BaseModel):
     course_id: str
     access_link: str
     access_link_status: Literal["active"]
+
+
+class AdminResendInviteResponse(BaseModel):
+    invite_id: str
+    activation_link: str
+    expires_at: str
+
+
+class AdminRemoveTeacherResponse(BaseModel):
+    removed_membership_id: str
+    affected_course_ids: list[str]
+
+
+class AdminRevokeInviteResponse(BaseModel):
+    revoked_invite_id: str
+    affected_course_ids: list[str]
 
 
 @dataclass(slots=True)
@@ -410,6 +426,221 @@ def create_teacher_invite(
         email=normalized_email,
         status="pending",
         activation_link=_build_teacher_activation_link(raw_token),
+    )
+
+
+def resend_teacher_invite(
+    db: Session,
+    context: AdminContext,
+    invite_id: str,
+) -> AdminResendInviteResponse:
+    try:
+        invite = db.scalar(
+            select(Invite)
+            .where(
+                Invite.id == invite_id,
+                Invite.university_id == context.university_id,
+                Invite.role == "teacher",
+            )
+            .with_for_update(nowait=True)
+        )
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="invite_update_in_progress",
+        ) from exc
+
+    if invite is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="invite_not_found",
+        )
+    if invite.status == "consumed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="invite_already_consumed",
+        )
+    if invite.status == "revoked":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="invite_not_found",
+        )
+
+    raw_token = secrets.token_urlsafe(32)
+    expires_at = utc_now() + TEACHER_INVITE_TTL
+    try:
+        invite.token_hash = hash_invite_token(raw_token)
+        invite.status = "pending"
+        invite.expires_at = expires_at
+        invite.consumed_at = None
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="teacher_invite_resend_failed",
+        ) from exc
+
+    audit_log(
+        "admin.teacher.invite_resent",
+        "success",
+        auth_user_id=context.auth_user_id,
+        university_id=context.university_id,
+        invite_id=invite.id,
+        http_status=status.HTTP_200_OK,
+    )
+    return AdminResendInviteResponse(
+        invite_id=invite.id,
+        activation_link=_build_teacher_activation_link(raw_token),
+        expires_at=expires_at.isoformat(),
+    )
+
+
+def _teacher_has_active_cases(db: Session, *, membership: Membership) -> bool:
+    active_job = db.scalar(
+        select(AuthoringJob.id)
+        .join(Assignment, Assignment.id == AuthoringJob.assignment_id)
+        .where(
+            Assignment.teacher_id == membership.user_id,
+            AuthoringJob.status.in_(("pending", "processing")),
+        )
+        .limit(1)
+    )
+    return active_job is not None
+
+
+def remove_teacher_membership(
+    db: Session,
+    context: AdminContext,
+    membership_id: str,
+) -> AdminRemoveTeacherResponse:
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.id == membership_id,
+            Membership.university_id == context.university_id,
+            Membership.role == "teacher",
+        )
+    )
+    if membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="membership_not_found",
+        )
+    if _teacher_has_active_cases(db, membership=membership):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="teacher_has_active_cases",
+        )
+
+    affected_course_ids = list(
+        db.scalars(
+            select(Course.id).where(
+                Course.university_id == context.university_id,
+                Course.teacher_membership_id == membership.id,
+            )
+        )
+    )
+    try:
+        db.execute(
+            update(Course)
+            .where(
+                Course.university_id == context.university_id,
+                Course.teacher_membership_id == membership.id,
+            )
+            .values(teacher_membership_id=None)
+        )
+        db.execute(delete(Membership).where(Membership.id == membership.id))
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="teacher_membership_remove_failed",
+        ) from exc
+
+    audit_log(
+        "admin.teacher.removed",
+        "success",
+        auth_user_id=context.auth_user_id,
+        university_id=context.university_id,
+        membership_id=membership.id,
+        http_status=status.HTTP_200_OK,
+    )
+    return AdminRemoveTeacherResponse(
+        removed_membership_id=membership.id,
+        affected_course_ids=affected_course_ids,
+    )
+
+
+def revoke_teacher_invite(
+    db: Session,
+    context: AdminContext,
+    invite_id: str,
+) -> AdminRevokeInviteResponse:
+    try:
+        invite = db.scalar(
+            select(Invite)
+            .where(
+                Invite.id == invite_id,
+                Invite.university_id == context.university_id,
+                Invite.role == "teacher",
+            )
+            .with_for_update(nowait=True)
+        )
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="invite_update_in_progress",
+        ) from exc
+
+    if invite is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="invite_not_found",
+        )
+    if invite.status == "consumed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="invite_already_consumed",
+        )
+
+    affected_course_ids = list(
+        db.scalars(
+            select(Course.id).where(
+                Course.university_id == context.university_id,
+                Course.pending_teacher_invite_id == invite.id,
+            )
+        )
+    )
+    try:
+        invite.status = "revoked"
+        db.execute(
+            update(Course)
+            .where(
+                Course.university_id == context.university_id,
+                Course.pending_teacher_invite_id == invite.id,
+            )
+            .values(pending_teacher_invite_id=None)
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="teacher_invite_revoke_failed",
+        ) from exc
+
+    audit_log(
+        "admin.teacher.invite_revoked",
+        "success",
+        auth_user_id=context.auth_user_id,
+        university_id=context.university_id,
+        invite_id=invite.id,
+        http_status=status.HTTP_200_OK,
+    )
+    return AdminRevokeInviteResponse(
+        revoked_invite_id=invite.id,
+        affected_course_ids=affected_course_ids,
     )
 
 

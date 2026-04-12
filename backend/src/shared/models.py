@@ -166,15 +166,7 @@ class Course(Base):
             name="ck_courses_academic_level",
         ),
         CheckConstraint(
-            """
-            (
-                teacher_membership_id IS NOT NULL
-                AND pending_teacher_invite_id IS NULL
-            ) OR (
-                teacher_membership_id IS NULL
-                AND pending_teacher_invite_id IS NOT NULL
-            )
-            """,
+            "NOT (teacher_membership_id IS NOT NULL AND pending_teacher_invite_id IS NOT NULL)",
             name="ck_courses_teacher_assignment_xor",
         ),
     )

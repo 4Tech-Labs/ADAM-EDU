@@ -7,22 +7,30 @@ from sqlalchemy.orm import Session
 
 from shared.admin_context import AdminContext, require_admin_context
 from shared.admin_reads import (
+    AdminTeacherDirectoryResponse,
     AdminCoursesResponse,
     CourseListItemResponse,
     DashboardSummaryResponse,
     TeacherOptionsResponse,
     get_dashboard_summary,
+    list_teacher_directory,
     list_admin_courses,
     list_teacher_options,
 )
 from shared.admin_writes import (
+    AdminRemoveTeacherResponse,
+    AdminResendInviteResponse,
+    AdminRevokeInviteResponse,
     AdminCourseMutationRequest,
     CourseAccessLinkRegenerateResponse,
     CreateTeacherInviteRequest,
     TeacherInviteResponse,
     create_admin_course,
     create_teacher_invite,
+    remove_teacher_membership,
     regenerate_admin_course_access_link,
+    resend_teacher_invite,
+    revoke_teacher_invite,
     update_admin_course,
 )
 from shared.database import get_db
@@ -69,6 +77,14 @@ def get_admin_teacher_options(
     return list_teacher_options(db, context)
 
 
+@router.get("/teacher-directory", response_model=AdminTeacherDirectoryResponse)
+def get_admin_teacher_directory(
+    context: Annotated[AdminContext, Depends(require_admin_context)],
+    db: Session = Depends(get_db),
+) -> AdminTeacherDirectoryResponse:
+    return list_teacher_directory(db, context)
+
+
 @router.post("/courses", response_model=CourseListItemResponse, status_code=201)
 def post_admin_course(
     request: AdminCourseMutationRequest,
@@ -95,6 +111,33 @@ def post_teacher_invite(
     db: Session = Depends(get_db),
 ) -> TeacherInviteResponse:
     return create_teacher_invite(db, context, request)
+
+
+@router.post("/teacher-invites/{invite_id}/resend", response_model=AdminResendInviteResponse)
+def post_resend_teacher_invite(
+    invite_id: str,
+    context: Annotated[AdminContext, Depends(require_admin_context)],
+    db: Session = Depends(get_db),
+) -> AdminResendInviteResponse:
+    return resend_teacher_invite(db, context, invite_id)
+
+
+@router.delete("/memberships/{membership_id}", response_model=AdminRemoveTeacherResponse)
+def delete_teacher_membership(
+    membership_id: str,
+    context: Annotated[AdminContext, Depends(require_admin_context)],
+    db: Session = Depends(get_db),
+) -> AdminRemoveTeacherResponse:
+    return remove_teacher_membership(db, context, membership_id)
+
+
+@router.delete("/teacher-invites/{invite_id}", response_model=AdminRevokeInviteResponse)
+def delete_teacher_invite(
+    invite_id: str,
+    context: Annotated[AdminContext, Depends(require_admin_context)],
+    db: Session = Depends(get_db),
+) -> AdminRevokeInviteResponse:
+    return revoke_teacher_invite(db, context, invite_id)
 
 
 @router.post(

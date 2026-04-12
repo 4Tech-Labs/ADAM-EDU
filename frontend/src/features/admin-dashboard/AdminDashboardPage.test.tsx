@@ -23,9 +23,13 @@ vi.mock("@/shared/api", async () => {
                 getDashboardSummary: vi.fn(),
                 listCourses: vi.fn(),
                 getTeacherOptions: vi.fn(),
+                getTeacherDirectory: vi.fn(),
                 createCourse: vi.fn(),
                 updateCourse: vi.fn(),
                 createTeacherInvite: vi.fn(),
+                resendInvite: vi.fn(),
+                removeTeacher: vi.fn(),
+                revokeInvite: vi.fn(),
                 regenerateCourseAccessLink: vi.fn(),
             },
         },
@@ -263,6 +267,10 @@ describe("AdminDashboardPage", () => {
         vi.mocked(api.admin.getDashboardSummary).mockResolvedValue(summaryResponse);
         vi.mocked(api.admin.listCourses).mockResolvedValue(coursesResponse);
         vi.mocked(api.admin.getTeacherOptions).mockResolvedValue(teacherOptionsResponse);
+        vi.mocked(api.admin.getTeacherDirectory).mockResolvedValue({
+            active_teachers: [],
+            pending_invites: [],
+        });
         vi.mocked(api.admin.createCourse).mockResolvedValue({
             ...activeCourse,
             id: "course-3",
@@ -277,6 +285,19 @@ describe("AdminDashboardPage", () => {
             email: "maria@example.edu",
             status: "pending",
             activation_link: "/app/teacher/activate#invite_token=abc123",
+        });
+        vi.mocked(api.admin.resendInvite).mockResolvedValue({
+            invite_id: "invite-2",
+            activation_link: "/app/teacher/activate#invite_token=resent",
+            expires_at: new Date().toISOString(),
+        });
+        vi.mocked(api.admin.removeTeacher).mockResolvedValue({
+            removed_membership_id: "teacher-membership-1",
+            affected_course_ids: [],
+        });
+        vi.mocked(api.admin.revokeInvite).mockResolvedValue({
+            revoked_invite_id: "invite-2",
+            affected_course_ids: [],
         });
         vi.mocked(api.admin.regenerateCourseAccessLink).mockResolvedValue({
             course_id: activeCourse.id,
@@ -538,15 +559,15 @@ describe("AdminDashboardPage", () => {
         });
     }, 20_000);
 
-    it("keeps dashboard quick actions as placeholders with no side effects", async () => {
+    it("opens the teacher directory modal and keeps reportes as placeholder", async () => {
         renderPage();
         await screen.findByText("Directorio de Cursos");
 
         fireEvent.click(screen.getByText("Gestion de Docentes"));
         fireEvent.click(screen.getByText("Reportes Globales"));
 
-        expect(showToast).toHaveBeenCalledWith("La gestion de docentes estara disponible proximamente.", "default");
         expect(showToast).toHaveBeenCalledWith("Modulo de reportes proximamente disponible.", "default");
+        expect(api.admin.getTeacherDirectory).toHaveBeenCalledTimes(1);
         expect(api.admin.createTeacherInvite).not.toHaveBeenCalled();
     });
 

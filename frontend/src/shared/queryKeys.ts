@@ -51,6 +51,7 @@ export const queryKeys = {
         },
         /** ["admin", "teacher-options"] — opciones para el dropdown de asignación de docente */
         teacherOptions: () => ["admin", "teacher-options"] as const,
+        teacherDirectory: () => ["admin", "teacher-directory"] as const,
     },
     authoring: {
         /**
