@@ -17,7 +17,7 @@ from shared.invite_status import invite_effective_status_from_fields
 from shared.models import Course, CourseAccessLink, CourseMembership, Invite, Membership, Profile, User
 
 
-TeacherState = Literal["active", "pending", "stale_pending_invite"]
+TeacherState = Literal["active", "pending", "stale_pending_invite", "unassigned"]
 AccessLinkStatus = Literal["active", "missing"]
 _MISSING_TEACHER_EMAIL = "__missing_teacher_email__"
 _teacher_email_cache: TTLCache[str, str] = TTLCache(maxsize=500, ttl=300)
@@ -41,6 +41,35 @@ class TeacherPendingInviteAssignmentResponse(BaseModel):
     invite_id: str
 
 
+class AdminCourseRef(BaseModel):
+    course_id: str
+    title: str
+    code: str
+    semester: str
+    status: Literal["active", "inactive"]
+
+
+class AdminTeacherDirectoryEntry(BaseModel):
+    membership_id: str
+    full_name: str
+    email: str
+    assigned_courses: list[AdminCourseRef]
+
+
+class AdminTeacherDirectoryInvite(BaseModel):
+    invite_id: str
+    full_name: str
+    email: str
+    status: Literal["pending"]
+    expires_at: str
+    assigned_courses: list[AdminCourseRef]
+
+
+class AdminTeacherDirectoryResponse(BaseModel):
+    active_teachers: list[AdminTeacherDirectoryEntry]
+    pending_invites: list[AdminTeacherDirectoryInvite]
+
+
 class CourseListItemResponse(BaseModel):
     id: str
     title: str
@@ -50,7 +79,7 @@ class CourseListItemResponse(BaseModel):
     status: str
     teacher_display_name: str
     teacher_state: TeacherState
-    teacher_assignment: TeacherMembershipAssignmentResponse | TeacherPendingInviteAssignmentResponse
+    teacher_assignment: TeacherMembershipAssignmentResponse | TeacherPendingInviteAssignmentResponse | None
     students_count: int
     max_students: int
     occupancy_percent: int
@@ -341,7 +370,25 @@ def _serialize_course_item(row: dict[str, Any], *, access_link: str | None = Non
             access_link_status="active" if row["active_link_status"] == "active" else "missing",
         )
 
-    if course_pending_teacher_invite_id is None or row["pending_invite_id"] is None:
+    if course_pending_teacher_invite_id is None:
+        return CourseListItemResponse(
+            id=row["id"],
+            title=row["title"],
+            code=row["code"],
+            semester=row["semester"],
+            academic_level=row["academic_level"],
+            status=row["status"],
+            teacher_display_name="Sin docente asignado",
+            teacher_state="unassigned",
+            teacher_assignment=None,
+            students_count=students_count,
+            max_students=max_students,
+            occupancy_percent=_calculate_percent(students_count, max_students),
+            access_link=access_link,
+            access_link_status="active" if row["active_link_status"] == "active" else "missing",
+        )
+
+    if row["pending_invite_id"] is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="invalid_teacher_assignment",
@@ -564,6 +611,141 @@ def list_teacher_options(db: Session, context: AdminContext) -> TeacherOptionsRe
     )
 
     return TeacherOptionsResponse(
+        active_teachers=active_teachers,
+        pending_invites=pending_invites,
+    )
+
+
+def _serialize_course_ref(row: dict[str, Any]) -> AdminCourseRef:
+    return AdminCourseRef(
+        course_id=row["course_id"],
+        title=row["title"],
+        code=row["code"],
+        semester=row["semester"],
+        status=row["status"],
+    )
+
+
+def list_teacher_directory(db: Session, context: AdminContext) -> AdminTeacherDirectoryResponse:
+    teacher_rows = (
+        db.execute(
+            select(
+                Membership.id.label("membership_id"),
+                Membership.user_id.label("user_id"),
+                Profile.full_name.label("full_name"),
+                User.email.label("legacy_email"),
+                Course.id.label("course_id"),
+                Course.title.label("title"),
+                Course.code.label("code"),
+                Course.semester.label("semester"),
+                Course.status.label("status"),
+            )
+            .select_from(Membership)
+            .join(Profile, Membership.user_id == Profile.id)
+            .outerjoin(User, User.id == Membership.user_id)
+            .outerjoin(
+                Course,
+                and_(
+                    Course.teacher_membership_id == Membership.id,
+                    Course.university_id == context.university_id,
+                ),
+            )
+            .where(
+                Membership.university_id == context.university_id,
+                Membership.role == "teacher",
+                Membership.status == "active",
+            )
+            .order_by(Profile.full_name.asc(), Membership.id.asc(), Course.created_at.desc(), Course.id.desc())
+        )
+        .mappings()
+        .all()
+    )
+
+    teacher_map: dict[str, AdminTeacherDirectoryEntry] = {}
+    for row in teacher_rows:
+        membership_id = row["membership_id"]
+        if membership_id not in teacher_map:
+            teacher_map[membership_id] = AdminTeacherDirectoryEntry(
+                membership_id=membership_id,
+                full_name=row["full_name"],
+                email=_resolve_teacher_email(row["user_id"], row["legacy_email"]),
+                assigned_courses=[],
+            )
+        if row["course_id"] is not None:
+            teacher_map[membership_id].assigned_courses.append(_serialize_course_ref(dict(row)))
+
+    active_teachers = sorted(
+        teacher_map.values(),
+        key=lambda teacher: ((teacher.full_name or teacher.email).lower(), teacher.membership_id),
+    )
+
+    invite_rows = (
+        db.execute(
+            select(
+                Invite.id.label("invite_id"),
+                Invite.full_name.label("full_name"),
+                Invite.email.label("email"),
+                Invite.status.label("invite_status"),
+                Invite.expires_at.label("expires_at"),
+                Course.id.label("course_id"),
+                Course.title.label("title"),
+                Course.code.label("code"),
+                Course.semester.label("semester"),
+                Course.status.label("course_status"),
+            )
+            .select_from(Invite)
+            .outerjoin(
+                Course,
+                and_(
+                    Course.pending_teacher_invite_id == Invite.id,
+                    Course.university_id == context.university_id,
+                ),
+            )
+            .where(
+                Invite.university_id == context.university_id,
+                Invite.role == "teacher",
+            )
+            .order_by(Invite.full_name.asc(), Invite.id.asc(), Course.created_at.desc(), Course.id.desc())
+        )
+        .mappings()
+        .all()
+    )
+
+    invite_map: dict[str, AdminTeacherDirectoryInvite] = {}
+    for row in invite_rows:
+        effective_status = invite_effective_status_from_fields(row["invite_status"], row["expires_at"])
+        if effective_status != "pending":
+            continue
+        invite_id = row["invite_id"]
+        if invite_id not in invite_map:
+            full_name = row["full_name"] or row["email"]
+            invite_map[invite_id] = AdminTeacherDirectoryInvite(
+                invite_id=invite_id,
+                full_name=full_name,
+                email=row["email"],
+                status="pending",
+                expires_at=row["expires_at"].astimezone(timezone.utc).isoformat(),
+                assigned_courses=[],
+            )
+        if row["course_id"] is not None:
+            invite_map[invite_id].assigned_courses.append(
+                _serialize_course_ref(
+                    {
+                        "course_id": row["course_id"],
+                        "title": row["title"],
+                        "code": row["code"],
+                        "semester": row["semester"],
+                        "status": row["course_status"],
+                    }
+                )
+            )
+
+    pending_invites = sorted(
+        invite_map.values(),
+        key=lambda invite: ((invite.full_name or invite.email).lower(), invite.invite_id),
+    )
+
+    return AdminTeacherDirectoryResponse(
         active_teachers=active_teachers,
         pending_invites=pending_invites,
     )

@@ -79,6 +79,8 @@ import {
     type LinkPresentation,
     type SemesterTerm,
 } from "./adminDashboardModel";
+import { ConfirmationModal } from "./AdminDashboardModals";
+import { TeacherDirectoryModal } from "./TeacherDirectoryModal";
 
 type ModalInviteTarget = "create" | "edit";
 
@@ -110,6 +112,7 @@ export function AdminDashboardPage({ showToast }: Props) {
     const [isEditOpen, setIsEditOpen] = useState(false);
     const [isArchiveOpen, setIsArchiveOpen] = useState(false);
     const [isInviteOpen, setIsInviteOpen] = useState(false);
+    const [isTeacherDirectoryOpen, setIsTeacherDirectoryOpen] = useState(false);
     const [createForm, setCreateForm] = useState<CourseFormState>(createEmptyCourseForm());
     const [editForm, setEditForm] = useState<CourseFormState>(createEmptyCourseForm());
     const [inviteTarget, setInviteTarget] = useState<ModalInviteTarget>("create");
@@ -392,7 +395,7 @@ export function AdminDashboardPage({ showToast }: Props) {
     }
 
     function handleArchiveCourse() {
-        if (!archivingCourse) return;
+        if (!archivingCourse || !archivingCourse.teacher_assignment) return;
         setCourseFormError(null);
         archiveCourseMutation.mutate({
             courseId: archivingCourse.id,
@@ -546,7 +549,7 @@ export function AdminDashboardPage({ showToast }: Props) {
 
                         <section className="mb-7 grid grid-cols-1 gap-4 md:grid-cols-3">
                             <ActionCard title="Crear Nuevo Curso" subtitle="Asigna un docente y genera link" onClick={openCreateModal} variant="primary" icon={<Plus className="h-5 w-5 text-white" strokeWidth={2.4} />} />
-                            <ActionCard title="Gestion de Docentes" subtitle="Proximamente disponible" onClick={() => showToast("La gestion de docentes estara disponible proximamente.", "default")} variant="primary" icon={<Users className="h-5 w-5 text-white" strokeWidth={2.4} />} />
+                            <ActionCard title="Gestion de Docentes" subtitle="Directorio e invitaciones" onClick={() => setIsTeacherDirectoryOpen(true)} variant="primary" icon={<Users className="h-5 w-5 text-white" strokeWidth={2.4} />} />
                             <ActionCard title="Reportes Globales" subtitle="Proximamente disponible" onClick={() => showToast("Modulo de reportes proximamente disponible.", "default")} variant="placeholder" icon={<ExternalLink className="h-5 w-5 text-slate-400" />} />
                         </section>
 
@@ -716,6 +719,11 @@ export function AdminDashboardPage({ showToast }: Props) {
                     setInviteEmail("");
                     setInviteFormError(null);
                 }}
+            />
+            <TeacherDirectoryModal
+                isOpen={isTeacherDirectoryOpen}
+                onClose={() => setIsTeacherDirectoryOpen(false)}
+                showToast={showToast}
             />
         </div>
     );
@@ -1015,7 +1023,7 @@ function ActionsCell({
                     <ExternalLink className="h-5 w-5" />
                 </button>
             ) : null}
-            <button type="button" disabled={item.status === "inactive"} onClick={onArchive} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40" aria-label={`Archivar ${item.title}`}>
+            <button type="button" disabled={item.status === "inactive" || item.teacher_assignment === null} onClick={onArchive} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40" aria-label={`Archivar ${item.title}`}>
                 <Archive className="h-5 w-5" />
             </button>
         </div>
@@ -1398,40 +1406,6 @@ function TeacherOptionsRefreshNotice({
             <button type="button" onClick={onRetry} className="font-semibold text-[#0144a0] transition hover:text-[#00337a]">
                 Reintentar
             </button>
-        </div>
-    );
-}
-
-function ConfirmationModal({
-    isOpen,
-    title,
-    description,
-    confirmLabel,
-    isSubmitting,
-    onClose,
-    onConfirm,
-}: {
-    isOpen: boolean;
-    title: string;
-    description: string;
-    confirmLabel: string;
-    isSubmitting: boolean;
-    onClose: () => void;
-    onConfirm: () => void;
-}) {
-    if (!isOpen) return null;
-    return (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/60 px-4 py-6 backdrop-blur-sm">
-            <div className="w-full max-w-md overflow-hidden rounded-[20px] bg-white shadow-[0_24px_64px_rgba(0,0,0,0.22)]">
-                <div className="px-6 py-5">
-                    <h2 className="text-xl font-bold tracking-tight text-slate-900">{title}</h2>
-                    <p className="mt-3 text-sm leading-6 text-slate-500">{description}</p>
-                </div>
-                <div className="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4">
-                    <button type="button" onClick={onClose} className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900">Cancelar</button>
-                    <button type="button" onClick={onConfirm} disabled={isSubmitting} className="inline-flex items-center justify-center rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">{confirmLabel}</button>
-                </div>
-            </div>
         </div>
     );
 }

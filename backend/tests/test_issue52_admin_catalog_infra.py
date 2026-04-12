@@ -355,7 +355,7 @@ def test_issue52_course_constraints_allow_pending_teacher_assignment(db, seed_in
     assert course.pending_teacher_invite_id == invite.id
 
 
-def test_issue52_course_rejects_invalid_teacher_assignment_xor(db, seed_identity, seed_invite) -> None:
+def test_issue52_course_rejects_both_teacher_assignment_columns_set(db, seed_identity, seed_invite) -> None:
     teacher = seed_identity(
         user_id=str(uuid.uuid4()),
         email="teacher-xor@example.edu",
@@ -384,20 +384,29 @@ def test_issue52_course_rejects_invalid_teacher_assignment_xor(db, seed_identity
         db.commit()
     db.rollback()
 
-    both_null = Course(
+def test_issue52_course_allows_unassigned_shape_after_issue86(db, seed_identity) -> None:
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher-unassigned@example.edu",
+        role="teacher",
+        university_id="10000000-0000-0000-0000-000000000870",
+    )
+
+    unassigned = Course(
         university_id=teacher["tenant"].id,
         teacher_membership_id=None,
         pending_teacher_invite_id=None,
-        title="Invalid Both Null",
+        title="Unassigned Course",
         code="ISSUE52-XOR-002",
         semester="2026-I",
         academic_level="Pregrado",
         max_students=30,
         status="active",
     )
-    db.add(both_null)
-    with pytest.raises(IntegrityError):
-        db.commit()
+    db.add(unassigned)
+    db.commit()
+
+    assert unassigned.id is not None
 
 
 def test_issue52_course_rejects_duplicate_code_per_university_and_semester(db, seed_identity) -> None:
