@@ -420,7 +420,7 @@ export function AdminDashboardPage({ showToast }: Props) {
         }
     }
 
-        return (
+    return (
         <div className="min-h-screen bg-[#f0f4f8] text-slate-800" data-testid="admin-dashboard-shell">
             <header className="border-b-[3px] border-[#0144a0] bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800" data-testid="admin-dashboard-header">
                 <div className="mx-auto flex h-20 w-full max-w-7xl items-center justify-between gap-5 px-6">

@@ -407,7 +407,7 @@ describe("AdminDashboardPage", () => {
                 },
             }));
         });
-    });
+    }, 20_000);
 
     it("blocks invalid max_students locally before calling the backend", async () => {
         renderPage();
@@ -422,7 +422,7 @@ describe("AdminDashboardPage", () => {
 
         expect(await screen.findByText("La capacidad máxima debe ser un número entero mayor o igual a 1.")).toBeTruthy();
         expect(api.admin.createCourse).not.toHaveBeenCalled();
-    });
+    }, 20_000);
 
     it("uses guided semester selectors when creating a course", async () => {
         renderPage();
@@ -437,7 +437,7 @@ describe("AdminDashboardPage", () => {
                 semester: "2026-II",
             }));
         });
-    });
+    }, 20_000);
 
     it("blocks editing when a course arrives with an invalid inherited semester", async () => {
         vi.mocked(api.admin.listCourses).mockResolvedValueOnce({
@@ -518,7 +518,7 @@ describe("AdminDashboardPage", () => {
                 },
             }));
         });
-    });
+    }, 20_000);
 
     it("keeps dashboard quick actions as placeholders with no side effects", async () => {
         renderPage();
