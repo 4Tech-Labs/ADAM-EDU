@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import traceback
 import uuid
@@ -25,7 +26,6 @@ from shared.blueprint_schema import (
 )
 from shared.database import SessionLocal
 from shared.models import Assignment, AuthoringJob
-from shared.progress_bus import publish
 from shared.sanitization import sanitize_untrusted_text
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,34 @@ SUPPORTED_CONTEXT_KEYS = [
 ]
 NARRATIVE_ARTIFACT_LIMIT = 30000
 EDA_ARTIFACT_LIMIT = 40000
+
+
+def _next_progress_payload(
+    existing_payload: Mapping[str, Any] | None,
+    *,
+    status: str,
+    current_step: str | None = None,
+    error_code: str | None = None,
+    error_trace: str | None = None,
+) -> dict[str, Any]:
+    """Build a monotonic progress payload persisted in authoring_jobs.task_payload."""
+    payload = dict(existing_payload or {})
+
+    previous_seq = payload.get("progress_seq")
+    progress_seq = previous_seq if isinstance(previous_seq, int) else 0
+
+    payload["progress_seq"] = progress_seq + 1
+    payload["progress_ts"] = datetime.now(timezone.utc).isoformat()
+    payload["progress_status"] = status
+
+    if current_step is not None:
+        payload["current_step"] = current_step
+    if error_code is not None:
+        payload["error_code"] = error_code
+    if error_trace is not None:
+        payload["error_trace"] = error_trace
+
+    return payload
 
 
 def _derive_output_depth(payload: Mapping[str, Any]) -> str | None:
@@ -186,6 +214,7 @@ class AuthoringService:
         assignment_id: str | None = None
         owner_id = ""
         payload: dict[str, Any] = {}
+        error_code: str | None = None
 
         # --- DB MICRO-SESSION 1: transition the job into processing ---
         db = SessionLocal()
@@ -207,17 +236,26 @@ class AuthoringService:
             if assignment is None:
                 logger.error("AuthoringService: Assignment %s not found for job %s.", job.assignment_id, job_id)
                 job.status = "failed"
-                payload_with_error = dict(job.task_payload or {})
-                payload_with_error["error_trace"] = "Assignment not found for authoring job."
+                payload_with_error = _next_progress_payload(
+                    job.task_payload,
+                    status="failed",
+                    current_step="failed",
+                    error_code="assignment_missing",
+                    error_trace="Assignment not found for authoring job.",
+                )
                 job.task_payload = payload_with_error
                 db.commit()
-                publish(job_id, {"type": "failed", "error": payload_with_error["error_trace"]})
                 return
 
             job.status = "processing"
             job.retry_count += 1
             assignment_id = assignment.id
             owner_id = assignment.teacher_id
+            job.task_payload = _next_progress_payload(
+                job.task_payload,
+                status="processing",
+                current_step="processing",
+            )
             payload = dict(job.task_payload or {})
             db.commit()
         except Exception as exc:
@@ -313,8 +351,11 @@ class AuthoringService:
                             try:
                                 job_step = db_step.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
                                 if job_step is not None:
-                                    payload_step = dict(job_step.task_payload or {})
-                                    payload_step["current_step"] = current_agent
+                                    payload_step = _next_progress_payload(
+                                        job_step.task_payload,
+                                        status="processing",
+                                        current_step=str(current_agent),
+                                    )
                                     job_step.task_payload = payload_step
                                     db_step.commit()
                                     last_reported_step = str(current_agent)
@@ -327,7 +368,6 @@ class AuthoringService:
                                 job_id,
                                 exc,
                             )
-                        publish(job_id, {"type": "step", "node": current_agent})
 
                 return final_state
 
@@ -335,6 +375,7 @@ class AuthoringService:
             logger.info("AuthoringService: LangGraph execution finished for Job %s.", job_id)
         except asyncio.TimeoutError:
             logger.error("AuthoringService: TIMEOUT — Job %s exceeded 900s", job_id)
+            error_code = "llm_timeout"
             error_msg = (
                 "Nuestros servidores de IA estan a maxima capacidad y el tiempo de espera se agoto. "
                 "Por favor, reintenta en unos minutos."
@@ -344,16 +385,19 @@ class AuthoringService:
             error_trace = traceback.format_exc()
             error_str = error_trace.lower()
             if "503" in error_str or "high demand" in error_str or "unavailable" in error_str:
+                error_code = "llm_provider_unavailable"
                 error_msg = (
                     "Nuestros servidores de IA estan experimentando un pico de trafico en este momento. "
                     "Por favor, reintenta en un par de minutos."
                 )
             elif "429" in error_str or "quota" in error_str:
+                error_code = "llm_rate_limited"
                 error_msg = (
                     "Hemos alcanzado el limite de operaciones de IA permitidas por minuto. "
                     "Por favor, intenta generar el caso un poco mas tarde."
                 )
             else:
+                error_code = "llm_unhandled_error"
                 error_msg = error_trace
 
         # --- MICRO-SESSION 2: Persist Results ---
@@ -368,14 +412,18 @@ class AuthoringService:
 
             if error_msg:
                 job.status = "failed"
-                current_payload = dict(job.task_payload or {})
-                current_payload["error_trace"] = error_msg
+                current_payload = _next_progress_payload(
+                    job.task_payload,
+                    status="failed",
+                    current_step="failed",
+                    error_code=error_code or "llm_failure",
+                    error_trace=error_msg,
+                )
                 job.task_payload = current_payload
 
                 logger.error("AuthoringService: Job %s marked as FAILED. Cleaning up artifacts.", job_id)
                 ArtifactManager.orphan_job_artifacts(db, job_id)
                 db.commit()
-                publish(job_id, {"type": "failed", "error": error_msg})
                 return
 
             if graph_output is None:
@@ -429,10 +477,14 @@ class AuthoringService:
             assignment.canonical_output = canonical_result.get("canonical_output", {})
             assignment.status = "published"
             job.status = "completed"
+            job.task_payload = _next_progress_payload(
+                job.task_payload,
+                status="completed",
+                current_step="completed",
+            )
 
             ArtifactManager.publish_job_artifacts(db, job_id)
             db.commit()
-            publish(job_id, {"type": "completed", "result": assignment.canonical_output or {}})
             logger.info("AuthoringService: Successfully promoted to V5 and completed Job %s", job_id)
         except Exception:
             logger.error(
@@ -446,12 +498,16 @@ class AuthoringService:
                 job = db.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
                 if job is not None and job.status != "failed":
                     job.status = "failed"
-                    current_payload = dict(job.task_payload or {})
-                    current_payload["error_trace"] = traceback.format_exc()
+                    current_payload = _next_progress_payload(
+                        job.task_payload,
+                        status="failed",
+                        current_step="failed",
+                        error_code="finalization_error",
+                        error_trace=traceback.format_exc(),
+                    )
                     job.task_payload = current_payload
                     ArtifactManager.orphan_job_artifacts(db, job_id)
                     db.commit()
-                    publish(job_id, {"type": "failed", "error": current_payload["error_trace"]})
                     logger.error(
                         "AuthoringService: Job %s marked as FAILED after final-state exception.",
                         job_id,

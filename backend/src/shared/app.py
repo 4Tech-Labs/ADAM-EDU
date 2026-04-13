@@ -4,7 +4,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import asyncio
 import json
 import logging
 import os
@@ -26,7 +25,6 @@ from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sse_starlette.sse import EventSourceResponse
 
 from case_generator.core.authoring import AuthoringService
 from case_generator.suggest_service import SuggestRequest, SuggestResponse, generate_suggestion
@@ -56,7 +54,7 @@ from shared.identity_activation import (
     upsert_membership as upsert_membership_impl,
     upsert_profile as upsert_profile_impl,
 )
-from shared.database import SessionLocal, get_db
+from shared.database import get_db
 from shared.invite_status import invite_effective_status
 from shared.models import (
     Assignment,
@@ -70,7 +68,6 @@ from shared.models import (
     User,
 )
 from shared.internal_tasks import process_authoring_job_task
-from shared.progress_bus import subscribe, unsubscribe
 
 load_dotenv()
 
@@ -557,6 +554,16 @@ class JobResultResponse(BaseModel):
     canonical_output: dict[str, Any] | None = None
 
 
+class JobProgressResponse(BaseModel):
+    job_id: str
+    status: str
+    current_step: str | None = None
+    progress_seq: int | None = None
+    progress_ts: str | None = None
+    error_code: str | None = None
+    error_trace: str | None = None
+
+
 @app.get("/api/authoring/jobs/{job_id}", response_model=JobStatusResponse)
 def get_job_status(
     job_id: str,
@@ -607,75 +614,30 @@ def get_job_result(
     )
 
 
-@app.get("/api/authoring/jobs/{job_id}/progress", response_class=EventSourceResponse, response_model=None)
-async def stream_job_progress(
+@app.get("/api/authoring/jobs/{job_id}/progress", response_model=JobProgressResponse)
+def get_job_progress(
     job_id: str,
     actor: CurrentActor = Depends(require_teacher_actor),
     db: Session = Depends(get_db),
-) -> EventSourceResponse:
-    get_owned_job_or_404(db, job_id, actor)
+) -> JobProgressResponse:
+    job = get_owned_job_or_404(db, job_id, actor)
+    payload = job.task_payload or {}
 
-    async def event_publisher() -> AsyncIterator[dict[str, str]]:
-        queue = subscribe(job_id)
-        try:
-            db_local = SessionLocal()
-            try:
-                job = db_local.scalar(select(AuthoringJob).where(AuthoringJob.id == job_id))
-                if not job:
-                    yield {"event": "error", "data": json.dumps({"detail": "Job no encontrado"})}
-                    return
-                if job.status == "completed":
-                    assignment = db_local.scalar(select(Assignment).where(Assignment.id == job.assignment_id))
-                    result_data = assignment.canonical_output if assignment and assignment.canonical_output else {}
-                    yield {"event": "result", "data": json.dumps({"canonical_output": result_data})}
-                    return
-                if job.status == "failed":
-                    error_msg = job.task_payload.get("error_trace", "Error en generacion") if job.task_payload else "Error en generacion"
-                    yield {"event": "error", "data": json.dumps({"detail": error_msg})}
-                    return
-                yield {"event": "metadata", "data": json.dumps({"status": job.status})}
-                current_step = (job.task_payload or {}).get("current_step")
-                if current_step:
-                    yield {"event": "message", "data": json.dumps({"node": current_step})}
-            finally:
-                db_local.close()
+    current_step = payload.get("current_step")
+    progress_seq = payload.get("progress_seq")
+    progress_ts = payload.get("progress_ts")
+    error_code = payload.get("error_code")
+    error_trace = payload.get("error_trace")
 
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=25.0)
-                except asyncio.TimeoutError:
-                    db_local = SessionLocal()
-                    try:
-                        job = db_local.scalar(select(AuthoringJob).where(AuthoringJob.id == job_id))
-                        if job and job.status == "completed":
-                            assignment = db_local.scalar(select(Assignment).where(Assignment.id == job.assignment_id))
-                            result_data = assignment.canonical_output if assignment and assignment.canonical_output else {}
-                            yield {"event": "result", "data": json.dumps({"canonical_output": result_data})}
-                            return
-                        if job and job.status == "failed":
-                            error_msg = job.task_payload.get("error_trace", "Error en generacion") if job.task_payload else "Error en generacion"
-                            yield {"event": "error", "data": json.dumps({"detail": error_msg})}
-                            return
-                    finally:
-                        db_local.close()
-                    yield {"event": "metadata", "data": json.dumps({"status": "processing"})}
-                    continue
-
-                etype = event.get("type")
-                if etype == "step":
-                    yield {"event": "message", "data": json.dumps({"node": event["node"]})}
-                elif etype == "metadata":
-                    yield {"event": "metadata", "data": json.dumps({"status": event["status"]})}
-                elif etype == "completed":
-                    yield {"event": "result", "data": json.dumps({"canonical_output": event["result"]})}
-                    return
-                elif etype == "failed":
-                    yield {"event": "error", "data": json.dumps({"detail": event["error"]})}
-                    return
-        finally:
-            unsubscribe(job_id, queue)
-
-    return EventSourceResponse(event_publisher())
+    return JobProgressResponse(
+        job_id=job.id,
+        status=job.status,
+        current_step=current_step if isinstance(current_step, str) else None,
+        progress_seq=progress_seq if isinstance(progress_seq, int) else None,
+        progress_ts=progress_ts if isinstance(progress_ts, str) else None,
+        error_code=error_code if isinstance(error_code, str) else None,
+        error_trace=error_trace if isinstance(error_trace, str) else None,
+    )
 
 
 class MembershipResponse(BaseModel):

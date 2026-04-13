@@ -17,7 +17,7 @@ function getProgressStreamErrorMessage(error: unknown) {
         return error.message;
     }
 
-    return "No se pudo conectar al stream de progreso.";
+    return "No se pudo conectar al canal de progreso en tiempo real.";
 }
 
 export function buildAuthoringJobCreateRequest(formData: CaseFormData): AuthoringJobCreateRequest {

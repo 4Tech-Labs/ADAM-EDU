@@ -57,3 +57,39 @@ CREATE POLICY deny_all ON university_sso_configs
   FOR ALL
   USING (false)
   WITH CHECK (false);
+
+-- Issue #108: teacher authoring progress over Supabase Realtime.
+-- This section enables safe client-side SELECT for owned authoring jobs only.
+ALTER TABLE assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE authoring_jobs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS assignments_teacher_owner_select ON assignments;
+CREATE POLICY assignments_teacher_owner_select ON assignments
+  FOR SELECT
+  USING (teacher_id = auth.uid()::text);
+
+DROP POLICY IF EXISTS authoring_jobs_teacher_owner_select ON authoring_jobs;
+CREATE POLICY authoring_jobs_teacher_owner_select ON authoring_jobs
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1
+      FROM assignments a
+      WHERE a.id = authoring_jobs.assignment_id
+        AND a.teacher_id = auth.uid()::text
+    )
+  );
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'authoring_jobs'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.authoring_jobs;
+  END IF;
+END
+$$;
