@@ -14,6 +14,11 @@ vi.mock("@/features/teacher-auth/TeacherLoginPage", () => ({
 vi.mock("@/features/teacher-dashboard/TeacherDashboardPage", () => ({
     TeacherDashboardPage: () => <div data-testid="teacher-dashboard-page">Teacher dashboard</div>,
 }));
+vi.mock("@/features/teacher-dashboard/TeacherCoursePlaceholderPage", () => ({
+    TeacherCoursePlaceholderPage: () => (
+        <div data-testid="teacher-course-placeholder-page">Teacher course placeholder</div>
+    ),
+}));
 vi.mock("@/features/admin-dashboard/AdminDashboardPage", () => ({
     AdminDashboardPage: () => <div data-testid="admin-dashboard-page">Dashboard admin</div>,
 }));
@@ -170,6 +175,21 @@ describe("App admin shell layout", () => {
 
         expect(await screen.findByTestId("teacher-authoring-page")).toBeTruthy();
         expect(screen.queryByTestId("teacher-dashboard-page")).toBeNull();
+    });
+
+    it("resolves the teacher course placeholder route before the authoring catch-all", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: teacherActor,
+        });
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/teacher/courses/course-1"],
+        });
+
+        expect(await screen.findByTestId("teacher-course-placeholder-page")).toBeTruthy();
+        expect(screen.queryByTestId("teacher-authoring-page")).toBeNull();
     });
 
     it("redirects a non-teacher actor away from /teacher/dashboard", async () => {
