@@ -4,7 +4,7 @@
 help:
 	@echo "Available commands:"
 	@echo "  make dev-frontend    - Starts the frontend development server (Vite)"
-	@echo "  make dev-backend     - Starts the backend API server (Uvicorn with reload)"
+	@echo "  make dev-backend     - Starts the backend API server (runtime profile launcher)"
 	@echo "  make dev-langgraph   - Starts the LangGraph development server"
 	@echo "  make dev             - Starts both frontend and backend API development servers"
 
@@ -14,7 +14,7 @@ dev-frontend:
 
 dev-backend:
 	@echo "Starting backend API development server..."
-	@cd backend && uv run uvicorn shared.app:app --reload --host 0.0.0.0 --port 8000
+	@cd backend && uv run python -m shared.app
 
 dev-langgraph:
 	@echo "Starting LangGraph development server..."

@@ -14,6 +14,11 @@
 The `public-api` service handles all user-facing traffic (SPA, auth endpoints, authoring job intake).
 The `authoring-worker` service processes async authoring jobs dispatched by Cloud Tasks — it has no public ingress.
 
+Runtime guardrail: `--reload` is forbidden in non-development runtimes.
+Production startup paths must never include `uvicorn ... --reload`.
+La matriz runtime canonica (precedencia `APP_ENV` sobre `ENVIRONMENT`) vive en
+`docs/runbooks/local-dev-auth.md`, seccion "Matriz runtime canonica".
+
 ---
 
 ## Database connection mode

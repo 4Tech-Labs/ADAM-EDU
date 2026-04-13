@@ -50,6 +50,22 @@ El `supabase/config.toml` incluye redirects del shell auth-aware de Issue 5:
 - `5432`: Supavisor session mode o conexion remota equivalente. No es el default local del repo.
 - `6543`: Supavisor transaction mode remoto/serverless. No es setup local.
 
+## Matriz runtime canonica
+
+La fuente de verdad del perfil runtime de la API es el launcher:
+`uv run --directory backend python -m shared.app`.
+
+Resolucion de entorno efectivo:
+
+- si `APP_ENV` esta definido y no vacio, tiene prioridad
+- si `APP_ENV` no esta definido, usa `ENVIRONMENT`
+- si ninguna variable esta definida, el default es `development`
+
+| Entorno efectivo | Politica de reload | Evidencia operativa |
+| --- | --- | --- |
+| `development` | permitido, con watch scope solo en `backend/src` y exclusiones explicitas (`.venv`, `site-packages`, `node_modules`, `.git`, `build`, `dist`) | log `runtime_profile` con `reload_enabled=true` |
+| cualquier valor distinto de `development` (por ejemplo `staging`, `production`) | deshabilitado; cualquier intento explicito de `--reload` falla en startup | error `Reload is forbidden...` + `reload_enabled=false` |
+
 ## Flujo recomendado en menos de 10 comandos
 
 Los prerrequisitos anteriores no cuentan dentro de este flujo.
@@ -60,7 +76,7 @@ Los prerrequisitos anteriores no cuentan dentro de este flujo.
 4. preparar `backend/.env` y `frontend/.env` desde sus ejemplos, con el mapping local correcto
 5. `uv sync --directory backend --dev`
 6. `uv run --directory backend alembic upgrade head`
-7. `uv run --directory backend uvicorn shared.app:app --reload --host 0.0.0.0 --port 8000`
+7. `uv run --directory backend python -m shared.app`
 8. `npm --prefix frontend install`
 9. `npm --prefix frontend run dev`
 

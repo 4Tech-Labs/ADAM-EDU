@@ -86,3 +86,19 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Context:** Identificado en Issue #46 (Plan Issue #10, plan-eng-review decisión 1A). La decisión de diferir fue explícita: no hay Redis disponible en la infra actual, y `slowapi` in-memory da falsa seguridad con max-instances=10. Ver sección "Rate Limiting Strategy" en `docs/runbooks/cloud-run-deploy.md` para los límites target y el contexto de la decisión.
 
 **Depends on / blocked by:** Aprovisionamiento de Cloud Memorystore en el proyecto GCP, o reducción de `maxInstances` a 1 en `public-api`. No bloquea Issue #11.
+
+---
+
+## TODO-006: Migración total de contrato runtime a `APP_ENV`
+
+**What:** Migrar el contrato de entorno runtime para que `APP_ENV` sea la variable única en todo el stack (código, runbooks, compose, CI y despliegue), retirando gradualmente `ENVIRONMENT`.
+
+**Why:** Issue #110 introduce `APP_ENV` como override para aplicar guardrails de runtime sin romper compatibilidad. Mantener dos variables de entorno a largo plazo aumenta ambigüedad operativa y riesgo de configuraciones inconsistentes.
+
+**Pros:** Contrato único y explícito para perfil runtime, menos drift documental, menor riesgo de errores de despliegue por variables cruzadas.
+
+**Cons:** Toca múltiples superficies (docker-compose, Cloud Run env bindings, tests, `.env.example`, runbooks y validaciones), requiere coordinación de rollout para no romper entornos existentes.
+
+**Context:** En la implementación de Issue #110 se decidió mantener `ENVIRONMENT` como canónico temporal y soportar `APP_ENV` con prioridad para minimizar riesgo inmediato. Esta deuda se registra para cerrar la dualidad una vez estabilicen los guardrails.
+
+**Depends on / blocked by:** Plan de migración coordinado por fases, validación de todos los entornos activos y ventana de despliegue para cortar compatibilidad con `ENVIRONMENT`.

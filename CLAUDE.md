@@ -147,7 +147,7 @@ supabase start
 cd backend
 uv sync --dev
 uv run alembic upgrade head
-uv run uvicorn shared.app:app --reload --host 0.0.0.0 --port 8000
+uv run python -m shared.app
 ```
 
 `docker compose up` starts PostgreSQL, but does not apply migrations. Alembic bootstrap is required before using the API locally.
