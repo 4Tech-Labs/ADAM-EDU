@@ -57,7 +57,7 @@ def get_teacher_cases(
     db: Session = Depends(get_db),
 ) -> TeacherCasesResponse:
     now = datetime.now(timezone.utc)
-    cases = list_teacher_active_cases(db, actor)
+    cases = list_teacher_active_cases(db, actor, now=now)
     items = [
         TeacherCaseItemResponse(
             id=item.id,

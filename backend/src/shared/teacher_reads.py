@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
 from sqlalchemy import and_, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from shared.auth import CurrentActor, ensure_legacy_teacher_bridge
-from shared.models import Course, CourseMembership, Membership
+from shared.models import Assignment, Course, CourseMembership, Membership
 from shared.teacher_context import TeacherContext
-from shared.models import Assignment
 
 
 class TeacherCourseItemResponse(BaseModel):
@@ -100,12 +99,36 @@ def list_teacher_courses(db: Session, context: TeacherContext) -> TeacherCourses
     return TeacherCoursesResponse(courses=courses, total=len(courses))
 
 
-def list_teacher_active_cases(db: Session, actor: CurrentActor) -> list[TeacherCaseItem]:
+def list_teacher_active_cases(
+    db: Session,
+    actor: CurrentActor,
+    *,
+    now: datetime,
+) -> list[TeacherCaseItem]:
+    """Return active (deadline >= now) cases for the authenticated teacher.
+
+    ``now`` must be injected by the caller so that the DB filter and the
+    ``days_remaining`` calculation in the router share a single logical instant,
+    eliminating drift between the two captures.
+
+    Invariant: ``ensure_legacy_teacher_bridge`` raises HTTP 500
+    (``legacy_bridge_missing``) when the legacy User row does not exist.  This
+    should never happen in production because the bridge is created atomically
+    with every Membership at sign-up.  A 500 here signals a data-integrity gap
+    that requires a backfill, not a user-facing error.
+    """
     legacy_user = ensure_legacy_teacher_bridge(db, actor)
-    now = datetime.now(timezone.utc)
 
     assignments = db.scalars(
         select(Assignment)
+        .options(
+            load_only(
+                Assignment.id,
+                Assignment.title,
+                Assignment.deadline,
+                Assignment.status,
+            )
+        )
         .where(
             Assignment.teacher_id == legacy_user.id,
             Assignment.status == "published",
