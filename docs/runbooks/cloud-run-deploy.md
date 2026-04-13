@@ -14,6 +14,9 @@
 The `public-api` service handles all user-facing traffic (SPA, auth endpoints, authoring job intake).
 The `authoring-worker` service processes async authoring jobs dispatched by Cloud Tasks — it has no public ingress.
 
+Runtime guardrail: `--reload` is forbidden in non-development runtimes.
+Production startup paths must never include `uvicorn ... --reload`.
+
 ---
 
 ## Database connection mode

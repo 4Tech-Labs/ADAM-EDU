@@ -60,7 +60,7 @@ Los prerrequisitos anteriores no cuentan dentro de este flujo.
 4. preparar `backend/.env` y `frontend/.env` desde sus ejemplos, con el mapping local correcto
 5. `uv sync --directory backend --dev`
 6. `uv run --directory backend alembic upgrade head`
-7. `uv run --directory backend uvicorn shared.app:app --reload --host 0.0.0.0 --port 8000`
+7. `uv run --directory backend python -m shared.app`
 8. `npm --prefix frontend install`
 9. `npm --prefix frontend run dev`
 

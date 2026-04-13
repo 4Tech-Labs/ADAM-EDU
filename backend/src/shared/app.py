@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import asyncio
 import json
 import logging
 import os
 import pathlib
+import sys
 import time
 from typing import Any
 import uuid
@@ -77,6 +79,123 @@ _json_handler.setFormatter(JsonFormatter("%(asctime)s %(levelname)s %(name)s %(m
 logging.basicConfig(handlers=[_json_handler], level=logging.INFO, force=True)
 logger = logging.getLogger(__name__)
 _BOGOTA_TZ = ZoneInfo("America/Bogota")
+
+_DEVELOPMENT_ENV = "development"
+_DEFAULT_HOST = "0.0.0.0"
+_DEFAULT_PORT = 8000
+_DEFAULT_WORKERS = 2
+_DEFAULT_TIMEOUT_KEEP_ALIVE = 30
+_DEFAULT_TIMEOUT_GRACEFUL_SHUTDOWN = 60
+_DEFAULT_RELOAD_EXCLUDES = [
+    ".venv/*",
+    "*/.venv/*",
+    "*site-packages*",
+    "node_modules/*",
+    "*/node_modules/*",
+    ".git/*",
+    "*/.git/*",
+    "build/*",
+    "*/build/*",
+    "dist/*",
+    "*/dist/*",
+]
+
+
+@dataclass(frozen=True)
+class UvicornRuntimeProfile:
+    app_env: str
+    host: str
+    port: int
+    reload: bool
+    reload_dirs: list[str]
+    reload_excludes: list[str]
+    workers: int
+    timeout_keep_alive: int
+    timeout_graceful_shutdown: int
+
+
+def _effective_app_env() -> str:
+    app_env_override = os.getenv("APP_ENV", "").strip().lower()
+    if app_env_override:
+        return app_env_override
+    environment = os.getenv("ENVIRONMENT", _DEVELOPMENT_ENV).strip().lower()
+    return environment or _DEVELOPMENT_ENV
+
+
+def _read_int_env(name: str, default: int, *, minimum: int = 1) -> int:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        parsed_value = int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer value") from exc
+    if parsed_value < minimum:
+        raise RuntimeError(f"{name} must be >= {minimum}")
+    return parsed_value
+
+
+def _build_uvicorn_runtime_profile(argv: list[str] | None = None) -> UvicornRuntimeProfile:
+    app_env = _effective_app_env()
+    cli_args = argv if argv is not None else sys.argv[1:]
+    reload_requested = "--reload" in cli_args
+    if reload_requested and app_env != _DEVELOPMENT_ENV:
+        raise RuntimeError("Reload is forbidden when APP_ENV/ENVIRONMENT is not 'development'")
+
+    source_dir = pathlib.Path(__file__).resolve().parents[1]
+    return UvicornRuntimeProfile(
+        app_env=app_env,
+        host=os.getenv("APP_HOST", _DEFAULT_HOST),
+        port=_read_int_env("APP_PORT", _DEFAULT_PORT),
+        reload=app_env == _DEVELOPMENT_ENV,
+        reload_dirs=[str(source_dir)],
+        reload_excludes=list(_DEFAULT_RELOAD_EXCLUDES),
+        workers=_read_int_env("APP_WORKERS", _DEFAULT_WORKERS),
+        timeout_keep_alive=_read_int_env("APP_TIMEOUT_KEEP_ALIVE", _DEFAULT_TIMEOUT_KEEP_ALIVE),
+        timeout_graceful_shutdown=_read_int_env(
+            "APP_TIMEOUT_GRACEFUL_SHUTDOWN",
+            _DEFAULT_TIMEOUT_GRACEFUL_SHUTDOWN,
+        ),
+    )
+
+
+def _run_uvicorn_profile(profile: UvicornRuntimeProfile) -> None:
+    import uvicorn
+
+    logger.info(
+        "runtime_profile",
+        extra={
+            "runtime_profile": {
+                "app_env": profile.app_env,
+                "reload_enabled": profile.reload,
+                "reload_dirs": profile.reload_dirs,
+                "reload_excludes": profile.reload_excludes,
+                "workers": profile.workers if not profile.reload else 1,
+                "timeout_keep_alive": profile.timeout_keep_alive,
+                "timeout_graceful_shutdown": profile.timeout_graceful_shutdown,
+            }
+        },
+    )
+
+    run_kwargs: dict[str, Any] = {
+        "app": "shared.app:app",
+        "host": profile.host,
+        "port": profile.port,
+        "reload": profile.reload,
+        "reload_dirs": profile.reload_dirs,
+        "reload_excludes": profile.reload_excludes,
+        "timeout_keep_alive": profile.timeout_keep_alive,
+        "timeout_graceful_shutdown": profile.timeout_graceful_shutdown,
+    }
+    if not profile.reload:
+        run_kwargs["workers"] = profile.workers
+
+    uvicorn.run(**run_kwargs)
+
+
+def main() -> None:
+    runtime_profile = _build_uvicorn_runtime_profile()
+    _run_uvicorn_profile(runtime_profile)
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -1139,3 +1258,7 @@ def create_frontend_router(build_dir: str = "../frontend/dist") -> Any:
 
 
 app.mount("/app", create_frontend_router(), name="frontend")
+
+
+if __name__ == "__main__":
+    main()
