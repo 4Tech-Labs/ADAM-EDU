@@ -11,6 +11,7 @@ import pathlib
 import time
 from typing import Any
 import uuid
+from zoneinfo import ZoneInfo
 
 from pythonjsonlogger.json import JsonFormatter
 
@@ -75,9 +76,35 @@ _json_handler = logging.StreamHandler()
 _json_handler.setFormatter(JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
 logging.basicConfig(handlers=[_json_handler], level=logging.INFO, force=True)
 logger = logging.getLogger(__name__)
+_BOGOTA_TZ = ZoneInfo("America/Bogota")
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _normalize_deadline_input(raw_due_at: str | None) -> tuple[datetime | None, str | None]:
+    if raw_due_at is None:
+        return None, None
+
+    stripped_due_at = raw_due_at.strip()
+    if not stripped_due_at:
+        return None, None
+
+    try:
+        parsed_due_at = datetime.fromisoformat(stripped_due_at)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="invalid_due_at",
+        ) from exc
+
+    localized_due_at = (
+        parsed_due_at.replace(tzinfo=_BOGOTA_TZ)
+        if parsed_due_at.tzinfo is None
+        else parsed_due_at
+    )
+    deadline_utc = localized_due_at.astimezone(timezone.utc)
+    return deadline_utc, deadline_utc.isoformat()
 
 
 def get_legacy_teacher_or_500(db: Session, actor: CurrentActor) -> User:
@@ -335,8 +362,14 @@ def create_authoring_job(
     db: Session = Depends(get_db),
 ) -> JobCreatedResponse:
     teacher = get_legacy_teacher_or_500(db, actor)
+    deadline, normalized_due_at = _normalize_deadline_input(req.due_at)
 
-    assignment = Assignment(teacher_id=teacher.id, title=req.assignment_title, status="draft")
+    assignment = Assignment(
+        teacher_id=teacher.id,
+        title=req.assignment_title,
+        status="draft",
+        deadline=deadline,
+    )
     db.add(assignment)
     db.commit()
     db.refresh(assignment)
@@ -362,7 +395,7 @@ def create_authoring_job(
             "includePythonCode": req.include_python_code,
             "algoritmos": req.suggested_techniques,
             "availableFrom": req.available_from,
-            "dueAt": req.due_at,
+            "dueAt": normalized_due_at,
         },
     )
     db.add(job)
