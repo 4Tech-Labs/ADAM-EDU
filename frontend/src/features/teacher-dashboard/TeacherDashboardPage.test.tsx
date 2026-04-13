@@ -16,10 +16,14 @@ vi.mock("./QuickActionsSection", () => ({
     },
 }));
 
+vi.mock("./CursosActivosSection", () => ({
+    CursosActivosSection: () => <div data-testid="cursos-activos-section">Cursos</div>,
+}));
+
 import { TeacherDashboardPage } from "./TeacherDashboardPage";
 
 describe("TeacherDashboardPage", () => {
-    it("composes the dashboard header, quick actions, and cases anchor", () => {
+    it("composes the dashboard header, quick actions, courses section, and cases anchor", () => {
         const showToast = vi.fn();
 
         renderWithProviders(<TeacherDashboardPage showToast={showToast} />);
@@ -27,6 +31,7 @@ describe("TeacherDashboardPage", () => {
         expect(screen.getByTestId("teacher-dashboard-page")).toBeTruthy();
         expect(screen.getByTestId("dashboard-header")).toBeTruthy();
         expect(screen.getByTestId("quick-actions-section")).toBeTruthy();
+        expect(screen.getByTestId("cursos-activos-section")).toBeTruthy();
         expect(document.getElementById("cases-section")).toBeTruthy();
         expect(quickActionsSectionSpy).toHaveBeenCalledWith(
             expect.objectContaining({ showToast }),

@@ -18,6 +18,11 @@ const TeacherDashboardPage = lazy(() =>
         (module) => ({ default: module.TeacherDashboardPage }),
     ),
 );
+const TeacherCoursePlaceholderPage = lazy(() =>
+    import("@/features/teacher-dashboard/TeacherCoursePlaceholderPage").then(
+        (module) => ({ default: module.TeacherCoursePlaceholderPage }),
+    ),
+);
 const AuthCallbackPage = lazy(() =>
     import("@/features/auth-callback/AuthCallbackPage").then((module) => ({
         default: module.AuthCallbackPage,
@@ -99,6 +104,14 @@ function App() {
                             element={
                                 <RequireRole role="teacher">
                                     <TeacherDashboardPage showToast={showToast} />
+                                </RequireRole>
+                            }
+                        />
+                        <Route
+                            path="/teacher/courses/:courseId"
+                            element={
+                                <RequireRole role="teacher">
+                                    <TeacherCoursePlaceholderPage />
                                 </RequireRole>
                             }
                         />
