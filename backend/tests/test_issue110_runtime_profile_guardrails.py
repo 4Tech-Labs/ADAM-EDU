@@ -44,10 +44,34 @@ def test_dev_reload_scope_is_source_only(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("APP_ENV", "development")
 
     profile = _build_uvicorn_runtime_profile([])
+    expected_excludes = {
+        ".venv/*",
+        "*/.venv/*",
+        "*site-packages*",
+        "node_modules/*",
+        "*/node_modules/*",
+        ".git/*",
+        "*/.git/*",
+        "build/*",
+        "*/build/*",
+        "dist/*",
+        "*/dist/*",
+    }
 
     assert profile.reload is True
     assert profile.reload_dirs == [str((REPO_ROOT / "backend" / "src").resolve())]
-    assert any(pattern == ".venv/*" for pattern in profile.reload_excludes)
+    assert expected_excludes.issubset(set(profile.reload_excludes))
+
+
+def test_reload_excludes_cover_dependency_churn_patterns(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "development")
+
+    profile = _build_uvicorn_runtime_profile([])
+
+    # These patterns prevent restarts triggered by external dependency/file churn.
+    for expected_pattern in ("*site-packages*", "*/.venv/*", "*/node_modules/*"):
+        assert expected_pattern in profile.reload_excludes
 
 
 def test_non_dev_rejects_reload_flag(monkeypatch: pytest.MonkeyPatch) -> None:
