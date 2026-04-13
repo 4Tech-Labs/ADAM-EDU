@@ -1,8 +1,8 @@
 import type { ShowToast } from "@/shared/Toast";
+import { TeacherLayout } from "@/features/teacher-layout/TeacherLayout";
 
 import { CasosActivosSection } from "./CasosActivosSection";
 import { CursosActivosSection } from "./CursosActivosSection";
-import { DashboardHeader } from "./DashboardHeader";
 import { QuickActionsSection } from "./QuickActionsSection";
 
 interface TeacherDashboardPageProps {
@@ -13,13 +13,13 @@ export function TeacherDashboardPage({
     showToast,
 }: TeacherDashboardPageProps) {
     return (
-        <div className="min-h-screen bg-[#F0F4F8]" data-testid="teacher-dashboard-page">
-            <DashboardHeader />
-            <main className="mx-auto max-w-6xl space-y-10 px-6 py-9">
+        <TeacherLayout
+            testId="teacher-dashboard-page"
+            contentClassName="mx-auto max-w-6xl space-y-10 px-6 py-9"
+        >
                 <QuickActionsSection showToast={showToast} />
                 <CursosActivosSection />
                 <CasosActivosSection showToast={showToast} />
-            </main>
-        </div>
+        </TeacherLayout>
     );
 }

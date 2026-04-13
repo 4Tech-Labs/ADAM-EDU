@@ -407,21 +407,6 @@ export function AuthoringForm({
             >
                 <div className="w-full max-w-3xl fade-in-up">
                     <div className="bg-white rounded-2xl shadow-[0_12px_48px_-12px_rgba(0,0,0,0.12)] border border-slate-200 overflow-hidden">
-                        {/* ── Header ── */}
-                        <div className="px-8 pt-7 pb-6" style={{ background: "linear-gradient(135deg, #0144a0 0%, #0255c5 100%)" }}>
-                            <div className="flex items-center gap-3.5">
-                                <div className="flex-shrink-0 h-10 w-10 rounded-xl bg-white/20 flex items-center justify-center text-white">
-                                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-                                    </svg>
-                                </div>
-                                <div>
-                                    <h1 className="text-lg font-bold text-white leading-tight tracking-tight">Diseñador de Casos ADAM</h1>
-                                    <p className="text-sm text-blue-200 mt-0.5">Configure los parámetros pedagógicos para generar el caso.</p>
-                                </div>
-                            </div>
-                        </div>
-
                         {/* ── Required note ── */}
                         <div className="px-8 pt-5 pb-0 flex justify-end">
                             <span className="text-[11.5px] text-slate-500">

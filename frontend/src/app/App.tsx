@@ -78,12 +78,14 @@ function App() {
     const { ToastContainer, showToast } = useToast();
     const location = useLocation();
     const isAdminDashboardRoute = location.pathname.startsWith("/admin/dashboard");
-    const isTeacherDashboardRoute =
-        location.pathname.startsWith("/teacher/dashboard");
+    const isTeacherShellRoute =
+        location.pathname.startsWith("/teacher/dashboard") ||
+        location.pathname.startsWith("/teacher/case-designer") ||
+        location.pathname === "/teacher";
 
     return (
         <div className="flex min-h-screen flex-col bg-bg-page font-sans type-body">
-            {!isAdminDashboardRoute && !isTeacherDashboardRoute && <SiteHeader />}
+            {!isAdminDashboardRoute && !isTeacherShellRoute && <SiteHeader />}
 
             <main className="flex-1">
                 <Suspense fallback={<RouteFallback />}>
@@ -115,8 +117,9 @@ function App() {
                                 </RequireRole>
                             }
                         />
+                        <Route path="/teacher" element={<Navigate to="/teacher/case-designer" replace />} />
                         <Route
-                            path="/teacher/*"
+                            path="/teacher/case-designer/*"
                             element={
                                 <RequireRole role="teacher">
                                     <TeacherAuthoringPage />

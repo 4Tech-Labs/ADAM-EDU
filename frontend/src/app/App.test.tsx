@@ -162,7 +162,22 @@ describe("App admin shell layout", () => {
         expect(screen.queryByTestId("site-header")).toBeNull();
     });
 
-    it("keeps /teacher routed to the existing authoring page", async () => {
+    it("resolves /teacher/case-designer directly and keeps the global SiteHeader hidden", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: teacherActor,
+        });
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/teacher/case-designer"],
+        });
+
+        expect(await screen.findByTestId("teacher-authoring-page")).toBeTruthy();
+        expect(screen.queryByTestId("site-header")).toBeNull();
+    });
+
+    it("redirects /teacher to the semantic authoring route and keeps SiteHeader hidden", async () => {
         vi.mocked(useAuth).mockReturnValue({
             ...baseContext,
             session: { access_token: "jwt" } as never,
@@ -175,6 +190,7 @@ describe("App admin shell layout", () => {
 
         expect(await screen.findByTestId("teacher-authoring-page")).toBeTruthy();
         expect(screen.queryByTestId("teacher-dashboard-page")).toBeNull();
+        expect(screen.queryByTestId("site-header")).toBeNull();
     });
 
     it("resolves the teacher course placeholder route before the authoring catch-all", async () => {
