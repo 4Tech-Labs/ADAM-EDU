@@ -67,7 +67,7 @@ describe("CasosActivosSection", () => {
         expect(document.getElementById("cases-section")).toBeTruthy();
     });
 
-    it("navigates to /teacher from create case button", () => {
+    it("navigates to /teacher/case-designer from create case button", () => {
         useTeacherCases.mockReturnValue({
             data: { cases: [createCase(1)], total: 1 },
             isLoading: false,
@@ -78,7 +78,7 @@ describe("CasosActivosSection", () => {
 
         fireEvent.click(screen.getByRole("button", { name: /crear nuevo caso/i }));
 
-        expect(navigate).toHaveBeenCalledWith("/teacher");
+        expect(navigate).toHaveBeenCalledWith("/teacher/case-designer");
     });
 
     it("renders loading, error and empty states", () => {

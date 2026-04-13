@@ -86,7 +86,7 @@ export function QuickActionsSection({ showToast }: QuickActionsSectionProps) {
                     gradient="linear-gradient(to bottom right, #06b6d4, #3b82f6, #1d4ed8)"
                     decorativeBlurLeftClassName="bg-cyan-300/20 group-hover:bg-cyan-300/30"
                     decorativeBlurRightClassName="bg-white/10 group-hover:bg-white/20"
-                    onClick={() => navigate("/teacher")}
+                    onClick={() => navigate("/teacher/case-designer")}
                     icon={<SparklesIcon />}
                 />
                 <DashboardActionCard

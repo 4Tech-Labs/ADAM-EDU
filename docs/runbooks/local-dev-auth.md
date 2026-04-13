@@ -41,8 +41,8 @@ Supabase CLI se usa para auth/session local y para obtener claves del stack loca
 El Postgres de Supabase CLI en `54322` no reemplaza la base principal del repo. Sirve
 para el stack local de Supabase, no para `DATABASE_URL`.
 
-El `supabase/config.toml` incluye las rutas del shell auth-aware de Issue 5:
-`/app/auth/callback`, `/app/teacher/activate`, `/app/join`. Para que los cambios de
+El `supabase/config.toml` incluye redirects del shell auth-aware de Issue 5:
+`/app/`, `/app/teacher` (compatibilidad), `/app/auth/callback`, `/app/teacher/activate`, `/app/join`. Para que los cambios de
 `config.toml` tengan efecto local, reinicia Supabase: `supabase stop && supabase start`.
 
 ## Puertos remotos y de produccion
@@ -107,7 +107,9 @@ Nunca lleves `SUPABASE_SERVICE_ROLE_KEY` al browser ni a ejemplos frontend.
 - `GET /health` responde `200`
 - `GET /api/auth/me` sin bearer responde `401`
 - `http://localhost:5173/app/` sin sesion muestra la landing con 3 entrypoints por rol
-- `http://localhost:5173/app/teacher/dashboard` sin sesion redirige a `/teacher/login`
+- `http://localhost:5173/app/teacher` redirige a `http://localhost:5173/app/teacher/case-designer`
+- `http://localhost:5173/app/teacher/dashboard` sin sesion redirige a `http://localhost:5173/app/teacher/login`
+- `http://localhost:5173/app/teacher/case-designer` sin sesion redirige a `http://localhost:5173/app/teacher/login`
 - `http://localhost:5173/app/auth/callback` muestra spinner de "Completando inicio de sesion"
 
 ## Prerequisito manual para produccion
@@ -128,7 +130,7 @@ El scaffold local de `supabase/config.toml` deja preparado el bloque Azure, pero
 habilita en esta issue.
 
 - usa `localhost`, no `127.0.0.1`, para redirect URIs locales
-- las rutas activas hoy en el scaffold local incluyen `/app/`, `/app/teacher` y `/app/teacher/dashboard`
+- las rutas funcionales actuales del shell docente son `/app/teacher/dashboard` y `/app/teacher/case-designer`; `/app/teacher` se mantiene como redirect de compatibilidad
 - completa client id/secret y activa el provider antes de Issue 5
 - callback local esperado: `http://localhost:54321/auth/v1/callback`
 

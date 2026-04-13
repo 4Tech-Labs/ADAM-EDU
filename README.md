@@ -3,7 +3,7 @@
 ADAM EDU es un Teacher Authoring + Preview MVP en transicion a una plataforma multi-rol con autenticacion real. El repositorio incluye:
 
 - Flujo docente completo: sugerencias en formulario, generacion asincrona con LangGraph, timeline por SSE y preview del caso.
-- Shell frontend auth-aware (Issue #5): `AuthProvider`, guards por rol, rutas reales para teacher/student/admin, callback OAuth PKCE, helper `sessionStorage` de activacion con TTL 5 minutos y landing docente en `/app/teacher/dashboard`.
+- Shell frontend auth-aware (Issue #5): `AuthProvider`, guards por rol, callback OAuth PKCE, helper `sessionStorage` de activacion con TTL 5 minutos, dashboard docente en `/app/teacher/dashboard` y ruta canonica de authoring en `/app/teacher/case-designer` (con compatibilidad via redirect `/app/teacher` -> `/app/teacher/case-designer`).
 - Auth perimeter backend (Issue #3): verificacion JWT via JWKS, actor resolution por memberships, `GET /api/auth/me`, endpoints de activacion body-only.
 
 Los flujos de negocio completos de teacher activation, student join y admin provisioning siguen en Issues #6, #7 y #8 respectivamente. El shell actual deja listos los placeholders y contratos de routing para esas historias.
@@ -96,6 +96,12 @@ En este corte no se renombran carpetas del frontend.
 8. `POST /api/invites/resolve`, `POST /api/invites/redeem`, `POST /api/auth/activate/password` y `POST /api/auth/activate/oauth/complete` consumen `invite_token` por body.
 
 El frontend usa ese flujo para renderizar el timeline y el `CasePreview` del profesor.
+
+Rutas funcionales actuales del shell docente (frontend):
+
+- `/app/teacher/dashboard`: dashboard principal del docente.
+- `/app/teacher/case-designer`: entrada canonica al Diseñador de Casos.
+- `/app/teacher`: redirect de compatibilidad hacia `/app/teacher/case-designer`.
 
 ### Deploy note for `Assignment.deadline`
 

@@ -33,12 +33,12 @@ describe("QuickActionsSection", () => {
         expect(screen.getByText("Próximamente en nuevas versiones")).toBeTruthy();
     });
 
-    it("navigates to /teacher from the create case card", () => {
+    it("navigates to /teacher/case-designer from the create case card", () => {
         renderWithProviders(<QuickActionsSection showToast={vi.fn()} />);
 
         fireEvent.click(screen.getByRole("button", { name: /crear nuevo caso/i }));
 
-        expect(navigate).toHaveBeenCalledWith("/teacher");
+        expect(navigate).toHaveBeenCalledWith("/teacher/case-designer");
     });
 
     it("scrolls smoothly to the cases section", () => {

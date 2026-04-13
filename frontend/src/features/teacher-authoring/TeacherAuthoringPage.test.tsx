@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 
 vi.mock("./AuthoringForm", () => ({
     AuthoringForm: () => <div data-testid="authoring-form">Authoring form</div>,
@@ -9,6 +10,11 @@ vi.mock("./AuthoringProgressTimeline", () => ({
 }));
 vi.mock("./AuthoringErrorState", () => ({
     AuthoringErrorState: () => <div data-testid="authoring-error">Error</div>,
+}));
+vi.mock("@/features/teacher-layout/TeacherLayout", () => ({
+    TeacherLayout: (props: { children: ReactNode; testId?: string }) => (
+        <div data-testid={props.testId ?? "teacher-layout"}>{props.children}</div>
+    ),
 }));
 vi.mock("./useAuthoringJobProgress", () => ({
     useAuthoringJobProgress: vi.fn(),
@@ -39,6 +45,7 @@ describe("TeacherAuthoringPage", () => {
 
         render(<TeacherAuthoringPage />);
 
+        expect(screen.getByTestId("teacher-authoring-page")).toBeTruthy();
         expect(screen.getByTestId("authoring-form")).toBeTruthy();
         expect(screen.queryByTestId("case-preview")).toBeNull();
     });

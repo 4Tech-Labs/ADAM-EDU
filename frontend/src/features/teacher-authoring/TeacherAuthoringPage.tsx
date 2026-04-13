@@ -3,6 +3,7 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import type { CaseFormData, CanonicalCaseOutput } from "@/shared/adam-types";
 import { EMPTY_FORM } from "@/shared/adam-types";
+import { TeacherLayout } from "@/features/teacher-layout/TeacherLayout";
 
 import { AuthoringErrorState } from "./AuthoringErrorState";
 import { AuthoringForm } from "./AuthoringForm";
@@ -74,7 +75,7 @@ export function TeacherAuthoringPage() {
   };
 
   return (
-    <>
+    <TeacherLayout testId="teacher-authoring-page" contentClassName="mx-auto w-full max-w-6xl">
       {(appState === "idle" || appState === "editing") && (
         <AuthoringForm
           initialData={formData}
@@ -110,6 +111,6 @@ export function TeacherAuthoringPage() {
           onBack={() => setAppState("idle")}
         />
       )}
-    </>
+    </TeacherLayout>
   );
 }

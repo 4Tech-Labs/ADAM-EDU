@@ -25,7 +25,7 @@ debe retirar de forma explicita:
   [`backend/src/shared/app.py`](../../backend/src/shared/app.py).
 - `POST /api/authoring/jobs` autocrea `Tenant` y `User` si no existen, en el mismo
   endpoint y sin identidad verificada.
-- El shell funcional actual del docente vive bajo `/app/teacher` y `/app/teacher/dashboard`, montado por
+- El shell funcional actual del docente vive bajo `/app/teacher/dashboard` y `/app/teacher/case-designer`, con redirect de compatibilidad `/app/teacher` -> `/app/teacher/case-designer`, montado por
   [`frontend/src/app/App.tsx`](../../frontend/src/app/App.tsx) con
   `BrowserRouter basename="/app/"` en
   [`frontend/src/app/main.tsx`](../../frontend/src/app/main.tsx).

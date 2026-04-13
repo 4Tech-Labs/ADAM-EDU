@@ -189,7 +189,7 @@ export function CasosActivosSection({ showToast }: CasosActivosSectionProps) {
                 <button
                     type="button"
                     onClick={() => {
-                        navigate("/teacher");
+                        navigate("/teacher/case-designer");
                     }}
                     className="btn-primary inline-flex shrink-0 items-center gap-[7px] rounded-[11px] px-5 py-[10px] text-[14px] font-bold text-white"
                     style={{
