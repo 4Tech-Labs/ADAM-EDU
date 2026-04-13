@@ -1,25 +1,21 @@
 import type { ShowToast } from "@/shared/Toast";
 
 import { DashboardHeader } from "./DashboardHeader";
+import { QuickActionsSection } from "./QuickActionsSection";
 
 interface TeacherDashboardPageProps {
     showToast: ShowToast;
 }
 
 export function TeacherDashboardPage({
-    showToast: _showToast,
+    showToast,
 }: TeacherDashboardPageProps) {
-    void _showToast;
-
     return (
         <div className="min-h-screen bg-[#F0F4F8]" data-testid="teacher-dashboard-page">
             <DashboardHeader />
             <main className="mx-auto max-w-6xl space-y-10 px-6 py-9">
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-10">
-                    <p className="text-sm text-slate-500">
-                        Teacher Dashboard - WIP
-                    </p>
-                </div>
+                <QuickActionsSection showToast={showToast} />
+                <div id="cases-section" aria-hidden="true" className="h-px w-full" />
             </main>
         </div>
     );
