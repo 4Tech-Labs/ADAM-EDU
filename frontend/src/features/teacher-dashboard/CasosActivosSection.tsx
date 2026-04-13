@@ -13,18 +13,16 @@ const CASES_LOAD_ERROR_MSG = "Error al cargar casos. Intenta refrescar la págin
 const EMPTY_CASES: TeacherCaseItem[] = [];
 
 function buildCasesSignature(cases: TeacherCaseItem[]): string {
-    return cases
-        .map((item) =>
-            [
-                item.id,
-                item.title,
-                item.deadline ?? "null",
-                item.status,
-                item.days_remaining ?? "null",
-                item.course_codes.join(","),
-            ].join("|"),
-        )
-        .join("||");
+    return JSON.stringify(
+        cases.map((item) => [
+            item.id,
+            item.title,
+            item.deadline,
+            item.status,
+            item.days_remaining,
+            item.course_codes,
+        ]),
+    );
 }
 
 function DeadlineBadge({ days }: { days: number | null }) {
@@ -217,6 +215,7 @@ export function CasosActivosSection({ showToast }: CasosActivosSectionProps) {
                                 ] as const).map((column) => (
                                     <th
                                         key={column}
+                                        scope="col"
                                         className={[
                                             "px-6 py-4 text-[14px] font-bold tracking-wide",
                                             column === "Acciones" ? "text-right" : "text-left",
@@ -227,10 +226,18 @@ export function CasosActivosSection({ showToast }: CasosActivosSectionProps) {
                                 ))}
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100 text-[15px] text-slate-700">
+                        <tbody
+                            aria-busy={isLoading}
+                            className="divide-y divide-slate-100 text-[15px] text-slate-700"
+                        >
                             {isLoading ? (
                                 <tr>
-                                    <td className="px-6 py-8 text-center text-sm text-slate-400" colSpan={4}>
+                                    <td
+                                        role="status"
+                                        aria-live="polite"
+                                        className="px-6 py-8 text-center text-sm text-slate-400"
+                                        colSpan={4}
+                                    >
                                         Cargando casos...
                                     </td>
                                 </tr>
@@ -238,7 +245,12 @@ export function CasosActivosSection({ showToast }: CasosActivosSectionProps) {
 
                             {!isLoading && isError ? (
                                 <tr>
-                                    <td className="px-6 py-8 text-center text-sm text-red-600" colSpan={4}>
+                                    <td
+                                        role="alert"
+                                        aria-live="assertive"
+                                        className="px-6 py-8 text-center text-sm text-red-600"
+                                        colSpan={4}
+                                    >
                                         {CASES_LOAD_ERROR_MSG}
                                     </td>
                                 </tr>
@@ -246,7 +258,12 @@ export function CasosActivosSection({ showToast }: CasosActivosSectionProps) {
 
                             {!isLoading && !isError && pageCases.length === 0 ? (
                                 <tr>
-                                    <td className="px-6 py-8 text-center text-sm text-slate-400" colSpan={4}>
+                                    <td
+                                        role="status"
+                                        aria-live="polite"
+                                        className="px-6 py-8 text-center text-sm text-slate-400"
+                                        colSpan={4}
+                                    >
                                         No hay casos activos con deadline vigente.
                                     </td>
                                 </tr>

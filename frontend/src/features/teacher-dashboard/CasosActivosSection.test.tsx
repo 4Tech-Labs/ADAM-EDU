@@ -58,6 +58,10 @@ describe("CasosActivosSection", () => {
         expect(screen.getByText("Cursos / Asignaciones")).toBeTruthy();
         expect(screen.getByText("Deadline")).toBeTruthy();
         expect(screen.getByText("Acciones")).toBeTruthy();
+        expect(screen.getByRole("columnheader", { name: "Caso" })).toHaveAttribute(
+            "scope",
+            "col",
+        );
         expect(screen.getByText("Mostrando 3 de 3 casos activos")).toBeTruthy();
         expect(screen.getByText("—")).toBeTruthy();
         expect(document.getElementById("cases-section")).toBeTruthy();
@@ -86,7 +90,9 @@ describe("CasosActivosSection", () => {
 
         const { rerender } = renderWithProviders(<CasosActivosSection showToast={vi.fn()} />);
 
+        expect(screen.getByRole("status")).toBeTruthy();
         expect(screen.getByText("Cargando casos...")).toBeTruthy();
+        expect(screen.getAllByRole("rowgroup")[1]).toHaveAttribute("aria-busy", "true");
 
         useTeacherCases.mockReturnValue({
             data: undefined,
@@ -96,6 +102,7 @@ describe("CasosActivosSection", () => {
 
         rerender(<CasosActivosSection showToast={vi.fn()} />);
 
+        expect(screen.getByRole("alert")).toBeTruthy();
         expect(screen.getByText("Error al cargar casos. Intenta refrescar la página.")).toBeTruthy();
 
         useTeacherCases.mockReturnValue({
@@ -106,7 +113,9 @@ describe("CasosActivosSection", () => {
 
         rerender(<CasosActivosSection showToast={vi.fn()} />);
 
+        expect(screen.getByRole("status")).toBeTruthy();
         expect(screen.getByText("No hay casos activos con deadline vigente.")).toBeTruthy();
+        expect(screen.getAllByRole("rowgroup")[1]).toHaveAttribute("aria-busy", "false");
     });
 
     it("renders deadline badge variants", () => {
