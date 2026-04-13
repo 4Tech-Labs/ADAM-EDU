@@ -474,6 +474,38 @@ export interface AdminResendInviteResponse {
     expires_at: string;
 }
 
+export type TeacherCourseStatus = "active" | "inactive";
+
+export interface TeacherCourseItem {
+    id: string;
+    title: string;
+    code: string;
+    semester: string;
+    academic_level: string;
+    status: TeacherCourseStatus;
+    students_count: number;
+    active_cases_count: number;
+}
+
+export interface TeacherCoursesResponse {
+    courses: TeacherCourseItem[];
+    total: number;
+}
+
+export interface TeacherCaseItem {
+    id: string;
+    title: string;
+    deadline: string | null;
+    status: string;
+    course_codes: string[];
+    days_remaining: number | null;
+}
+
+export interface TeacherCasesResponse {
+    cases: TeacherCaseItem[];
+    total: number;
+}
+
 export const EMPTY_FORM: CaseFormData = {
     subject: "",
     academicLevel: "Pregrado",

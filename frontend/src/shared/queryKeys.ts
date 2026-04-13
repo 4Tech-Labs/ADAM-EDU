@@ -61,4 +61,12 @@ export const queryKeys = {
         suggest: (intent: IntentType, payload: SuggestRequest) =>
             ["authoring", "suggest", intent, payload] as const,
     },
+    teacher: {
+        /** ["teacher"] â€” key raÃ­z para invalidaciÃ³n masiva */
+        all: () => ["teacher"] as const,
+        /** ["teacher", "courses"] â€” cursos del docente autenticado */
+        courses: () => ["teacher", "courses"] as const,
+        /** ["teacher", "cases"] â€” casos activos del docente autenticado */
+        cases: () => ["teacher", "cases"] as const,
+    },
 } as const;
