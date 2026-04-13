@@ -33,6 +33,8 @@ import type {
     InviteResolveResponse,
     SuggestRequest,
     SuggestResponse,
+    TeacherCasesResponse,
+    TeacherCoursesResponse,
 } from "@/shared/adam-types";
 
 /**
@@ -49,7 +51,8 @@ type ApiErrorCode =
     | "membership_required"
     | "account_suspended"
     | "authoring_forbidden"
-    | "legacy_bridge_missing";
+    | "legacy_bridge_missing"
+    | "teacher_membership_context_required";
 
 export interface SseEvent {
     event: string;
@@ -132,6 +135,14 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
             default:
                 return "No tienes permisos para esta accion.";
         }
+    }
+
+    if (status === 409 && code === "teacher_membership_context_required") {
+        return "Tu cuenta tiene multiples membresias docentes activas y requiere seleccion de contexto.";
+    }
+
+    if (status === 500 && code === "legacy_bridge_missing") {
+        return "Tu cuenta docente no esta completamente aprovisionada para consultar casos.";
     }
 
     if (Array.isArray(detail)) {
@@ -487,6 +498,14 @@ export const api = {
                     method: "POST",
                 },
             );
+        },
+    },
+    teacher: {
+        async getCourses(): Promise<TeacherCoursesResponse> {
+            return parseJsonResponse<TeacherCoursesResponse>("/teacher/courses");
+        },
+        async getCases(): Promise<TeacherCasesResponse> {
+            return parseJsonResponse<TeacherCasesResponse>("/teacher/cases");
         },
     },
 };
