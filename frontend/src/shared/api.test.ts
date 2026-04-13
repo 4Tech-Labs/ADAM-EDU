@@ -120,6 +120,15 @@ describe("api auth + stream glue", () => {
         );
     });
 
+    it("maps teacher-specific context and provisioning errors to actionable messages", () => {
+        expect(formatHttpError(409, "teacher_membership_context_required")).toBe(
+            "Tu cuenta tiene multiples membresias docentes activas y requiere seleccion de contexto.",
+        );
+        expect(formatHttpError(500, "legacy_bridge_missing")).toBe(
+            "Tu cuenta docente no esta completamente aprovisionada para consultar casos.",
+        );
+    });
+
     it("surfaces validation messages from structured FastAPI 422 errors", () => {
         expect(formatHttpError(422, [{
             type: "value_error",
@@ -190,5 +199,53 @@ describe("api auth + stream glue", () => {
                 },
             }),
         );
+    });
+
+    it("requests teacher courses from the shared teacher endpoint with bearer auth", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+        getSessionMock.mockResolvedValue({
+            data: { session: { access_token: "teacher-token" } },
+            error: null,
+        });
+
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ courses: [], total: 0 }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.teacher.getCourses();
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/teacher/courses");
+        const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
+        expect(options.method).toBeUndefined();
+        expect(new Headers(options.headers).get("Authorization")).toBe("Bearer teacher-token");
+    });
+
+    it("requests teacher cases from the shared teacher endpoint with bearer auth", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+        getSessionMock.mockResolvedValue({
+            data: { session: { access_token: "teacher-token" } },
+            error: null,
+        });
+
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ cases: [], total: 0 }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.teacher.getCases();
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/teacher/cases");
+        const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
+        expect(options.method).toBeUndefined();
+        expect(new Headers(options.headers).get("Authorization")).toBe("Bearer teacher-token");
     });
 });
