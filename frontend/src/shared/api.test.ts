@@ -245,7 +245,6 @@ describe("api auth + stream glue", () => {
             } satisfies Pick<ApiError, "status" | "detail" | "retryAfterSeconds" | "message">,
         );
     });
-
     it("maps 401 and 403 away from generic network errors", () => {
         expect(formatHttpError(401, "invalid_token")).toBe(
             "Sesion requerida o expirada. Vuelve a iniciar sesion.",
