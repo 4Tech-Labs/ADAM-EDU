@@ -123,7 +123,7 @@ export function useAuthoringJobProgress() {
                             controller.abort();
                         }
                     } catch {
-                        setErrorTrace("Respuesta invalida del stream de progreso.");
+                        setErrorTrace("Respuesta invalida del canal de progreso en tiempo real.");
                         setStatus("failed");
                         setIsStreaming(false);
                         controller.abort();

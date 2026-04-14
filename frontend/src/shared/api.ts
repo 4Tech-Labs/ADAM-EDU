@@ -55,7 +55,7 @@ type ApiErrorCode =
     | "legacy_bridge_missing"
     | "teacher_membership_context_required";
 
-export interface SseEvent {
+export interface ProgressEvent {
     event: string;
     data: string;
 }
@@ -207,14 +207,14 @@ function asObject(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
-function emitStatusEvent(onEvent: (event: SseEvent) => void, status: unknown): void {
+function emitStatusEvent(onEvent: (event: ProgressEvent) => void, status: unknown): void {
     if (typeof status !== "string") {
         return;
     }
     onEvent({ event: "metadata", data: JSON.stringify({ status }) });
 }
 
-function emitStepEvent(onEvent: (event: SseEvent) => void, taskPayload: Record<string, unknown>): void {
+function emitStepEvent(onEvent: (event: ProgressEvent) => void, taskPayload: Record<string, unknown>): void {
     const currentStep = taskPayload.current_step;
     if (typeof currentStep !== "string" || currentStep.trim() === "") {
         return;
@@ -226,7 +226,7 @@ async function emitTerminalEvent(
     jobId: string,
     status: string,
     taskPayload: Record<string, unknown>,
-    onEvent: (event: SseEvent) => void,
+    onEvent: (event: ProgressEvent) => void,
 ): Promise<void> {
     if (status === "completed") {
         const result = await parseJsonResponse<AuthoringJobResultResponse>(`/authoring/jobs/${jobId}/result`);
@@ -253,7 +253,7 @@ async function emitTerminalEvent(
 
 async function streamRealtimeProgress(
     jobId: string,
-    onEvent: (event: SseEvent) => void,
+    onEvent: (event: ProgressEvent) => void,
     signal?: AbortSignal,
 ): Promise<void> {
     const snapshot = await parseJsonResponse<AuthoringJobProgressSnapshotResponse>(
@@ -319,6 +319,46 @@ async function streamRealtimeProgress(
                 if (settled) {
                     return;
                 }
+
+                if (subscriptionStatus === "SUBSCRIBED") {
+                    void parseJsonResponse<AuthoringJobProgressSnapshotResponse>(`/authoring/jobs/${jobId}/progress`)
+                        .then((latestSnapshot) => {
+                            if (settled) {
+                                return;
+                            }
+
+                            emitStatusEvent(onEvent, latestSnapshot.status);
+                            if (latestSnapshot.current_step) {
+                                onEvent({ event: "message", data: JSON.stringify({ node: latestSnapshot.current_step }) });
+                            }
+
+                            if (latestSnapshot.status !== "completed" && latestSnapshot.status !== "failed") {
+                                return;
+                            }
+
+                            settled = true;
+                            const terminalPayload =
+                                latestSnapshot.status === "failed"
+                                    ? {
+                                          error_trace:
+                                              latestSnapshot.error_trace ?? "Error del servidor durante la generacion.",
+                                      }
+                                    : {};
+                            void emitTerminalEvent(jobId, latestSnapshot.status, terminalPayload, onEvent)
+                                .then(() => client.removeChannel(channel))
+                                .then(() => resolve())
+                                .catch((error) => reject(error));
+                        })
+                        .catch((error) => {
+                            if (settled) {
+                                return;
+                            }
+                            settled = true;
+                            void client.removeChannel(channel).finally(() => reject(error));
+                        });
+                    return;
+                }
+
                 if (subscriptionStatus === "CHANNEL_ERROR" || subscriptionStatus === "TIMED_OUT") {
                     settled = true;
                     void client.removeChannel(channel).finally(() => {
@@ -362,7 +402,7 @@ export const api = {
         },
         async streamProgress(
             jobId: string,
-            onEvent: (event: SseEvent) => void,
+            onEvent: (event: ProgressEvent) => void,
             signal?: AbortSignal,
         ) {
             await streamRealtimeProgress(jobId, onEvent, signal);

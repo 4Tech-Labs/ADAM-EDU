@@ -110,6 +110,76 @@ describe("api auth + stream glue", () => {
         expect(events[2]).toEqual({ event: "result", data: "{\"canonical_output\":{\"title\":\"Case\"}}" });
     });
 
+    it("reconciles terminal state after subscribe when initial snapshot is stale", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+
+        const channel = {
+            on: vi.fn().mockReturnThis(),
+            subscribe: vi.fn((callback: (status: string) => void) => {
+                callback("SUBSCRIBED");
+                return channel;
+            }),
+        };
+        const removeChannelMock = vi.fn().mockResolvedValue(undefined);
+
+        createClientMock.mockImplementationOnce(() => ({
+            auth: {
+                getSession: getSessionMock,
+            },
+            channel: vi.fn(() => channel),
+            removeChannel: removeChannelMock,
+        }));
+
+        const events: Array<{ event: string; data: string }> = [];
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "processing",
+                    current_step: "writer",
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "completed",
+                    current_step: "completed",
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    assignment_id: "assignment-1",
+                    blueprint: {},
+                    canonical_output: { title: "Case" },
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.authoring.streamProgress("job-1", (event) => events.push(event));
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/authoring/jobs/job-1/progress");
+        expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/authoring/jobs/job-1/progress");
+        expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/authoring/jobs/job-1/result");
+        expect(events).toContainEqual({ event: "metadata", data: "{\"status\":\"processing\"}" });
+        expect(events).toContainEqual({ event: "metadata", data: "{\"status\":\"completed\"}" });
+        expect(events[events.length - 1]).toEqual({
+            event: "result",
+            data: "{\"canonical_output\":{\"title\":\"Case\"}}",
+        });
+        expect(removeChannelMock).toHaveBeenCalledTimes(1);
+    });
+
     it("returns a non-generic auth error for forbidden streams", async () => {
         vi.stubGlobal(
             "fetch",
