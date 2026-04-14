@@ -14,6 +14,9 @@ function parseEventPayload(data: string) {
 
 function getProgressStreamErrorMessage(error: unknown) {
     if (error instanceof ApiError) {
+        if (error.status === 503 && error.retryAfterSeconds) {
+            return `${error.message} Reintenta en ${error.retryAfterSeconds}s.`;
+        }
         return error.message;
     }
 

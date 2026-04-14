@@ -222,6 +222,30 @@ describe("api auth + stream glue", () => {
         );
     });
 
+    it("surfaces retry-after metadata when progress snapshot receives 503 backpressure", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn().mockResolvedValue(
+                new Response(JSON.stringify({ detail: "db_saturated" }), {
+                    status: 503,
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Retry-After": "9",
+                    },
+                }),
+            ),
+        );
+
+        await expect(api.authoring.streamProgress("job-1", () => undefined)).rejects.toMatchObject(
+            {
+                status: 503,
+                detail: "db_saturated",
+                retryAfterSeconds: 9,
+                message: "El sistema esta temporalmente saturado. Intenta de nuevo en unos segundos.",
+            } satisfies Pick<ApiError, "status" | "detail" | "retryAfterSeconds" | "message">,
+        );
+    });
+
     it("maps 401 and 403 away from generic network errors", () => {
         expect(formatHttpError(401, "invalid_token")).toBe(
             "Sesion requerida o expirada. Vuelve a iniciar sesion.",
@@ -237,6 +261,15 @@ describe("api auth + stream glue", () => {
         );
         expect(formatHttpError(500, "legacy_bridge_missing")).toBe(
             "Tu cuenta docente no esta completamente aprovisionada para consultar casos.",
+        );
+    });
+
+    it("maps db resilience detail codes to explicit 503 UX copy", () => {
+        expect(formatHttpError(503, "db_saturated")).toBe(
+            "El sistema esta temporalmente saturado. Intenta de nuevo en unos segundos.",
+        );
+        expect(formatHttpError(503, "db_timeout")).toBe(
+            "La base de datos tardo demasiado en responder. Intenta de nuevo.",
         );
     });
 

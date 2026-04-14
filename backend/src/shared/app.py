@@ -23,7 +23,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.orm import Session
 
 from case_generator.core.authoring import AuthoringService
@@ -55,6 +56,14 @@ from shared.identity_activation import (
     upsert_profile as upsert_profile_impl,
 )
 from shared.database import get_db
+from shared.db_resilience import (
+    AUTH_ME_ENDPOINT,
+    AUTHORING_INTAKE_ENDPOINT,
+    AUTHORING_PROGRESS_ENDPOINT,
+    critical_endpoint_dependency,
+    emit_metric,
+    raise_db_unavailable,
+)
 from shared.invite_status import invite_effective_status
 from shared.models import (
     Assignment,
@@ -380,6 +389,49 @@ def _check_student_email_domain(db: Session, invite: Invite) -> None:
     )
 
 
+_auth_me_budget_dependency = critical_endpoint_dependency(AUTH_ME_ENDPOINT)
+_authoring_intake_budget_dependency = critical_endpoint_dependency(AUTHORING_INTAKE_ENDPOINT)
+_authoring_progress_budget_dependency = critical_endpoint_dependency(AUTHORING_PROGRESS_ENDPOINT)
+
+
+def require_current_actor_auth_me(
+    authorization: str | None = Header(None),
+    db: Session = Depends(get_db),
+) -> CurrentActor:
+    try:
+        return require_current_actor(authorization=authorization, db=db)
+    except AuthError:
+        raise
+    except (SATimeoutError, OperationalError, DBAPIError) as exc:
+        raise_db_unavailable(exc, endpoint_code=AUTH_ME_ENDPOINT)
+
+
+def require_teacher_actor_authoring_intake(
+    authorization: str | None = Header(None),
+    db: Session = Depends(get_db),
+) -> CurrentActor:
+    try:
+        actor = require_current_actor(authorization=authorization, db=db)
+        return require_teacher_actor(actor=actor)
+    except AuthError:
+        raise
+    except (SATimeoutError, OperationalError, DBAPIError) as exc:
+        raise_db_unavailable(exc, endpoint_code=AUTHORING_INTAKE_ENDPOINT)
+
+
+def require_teacher_actor_authoring_progress(
+    authorization: str | None = Header(None),
+    db: Session = Depends(get_db),
+) -> CurrentActor:
+    try:
+        actor = require_current_actor(authorization=authorization, db=db)
+        return require_teacher_actor(actor=actor)
+    except AuthError:
+        raise
+    except (SATimeoutError, OperationalError, DBAPIError) as exc:
+        raise_db_unavailable(exc, endpoint_code=AUTHORING_PROGRESS_ENDPOINT)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
@@ -470,62 +522,77 @@ class JobCreatedResponse(BaseModel):
     message: str
 
 
-@app.post("/api/authoring/jobs", response_model=JobCreatedResponse, status_code=202)
+@app.post(
+    "/api/authoring/jobs",
+    response_model=JobCreatedResponse,
+    status_code=202,
+    dependencies=[Depends(_authoring_intake_budget_dependency)],
+)
 def create_authoring_job(
     req: IntakeRequest,
     background_tasks: BackgroundTasks,
-    actor: CurrentActor = Depends(require_teacher_actor),
+    actor: CurrentActor = Depends(require_teacher_actor_authoring_intake),
     db: Session = Depends(get_db),
 ) -> JobCreatedResponse:
-    teacher = get_legacy_teacher_or_500(db, actor)
-    deadline, normalized_due_at = _normalize_deadline_input(req.due_at)
+    started = time.monotonic()
+    try:
+        teacher = get_legacy_teacher_or_500(db, actor)
+        deadline, normalized_due_at = _normalize_deadline_input(req.due_at)
 
-    assignment = Assignment(
-        teacher_id=teacher.id,
-        title=req.assignment_title,
-        status="draft",
-        deadline=deadline,
-    )
-    db.add(assignment)
-    db.commit()
-    db.refresh(assignment)
+        assignment = Assignment(
+            teacher_id=teacher.id,
+            title=req.assignment_title,
+            status="draft",
+            deadline=deadline,
+        )
+        db.add(assignment)
+        db.commit()
+        db.refresh(assignment)
 
-    idempotency_key = f"job-init-{assignment.id}-{uuid.uuid4()}"
-    job = AuthoringJob(
-        assignment_id=assignment.id,
-        idempotency_key=idempotency_key,
-        status="pending",
-        task_payload={
-            "step": "authoring",
-            "asignatura": req.subject or req.assignment_title,
-            "nivel": req.academic_level,
-            "industria": req.industry,
-            "studentProfile": req.student_profile,
-            "caseType": req.case_type,
-            "modulo": req.syllabus_module,
-            "escenario": req.scenario_description,
-            "pregunta_guia": req.guiding_question,
-            "topicUnit": req.topic_unit,
-            "targetGroups": req.target_groups,
-            "edaDepth": req.eda_depth,
-            "includePythonCode": req.include_python_code,
-            "algoritmos": req.suggested_techniques,
-            "availableFrom": req.available_from,
-            "dueAt": normalized_due_at,
-        },
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
+        idempotency_key = f"job-init-{assignment.id}-{uuid.uuid4()}"
+        job = AuthoringJob(
+            assignment_id=assignment.id,
+            idempotency_key=idempotency_key,
+            status="pending",
+            task_payload={
+                "step": "authoring",
+                "asignatura": req.subject or req.assignment_title,
+                "nivel": req.academic_level,
+                "industria": req.industry,
+                "studentProfile": req.student_profile,
+                "caseType": req.case_type,
+                "modulo": req.syllabus_module,
+                "escenario": req.scenario_description,
+                "pregunta_guia": req.guiding_question,
+                "topicUnit": req.topic_unit,
+                "targetGroups": req.target_groups,
+                "edaDepth": req.eda_depth,
+                "includePythonCode": req.include_python_code,
+                "algoritmos": req.suggested_techniques,
+                "availableFrom": req.available_from,
+                "dueAt": normalized_due_at,
+            },
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
 
-    logger.info("Intake complete. Job %s enqueued. Assignment: %s", job.id, assignment.id)
-    background_tasks.add_task(AuthoringService.run_job, job.id)
+        logger.info("Intake complete. Job %s enqueued. Assignment: %s", job.id, assignment.id)
+        background_tasks.add_task(AuthoringService.run_job, job.id)
 
-    return JobCreatedResponse(
-        job_id=job.id,
-        status="accepted",
-        message="Authoring job accepted and dispatched to queue.",
-    )
+        return JobCreatedResponse(
+            job_id=job.id,
+            status="accepted",
+            message="Authoring job accepted and dispatched to queue.",
+        )
+    except (SATimeoutError, OperationalError, DBAPIError) as exc:
+        raise_db_unavailable(exc, endpoint_code=AUTHORING_INTAKE_ENDPOINT)
+    finally:
+        emit_metric(
+            "authoring_intake_latency_ms",
+            round((time.monotonic() - started) * 1000, 3),
+            endpoint=AUTHORING_INTAKE_ENDPOINT,
+        )
 
 
 # Cloud Tasks internal endpoint — handler lives in shared.internal_tasks
@@ -614,30 +681,45 @@ def get_job_result(
     )
 
 
-@app.get("/api/authoring/jobs/{job_id}/progress", response_model=JobProgressResponse)
+@app.get(
+    "/api/authoring/jobs/{job_id}/progress",
+    response_model=JobProgressResponse,
+    dependencies=[Depends(_authoring_progress_budget_dependency)],
+)
 def get_job_progress(
     job_id: str,
-    actor: CurrentActor = Depends(require_teacher_actor),
+    actor: CurrentActor = Depends(require_teacher_actor_authoring_progress),
     db: Session = Depends(get_db),
 ) -> JobProgressResponse:
-    job = get_owned_job_or_404(db, job_id, actor)
-    payload = job.task_payload or {}
+    started = time.monotonic()
+    try:
+        job = get_owned_job_or_404(db, job_id, actor)
+        payload = job.task_payload or {}
 
-    current_step = payload.get("current_step")
-    progress_seq = payload.get("progress_seq")
-    progress_ts = payload.get("progress_ts")
-    error_code = payload.get("error_code")
-    error_trace = payload.get("error_trace")
+        current_step = payload.get("current_step")
+        progress_seq = payload.get("progress_seq")
+        progress_ts = payload.get("progress_ts")
+        error_code = payload.get("error_code")
+        error_trace = payload.get("error_trace")
 
-    return JobProgressResponse(
-        job_id=job.id,
-        status=job.status,
-        current_step=current_step if isinstance(current_step, str) else None,
-        progress_seq=progress_seq if isinstance(progress_seq, int) else None,
-        progress_ts=progress_ts if isinstance(progress_ts, str) else None,
-        error_code=error_code if isinstance(error_code, str) else None,
-        error_trace=error_trace if isinstance(error_trace, str) else None,
-    )
+        emit_metric("progress_snapshot_reads_total", 1, endpoint=AUTHORING_PROGRESS_ENDPOINT)
+        return JobProgressResponse(
+            job_id=job.id,
+            status=job.status,
+            current_step=current_step if isinstance(current_step, str) else None,
+            progress_seq=progress_seq if isinstance(progress_seq, int) else None,
+            progress_ts=progress_ts if isinstance(progress_ts, str) else None,
+            error_code=error_code if isinstance(error_code, str) else None,
+            error_trace=error_trace if isinstance(error_trace, str) else None,
+        )
+    except (SATimeoutError, OperationalError, DBAPIError) as exc:
+        raise_db_unavailable(exc, endpoint_code=AUTHORING_PROGRESS_ENDPOINT)
+    finally:
+        emit_metric(
+            "progress_snapshot_latency_ms",
+            round((time.monotonic() - started) * 1000, 3),
+            endpoint=AUTHORING_PROGRESS_ENDPOINT,
+        )
 
 
 class MembershipResponse(BaseModel):
@@ -661,15 +743,20 @@ class AuthMeResponse(BaseModel):
     primary_role: str
 
 
-@app.get("/api/auth/me", response_model=AuthMeResponse)
-def get_auth_me(actor: CurrentActor = Depends(require_current_actor)) -> AuthMeResponse:
+@app.get(
+    "/api/auth/me",
+    response_model=AuthMeResponse,
+    dependencies=[Depends(_auth_me_budget_dependency)],
+)
+def get_auth_me(actor: CurrentActor = Depends(require_current_actor_auth_me)) -> AuthMeResponse:
+    started = time.monotonic()
     audit_log(
         "session.verified",
         "success",
         auth_user_id=actor.auth_user_id,
         http_status=200,
     )
-    return AuthMeResponse(
+    response = AuthMeResponse(
         auth_user_id=actor.auth_user_id,
         profile=AuthMeProfileResponse(id=actor.profile.id, full_name=actor.profile.full_name),
         memberships=[
@@ -685,6 +772,12 @@ def get_auth_me(actor: CurrentActor = Depends(require_current_actor)) -> AuthMeR
         must_rotate_password=actor.must_rotate_password,
         primary_role=actor.primary_role,
     )
+    emit_metric(
+        "auth_me_latency_ms",
+        round((time.monotonic() - started) * 1000, 3),
+        endpoint=AUTH_ME_ENDPOINT,
+    )
+    return response
 
 
 class ChangePasswordRequest(BaseModel):

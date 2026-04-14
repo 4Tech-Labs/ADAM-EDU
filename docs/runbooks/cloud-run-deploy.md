@@ -147,16 +147,34 @@ independientes por instancia — hasta 10× el límite configurado sin protecci�
 
 ## Cloud Monitoring — minimum alert policies
 
+### Issue #109 emitted metrics (log-based)
+
+| Metric | Expected source | Notes |
+|---|---|---|
+| `db_session_acquire_latency_ms` | `public-api` critical endpoints | Use p50/p95/p99 dashboards |
+| `db_backpressure_503_total` | `public-api` critical endpoints | Tag by endpoint + detail code |
+| `db_timeout_total` | `public-api` critical endpoints | Timeout-specific counter |
+| `auth_me_latency_ms` | `GET /api/auth/me` | Auth profile latency |
+| `progress_snapshot_reads_total` | `GET /api/authoring/jobs/{job_id}/progress` | Progress read volume |
+
+### Alerts
+
 | Alert | Threshold | Rationale |
 |---|---|---|
 | Auth failures | `5xx on /api/auth/*` > 5/min | Detects brute-force or misconfiguration |
 | Global 5xx | > 10/min on public-api | Catches deployment regressions |
 | Latency p95 | > 3s on public-api | Tracks interactive response quality |
+| Sustained DB backpressure | `db_backpressure_503_total` >= 20 in 5m | Detects saturation affecting user paths |
+| DB timeout presence | `db_timeout_total` > 0 for 10m | Detects degraded DB behavior in active window |
 | Cloud Tasks queue depth | > 50 pending tasks | Detects worker backlog |
 | OIDC failures | `detail=invalid_oidc_token` > 3/min in worker logs | Detects unauthorized invocation attempts |
 | JWKS unavailable | `detail=jwks_unavailable` in worker logs | Google OIDC endpoint health |
 
-Log-based alerts should filter on the JSON field `detail` from worker logs.
+Detail code interpretation for Issue #109:
+- `db_saturated`: fail-fast admission guard or connection saturation triggered; clients should back off using `Retry-After`.
+- `db_timeout`: statement/lock timeout or operational timeout path; investigate slow queries/locks.
+
+Log-based alerts should filter on the structured fields `metric_name`, `metric_value`, and `detail`/`detail_code`.
 
 ---
 
@@ -175,6 +193,13 @@ Log-based alerts should filter on the JSON field `detail` from worker logs.
 
 3. **Database migration rollback:** No migrations in Issue #9. NullPool is a connection strategy
    change only — reverting `ENVIRONMENT=production` to `development` restores classic pooling.
+
+4. **Issue #109 resilience rollback knobs:** if saturation handling is too aggressive, adjust env vars
+  in the last healthy Cloud Run revision and redeploy gradually:
+  - `DB_STATEMENT_TIMEOUT_MS`
+  - `DB_LOCK_TIMEOUT_MS`
+  - `DB_CRITICAL_ENDPOINT_BUDGET`
+  - `DB_RETRY_AFTER_SECONDS`
 
 ---
 

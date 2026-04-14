@@ -128,6 +128,25 @@ describe("AuthProvider", () => {
         expect(mockApiFetch).toHaveBeenCalledWith("/auth/me");
     });
 
+    it("does not stay loading forever when /api/auth/me fails under DB pressure", async () => {
+        const fakeSession = { access_token: "jwt-abc" };
+        mockGetSession.mockResolvedValue({
+            data: { session: fakeSession },
+            error: null,
+        });
+        mockApiFetch.mockRejectedValue(new Error("db_saturated"));
+
+        renderWithAuthProvider();
+
+        await waitFor(() =>
+            expect(screen.getByTestId("loading").textContent).toBe("false"),
+        );
+        expect(screen.getByTestId("actor").textContent).toBe("none");
+        expect(screen.getByTestId("error").textContent).toBe(
+            "No se pudo cargar tu perfil. Intenta iniciar sesión de nuevo.",
+        );
+    });
+
     it("clears actor on SIGNED_OUT event", async () => {
         const fakeSession = { access_token: "jwt-abc" };
         mockGetSession.mockResolvedValue({
