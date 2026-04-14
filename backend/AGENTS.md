@@ -42,10 +42,17 @@ uv run pytest -m live_llm -q
 ## Boundaries
 
 - `src/case_generator/` owns teacher authoring business logic.
-- `src/shared/` owns app composition, DB, ORM, sanitization, progress bus, and shared contracts.
+- `src/shared/` owns app composition, DB, ORM, sanitization, progress snapshot endpoints, and shared contracts.
 - `shared/` must not absorb new product domains.
 - Use absolute imports. Do not add `sys.path` mutations.
 - Keep application schema changes in Alembic migrations under `alembic/versions/`.
+
+## Supabase Infrastructure Guardrails
+
+- Treat Supavisor transaction mode (`:6543`) as the default production connection path for backend database access.
+- Teacher authoring progress is Supabase-native: durable state in Postgres + Realtime via `postgres_changes` on `public.authoring_jobs`.
+- Do not introduce manual SSE pub/sub systems, in-memory progress buses, or custom stream fanout layers for this progress path.
+- Do not introduce complex queue reclaimers/orchestrators for this progress path unless an approved ADR changes the architecture.
 
 ## Database Rules
 
