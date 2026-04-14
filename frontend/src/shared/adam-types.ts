@@ -185,6 +185,19 @@ export interface SuggestResponse {
 // API responses used by the teacher authoring flow.
 export type AuthoringJobStatus = "pending" | "processing" | "completed" | "failed";
 
+export const AUTHORING_PROGRESS_STEP_IDS = [
+    "case_architect",
+    "case_writer",
+    "eda_text_analyst",
+    "m3_content_generator",
+    "m4_content_generator",
+    "m5_content_generator",
+    "teaching_note_part1",
+] as const;
+
+export type AuthoringProgressStep = (typeof AUTHORING_PROGRESS_STEP_IDS)[number];
+export type AuthoringProgressCheckpoint = AuthoringProgressStep | "completed" | "failed";
+
 export interface AuthoringJobStatusResponse {
     job_id: string;
     status: AuthoringJobStatus;
@@ -197,7 +210,7 @@ export interface AuthoringJobStatusResponse {
 export interface AuthoringJobProgressSnapshotResponse {
     job_id: string;
     status: AuthoringJobStatus;
-    current_step?: string;
+    current_step?: AuthoringProgressCheckpoint;
     progress_seq?: number;
     progress_ts?: string;
     error_code?: string;

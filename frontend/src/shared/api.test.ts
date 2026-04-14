@@ -106,8 +106,7 @@ describe("api auth + stream glue", () => {
         await api.authoring.streamProgress("job-1", (event) => events.push(event));
 
         expect(events[0]).toEqual({ event: "metadata", data: "{\"status\":\"completed\"}" });
-        expect(events[1]).toEqual({ event: "message", data: "{\"node\":\"completed\"}" });
-        expect(events[2]).toEqual({ event: "result", data: "{\"canonical_output\":{\"title\":\"Case\"}}" });
+        expect(events[1]).toEqual({ event: "result", data: "{\"canonical_output\":{\"title\":\"Case\"}}" });
     });
 
     it("reconciles terminal state after subscribe when initial snapshot is stale", async () => {
@@ -137,7 +136,7 @@ describe("api auth + stream glue", () => {
                 new Response(JSON.stringify({
                     job_id: "job-1",
                     status: "processing",
-                    current_step: "writer",
+                    current_step: "case_writer",
                 }), {
                     status: 200,
                     headers: { "Content-Type": "application/json" },
@@ -180,6 +179,77 @@ describe("api auth + stream glue", () => {
         expect(removeChannelMock).toHaveBeenCalledTimes(1);
     });
 
+    it("ignores stale post-subscribe snapshots after newer realtime progress", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+
+        const channel = {
+            on: vi.fn().mockReturnThis(),
+            subscribe: vi.fn((handler: (status: string) => void) => {
+                handler("SUBSCRIBED");
+                queueMicrotask(() => handler("CHANNEL_ERROR"));
+                return channel;
+            }),
+        };
+        const removeChannelMock = vi.fn().mockResolvedValue(undefined);
+
+        createClientMock.mockImplementationOnce(() => ({
+            auth: {
+                getSession: getSessionMock,
+            },
+            channel: vi.fn(() => channel),
+            removeChannel: removeChannelMock,
+        }));
+
+        const events: Array<{ event: string; data: string }> = [];
+
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "processing",
+                    current_step: "m3_content_generator",
+                    progress_seq: 3,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "processing",
+                    current_step: "case_writer",
+                    progress_seq: 2,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const streamPromise = api.authoring.streamProgress("job-1", (event) => events.push(event));
+
+        await expect(streamPromise).rejects.toMatchObject(
+            {
+                status: 502,
+                message: "No se pudo abrir el canal de progreso en tiempo real.",
+            } satisfies Pick<ApiError, "status" | "message">,
+        );
+
+        const statuses = events
+            .filter((event) => event.event === "metadata")
+            .map((event) => (JSON.parse(event.data) as { status: string }).status);
+        expect(statuses).toEqual(["processing"]);
+
+        const nodes = events
+            .filter((event) => event.event === "message")
+            .map((event) => (JSON.parse(event.data) as { node: string }).node);
+        expect(nodes).toEqual(["m3_content_generator"]);
+
+        expect(removeChannelMock).toHaveBeenCalledTimes(1);
+    });
+
     it("returns a non-generic auth error for forbidden streams", async () => {
         vi.stubGlobal(
             "fetch",
@@ -206,7 +276,7 @@ describe("api auth + stream glue", () => {
                 new Response(JSON.stringify({
                     job_id: "job-1",
                     status: "processing",
-                    current_step: "writer",
+                    current_step: "case_writer",
                 }), {
                     status: 200,
                     headers: { "Content-Type": "application/json" },
@@ -220,6 +290,32 @@ describe("api auth + stream glue", () => {
                 message: "No se pudo conectar al canal de progreso en tiempo real.",
             } satisfies Pick<ApiError, "status" | "message">,
         );
+    });
+
+    it("ignores non-canonical current_step values", async () => {
+        const events: Array<{ event: string; data: string }> = [];
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({
+                job_id: "job-1",
+                status: "processing",
+                current_step: "unknown_internal_node",
+            }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await expect(api.authoring.streamProgress("job-1", (event) => events.push(event))).rejects.toMatchObject(
+            {
+                status: 503,
+                message: "No se pudo conectar al canal de progreso en tiempo real.",
+            } satisfies Pick<ApiError, "status" | "message">,
+        );
+
+        expect(events).toEqual([
+            { event: "metadata", data: "{\"status\":\"processing\"}" },
+        ]);
     });
 
     it("surfaces retry-after metadata when progress snapshot receives 503 backpressure", async () => {

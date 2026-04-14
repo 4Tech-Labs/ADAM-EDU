@@ -42,6 +42,210 @@ SUPPORTED_CONTEXT_KEYS = [
 NARRATIVE_ARTIFACT_LIMIT = 30000
 EDA_ARTIFACT_LIMIT = 40000
 
+# Keep this list synchronized with frontend PIPELINE_STEPS ids in
+# frontend/src/features/teacher-authoring/AuthoringProgressTimeline.tsx.
+CANONICAL_TIMELINE_STEP_IDS = (
+    "case_architect",
+    "case_writer",
+    "eda_text_analyst",
+    "m3_content_generator",
+    "m4_content_generator",
+    "m5_content_generator",
+    "teaching_note_part1",
+)
+TERMINAL_PROGRESS_STEPS = ("completed", "failed")
+_FIRST_CANONICAL_STEP = CANONICAL_TIMELINE_STEP_IDS[0]
+
+# Internal graph nodes are translated to stable timeline steps so the UI receives
+# deterministic progress values even if the orchestration graph evolves.
+_GRAPH_AGENT_TO_CANONICAL_STEP = {
+    "case_architect": "case_architect",
+    "case_writer": "case_writer",
+    "case_questions": "case_writer",
+    "doc3_generation": "case_writer",
+    "data_generator": "eda_text_analyst",
+    "data_validator": "eda_text_analyst",
+    "eda_text_analyst": "eda_text_analyst",
+    "eda_chart_generator": "eda_text_analyst",
+    "m3_content_generator": "m3_content_generator",
+    "m3_questions_generator": "m3_content_generator",
+    "m3_notebook_generator": "m3_content_generator",
+    "m4_content_generator": "m4_content_generator",
+    "m4_chart_generator": "m4_content_generator",
+    "m4_questions_generator": "m4_content_generator",
+    "m5_content_generator": "m5_content_generator",
+    "m5_questions_generator": "m5_content_generator",
+    "teaching_note_part1": "teaching_note_part1",
+    "teaching_note_part2": "teaching_note_part1",
+    "processing": _FIRST_CANONICAL_STEP,
+}
+
+_PROGRESS_DEGRADATION_KEYS = (
+    "progress_degraded",
+    "progress_degraded_step",
+    "progress_degraded_reason",
+    "progress_degraded_retries",
+    "progress_degraded_at",
+    "progress_degraded_error",
+)
+
+
+def _to_canonical_progress_step(raw_step: str | None) -> str | None:
+    """Translate internal graph agent ids into the stable timeline step contract."""
+    if raw_step is None:
+        return None
+
+    normalized = raw_step.strip()
+    if not normalized:
+        return None
+
+    if normalized in TERMINAL_PROGRESS_STEPS:
+        return normalized
+
+    mapped = _GRAPH_AGENT_TO_CANONICAL_STEP.get(normalized)
+    if mapped:
+        return mapped
+
+    if normalized in CANONICAL_TIMELINE_STEP_IDS:
+        return normalized
+
+    return None
+
+
+def _clear_progress_degradation(payload: dict[str, Any]) -> None:
+    for key in _PROGRESS_DEGRADATION_KEYS:
+        payload.pop(key, None)
+
+
+def _persist_progress_degradation(
+    *,
+    job_id: str,
+    canonical_step: str,
+    max_attempts: int,
+    error_detail: str,
+) -> None:
+    """Persist a durable degraded marker when intermediate progress writes exhaust retries."""
+    db_degraded = SessionLocal()
+    try:
+        job_degraded = db_degraded.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
+        if job_degraded is None:
+            logger.error(
+                "AuthoringService: Could not mark degraded progress state because job %s was not found.",
+                job_id,
+            )
+            return
+
+        payload = dict(job_degraded.task_payload or {})
+        current_step = payload.get("current_step")
+        canonical_current_step = (
+            _to_canonical_progress_step(current_step)
+            if isinstance(current_step, str)
+            else None
+        ) or _FIRST_CANONICAL_STEP
+
+        payload = _next_progress_payload(
+            payload,
+            status="processing",
+            current_step=canonical_current_step,
+        )
+        payload["progress_degraded"] = True
+        payload["progress_degraded_step"] = canonical_step
+        payload["progress_degraded_reason"] = "intermediate_checkpoint_write_failed"
+        payload["progress_degraded_retries"] = max_attempts
+        payload["progress_degraded_at"] = datetime.now(timezone.utc).isoformat()
+        payload["progress_degraded_error"] = error_detail[:500]
+        job_degraded.task_payload = payload
+
+        db_degraded.commit()
+        logger.warning(
+            "AuthoringService: Progress stream degraded for job %s after %s failed attempts at step '%s'.",
+            job_id,
+            max_attempts,
+            canonical_step,
+        )
+    except Exception as exc:
+        logger.error(
+            "AuthoringService: Could not persist degraded progress state for job %s at step '%s': %s",
+            job_id,
+            canonical_step,
+            exc,
+        )
+        db_degraded.rollback()
+    finally:
+        db_degraded.close()
+
+
+async def _persist_intermediate_progress_step(
+    *,
+    job_id: str,
+    canonical_step: str,
+    max_attempts: int = 3,
+    retry_base_delay_seconds: float = 0.2,
+) -> bool:
+    """Persist a canonical intermediate step with bounded retries and degraded fallback."""
+    if canonical_step not in CANONICAL_TIMELINE_STEP_IDS:
+        logger.warning(
+            "AuthoringService: Skipping non-canonical progress step '%s' for job %s.",
+            canonical_step,
+            job_id,
+        )
+        return False
+
+    last_error = "unknown_error"
+
+    for attempt in range(1, max_attempts + 1):
+        db_step = SessionLocal()
+        try:
+            job_step = db_step.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
+            if job_step is None:
+                logger.error(
+                    "AuthoringService: Could not persist progress checkpoint because job %s was not found.",
+                    job_id,
+                )
+                return False
+
+            payload_step = _next_progress_payload(
+                job_step.task_payload,
+                status="processing",
+                current_step=canonical_step,
+            )
+            _clear_progress_degradation(payload_step)
+            job_step.task_payload = payload_step
+            db_step.commit()
+
+            if attempt > 1:
+                logger.warning(
+                    "AuthoringService: Progress checkpoint write recovered for job %s at step '%s' (attempt %s/%s).",
+                    job_id,
+                    canonical_step,
+                    attempt,
+                    max_attempts,
+                )
+            return True
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "AuthoringService: Progress checkpoint write failed for job %s at step '%s' (attempt %s/%s): %s",
+                job_id,
+                canonical_step,
+                attempt,
+                max_attempts,
+                exc,
+            )
+            db_step.rollback()
+            if attempt < max_attempts and retry_base_delay_seconds > 0:
+                await asyncio.sleep(retry_base_delay_seconds * (2 ** (attempt - 1)))
+        finally:
+            db_step.close()
+
+    _persist_progress_degradation(
+        job_id=job_id,
+        canonical_step=canonical_step,
+        max_attempts=max_attempts,
+        error_detail=last_error,
+    )
+    return False
+
 
 def _next_progress_payload(
     existing_payload: Mapping[str, Any] | None,
@@ -254,7 +458,7 @@ class AuthoringService:
             job.task_payload = _next_progress_payload(
                 job.task_payload,
                 status="processing",
-                current_step="processing",
+                current_step=_FIRST_CANONICAL_STEP,
             )
             payload = dict(job.task_payload or {})
             db.commit()
@@ -337,37 +541,31 @@ class AuthoringService:
 
             async def _run_graph_stream() -> dict[str, Any]:
                 final_state: dict[str, Any] = state_input.copy()
-                last_reported_step = "processing"
+                current_step = payload.get("current_step")
+                last_reported_step = (
+                    _to_canonical_progress_step(current_step)
+                    if isinstance(current_step, str)
+                    else None
+                ) or _FIRST_CANONICAL_STEP
                 stream_mode: Literal["values"] = "values"
                 stream = cast(Any, graph).astream(state_input, config=run_config, stream_mode=stream_mode)
 
                 async for event in stream:
                     final_state = dict(event)
                     current_agent = final_state.get("current_agent")
+                    canonical_step = (
+                        _to_canonical_progress_step(current_agent)
+                        if isinstance(current_agent, str)
+                        else None
+                    )
 
-                    if current_agent and current_agent != last_reported_step:
-                        try:
-                            db_step = SessionLocal()
-                            try:
-                                job_step = db_step.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
-                                if job_step is not None:
-                                    payload_step = _next_progress_payload(
-                                        job_step.task_payload,
-                                        status="processing",
-                                        current_step=str(current_agent),
-                                    )
-                                    job_step.task_payload = payload_step
-                                    db_step.commit()
-                                    last_reported_step = str(current_agent)
-                            finally:
-                                db_step.close()
-                        except Exception as exc:
-                            logger.error(
-                                "AuthoringService: Error updating current_step '%s' for job %s: %s",
-                                current_agent,
-                                job_id,
-                                exc,
-                            )
+                    if canonical_step and canonical_step != last_reported_step:
+                        persisted = await _persist_intermediate_progress_step(
+                            job_id=job_id,
+                            canonical_step=canonical_step,
+                        )
+                        if persisted:
+                            last_reported_step = canonical_step
 
                 return final_state
 

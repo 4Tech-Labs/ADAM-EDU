@@ -102,3 +102,35 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Context:** En la implementación de Issue #110 se decidió mantener `ENVIRONMENT` como canónico temporal y soportar `APP_ENV` con prioridad para minimizar riesgo inmediato. Esta deuda se registra para cerrar la dualidad una vez estabilicen los guardrails.
 
 **Depends on / blocked by:** Plan de migración coordinado por fases, validación de todos los entornos activos y ventana de despliegue para cortar compatibilidad con `ENVIRONMENT`.
+
+---
+
+## TODO-007: Watchdog de progreso en frontend para fallback de stream
+
+**What:** Implementar un watchdog en `useAuthoringJobProgress` que detecte silencio prolongado del stream (sin snapshots ni eventos realtime durante una ventana configurable) y ejecute fallback controlado: re-fetch del snapshot, reintento de suscripción y señalización explícita de estado degradado en UI.
+
+**Why:** Aunque la PR actual mejora la rehidratación y normalización de pasos, todavía existe el riesgo de "stream zombie" cuando el canal realtime se degrada sin error hard. Sin watchdog, el usuario puede quedar viendo un progreso congelado sin feedback.
+
+**Pros:** Mejora percepción de confiabilidad, reduce casos de estancamiento silencioso, y limita dependencia de reconexión manual (F5).
+
+**Cons:** Añade complejidad de estado en el hook (timers + debounce + estados degradados), requiere cuidado para no generar polling excesivo ni ruido visual.
+
+**Context:** Diferido explícitamente para mantener el scope de esta PR en contrato canónico + rehidratación. El síntoma principal (0% -> 100%) ya quedó resuelto; este ítem apunta a hardening operativo adicional.
+
+**Depends on / blocked by:** Definir política final de timeout/retry por entorno (local/staging/prod) y métricas mínimas de reconexión aceptables.
+
+---
+
+## TODO-008: Monitoreo y alertas de salud del stream de authoring
+
+**What:** Agregar telemetría estructurada y tableros/alertas para el flujo realtime de authoring: tasa de suscripción fallida, reconexiones por job, latencia entre persistencia backend y render frontend, y porcentaje de jobs que llegan a `completed` sin eventos intermedios.
+
+**Why:** Hoy hay logs de suscripción en frontend y resiliencia en backend, pero falta observabilidad agregada para detectar regresiones antes de que lleguen como reportes manuales.
+
+**Pros:** Detección temprana de incidentes, baseline para SLO de progreso en tiempo real y diagnóstico más rápido de problemas de red/realtime/publicación.
+
+**Cons:** Requiere definir pipeline de ingestión (frontend + backend), cardinalidad de etiquetas y umbrales de alerta para evitar fatiga por ruido.
+
+**Context:** Registrado como follow-up de hardening después de estabilizar el contrato canónico de pasos y la persistencia resiliente introducidos en esta entrega.
+
+**Depends on / blocked by:** Alineación con la estrategia de observabilidad de la plataforma (métricas, logs y alerting) y disponibilidad del destino de métricas en ambientes compartidos.
