@@ -1,6 +1,7 @@
 from collections.abc import Generator
 from pathlib import Path
 from sqlalchemy import create_engine, Engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import NullPool
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,8 +25,34 @@ class Settings(BaseSettings):
     db_max_overflow: int = 10
     db_pool_timeout: int = 30
     db_pool_recycle: int = 1800
+    db_statement_timeout_ms: int = 15000
+    db_lock_timeout_ms: int = 5000
+    db_retry_after_seconds: int = 3
+    db_critical_endpoint_budget: int = 64
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
+
+
+def _validate_production_database_url(s: Settings) -> None:
+    """Fail fast when production does not use Supavisor transaction mode."""
+    if s.environment.strip().lower() != "production":
+        return
+
+    parsed_url = make_url(s.database_url)
+    if parsed_url.port != 6543:
+        raise ValueError(
+            "ENVIRONMENT=production requires DATABASE_URL on Supavisor transaction mode (:6543)."
+        )
+
+
+def _build_connect_args(s: Settings) -> dict[str, str]:
+    """Set session-level statement and lock timeout for every DB connection."""
+    return {
+        "options": (
+            f"-c statement_timeout={max(1, s.db_statement_timeout_ms)} "
+            f"-c lock_timeout={max(1, s.db_lock_timeout_ms)}"
+        )
+    }
 
 
 def _make_engine(s: Settings) -> Engine:
@@ -39,14 +66,22 @@ def _make_engine(s: Settings) -> Engine:
     NullPool creates and destroys the connection on each request, which is the
     correct behaviour for Cloud Run + Supavisor.
     """
-    if s.environment == "production":
-        return create_engine(s.database_url, poolclass=NullPool)
+    normalized_environment = s.environment.strip().lower()
+    _validate_production_database_url(s)
+
+    if normalized_environment == "production":
+        return create_engine(
+            s.database_url,
+            poolclass=NullPool,
+            connect_args=_build_connect_args(s),
+        )
     return create_engine(
         s.database_url,
         pool_size=s.db_pool_size,
         max_overflow=s.db_max_overflow,
         pool_timeout=s.db_pool_timeout,
         pool_recycle=s.db_pool_recycle,
+        connect_args=_build_connect_args(s),
         # Verify connection liveness before usage — essential for serverless
         pool_pre_ping=True,
     )

@@ -53,7 +53,9 @@ type ApiErrorCode =
     | "account_suspended"
     | "authoring_forbidden"
     | "legacy_bridge_missing"
-    | "teacher_membership_context_required";
+    | "teacher_membership_context_required"
+    | "db_saturated"
+    | "db_timeout";
 
 export interface ProgressEvent {
     event: string;
@@ -78,12 +80,14 @@ export type ApiErrorDetail = string | ApiValidationErrorDetail[];
 export class ApiError extends Error {
     readonly status: number;
     readonly detail?: ApiErrorDetail;
+    readonly retryAfterSeconds?: number;
 
-    constructor(status: number, message: string, detail?: ApiErrorDetail) {
+    constructor(status: number, message: string, detail?: ApiErrorDetail, retryAfterSeconds?: number) {
         super(message);
         this.name = "ApiError";
         this.status = status;
         this.detail = detail;
+        this.retryAfterSeconds = retryAfterSeconds;
     }
 }
 
@@ -151,6 +155,16 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
         return "Tu cuenta docente no esta completamente aprovisionada para consultar casos.";
     }
 
+    if (status === 503) {
+        if (code === "db_saturated") {
+            return "El sistema esta temporalmente saturado. Intenta de nuevo en unos segundos.";
+        }
+        if (code === "db_timeout") {
+            return "La base de datos tardo demasiado en responder. Intenta de nuevo.";
+        }
+        return "El servicio no esta disponible temporalmente. Intenta de nuevo.";
+    }
+
     if (Array.isArray(detail)) {
         return detail[0]?.msg || "Solicitud invalida.";
     }
@@ -183,6 +197,34 @@ async function readErrorDetail(res: Response): Promise<ApiErrorDetail | undefine
     }
 }
 
+function parseRetryAfterSeconds(value: string | null): number | undefined {
+    if (!value) {
+        return undefined;
+    }
+
+    const raw = value.trim();
+    if (!raw) {
+        return undefined;
+    }
+
+    const asSeconds = Number(raw);
+    if (Number.isFinite(asSeconds) && asSeconds > 0) {
+        return Math.ceil(asSeconds);
+    }
+
+    const asDate = Date.parse(raw);
+    if (!Number.isFinite(asDate)) {
+        return undefined;
+    }
+
+    const deltaMs = asDate - Date.now();
+    if (deltaMs <= 0) {
+        return undefined;
+    }
+
+    return Math.ceil(deltaMs / 1000);
+}
+
 export async function apiFetch(path: string, init?: RequestInit) {
     const headers = await createAuthorizedHeaders(init?.headers);
     const response = await fetch(`${API_BASE}${path}`, {
@@ -192,7 +234,13 @@ export async function apiFetch(path: string, init?: RequestInit) {
 
     if (!response.ok) {
         const detail = await readErrorDetail(response);
-        throw new ApiError(response.status, formatHttpError(response.status, detail), detail);
+        const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get("Retry-After"));
+        throw new ApiError(
+            response.status,
+            formatHttpError(response.status, detail),
+            detail,
+            retryAfterSeconds,
+        );
     }
 
     return response;
