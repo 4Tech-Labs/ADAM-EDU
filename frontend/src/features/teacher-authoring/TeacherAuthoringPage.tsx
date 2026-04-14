@@ -1,4 +1,4 @@
-/** ADAM v8 - Portal Profesor: Builder Mode (Native SSE Flow) */
+/** ADAM v8 - Portal Profesor: Builder Mode (Supabase Realtime Flow) */
 
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import type { CaseFormData, CanonicalCaseOutput } from "@/shared/adam-types";

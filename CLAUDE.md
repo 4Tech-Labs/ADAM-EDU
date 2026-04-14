@@ -2,7 +2,7 @@
 
 ## Project Context
 
-ADAM-EDU is a teacher authoring + preview MVP for pedagogical business cases. The active product surface in this repository is the teacher flow: form assistance, authoring job intake, LangGraph-based generation, SSE progress, and preview rendering.
+ADAM-EDU is a teacher authoring + preview MVP for pedagogical business cases. The active product surface in this repository is the teacher flow: form assistance, authoring job intake, LangGraph-based generation, Supabase Realtime progress, and preview rendering.
 
 This repository does not currently publish a student runtime, full authentication, or a hardened production deployment surface.
 
@@ -62,7 +62,7 @@ Use the repo-driven gstack runtime materialized from the pinned lock in `scripts
 ## Domain Map
 
 - `backend/src/case_generator/`: authoring business logic, LangGraph orchestration, prompts, schemas, and downstream generation services.
-- `backend/src/shared/`: FastAPI composition root, database access, ORM models, shared contracts, sanitization, and progress/SSE support.
+- `backend/src/shared/`: FastAPI composition root, database access, ORM models, shared contracts, sanitization, and progress snapshot endpoints.
 - `frontend/src/app/`: application shell, router, entrypoint, and global styles.
 - `frontend/src/features/teacher-authoring/`: teacher-facing authoring workflow.
 - `frontend/src/features/case-preview/`: generated case preview and `M1..M6` rendering surface.
@@ -75,6 +75,14 @@ Use the repo-driven gstack runtime materialized from the pinned lock in `scripts
 - `shared/` should not import business domains, except where composition requires it in the app root.
 - Schema changes for the app runtime go through Alembic migrations.
 - Keep `backend/.env.example`, local defaults, and documented setup aligned when database expectations change.
+
+## Supabase Infrastructure Guardrails
+
+- ADAM-EDU production progress infrastructure is Supabase-native: Postgres durability + Supabase Realtime (`postgres_changes` on `public.authoring_jobs`).
+- Treat Supavisor transaction mode (`:6543`) as the default production connection path for backend database access.
+- Do not introduce manual SSE pub/sub systems, in-memory progress buses, or custom long-lived stream fanout layers for teacher authoring progress.
+- Do not introduce complex queue reclaimers/orchestrators for this progress path unless an approved ADR explicitly changes the architecture.
+- If a change proposes moving away from Supabase Realtime or Supavisor defaults, require a dedicated ADR and synchronized updates to `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and `CLAUDE.md` in the same PR.
 
 ## Validation Commands
 

@@ -2,7 +2,7 @@
 
 ADAM EDU es un Teacher Authoring + Preview MVP en transicion a una plataforma multi-rol con autenticacion real. El repositorio incluye:
 
-- Flujo docente completo: sugerencias en formulario, generacion asincrona con LangGraph, timeline por SSE y preview del caso.
+- Flujo docente completo: sugerencias en formulario, generacion asincrona con LangGraph, progreso en tiempo real via Supabase Realtime (`postgres_changes`) y preview del caso.
 - Shell frontend auth-aware (Issue #5): `AuthProvider`, guards por rol, callback OAuth PKCE, helper `sessionStorage` de activacion con TTL 5 minutos, dashboard docente en `/app/teacher/dashboard` y ruta canonica de authoring en `/app/teacher/case-designer` (con compatibilidad via redirect `/app/teacher` -> `/app/teacher/case-designer`).
 - Auth perimeter backend (Issue #3): verificacion JWT via JWKS, actor resolution por memberships, `GET /api/auth/me`, endpoints de activacion body-only.
 
@@ -24,7 +24,7 @@ La referencia viva para estas reglas esta en `CONTRIBUTING.md` y `docs/repo-gove
 ## Alcance actual
 
 - `backend/src/case_generator/`: grafo LangGraph, prompts, schemas y servicios de authoring.
-- `backend/src/shared/`: FastAPI app, DB, modelos, progress bus y contratos compartidos que siguen sosteniendo el flujo docente.
+- `backend/src/shared/`: FastAPI app, DB, modelos, snapshots de progreso y contratos compartidos que siguen sosteniendo el flujo docente.
 - `frontend/`: builder del profesor y preview editorial del caso generado.
 
 La zona funcional principal del generador vive en `backend/src/case_generator/` y se mantiene congelada en este corte.
@@ -45,7 +45,7 @@ La raiz del repo se mantiene minima y operativa. Artefactos locales generados co
 ## Mapa del backend
 
 - `backend/src/case_generator/`: dominio funcional del producto. Aqui vive la logica de negocio del authoring, el grafo LangGraph, los prompts, adapters y servicios del generador de casos.
-- `backend/src/shared/`: capa comun de app e infraestructura del MVP docente. Aqui viven FastAPI, base de datos, ORM, progress bus SSE, sanitizacion y contratos de soporte usados por el flujo docente.
+- `backend/src/shared/`: capa comun de app e infraestructura del MVP docente. Aqui viven FastAPI, base de datos, ORM, snapshots de progreso, sanitizacion y contratos de soporte usados por el flujo docente.
 - `backend/tests/`: validacion del backend docente. `tests/integration/` cubre validacion live del flujo/grafo y `tests/validation/` cubre shape y adapters.
 - `backend/alembic/`: trazabilidad del esquema y migraciones historicas del backend.
 
@@ -71,7 +71,7 @@ El endpoint interno `/api/internal/tasks/authoring_step` se conserva como seam d
 ## Mapa del frontend
 
 - `frontend/src/app/`: shell del frontend. Aqui viven router, entrypoint, layout base y estilos globales.
-- `frontend/src/features/teacher-authoring/`: flujo docente real. Contiene formulario, submit del job, SSE, timeline y estados del authoring.
+- `frontend/src/features/teacher-authoring/`: flujo docente real. Contiene formulario, submit del job, suscripcion Realtime, timeline y estados del authoring.
 - `frontend/src/features/case-preview/`: preview editorial del caso generado, incluyendo renderers y modulos `M1..M6`.
 - `frontend/src/shared/`: piezas transversales del MVP. Aqui viven cliente API, tipos compartidos, header, toast, utilidades y primitives UI.
 
@@ -89,7 +89,7 @@ En este corte no se renombran carpetas del frontend.
 2. `POST /api/authoring/jobs` es teacher-only y requiere bearer JWT valido; crea `Assignment` + `AuthoringJob` sin confiar en `teacher_id` del cliente.
    Si el payload incluye `due_at`, el backend lo interpreta como hora local `America/Bogota`, lo persiste en UTC en `Assignment.deadline` y conserva `task_payload["dueAt"]` como string ISO-8601 normalizado.
 3. `AuthoringService.run_job()` ejecuta el grafo y persiste el resultado.
-4. `GET /api/authoring/jobs/{job_id}/progress` emite progreso por SSE autenticado con ownership exacto por docente.
+4. `GET /api/authoring/jobs/{job_id}/progress` devuelve el snapshot durable de progreso autenticado por ownership exacto por docente.
 5. `GET /api/authoring/jobs/{job_id}` permite polling autenticado del job.
 6. `GET /api/authoring/jobs/{job_id}/result` devuelve el resultado persistido para preview del owner.
 7. `GET /api/auth/me` expone `CurrentActor`, memberships y `must_rotate_password`.

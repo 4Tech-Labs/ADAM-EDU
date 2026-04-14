@@ -194,6 +194,16 @@ export interface AuthoringJobStatusResponse {
     error_trace?: string;
 }
 
+export interface AuthoringJobProgressSnapshotResponse {
+    job_id: string;
+    status: AuthoringJobStatus;
+    current_step?: string;
+    progress_seq?: number;
+    progress_ts?: string;
+    error_code?: string;
+    error_trace?: string;
+}
+
 export interface AuthoringJobResultResponse {
     job_id: string;
     assignment_id: string;

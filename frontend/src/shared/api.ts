@@ -18,6 +18,7 @@ import type {
     AdminTeacherOptionsResponse,
     AuthoringJobCreateRequest,
     AuthoringJobCreateResponse,
+    AuthoringJobProgressSnapshotResponse,
     AuthoringJobResultResponse,
     AuthoringJobStatusResponse,
     ChangePasswordRequest,
@@ -54,9 +55,14 @@ type ApiErrorCode =
     | "legacy_bridge_missing"
     | "teacher_membership_context_required";
 
-export interface SseEvent {
+export interface ProgressEvent {
     event: string;
     data: string;
+}
+
+interface AuthoringJobRealtimeRow {
+    status?: unknown;
+    task_payload?: unknown;
 }
 
 export interface ApiValidationErrorDetail {
@@ -197,108 +203,186 @@ async function parseJsonResponse<T>(path: string, init?: RequestInit): Promise<T
     return response.json() as Promise<T>;
 }
 
-export function createSseParser(onEvent: (event: SseEvent) => void) {
-    let buffer = "";
-    let eventName = "message";
-    let dataLines: string[] = [];
-
-    const dispatch = () => {
-        if (dataLines.length === 0) {
-            eventName = "message";
-            return;
-        }
-
-        onEvent({
-            event: eventName,
-            data: dataLines.join("\n"),
-        });
-
-        eventName = "message";
-        dataLines = [];
-    };
-
-    const processLine = (line: string) => {
-        if (line === "") {
-            dispatch();
-            return;
-        }
-
-        if (line.startsWith(":")) {
-            return;
-        }
-
-        const separatorIndex = line.indexOf(":");
-        const field = separatorIndex >= 0 ? line.slice(0, separatorIndex) : line;
-        const rawValue = separatorIndex >= 0 ? line.slice(separatorIndex + 1) : "";
-        const value = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;
-
-        if (field === "event") {
-            eventName = value || "message";
-            return;
-        }
-
-        if (field === "data") {
-            dataLines.push(value);
-        }
-    };
-
-    return {
-        push(chunk: string) {
-            buffer += chunk;
-
-            let newlineIndex = buffer.indexOf("\n");
-            while (newlineIndex >= 0) {
-                let line = buffer.slice(0, newlineIndex);
-                buffer = buffer.slice(newlineIndex + 1);
-
-                if (line.endsWith("\r")) {
-                    line = line.slice(0, -1);
-                }
-
-                processLine(line);
-                newlineIndex = buffer.indexOf("\n");
-            }
-        },
-        flush() {
-            if (buffer.length > 0) {
-                processLine(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
-                buffer = "";
-            }
-
-            dispatch();
-        },
-    };
+function asObject(value: unknown): Record<string, unknown> {
+    return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
-async function readSseStream(
-    path: string,
-    onEvent: (event: SseEvent) => void,
+function emitStatusEvent(onEvent: (event: ProgressEvent) => void, status: unknown): void {
+    if (typeof status !== "string") {
+        return;
+    }
+    onEvent({ event: "metadata", data: JSON.stringify({ status }) });
+}
+
+function emitStepEvent(onEvent: (event: ProgressEvent) => void, taskPayload: Record<string, unknown>): void {
+    const currentStep = taskPayload.current_step;
+    if (typeof currentStep !== "string" || currentStep.trim() === "") {
+        return;
+    }
+    onEvent({ event: "message", data: JSON.stringify({ node: currentStep }) });
+}
+
+async function emitTerminalEvent(
+    jobId: string,
+    status: string,
+    taskPayload: Record<string, unknown>,
+    onEvent: (event: ProgressEvent) => void,
+): Promise<void> {
+    if (status === "completed") {
+        const result = await parseJsonResponse<AuthoringJobResultResponse>(`/authoring/jobs/${jobId}/result`);
+        onEvent({
+            event: "result",
+            data: JSON.stringify({ canonical_output: result.canonical_output ?? {} }),
+        });
+        return;
+    }
+
+    if (status === "failed") {
+        const detail = taskPayload.error_trace;
+        onEvent({
+            event: "error",
+            data: JSON.stringify({
+                detail:
+                    typeof detail === "string" && detail.trim() !== ""
+                        ? detail
+                        : "Error del servidor durante la generacion.",
+            }),
+        });
+    }
+}
+
+async function streamRealtimeProgress(
+    jobId: string,
+    onEvent: (event: ProgressEvent) => void,
     signal?: AbortSignal,
-) {
-    const response = await apiFetch(path, {
-        headers: { Accept: "text/event-stream" },
-        signal,
-    });
-
-    if (!response.body) {
-        throw new ApiError(502, "No se pudo abrir el stream de progreso.");
+): Promise<void> {
+    const snapshot = await parseJsonResponse<AuthoringJobProgressSnapshotResponse>(
+        `/authoring/jobs/${jobId}/progress`,
+    );
+    emitStatusEvent(onEvent, snapshot.status);
+    if (snapshot.current_step) {
+        onEvent({ event: "message", data: JSON.stringify({ node: snapshot.current_step }) });
     }
 
-    const parser = createSseParser(onEvent);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+    if (snapshot.status === "completed") {
+        await emitTerminalEvent(jobId, "completed", {}, onEvent);
+        return;
+    }
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-            break;
+    if (snapshot.status === "failed") {
+        await emitTerminalEvent(
+            jobId,
+            "failed",
+            { error_trace: snapshot.error_trace ?? "Error del servidor durante la generacion." },
+            onEvent,
+        );
+        return;
+    }
+
+    const client = getSupabaseClient();
+    if (!client || typeof client.channel !== "function" || typeof client.removeChannel !== "function") {
+        throw new ApiError(503, "No se pudo conectar al canal de progreso en tiempo real.");
+    }
+
+    await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const channel = client
+            .channel(`authoring-job-${jobId}`)
+            .on(
+                "postgres_changes",
+                {
+                    event: "UPDATE",
+                    schema: "public",
+                    table: "authoring_jobs",
+                    filter: `id=eq.${jobId}`,
+                },
+                (payload: { new: AuthoringJobRealtimeRow | null }) => {
+                    if (settled || !payload.new) {
+                        return;
+                    }
+
+                    const taskPayload = asObject(payload.new.task_payload);
+                    emitStatusEvent(onEvent, payload.new.status);
+                    emitStepEvent(onEvent, taskPayload);
+
+                    const nextStatus = payload.new.status;
+                    if (nextStatus === "completed" || nextStatus === "failed") {
+                        settled = true;
+                        void emitTerminalEvent(jobId, nextStatus, taskPayload, onEvent)
+                            .then(() => client.removeChannel(channel))
+                            .then(() => resolve())
+                            .catch((error) => reject(error));
+                    }
+                },
+            )
+            .subscribe((subscriptionStatus) => {
+                if (settled) {
+                    return;
+                }
+
+                if (subscriptionStatus === "SUBSCRIBED") {
+                    void parseJsonResponse<AuthoringJobProgressSnapshotResponse>(`/authoring/jobs/${jobId}/progress`)
+                        .then((latestSnapshot) => {
+                            if (settled) {
+                                return;
+                            }
+
+                            emitStatusEvent(onEvent, latestSnapshot.status);
+                            if (latestSnapshot.current_step) {
+                                onEvent({ event: "message", data: JSON.stringify({ node: latestSnapshot.current_step }) });
+                            }
+
+                            if (latestSnapshot.status !== "completed" && latestSnapshot.status !== "failed") {
+                                return;
+                            }
+
+                            settled = true;
+                            const terminalPayload =
+                                latestSnapshot.status === "failed"
+                                    ? {
+                                          error_trace:
+                                              latestSnapshot.error_trace ?? "Error del servidor durante la generacion.",
+                                      }
+                                    : {};
+                            void emitTerminalEvent(jobId, latestSnapshot.status, terminalPayload, onEvent)
+                                .then(() => client.removeChannel(channel))
+                                .then(() => resolve())
+                                .catch((error) => reject(error));
+                        })
+                        .catch((error) => {
+                            if (settled) {
+                                return;
+                            }
+                            settled = true;
+                            void client.removeChannel(channel).finally(() => reject(error));
+                        });
+                    return;
+                }
+
+                if (subscriptionStatus === "CHANNEL_ERROR" || subscriptionStatus === "TIMED_OUT") {
+                    settled = true;
+                    void client.removeChannel(channel).finally(() => {
+                        reject(new ApiError(502, "No se pudo abrir el canal de progreso en tiempo real."));
+                    });
+                }
+            });
+
+        const onAbort = () => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            void client.removeChannel(channel).finally(() => resolve());
+        };
+
+        if (signal) {
+            if (signal.aborted) {
+                onAbort();
+                return;
+            }
+            signal.addEventListener("abort", onAbort, { once: true });
         }
-
-        parser.push(decoder.decode(value, { stream: true }));
-    }
-
-    parser.push(decoder.decode());
-    parser.flush();
+    });
 }
 
 export const api = {
@@ -318,10 +402,10 @@ export const api = {
         },
         async streamProgress(
             jobId: string,
-            onEvent: (event: SseEvent) => void,
+            onEvent: (event: ProgressEvent) => void,
             signal?: AbortSignal,
         ) {
-            await readSseStream(`/authoring/jobs/${jobId}/progress`, onEvent, signal);
+            await streamRealtimeProgress(jobId, onEvent, signal);
         },
     },
     async suggest(intent: IntentType, data: SuggestRequest): Promise<SuggestResponse> {

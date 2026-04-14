@@ -121,6 +121,41 @@ def test_failed_job_path(client, db, auth_headers_factory, seed_identity) -> Non
     assert result_response.status_code == 409
 
 
+def test_progress_snapshot_returns_durable_fields(client, db, auth_headers_factory, seed_identity) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-progress@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    headers = auth_headers_factory(sub=teacher_id, email=teacher_email)
+
+    assignment = Assignment(teacher_id=teacher_id, title="Progress Snapshot", status="draft")
+    db.add(assignment)
+    db.flush()
+    job = AuthoringJob(
+        assignment_id=assignment.id,
+        idempotency_key=f"job-{uuid.uuid4()}",
+        status="processing",
+        task_payload={
+            "current_step": "case_writer",
+            "progress_seq": 3,
+            "progress_ts": "2026-01-01T00:00:00+00:00",
+            "error_code": None,
+            "error_trace": None,
+        },
+    )
+    db.add(job)
+    db.commit()
+
+    response = client.get(f"/api/authoring/jobs/{job.id}/progress", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["job_id"] == job.id
+    assert payload["status"] == "processing"
+    assert payload["current_step"] == "case_writer"
+    assert payload["progress_seq"] == 3
+    assert payload["progress_ts"] == "2026-01-01T00:00:00+00:00"
+
+
 def test_authoring_owner_isolated(client, db, auth_headers_factory, seed_identity) -> None:
     owner_id = str(uuid.uuid4())
     owner_email = "owner@example.edu"

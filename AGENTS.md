@@ -9,7 +9,7 @@ This repository currently supports:
 - teacher form suggestions via `/api/suggest`
 - asynchronous authoring job intake via `/api/authoring/jobs`
 - LangGraph-based case generation
-- SSE progress updates
+- Supabase Realtime progress updates (`postgres_changes`)
 - teacher preview of the generated case
 
 This repository does not currently include a student runtime, full authentication, or a hardened production deployment surface.
@@ -64,11 +64,19 @@ This repository does not currently include a student runtime, full authenticatio
 ## Architecture Boundaries
 
 - `backend/src/case_generator/` owns authoring business logic, prompts, schemas, and graph execution.
-- `backend/src/shared/` owns FastAPI app composition, DB, ORM, shared contracts, and SSE support.
+- `backend/src/shared/` owns FastAPI app composition, DB, ORM, shared contracts, and progress snapshot endpoints.
 - `frontend/src/` follows the stable top-level split `app / features / shared`.
 - `shared/` must not become a catch-all for new product logic.
 - Use absolute imports by domain. Do not reintroduce `sys.path` hacks or deep relative import chains.
 - Alembic is the schema mechanism for the application runtime. Do not rely on ad hoc table creation in normal app startup.
+
+## Supabase Infrastructure Guardrails
+
+- ADAM-EDU production progress infrastructure is Supabase-native: Postgres durability + Supabase Realtime (`postgres_changes` on `public.authoring_jobs`).
+- Treat Supavisor transaction mode (`:6543`) as the default production connection path for backend database access.
+- Do not introduce manual SSE pub/sub systems, in-memory progress buses, or custom long-lived stream fanout layers for teacher authoring progress.
+- Do not introduce complex queue reclaimers/orchestrators for this progress path unless an approved ADR explicitly changes the architecture.
+- If a change proposes moving away from Supabase Realtime or Supavisor defaults, require a dedicated ADR and synchronized updates to `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and `CLAUDE.md` in the same PR.
 
 ## Validation Commands
 

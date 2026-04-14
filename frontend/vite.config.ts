@@ -51,8 +51,8 @@ export default defineConfig({
         target: "http://127.0.0.1:8000",
         changeOrigin: true,
         // selfHandleResponse desactiva el buffering interno de http-proxy y hace pipe
-        // directo de la respuesta — necesario para que los eventos SSE lleguen en tiempo real
-        // (sin esto, el proxy acumula toda la respuesta antes de enviarla al browser).
+        // directo de la respuesta para mantener el comportamiento de streaming/chunks
+        // cuando el backend emite respuestas largas o progresivas.
         selfHandleResponse: true,
         configure: (proxy) => {
           proxy.on("proxyRes", (proxyRes: IncomingMessage, _req: IncomingMessage, res: ServerResponse) => {

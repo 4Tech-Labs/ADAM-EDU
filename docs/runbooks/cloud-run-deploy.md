@@ -33,6 +33,8 @@ A classic connection pool exhausts the allowed concurrent connections when Cloud
 NullPool creates and immediately releases a connection on every request — this is the correct behavior
 for Cloud Run + Supavisor.
 
+For autoscaling API/worker services, `DATABASE_URL` must target Supavisor transaction mode on port `6543`.
+
 ---
 
 ## Secret Manager → Environment variables
