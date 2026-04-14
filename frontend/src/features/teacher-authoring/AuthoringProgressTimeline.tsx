@@ -1,14 +1,20 @@
 /** AuthoringProgressTimeline: muestra progreso del pipeline */
 
 import { useEffect, useState, useRef } from "react";
+import type { AuthoringProgressStep } from "@/shared/adam-types";
 
 interface Props {
-  activeAgent?: string;
+  activeAgent?: AuthoringProgressStep;
   scope: "narrative" | "technical";
   jobStatus?: "pending" | "processing" | "completed" | "failed";
 }
 
-const PIPELINE_STEPS = [
+const PIPELINE_STEPS: Array<{
+  id: AuthoringProgressStep;
+  label: string;
+  detail: string;
+  scope: "both" | "technical";
+}> = [
   {
     id: "case_architect",
     label: "Diseñando arquitectura del caso",
@@ -66,8 +72,8 @@ function getStepStatus(
     if (stepIndex === effectiveIndex) return "active";
     return "pending";
   }
-  // Fallback: sin step conocido aún
-  if (jobStatus === "pending" || jobStatus === "processing") {
+  // Fallback: cuando estamos procesando pero aún sin step canónico conocido
+  if (jobStatus === "processing") {
     return stepIndex === 0 ? "active" : "pending";
   }
   return "pending";
@@ -95,10 +101,14 @@ export function AuthoringProgressTimeline({ activeAgent, scope, jobStatus }: Pro
   if (activeIndex >= 0) lastValidIndexRef.current = activeIndex;
   const effectiveIndex = activeIndex >= 0 ? activeIndex : lastValidIndexRef.current;
 
-  const currentProgressIndex = effectiveIndex >= 0
+  const inferredActiveIndex = effectiveIndex >= 0
     ? effectiveIndex
-    : (jobStatus === 'completed' ? visibleSteps.length : 0);
-  const progressPercent = Math.round((currentProgressIndex / visibleSteps.length) * 100);
+    : (jobStatus === "processing" ? 0 : -1);
+  const currentProgressIndex = jobStatus === "completed"
+    ? visibleSteps.length
+    : (inferredActiveIndex >= 0 ? inferredActiveIndex + 1 : 0);
+  const safeCurrentProgressIndex = Math.max(0, Math.min(currentProgressIndex, visibleSteps.length));
+  const progressPercent = Math.round((safeCurrentProgressIndex / visibleSteps.length) * 100);
 
   useEffect(() => {
     if (scrollContainerRef.current) {
@@ -155,7 +165,7 @@ export function AuthoringProgressTimeline({ activeAgent, scope, jobStatus }: Pro
           <div className="hidden md:flex flex-col gap-2 mt-8 w-full">
             <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase tracking-widest">
               <span>Progreso del pipeline</span>
-              <span>{currentProgressIndex}/{visibleSteps.length}</span>
+              <span>{safeCurrentProgressIndex}/{visibleSteps.length}</span>
             </div>
             <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
               <div

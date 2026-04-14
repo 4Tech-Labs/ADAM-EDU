@@ -41,10 +41,12 @@ export function TeacherAuthoringPage() {
     activeAgent,
     submitJob,
     reset: resetJob,
+    isStreaming,
+    progressScope,
   } = useAuthoringJobProgress();
 
   useEffect(() => {
-    if (jobStatus === "pending" || jobStatus === "processing") {
+    if (isStreaming || jobStatus === "pending" || jobStatus === "processing") {
       setAppState("generating");
       setErrorMessage("");
     } else if (jobStatus === "failed") {
@@ -54,7 +56,7 @@ export function TeacherAuthoringPage() {
       setCaseResult(jobResult);
       setAppState("success");
     }
-  }, [jobStatus, errorTrace, jobResult]);
+  }, [isStreaming, jobStatus, errorTrace, jobResult]);
 
   const handleGenerate = useCallback(
     async (data: CaseFormData) => {
@@ -89,7 +91,7 @@ export function TeacherAuthoringPage() {
         <AuthoringProgressTimeline
           activeAgent={activeAgent}
           jobStatus={jobStatus || undefined}
-          scope={formData.caseType === "harvard_only" ? "narrative" : "technical"}
+          scope={progressScope || (formData.caseType === "harvard_only" ? "narrative" : "technical")}
         />
       )}
 

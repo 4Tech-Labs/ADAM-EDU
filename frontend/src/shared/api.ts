@@ -1,4 +1,5 @@
 import { getSupabaseClient, resetSupabaseClientForTests } from "@/shared/supabaseClient";
+import { AUTHORING_PROGRESS_STEP_IDS } from "@/shared/adam-types";
 
 import type {
     ActivateOAuthCompleteResponse,
@@ -18,6 +19,7 @@ import type {
     AdminTeacherOptionsResponse,
     AuthoringJobCreateRequest,
     AuthoringJobCreateResponse,
+    AuthoringProgressStep,
     AuthoringJobProgressSnapshotResponse,
     AuthoringJobResultResponse,
     AuthoringJobStatusResponse,
@@ -66,6 +68,8 @@ interface AuthoringJobRealtimeRow {
     status?: unknown;
     task_payload?: unknown;
 }
+
+const AUTHORING_PROGRESS_STEP_SET = new Set<string>(AUTHORING_PROGRESS_STEP_IDS);
 
 export interface ApiValidationErrorDetail {
     type: string;
@@ -263,11 +267,24 @@ function emitStatusEvent(onEvent: (event: ProgressEvent) => void, status: unknow
 }
 
 function emitStepEvent(onEvent: (event: ProgressEvent) => void, taskPayload: Record<string, unknown>): void {
-    const currentStep = taskPayload.current_step;
-    if (typeof currentStep !== "string" || currentStep.trim() === "") {
+    const currentStep = normalizeProgressStep(taskPayload.current_step);
+    if (!currentStep) {
         return;
     }
     onEvent({ event: "message", data: JSON.stringify({ node: currentStep }) });
+}
+
+function normalizeProgressStep(value: unknown): AuthoringProgressStep | null {
+    if (typeof value !== "string") {
+        return null;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed || !AUTHORING_PROGRESS_STEP_SET.has(trimmed)) {
+        return null;
+    }
+
+    return trimmed as AuthoringProgressStep;
 }
 
 async function emitTerminalEvent(
@@ -308,8 +325,9 @@ async function streamRealtimeProgress(
         `/authoring/jobs/${jobId}/progress`,
     );
     emitStatusEvent(onEvent, snapshot.status);
-    if (snapshot.current_step) {
-        onEvent({ event: "message", data: JSON.stringify({ node: snapshot.current_step }) });
+    const snapshotStep = normalizeProgressStep(snapshot.current_step);
+    if (snapshotStep) {
+        onEvent({ event: "message", data: JSON.stringify({ node: snapshotStep }) });
     }
 
     if (snapshot.status === "completed") {
@@ -369,6 +387,7 @@ async function streamRealtimeProgress(
                 }
 
                 if (subscriptionStatus === "SUBSCRIBED") {
+                    console.info("[authoring-progress] realtime subscribed", { jobId });
                     void parseJsonResponse<AuthoringJobProgressSnapshotResponse>(`/authoring/jobs/${jobId}/progress`)
                         .then((latestSnapshot) => {
                             if (settled) {
@@ -376,8 +395,9 @@ async function streamRealtimeProgress(
                             }
 
                             emitStatusEvent(onEvent, latestSnapshot.status);
-                            if (latestSnapshot.current_step) {
-                                onEvent({ event: "message", data: JSON.stringify({ node: latestSnapshot.current_step }) });
+                            const latestStep = normalizeProgressStep(latestSnapshot.current_step);
+                            if (latestStep) {
+                                onEvent({ event: "message", data: JSON.stringify({ node: latestStep }) });
                             }
 
                             if (latestSnapshot.status !== "completed" && latestSnapshot.status !== "failed") {
@@ -408,6 +428,10 @@ async function streamRealtimeProgress(
                 }
 
                 if (subscriptionStatus === "CHANNEL_ERROR" || subscriptionStatus === "TIMED_OUT") {
+                    console.error("[authoring-progress] realtime subscription failed", {
+                        jobId,
+                        subscriptionStatus,
+                    });
                     settled = true;
                     void client.removeChannel(channel).finally(() => {
                         reject(new ApiError(502, "No se pudo abrir el canal de progreso en tiempo real."));

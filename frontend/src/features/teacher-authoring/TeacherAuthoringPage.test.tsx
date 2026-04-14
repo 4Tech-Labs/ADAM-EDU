@@ -41,6 +41,7 @@ describe("TeacherAuthoringPage", () => {
             submitJob: vi.fn(),
             reset: vi.fn(),
             isStreaming: false,
+            progressScope: null,
         });
 
         render(<TeacherAuthoringPage />);
@@ -60,6 +61,7 @@ describe("TeacherAuthoringPage", () => {
             submitJob: vi.fn(),
             reset: vi.fn(),
             isStreaming: false,
+            progressScope: null,
         });
 
         render(<TeacherAuthoringPage />);

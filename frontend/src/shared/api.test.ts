@@ -106,8 +106,7 @@ describe("api auth + stream glue", () => {
         await api.authoring.streamProgress("job-1", (event) => events.push(event));
 
         expect(events[0]).toEqual({ event: "metadata", data: "{\"status\":\"completed\"}" });
-        expect(events[1]).toEqual({ event: "message", data: "{\"node\":\"completed\"}" });
-        expect(events[2]).toEqual({ event: "result", data: "{\"canonical_output\":{\"title\":\"Case\"}}" });
+        expect(events[1]).toEqual({ event: "result", data: "{\"canonical_output\":{\"title\":\"Case\"}}" });
     });
 
     it("reconciles terminal state after subscribe when initial snapshot is stale", async () => {
@@ -137,7 +136,7 @@ describe("api auth + stream glue", () => {
                 new Response(JSON.stringify({
                     job_id: "job-1",
                     status: "processing",
-                    current_step: "writer",
+                    current_step: "case_writer",
                 }), {
                     status: 200,
                     headers: { "Content-Type": "application/json" },
@@ -206,7 +205,7 @@ describe("api auth + stream glue", () => {
                 new Response(JSON.stringify({
                     job_id: "job-1",
                     status: "processing",
-                    current_step: "writer",
+                    current_step: "case_writer",
                 }), {
                     status: 200,
                     headers: { "Content-Type": "application/json" },
@@ -220,6 +219,32 @@ describe("api auth + stream glue", () => {
                 message: "No se pudo conectar al canal de progreso en tiempo real.",
             } satisfies Pick<ApiError, "status" | "message">,
         );
+    });
+
+    it("ignores non-canonical current_step values", async () => {
+        const events: Array<{ event: string; data: string }> = [];
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({
+                job_id: "job-1",
+                status: "processing",
+                current_step: "unknown_internal_node",
+            }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await expect(api.authoring.streamProgress("job-1", (event) => events.push(event))).rejects.toMatchObject(
+            {
+                status: 503,
+                message: "No se pudo conectar al canal de progreso en tiempo real.",
+            } satisfies Pick<ApiError, "status" | "message">,
+        );
+
+        expect(events).toEqual([
+            { event: "metadata", data: "{\"status\":\"processing\"}" },
+        ]);
     });
 
     it("surfaces retry-after metadata when progress snapshot receives 503 backpressure", async () => {

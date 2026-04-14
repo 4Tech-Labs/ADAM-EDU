@@ -1,12 +1,68 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, api } from "@/shared/api";
 import {
+    type AuthoringProgressStep,
     type AuthoringJobCreateRequest,
     type AuthoringJobStatusResponse,
     type CanonicalCaseOutput,
     type CaseFormData,
 } from "@/shared/adam-types";
+
+const ACTIVE_AUTHORING_JOB_STORAGE_KEY = "adam_authoring_active_job";
+
+type ProgressScope = "narrative" | "technical";
+
+interface PersistedActiveAuthoringJob {
+    jobId: string;
+    scope: ProgressScope;
+}
+
+function isProgressScope(value: unknown): value is ProgressScope {
+    return value === "narrative" || value === "technical";
+}
+
+function persistActiveAuthoringJob(state: PersistedActiveAuthoringJob): void {
+    if (typeof window === "undefined") {
+        return;
+    }
+    sessionStorage.setItem(ACTIVE_AUTHORING_JOB_STORAGE_KEY, JSON.stringify(state));
+}
+
+function clearPersistedActiveAuthoringJob(): void {
+    if (typeof window === "undefined") {
+        return;
+    }
+    sessionStorage.removeItem(ACTIVE_AUTHORING_JOB_STORAGE_KEY);
+}
+
+function readPersistedActiveAuthoringJob(): PersistedActiveAuthoringJob | null {
+    if (typeof window === "undefined") {
+        return null;
+    }
+
+    const raw = sessionStorage.getItem(ACTIVE_AUTHORING_JOB_STORAGE_KEY);
+    if (!raw) {
+        return null;
+    }
+
+    try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (typeof parsed.jobId !== "string" || parsed.jobId.trim() === "") {
+            clearPersistedActiveAuthoringJob();
+            return null;
+        }
+        if (!isProgressScope(parsed.scope)) {
+            clearPersistedActiveAuthoringJob();
+            return null;
+        }
+
+        return { jobId: parsed.jobId, scope: parsed.scope };
+    } catch {
+        clearPersistedActiveAuthoringJob();
+        return null;
+    }
+}
 
 function parseEventPayload(data: string) {
     return JSON.parse(data) as Record<string, unknown>;
@@ -47,10 +103,11 @@ export function buildAuthoringJobCreateRequest(formData: CaseFormData): Authorin
 export function useAuthoringJobProgress() {
     const [jobId, setJobId] = useState<string | null>(null);
     const [status, setStatus] = useState<AuthoringJobStatusResponse["status"] | null>(null);
-    const [activeAgent, setActiveAgent] = useState<string | undefined>(undefined);
+    const [activeAgent, setActiveAgent] = useState<AuthoringProgressStep | undefined>(undefined);
     const [errorTrace, setErrorTrace] = useState<string | null>(null);
     const [result, setResult] = useState<CanonicalCaseOutput | null>(null);
     const [isStreaming, setIsStreaming] = useState(false);
+    const [progressScope, setProgressScope] = useState<ProgressScope | null>(null);
 
     const streamAbortRef = useRef<AbortController | null>(null);
 
@@ -63,18 +120,24 @@ export function useAuthoringJobProgress() {
         setErrorTrace(null);
         setResult(null);
         setIsStreaming(false);
+        setProgressScope(null);
+        clearPersistedActiveAuthoringJob();
     }, []);
 
-    const startStreaming = useCallback((id: string) => {
+    const startStreaming = useCallback((id: string, scope: ProgressScope, opts?: { persist?: boolean }) => {
         streamAbortRef.current?.abort();
 
         const controller = new AbortController();
         streamAbortRef.current = controller;
 
         setJobId(id);
+        setProgressScope(scope);
         setIsStreaming(true);
-        setStatus("processing");
         setErrorTrace(null);
+
+        if (opts?.persist !== false) {
+            persistActiveAuthoringJob({ jobId: id, scope });
+        }
 
         void api.authoring
             .streamProgress(
@@ -94,7 +157,7 @@ export function useAuthoringJobProgress() {
                         if (event === "message") {
                             const node = payload.node;
                             if (typeof node === "string") {
-                                setActiveAgent(node);
+                                setActiveAgent(node as AuthoringProgressStep);
                             }
                             return;
                         }
@@ -110,6 +173,7 @@ export function useAuthoringJobProgress() {
 
                             setStatus("completed");
                             setIsStreaming(false);
+                            clearPersistedActiveAuthoringJob();
                             controller.abort();
                             return;
                         }
@@ -123,12 +187,14 @@ export function useAuthoringJobProgress() {
                             );
                             setStatus("failed");
                             setIsStreaming(false);
+                            clearPersistedActiveAuthoringJob();
                             controller.abort();
                         }
                     } catch {
                         setErrorTrace("Respuesta invalida del canal de progreso en tiempo real.");
                         setStatus("failed");
                         setIsStreaming(false);
+                        clearPersistedActiveAuthoringJob();
                         controller.abort();
                     }
                 },
@@ -142,6 +208,7 @@ export function useAuthoringJobProgress() {
                 setErrorTrace(getProgressStreamErrorMessage(error));
                 setStatus("failed");
                 setIsStreaming(false);
+                clearPersistedActiveAuthoringJob();
             })
             .finally(() => {
                 if (streamAbortRef.current === controller) {
@@ -149,6 +216,16 @@ export function useAuthoringJobProgress() {
                 }
             });
     }, []);
+
+    useEffect(() => {
+        const persisted = readPersistedActiveAuthoringJob();
+        if (!persisted) {
+            return;
+        }
+
+        setStatus("processing");
+        startStreaming(persisted.jobId, persisted.scope, { persist: false });
+    }, [startStreaming]);
 
     const submitJob = useCallback(
         async (formData: CaseFormData) => {
@@ -158,7 +235,8 @@ export function useAuthoringJobProgress() {
 
                 const data = await api.authoring.submitJob(buildAuthoringJobCreateRequest(formData));
                 if (data.job_id) {
-                    startStreaming(data.job_id);
+                    const scope: ProgressScope = formData.caseType === "harvard_only" ? "narrative" : "technical";
+                    startStreaming(data.job_id, scope);
                     return;
                 }
 
@@ -172,5 +250,5 @@ export function useAuthoringJobProgress() {
         [reset, startStreaming],
     );
 
-    return { jobId, status, errorTrace, result, activeAgent, submitJob, reset, isStreaming };
+    return { jobId, status, errorTrace, result, activeAgent, submitJob, reset, isStreaming, progressScope };
 }
