@@ -12,6 +12,7 @@ from case_generator.core.storage import get_storage_provider
 from case_generator.graph import graph
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
 from langchain_core.runnables import RunnableConfig
+from sqlalchemy import update
 from shared.blueprint_schema import (
     ArtifactManifestProjection,
     AssignmentBlueprint,
@@ -25,7 +26,15 @@ from shared.blueprint_schema import (
     ValidationContract,
 )
 from shared.database import SessionLocal
-from shared.models import Assignment, AuthoringJob
+from shared.models import (
+    AUTHORING_JOB_RETRYABLE_STATUSES,
+    AUTHORING_JOB_STATUS_COMPLETED,
+    AUTHORING_JOB_STATUS_FAILED,
+    AUTHORING_JOB_STATUS_FAILED_RESUMABLE,
+    AUTHORING_JOB_STATUS_PROCESSING,
+    Assignment,
+    AuthoringJob,
+)
 from shared.sanitization import sanitize_untrusted_text
 
 logger = logging.getLogger(__name__)
@@ -88,6 +97,38 @@ _PROGRESS_DEGRADATION_KEYS = (
     "progress_degraded_at",
     "progress_degraded_error",
 )
+
+_RESUMABLE_FAILURE_CODES = {
+    "llm_timeout",
+    "llm_provider_unavailable",
+    "llm_rate_limited",
+}
+
+_TRANSIENT_TIMEOUT_MARKERS = (
+    "timed out",
+    "read timeout",
+    "connect timeout",
+    "readtimeout",
+    "connecttimeout",
+    "deadline exceeded",
+)
+
+_TRANSIENT_PROVIDER_UNAVAILABLE_MARKERS = (
+    "503",
+    "service unavailable",
+    "temporarily unavailable",
+    "high demand",
+    "connection reset",
+    "connection aborted",
+    "network is unreachable",
+)
+
+
+def _classify_failure_status(error_code: str | None) -> str:
+    """Map known transient failures to failed_resumable and default to failed."""
+    if error_code in _RESUMABLE_FAILURE_CODES:
+        return AUTHORING_JOB_STATUS_FAILED_RESUMABLE
+    return AUTHORING_JOB_STATUS_FAILED
 
 
 def _to_canonical_progress_step(raw_step: str | None) -> str | None:
@@ -421,46 +462,75 @@ class AuthoringService:
         error_code: str | None = None
 
         # --- DB MICRO-SESSION 1: transition the job into processing ---
+        # Winner-takes-lock CAS: only one concurrent retry may move status to processing.
         db = SessionLocal()
         try:
-            job = db.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
-            if job is None:
+            existing_job = db.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
+            if existing_job is None:
                 logger.error("AuthoringService: Job %s not found in DB.", job_id)
                 return
 
-            if job.status in ["completed", "processing", "failed"]:
+            if existing_job.status in [
+                AUTHORING_JOB_STATUS_COMPLETED,
+                AUTHORING_JOB_STATUS_PROCESSING,
+                AUTHORING_JOB_STATUS_FAILED,
+            ]:
                 logger.warning(
                     "AuthoringService: Job %s is already in terminal/processing state '%s'. Aborting.",
                     job_id,
-                    job.status,
+                    existing_job.status,
                 )
                 return
 
-            assignment = db.query(Assignment).filter(Assignment.id == job.assignment_id).first()
+            processing_payload = _next_progress_payload(
+                existing_job.task_payload,
+                status=AUTHORING_JOB_STATUS_PROCESSING,
+                current_step=_FIRST_CANONICAL_STEP,
+            )
+            lock_stmt = (
+                update(AuthoringJob)
+                .where(
+                    AuthoringJob.id == job_id,
+                    AuthoringJob.status.in_(AUTHORING_JOB_RETRYABLE_STATUSES),
+                )
+                .values(
+                    status=AUTHORING_JOB_STATUS_PROCESSING,
+                    retry_count=AuthoringJob.retry_count + 1,
+                    task_payload=processing_payload,
+                )
+                .returning(AuthoringJob.assignment_id, AuthoringJob.task_payload)
+            )
+            locked_row = db.execute(lock_stmt).mappings().first()
+            if locked_row is None:
+                logger.info(
+                    "AuthoringService: retry_lost_race for job %s; another worker already claimed processing.",
+                    job_id,
+                )
+                db.rollback()
+                return
+
+            assignment_id = cast(str, locked_row["assignment_id"])
+            payload = dict(locked_row["task_payload"] or {})
+
+            assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
             if assignment is None:
-                logger.error("AuthoringService: Assignment %s not found for job %s.", job.assignment_id, job_id)
-                job.status = "failed"
+                logger.error("AuthoringService: Assignment %s not found for job %s.", assignment_id, job_id)
                 payload_with_error = _next_progress_payload(
-                    job.task_payload,
-                    status="failed",
+                    payload,
+                    status=AUTHORING_JOB_STATUS_FAILED,
                     current_step="failed",
                     error_code="assignment_missing",
                     error_trace="Assignment not found for authoring job.",
                 )
-                job.task_payload = payload_with_error
+                db.execute(
+                    update(AuthoringJob)
+                    .where(AuthoringJob.id == job_id)
+                    .values(status=AUTHORING_JOB_STATUS_FAILED, task_payload=payload_with_error)
+                )
                 db.commit()
                 return
 
-            job.status = "processing"
-            job.retry_count += 1
-            assignment_id = assignment.id
             owner_id = assignment.teacher_id
-            job.task_payload = _next_progress_payload(
-                job.task_payload,
-                status="processing",
-                current_step=_FIRST_CANONICAL_STEP,
-            )
-            payload = dict(job.task_payload or {})
             db.commit()
         except Exception as exc:
             logger.error("AuthoringService: Failure locking job %s: %s", job_id, exc)
@@ -582,7 +652,13 @@ class AuthoringService:
             logger.error("AuthoringService: LangGraph raised exception for Job %s", job_id, exc_info=True)
             error_trace = traceback.format_exc()
             error_str = error_trace.lower()
-            if "503" in error_str or "high demand" in error_str or "unavailable" in error_str:
+            if any(marker in error_str for marker in _TRANSIENT_TIMEOUT_MARKERS):
+                error_code = "llm_timeout"
+                error_msg = (
+                    "Nuestros servidores de IA estan a maxima capacidad y el tiempo de espera se agoto. "
+                    "Por favor, reintenta en unos minutos."
+                )
+            elif any(marker in error_str for marker in _TRANSIENT_PROVIDER_UNAVAILABLE_MARKERS):
                 error_code = "llm_provider_unavailable"
                 error_msg = (
                     "Nuestros servidores de IA estan experimentando un pico de trafico en este momento. "
@@ -609,18 +685,26 @@ class AuthoringService:
                 return
 
             if error_msg:
-                job.status = "failed"
+                failure_status = _classify_failure_status(error_code)
+                job.status = failure_status
                 current_payload = _next_progress_payload(
                     job.task_payload,
-                    status="failed",
+                    status=failure_status,
                     current_step="failed",
                     error_code=error_code or "llm_failure",
                     error_trace=error_msg,
                 )
                 job.task_payload = current_payload
 
-                logger.error("AuthoringService: Job %s marked as FAILED. Cleaning up artifacts.", job_id)
-                ArtifactManager.orphan_job_artifacts(db, job_id)
+                if failure_status == AUTHORING_JOB_STATUS_FAILED:
+                    logger.error("AuthoringService: Job %s marked as FAILED. Cleaning up artifacts.", job_id)
+                    ArtifactManager.orphan_job_artifacts(db, job_id)
+                else:
+                    logger.warning(
+                        "AuthoringService: Job %s marked as FAILED_RESUMABLE after transient failure (%s).",
+                        job_id,
+                        error_code,
+                    )
                 db.commit()
                 return
 
@@ -674,10 +758,10 @@ class AuthoringService:
             canonical_result = adapter_legacy_to_canonical_output(graph_output)
             assignment.canonical_output = canonical_result.get("canonical_output", {})
             assignment.status = "published"
-            job.status = "completed"
+            job.status = AUTHORING_JOB_STATUS_COMPLETED
             job.task_payload = _next_progress_payload(
                 job.task_payload,
-                status="completed",
+                status=AUTHORING_JOB_STATUS_COMPLETED,
                 current_step="completed",
             )
 
@@ -694,11 +778,11 @@ class AuthoringService:
             db = SessionLocal()
             try:
                 job = db.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
-                if job is not None and job.status != "failed":
-                    job.status = "failed"
+                if job is not None and job.status != AUTHORING_JOB_STATUS_FAILED:
+                    job.status = AUTHORING_JOB_STATUS_FAILED
                     current_payload = _next_progress_payload(
                         job.task_payload,
-                        status="failed",
+                        status=AUTHORING_JOB_STATUS_FAILED,
                         current_step="failed",
                         error_code="finalization_error",
                         error_trace=traceback.format_exc(),

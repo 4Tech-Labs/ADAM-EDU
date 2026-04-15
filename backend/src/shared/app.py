@@ -66,6 +66,11 @@ from shared.db_resilience import (
 )
 from shared.invite_status import invite_effective_status
 from shared.models import (
+    AUTHORING_JOB_RETRYABLE_STATUSES,
+    AUTHORING_JOB_STATUS_FAILED,
+    AUTHORING_JOB_STATUS_FAILED_RESUMABLE,
+    AUTHORING_JOB_STATUS_PENDING,
+    AUTHORING_JOB_STATUS_PROCESSING,
     Assignment,
     AuthoringJob,
     Course,
@@ -522,6 +527,12 @@ class JobCreatedResponse(BaseModel):
     message: str
 
 
+class RetryJobResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+
 @app.post(
     "/api/authoring/jobs",
     response_model=JobCreatedResponse,
@@ -553,7 +564,7 @@ def create_authoring_job(
         job = AuthoringJob(
             assignment_id=assignment.id,
             idempotency_key=idempotency_key,
-            status="pending",
+            status=AUTHORING_JOB_STATUS_PENDING,
             task_payload={
                 "step": "authoring",
                 "asignatura": req.subject or req.assignment_title,
@@ -593,6 +604,46 @@ def create_authoring_job(
             round((time.monotonic() - started) * 1000, 3),
             endpoint=AUTHORING_INTAKE_ENDPOINT,
         )
+
+
+@app.post(
+    "/api/authoring/jobs/{job_id}/retry",
+    response_model=RetryJobResponse,
+    status_code=202,
+)
+def retry_authoring_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    actor: CurrentActor = Depends(require_teacher_actor_authoring_intake),
+    db: Session = Depends(get_db),
+) -> RetryJobResponse:
+    job = get_owned_job_or_404(db, job_id, actor)
+
+    if job.status == AUTHORING_JOB_STATUS_PROCESSING:
+        return RetryJobResponse(
+            job_id=job.id,
+            status="accepted",
+            message="Authoring job already in progress.",
+        )
+
+    if job.status not in AUTHORING_JOB_RETRYABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Job not retryable",
+            headers={"X-Job-Status": job.status},
+        )
+
+    logger.info(
+        "Authoring retry accepted for job %s (status=%s)",
+        job.id,
+        job.status,
+    )
+    background_tasks.add_task(AuthoringService.run_job, job.id)
+    return RetryJobResponse(
+        job_id=job.id,
+        status="accepted",
+        message="Authoring retry accepted and dispatched to queue.",
+    )
 
 
 # Cloud Tasks internal endpoint — handler lives in shared.internal_tasks
@@ -639,7 +690,7 @@ def get_job_status(
 ) -> JobStatusResponse:
     job = get_owned_job_or_404(db, job_id, actor)
     error_trace = None
-    if job.status == "failed" and job.task_payload:
+    if job.status in {AUTHORING_JOB_STATUS_FAILED, AUTHORING_JOB_STATUS_FAILED_RESUMABLE} and job.task_payload:
         error_trace = job.task_payload.get("error_trace")
 
     return JobStatusResponse(
