@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import logging
+import time
 import traceback
 import uuid
 from typing import Any, Literal, Mapping, cast
@@ -97,6 +98,8 @@ _PROGRESS_DEGRADATION_KEYS = (
     "progress_degraded_at",
     "progress_degraded_error",
 )
+_RESUME_CACHE_STATE_KEY = "resume_cached_nodes"
+_RESUME_PREFETCH_WARN_MS = 25.0
 
 _RESUMABLE_FAILURE_CODES = {
     "llm_timeout",
@@ -460,6 +463,9 @@ class AuthoringService:
         owner_id = ""
         payload: dict[str, Any] = {}
         error_code: str | None = None
+        storage_provider = get_storage_provider()
+        resume_cached_nodes: dict[str, dict[str, str]] = {}
+        is_resume_retry = False
 
         # --- DB MICRO-SESSION 1: transition the job into processing ---
         # Winner-takes-lock CAS: only one concurrent retry may move status to processing.
@@ -469,6 +475,8 @@ class AuthoringService:
             if existing_job is None:
                 logger.error("AuthoringService: Job %s not found in DB.", job_id)
                 return
+
+            is_resume_retry = existing_job.status == AUTHORING_JOB_STATUS_FAILED_RESUMABLE
 
             if existing_job.status in [
                 AUTHORING_JOB_STATUS_COMPLETED,
@@ -543,6 +551,39 @@ class AuthoringService:
             logger.error("AuthoringService: Missing assignment_id for job %s after lock.", job_id)
             return
 
+        if is_resume_retry:
+            prefetch_started_at = time.perf_counter()
+            prefetch_db = SessionLocal()
+            try:
+                resume_cached_nodes = await ArtifactManager.prefetch_resume_artifacts(
+                    db=prefetch_db,
+                    storage_provider=storage_provider,
+                    assignment_id=assignment_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "AuthoringService: Resume artifact prefetch failed for job %s: %s",
+                    job_id,
+                    exc,
+                )
+            finally:
+                prefetch_db.close()
+
+            prefetch_latency_ms = round((time.perf_counter() - prefetch_started_at) * 1000, 3)
+            logger.info(
+                "AuthoringService: Resume prefetch for job %s loaded %s node payload(s) in %s ms.",
+                job_id,
+                len(resume_cached_nodes),
+                prefetch_latency_ms,
+            )
+            if prefetch_latency_ms > _RESUME_PREFETCH_WARN_MS:
+                logger.warning(
+                    "AuthoringService: Resume prefetch latency high for job %s: %s ms (threshold %s ms)",
+                    job_id,
+                    prefetch_latency_ms,
+                    _RESUME_PREFETCH_WARN_MS,
+                )
+
         # --- LANGGRAPH EXECUTION (no open DB session) ---
         graph_output: dict[str, Any] | None = None
         error_msg: str | None = None
@@ -590,7 +631,13 @@ class AuthoringService:
                 "urgency_frame": "48-96 horas",
                 "protected_columns": ["target", "id", "date"],
                 "industry_cagr_range": "5-8%",
+                _RESUME_CACHE_STATE_KEY: resume_cached_nodes,
             }
+
+            # Inject hydrated artifacts into initial graph state so downstream nodes
+            # keep context even when upstream generation is skipped.
+            for node_payload in resume_cached_nodes.values():
+                state_input.update(node_payload)
 
             run_config: RunnableConfig = {
                 "configurable": {
@@ -718,7 +765,6 @@ class AuthoringService:
             eda_full_text = _extract_text_field(graph_output, "doc2_eda", EDA_ARTIFACT_LIMIT)
             eda_summary = _build_eda_summary(eda_full_text)
 
-            storage_provider = get_storage_provider()
             artifact_ids: list[str] = []
             artifact_ids.append(
                 await ArtifactManager.save_artifact(

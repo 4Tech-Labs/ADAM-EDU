@@ -1,5 +1,7 @@
 from collections.abc import Generator
 from pathlib import Path
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 from sqlalchemy import create_engine, Engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -90,6 +92,7 @@ def _make_engine(s: Settings) -> Engine:
 settings = Settings()
 engine = _make_engine(settings)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+_langgraph_checkpointer_pool: ConnectionPool | None = None
 
 class Base(DeclarativeBase):
     """Base declarative class for SQLAlchemy models."""
@@ -106,3 +109,29 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def _to_psycopg_conninfo(database_url: str) -> str:
+    """Normalize SQLAlchemy database URLs for psycopg connection pools."""
+    url = make_url(database_url)
+    if url.drivername == "postgresql+psycopg":
+        url = url.set(drivername="postgresql")
+    return url.render_as_string(hide_password=False)
+
+
+def get_langgraph_checkpointer_pool() -> ConnectionPool:
+    """Return a shared psycopg pool configured from existing DB settings."""
+    global _langgraph_checkpointer_pool
+
+    if _langgraph_checkpointer_pool is None:
+        _langgraph_checkpointer_pool = ConnectionPool(
+            conninfo=_to_psycopg_conninfo(settings.database_url),
+            min_size=1,
+            max_size=max(1, settings.db_pool_size),
+            kwargs={"autocommit": True, "row_factory": dict_row},
+            timeout=float(settings.db_pool_timeout),
+            open=True,
+            name="langgraph-checkpointer",
+        )
+
+    return _langgraph_checkpointer_pool

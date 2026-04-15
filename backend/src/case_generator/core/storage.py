@@ -9,6 +9,9 @@ class IStorageProvider(Protocol):
     async def upload_text(self, text_content: str, assignment_id: str, job_id: str, artifact_type: str, version: int) -> str:
         ...
 
+    async def download_text(self, uri: str) -> str:
+        ...
+
 class LocalStorageProvider:
     """
     Local storage provider used by development and test environments.
@@ -38,6 +41,14 @@ class LocalStorageProvider:
             
         # Return a local URI that mimics object-storage addressing.
         return f"local://{file_path}"
+
+    async def download_text(self, uri: str) -> str:
+        """
+        Load text content from a previously persisted local URI.
+        """
+        file_path = uri.removeprefix("local://") if uri.startswith("local://") else uri
+        with open(file_path, mode="r", encoding="utf-8") as f:
+            return f.read()
 
 # Swappable seam for future storage backends.
 def get_storage_provider() -> IStorageProvider:
