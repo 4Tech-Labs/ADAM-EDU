@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
@@ -9,7 +9,13 @@ vi.mock("./AuthoringProgressTimeline", () => ({
     AuthoringProgressTimeline: () => <div data-testid="authoring-progress">Progress</div>,
 }));
 vi.mock("./AuthoringErrorState", () => ({
-    AuthoringErrorState: () => <div data-testid="authoring-error">Error</div>,
+    AuthoringErrorState: (props: { message: string; onRetry: () => void; onBack: () => void }) => (
+        <div data-testid="authoring-error">
+            <p>{props.message}</p>
+            <button onClick={props.onRetry}>Reintentar</button>
+            <button onClick={props.onBack}>Volver</button>
+        </div>
+    ),
 }));
 vi.mock("@/features/teacher-layout/TeacherLayout", () => ({
     TeacherLayout: (props: { children: ReactNode; testId?: string }) => (
@@ -39,6 +45,7 @@ describe("TeacherAuthoringPage", () => {
             result: null,
             activeAgent: undefined,
             submitJob: vi.fn(),
+            retryJob: vi.fn(),
             reset: vi.fn(),
             isStreaming: false,
             progressScope: null,
@@ -59,6 +66,7 @@ describe("TeacherAuthoringPage", () => {
             result: {} as never,
             activeAgent: undefined,
             submitJob: vi.fn(),
+            retryJob: vi.fn(),
             reset: vi.fn(),
             isStreaming: false,
             progressScope: null,
@@ -69,5 +77,35 @@ describe("TeacherAuthoringPage", () => {
         expect(screen.getByText(/cargando vista previa/i)).toBeTruthy();
         expect(await screen.findByTestId("case-preview")).toBeTruthy();
         expect(screen.queryByTestId("authoring-form")).toBeNull();
+    });
+
+    it("shows resumable error state and retries without resetting context", async () => {
+        const retryJob = vi.fn().mockResolvedValue(undefined);
+        const reset = vi.fn();
+
+        vi.mocked(useAuthoringJobProgress).mockReturnValue({
+            jobId: "job-77",
+            status: "failed_resumable",
+            errorTrace: "timeout upstream",
+            result: null,
+            activeAgent: undefined,
+            submitJob: vi.fn(),
+            retryJob,
+            reset,
+            isStreaming: false,
+            progressScope: "technical",
+        });
+
+        render(<TeacherAuthoringPage />);
+
+        expect(screen.getByTestId("authoring-error")).toBeTruthy();
+        expect(screen.getByText(/timeout upstream/i)).toBeTruthy();
+
+        fireEvent.click(screen.getByRole("button", { name: /reintentar/i }));
+
+        await waitFor(() => {
+            expect(retryJob).toHaveBeenCalledTimes(1);
+        });
+        expect(reset).not.toHaveBeenCalled();
     });
 });

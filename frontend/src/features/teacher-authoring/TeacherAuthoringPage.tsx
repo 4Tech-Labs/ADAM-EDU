@@ -40,6 +40,7 @@ export function TeacherAuthoringPage() {
     result: jobResult,
     activeAgent,
     submitJob,
+    retryJob,
     reset: resetJob,
     isStreaming,
     progressScope,
@@ -49,9 +50,15 @@ export function TeacherAuthoringPage() {
     if (isStreaming || jobStatus === "pending" || jobStatus === "processing") {
       setAppState("generating");
       setErrorMessage("");
-    } else if (jobStatus === "failed") {
+    } else if (jobStatus === "failed" || jobStatus === "failed_resumable") {
       setAppState("error");
-      setErrorMessage(errorTrace || "Error desconocido durante la generacion.");
+      if (errorTrace && errorTrace.trim() !== "") {
+        setErrorMessage(errorTrace);
+      } else if (jobStatus === "failed_resumable") {
+        setErrorMessage("La generacion se interrumpio por un error transitorio. Puedes reintentar sin perder el progreso ya completado.");
+      } else {
+        setErrorMessage("Error desconocido durante la generacion.");
+      }
     } else if (jobStatus === "completed" && jobResult) {
       setCaseResult(jobResult);
       setAppState("success");
@@ -71,10 +78,17 @@ export function TeacherAuthoringPage() {
     // Placeholder para un futuro flujo HITL.
   }, []);
 
-  const handleRetry = () => {
+  const handleRetry = useCallback(async () => {
+    if (jobStatus === "failed_resumable") {
+      setErrorMessage("");
+      setAppState("generating");
+      await retryJob();
+      return;
+    }
+
     resetJob();
     setAppState("idle");
-  };
+  }, [jobStatus, resetJob, retryJob]);
 
   return (
     <TeacherLayout testId="teacher-authoring-page" contentClassName="mx-auto w-full max-w-6xl">

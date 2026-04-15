@@ -19,6 +19,7 @@ import type {
     AdminTeacherOptionsResponse,
     AuthoringJobCreateRequest,
     AuthoringJobCreateResponse,
+    AuthoringJobRetryResponse,
     AuthoringProgressStep,
     AuthoringJobProgressSnapshotResponse,
     AuthoringJobResultResponse,
@@ -309,11 +310,12 @@ async function emitTerminalEvent(
         return;
     }
 
-    if (status === "failed") {
+    if (status === "failed" || status === "failed_resumable") {
         const detail = taskPayload.error_trace;
         onEvent({
             event: "error",
             data: JSON.stringify({
+                status,
                 detail:
                     typeof detail === "string" && detail.trim() !== ""
                         ? detail
@@ -403,10 +405,10 @@ async function streamRealtimeProgress(
         return;
     }
 
-    if (snapshot.status === "failed") {
+    if (snapshot.status === "failed" || snapshot.status === "failed_resumable") {
         await emitTerminalEvent(
             jobId,
-            "failed",
+            snapshot.status,
             { error_trace: snapshot.error_trace ?? "Error del servidor durante la generacion." },
             onEvent,
         );
@@ -439,7 +441,11 @@ async function streamRealtimeProgress(
                     emitMonotonicProgress(payload.new.status, taskPayload.current_step, taskPayload.progress_seq);
 
                     const nextStatus = payload.new.status;
-                    if (nextStatus === "completed" || nextStatus === "failed") {
+                    if (
+                        nextStatus === "completed"
+                        || nextStatus === "failed"
+                        || nextStatus === "failed_resumable"
+                    ) {
                         settled = true;
                         void emitTerminalEvent(jobId, nextStatus, taskPayload, onEvent)
                             .then(() => client.removeChannel(channel))
@@ -467,13 +473,17 @@ async function streamRealtimeProgress(
                                 latestSnapshot.progress_seq,
                             );
 
-                            if (latestSnapshot.status !== "completed" && latestSnapshot.status !== "failed") {
+                            if (
+                                latestSnapshot.status !== "completed"
+                                && latestSnapshot.status !== "failed"
+                                && latestSnapshot.status !== "failed_resumable"
+                            ) {
                                 return;
                             }
 
                             settled = true;
                             const terminalPayload =
-                                latestSnapshot.status === "failed"
+                                latestSnapshot.status === "failed" || latestSnapshot.status === "failed_resumable"
                                     ? {
                                           error_trace:
                                               latestSnapshot.error_trace ?? "Error del servidor durante la generacion.",
@@ -531,6 +541,11 @@ export const api = {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(reqBody),
+            });
+        },
+        async retryJob(jobId: string): Promise<AuthoringJobRetryResponse> {
+            return parseJsonResponse<AuthoringJobRetryResponse>(`/authoring/jobs/${jobId}/retry`, {
+                method: "POST",
             });
         },
         async getStatus(jobId: string): Promise<AuthoringJobStatusResponse> {

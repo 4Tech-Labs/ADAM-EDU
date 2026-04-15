@@ -6,7 +6,7 @@ import type { AuthoringProgressStep } from "@/shared/adam-types";
 interface Props {
   activeAgent?: AuthoringProgressStep;
   scope: "narrative" | "technical";
-  jobStatus?: "pending" | "processing" | "completed" | "failed";
+  jobStatus?: "pending" | "processing" | "completed" | "failed" | "failed_resumable";
 }
 
 const PIPELINE_STEPS: Array<{

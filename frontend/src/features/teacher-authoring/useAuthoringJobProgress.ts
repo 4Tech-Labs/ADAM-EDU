@@ -68,6 +68,16 @@ function parseEventPayload(data: string) {
     return JSON.parse(data) as Record<string, unknown>;
 }
 
+function isAuthoringJobStatus(value: unknown): value is AuthoringJobStatusResponse["status"] {
+    return (
+        value === "pending"
+        || value === "processing"
+        || value === "completed"
+        || value === "failed"
+        || value === "failed_resumable"
+    );
+}
+
 function getProgressStreamErrorMessage(error: unknown) {
     if (error instanceof ApiError) {
         if (error.status === 503 && error.retryAfterSeconds) {
@@ -134,6 +144,8 @@ export function useAuthoringJobProgress() {
         setProgressScope(scope);
         setIsStreaming(true);
         setErrorTrace(null);
+        setResult(null);
+        setActiveAgent(undefined);
 
         if (opts?.persist !== false) {
             persistActiveAuthoringJob({ jobId: id, scope });
@@ -148,8 +160,8 @@ export function useAuthoringJobProgress() {
 
                         if (event === "metadata") {
                             const nextStatus = payload.status;
-                            if (typeof nextStatus === "string") {
-                                setStatus(nextStatus as AuthoringJobStatusResponse["status"]);
+                            if (isAuthoringJobStatus(nextStatus)) {
+                                setStatus(nextStatus);
                             }
                             return;
                         }
@@ -179,15 +191,21 @@ export function useAuthoringJobProgress() {
                         }
 
                         if (event === "error") {
+                            const payloadStatus = payload.status;
+                            const nextStatus = isAuthoringJobStatus(payloadStatus)
+                                ? payloadStatus
+                                : "failed";
                             const detail = payload.detail;
                             setErrorTrace(
                                 typeof detail === "string"
                                     ? detail
                                     : "Error del servidor durante la generacion.",
                             );
-                            setStatus("failed");
+                            setStatus(nextStatus);
                             setIsStreaming(false);
-                            clearPersistedActiveAuthoringJob();
+                            if (nextStatus !== "failed_resumable") {
+                                clearPersistedActiveAuthoringJob();
+                            }
                             controller.abort();
                         }
                     } catch {
@@ -250,5 +268,43 @@ export function useAuthoringJobProgress() {
         [reset, startStreaming],
     );
 
-    return { jobId, status, errorTrace, result, activeAgent, submitJob, reset, isStreaming, progressScope };
+    const retryJob = useCallback(async () => {
+        const retryTargetJobId = jobId;
+        if (!retryTargetJobId) {
+            setErrorTrace("No se encontro un job para reintentar.");
+            setStatus("failed");
+            return;
+        }
+
+        const persisted = readPersistedActiveAuthoringJob();
+        const scope = progressScope ?? persisted?.scope;
+        if (!scope) {
+            setErrorTrace("No se pudo recuperar el contexto del progreso para reintentar.");
+            setStatus("failed");
+            return;
+        }
+
+        try {
+            setErrorTrace(null);
+            setStatus("pending");
+            const retryResponse = await api.authoring.retryJob(retryTargetJobId);
+            startStreaming(retryResponse.job_id, scope);
+        } catch (error) {
+            setErrorTrace(error instanceof Error ? error.message : "Error de red");
+            setStatus("failed");
+        }
+    }, [jobId, progressScope, startStreaming]);
+
+    return {
+        jobId,
+        status,
+        errorTrace,
+        result,
+        activeAgent,
+        submitJob,
+        retryJob,
+        reset,
+        isStreaming,
+        progressScope,
+    };
 }

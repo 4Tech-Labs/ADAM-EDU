@@ -109,6 +109,50 @@ describe("api auth + stream glue", () => {
         expect(events[1]).toEqual({ event: "result", data: "{\"canonical_output\":{\"title\":\"Case\"}}" });
     });
 
+    it("emits resumable terminal error when snapshot is already failed_resumable", async () => {
+        const events: Array<{ event: string; data: string }> = [];
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({
+                job_id: "job-1",
+                status: "failed_resumable",
+                current_step: "m4_content_generator",
+                error_trace: "timeout",
+            }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.authoring.streamProgress("job-1", (event) => events.push(event));
+
+        expect(events[0]).toEqual({ event: "metadata", data: "{\"status\":\"failed_resumable\"}" });
+        expect(events).toContainEqual({
+            event: "error",
+            data: "{\"status\":\"failed_resumable\",\"detail\":\"timeout\"}",
+        });
+    });
+
+    it("posts retry requests to the authoring retry endpoint", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({
+                job_id: "job-1",
+                status: "accepted",
+                message: "Authoring retry accepted and dispatched to queue.",
+            }), {
+                status: 202,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const response = await api.authoring.retryJob("job-1");
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/authoring/jobs/job-1/retry");
+        expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("POST");
+        expect(response.status).toBe("accepted");
+    });
+
     it("reconciles terminal state after subscribe when initial snapshot is stale", async () => {
         vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
         vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
