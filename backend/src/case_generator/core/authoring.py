@@ -10,7 +10,7 @@ from typing import Any, Literal, Mapping, cast
 
 from case_generator.core.artifact_manager import ArtifactManager
 from case_generator.core.storage import get_storage_provider
-from case_generator.graph import graph
+from case_generator.graph import DurableCheckpointUnavailableError, RESUME_CACHE_STATE_KEY, get_graph
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy import update
@@ -98,7 +98,6 @@ _PROGRESS_DEGRADATION_KEYS = (
     "progress_degraded_at",
     "progress_degraded_error",
 )
-_RESUME_CACHE_STATE_KEY = "resume_cached_nodes"
 _RESUME_PREFETCH_WARN_MS = 25.0
 
 _RESUMABLE_FAILURE_CODES = {
@@ -585,6 +584,12 @@ class AuthoringService:
                 )
 
         # --- LANGGRAPH EXECUTION (no open DB session) ---
+        # Retry/resume pipeline:
+        #   failed_resumable job
+        #     -> await get_graph()  [async lazy singleton, durable saver required]
+        #     -> graph.astream(thread_id=job_id)
+        #     -> checkpoint reload + explicit node skip/hydration
+        #     -> completed | failed_resumable | failed
         graph_output: dict[str, Any] | None = None
         error_msg: str | None = None
         try:
@@ -631,13 +636,15 @@ class AuthoringService:
                 "urgency_frame": "48-96 horas",
                 "protected_columns": ["target", "id", "date"],
                 "industry_cagr_range": "5-8%",
-                _RESUME_CACHE_STATE_KEY: resume_cached_nodes,
+                RESUME_CACHE_STATE_KEY: resume_cached_nodes,
             }
 
             # Inject hydrated artifacts into initial graph state so downstream nodes
             # keep context even when upstream generation is skipped.
             for node_payload in resume_cached_nodes.values():
                 state_input.update(node_payload)
+
+            compiled_graph = await get_graph()
 
             run_config: RunnableConfig = {
                 "configurable": {
@@ -665,7 +672,11 @@ class AuthoringService:
                     else None
                 ) or _FIRST_CANONICAL_STEP
                 stream_mode: Literal["values"] = "values"
-                stream = cast(Any, graph).astream(state_input, config=run_config, stream_mode=stream_mode)
+                stream = cast(Any, compiled_graph).astream(
+                    state_input,
+                    config=run_config,
+                    stream_mode=stream_mode,
+                )
 
                 async for event in stream:
                     final_state = dict(event)
@@ -688,6 +699,17 @@ class AuthoringService:
 
             graph_output = await asyncio.wait_for(_run_graph_stream(), timeout=900)
             logger.info("AuthoringService: LangGraph execution finished for Job %s.", job_id)
+        except DurableCheckpointUnavailableError:
+            logger.error(
+                "AuthoringService: Durable checkpoint wiring unavailable for Job %s",
+                job_id,
+                exc_info=True,
+            )
+            error_code = "checkpoint_unavailable"
+            error_msg = (
+                "No se pudo inicializar la persistencia durable del proceso de generacion. "
+                "Por favor, reintenta cuando el servicio de checkpoints este disponible."
+            )
         except asyncio.TimeoutError:
             logger.error("AuthoringService: TIMEOUT — Job %s exceeded 900s", job_id)
             error_code = "llm_timeout"

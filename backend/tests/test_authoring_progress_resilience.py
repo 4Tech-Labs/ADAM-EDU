@@ -1,13 +1,16 @@
 import asyncio
 import uuid
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy.orm import Session as OrmSession
 
 from case_generator.core.authoring import (
     CANONICAL_TIMELINE_STEP_IDS,
+    AuthoringService,
     _persist_intermediate_progress_step,
     _to_canonical_progress_step,
 )
+from case_generator.graph import DurableCheckpointUnavailableError
 from shared.models import Assignment, AuthoringJob
 
 
@@ -26,6 +29,30 @@ def _seed_processing_job(db, teacher_id: str, initial_step: str = "case_architec
             "progress_ts": "2026-01-01T00:00:00+00:00",
             "progress_status": "processing",
         },
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def _seed_authoring_job(
+    db,
+    teacher_id: str,
+    *,
+    status: str,
+    task_payload: dict[str, object] | None = None,
+) -> AuthoringJob:
+    assignment = Assignment(teacher_id=teacher_id, title="Issue 112 Resilience", status="draft")
+    db.add(assignment)
+    db.flush()
+
+    job = AuthoringJob(
+        assignment_id=assignment.id,
+        idempotency_key=f"job-{uuid.uuid4()}",
+        status=status,
+        retry_count=0,
+        task_payload=dict(task_payload or {}),
     )
     db.add(job)
     db.commit()
@@ -145,3 +172,96 @@ def test_intermediate_progress_write_marks_degraded_state_after_retry_exhaustion
     assert payload.get("progress_degraded_retries") == 3
     assert isinstance(payload.get("progress_degraded_at"), str)
     assert isinstance(payload.get("progress_degraded_error"), str)
+
+
+def test_run_job_fail_closed_when_checkpointer_is_unavailable(
+    db,
+    seed_identity,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-checkpointer-down@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+
+    job = _seed_authoring_job(
+        db,
+        teacher_id,
+        status="pending",
+        task_payload={"current_step": "case_architect", "progress_seq": 1},
+    )
+
+    async def fail_get_graph():
+        raise DurableCheckpointUnavailableError("checkpoint bootstrap failed")
+
+    with (
+        patch("case_generator.core.authoring.get_storage_provider", return_value=object()),
+        patch("case_generator.core.authoring.get_graph", new=fail_get_graph),
+        patch("case_generator.core.authoring.ArtifactManager.orphan_job_artifacts") as orphan_mock,
+    ):
+        asyncio.run(AuthoringService.run_job(job.id))
+
+    db.expire_all()
+    refreshed = db.get(AuthoringJob, job.id)
+    assert refreshed is not None
+
+    payload = dict(refreshed.task_payload or {})
+    assert refreshed.status == "failed"
+    assert refreshed.retry_count == 1
+    assert payload.get("current_step") == "failed"
+    assert payload.get("error_code") == "checkpoint_unavailable"
+    assert "persistencia durable" in str(payload.get("error_trace", ""))
+    orphan_mock.assert_called_once()
+
+
+def test_run_job_duplicate_retry_race_allows_only_one_checkpoint_attempt(
+    db,
+    seed_identity,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-double-retry@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+
+    job = _seed_authoring_job(
+        db,
+        teacher_id,
+        status="failed_resumable",
+        task_payload={
+            "current_step": "case_writer",
+            "progress_seq": 4,
+            "error_code": "llm_timeout",
+        },
+    )
+
+    state = {"get_graph_calls": 0}
+
+    async def fail_get_graph_once_locked():
+        state["get_graph_calls"] += 1
+        await asyncio.sleep(0.05)
+        raise DurableCheckpointUnavailableError("checkpoint bootstrap failed")
+
+    prefetch_mock = AsyncMock(return_value={})
+
+    with (
+        patch("case_generator.core.authoring.get_storage_provider", return_value=object()),
+        patch("case_generator.core.authoring.ArtifactManager.prefetch_resume_artifacts", new=prefetch_mock),
+        patch("case_generator.core.authoring.get_graph", new=fail_get_graph_once_locked),
+        patch("case_generator.core.authoring.ArtifactManager.orphan_job_artifacts") as orphan_mock,
+    ):
+        async def run_twice() -> None:
+            await asyncio.gather(
+                AuthoringService.run_job(job.id),
+                AuthoringService.run_job(job.id),
+            )
+
+        asyncio.run(run_twice())
+
+    db.expire_all()
+    refreshed = db.get(AuthoringJob, job.id)
+    assert refreshed is not None
+
+    payload = dict(refreshed.task_payload or {})
+    assert state["get_graph_calls"] == 1
+    assert prefetch_mock.await_count == 1
+    assert refreshed.retry_count == 1
+    assert refreshed.status == "failed"
+    assert payload.get("error_code") == "checkpoint_unavailable"
+    orphan_mock.assert_called_once()

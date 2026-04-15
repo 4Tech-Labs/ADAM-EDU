@@ -147,9 +147,9 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Cons:** Requiere definir ventana de retención por entorno, estrategia de borrado incremental y observabilidad para evitar borrados agresivos.
 
-**Context:** Diferido en la planeación de Issue #112 para priorizar Fase 1 (persistencia + contrato) y Fase 2 (resume funcional) antes de hardening operacional.
+**Context:** Reconfirmado en la corrección async de Issue #112. La decisión explícita es mantener Fase 2 enfocada en `AsyncPostgresSaver` + resume funcional y diferir la política de retención hasta que el flujo durable esté estable.
 
-**Depends on / blocked by:** Estabilizar primero el flujo de resume en producción y acordar política de compliance para retención de trazas de ejecución.
+**Depends on / blocked by:** Estabilizar primero el flujo de resume con el wiring async lazy/fail-closed y acordar política de compliance para retención de trazas de ejecución.
 
 ---
 
@@ -163,9 +163,9 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Cons:** Tiene riesgo de limpieza incorrecta si la heurística no es conservadora; requiere modo dry-run y auditoría de cambios.
 
-**Context:** Diferido en el plan de Issue #112 para no expandir alcance de la primera entrega de stateful recovery.
+**Context:** Reconfirmado en la revisión de corrección de Issue #112. La Fase 2 queda checkpoint-first; la reconciliación histórica sigue fuera de alcance para no mezclar cleanup legado con el fix del blocker async.
 
-**Depends on / blocked by:** Definir criterios de reconciliación por tipo de artifact y ventana temporal, más aprobación operativa para ejecutar limpieza en ambientes compartidos.
+**Depends on / blocked by:** Definir criterios de reconciliación por tipo de artifact y ventana temporal, más aprobación operativa para ejecutar limpieza en ambientes compartidos después de estabilizar el resume durable.
 
 ---
 
@@ -179,6 +179,22 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Cons:** Requiere calibración fina por tipo de error y coordinación entre backend, UX y métricas para no bloquear reintentos legítimos.
 
-**Context:** Registrado como deuda explícita al cerrar la planeación de Issue #112; no bloquea el arranque de Fase 1.
+**Context:** Reconfirmado durante la corrección async de Issue #112. La decisión explícita fue no diseñar budget/circuit breaker antes de tener baseline determinístico y `live_llm` del flujo de resume desde M4.
 
-**Depends on / blocked by:** Baseline de métricas de fallos transientes en producción y definición de política de producto sobre reintentos permitidos por usuario/curso.
+**Depends on / blocked by:** Baseline de métricas de fallos transientes en producción, validación del resume durable con `AsyncPostgresSaver`, y definición de política de producto sobre reintentos permitidos por usuario/curso.
+
+---
+
+## TODO-012: Lifecycle explícito para el singleton async de checkpoints
+
+**What:** Evaluar si el singleton async lazy de `AsyncConnectionPool` + `AsyncPostgresSaver` + grafo compilado debe migrarse a ownership explícito por `lifespan` en `shared.app` y `shared.worker_app`.
+
+**Why:** La Fase 2 de Issue #112 eligió el patrón lazy async por minimal diff. Si aparecen problemas de cleanup en shutdown, churn de event loops en tests o necesidad de teardown más predecible, conviene promover estos recursos a lifecycle explícito.
+
+**Pros:** Cierre determinístico de recursos, menos ambigüedad en tests/multi-loop, ownership operacional más obvio.
+
+**Cons:** Amplía scope a `shared.app` y `shared.worker_app`, añade más superficie sensible y no desbloquea el bug actual por sí mismo.
+
+**Context:** Esta fue la alternativa 1B considerada en la revisión de corrección de Issue #112. Se rechazó para el fix inicial por preferencia de diff mínimo, pero queda capturada como hardening posterior si el patrón lazy muestra límites reales.
+
+**Depends on / blocked by:** Observar primero el comportamiento del wiring async lazy en validación local, tests y worker real después de que el blocker quede resuelto.

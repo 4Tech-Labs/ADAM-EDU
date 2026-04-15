@@ -1,7 +1,10 @@
+import asyncio
 from collections.abc import Generator
+import logging
 from pathlib import Path
+import sys
 from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
+from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from sqlalchemy import create_engine, Engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -9,6 +12,12 @@ from sqlalchemy.pool import NullPool
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+logger = logging.getLogger(__name__)
+
+if sys.platform == "win32" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+    # psycopg async connections are not compatible with the default Proactor loop
+    # used by Python on Windows. Force the selector policy before any loop exists.
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 class Settings(BaseSettings):
@@ -93,6 +102,9 @@ settings = Settings()
 engine = _make_engine(settings)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 _langgraph_checkpointer_pool: ConnectionPool | None = None
+_langgraph_checkpointer_async_pool: AsyncConnectionPool | None = None
+_langgraph_checkpointer_async_pool_loop: asyncio.AbstractEventLoop | None = None
+_langgraph_checkpointer_async_pool_lock: asyncio.Lock | None = None
 
 class Base(DeclarativeBase):
     """Base declarative class for SQLAlchemy models."""
@@ -119,6 +131,15 @@ def _to_psycopg_conninfo(database_url: str) -> str:
     return url.render_as_string(hide_password=False)
 
 
+def _langgraph_pool_kwargs() -> dict[str, object]:
+    """Return psycopg connect kwargs required by LangGraph Postgres savers."""
+    return {
+        "autocommit": True,
+        "row_factory": dict_row,
+        "prepare_threshold": 0,
+    }
+
+
 def get_langgraph_checkpointer_pool() -> ConnectionPool:
     """Return a shared psycopg pool configured from existing DB settings."""
     global _langgraph_checkpointer_pool
@@ -128,10 +149,68 @@ def get_langgraph_checkpointer_pool() -> ConnectionPool:
             conninfo=_to_psycopg_conninfo(settings.database_url),
             min_size=1,
             max_size=max(1, settings.db_pool_size),
-            kwargs={"autocommit": True, "row_factory": dict_row},
+            kwargs=_langgraph_pool_kwargs(),
             timeout=float(settings.db_pool_timeout),
             open=True,
             name="langgraph-checkpointer",
         )
 
     return _langgraph_checkpointer_pool
+
+
+def _get_async_pool_lock(current_loop: asyncio.AbstractEventLoop) -> asyncio.Lock:
+    """Return a loop-bound lock for async pool singleton initialization."""
+    global _langgraph_checkpointer_async_pool_lock, _langgraph_checkpointer_async_pool_loop
+
+    if (
+        _langgraph_checkpointer_async_pool_lock is None
+        or _langgraph_checkpointer_async_pool_loop is not current_loop
+    ):
+        _langgraph_checkpointer_async_pool_lock = asyncio.Lock()
+    return _langgraph_checkpointer_async_pool_lock
+
+
+async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
+    """Return a shared async psycopg pool for LangGraph durable checkpointing.
+
+    The pool is cached per active event loop to stay compatible with the async
+    saver implementation used by LangGraph during `graph.astream(...)`.
+    """
+
+    global _langgraph_checkpointer_async_pool, _langgraph_checkpointer_async_pool_loop
+
+    current_loop = asyncio.get_running_loop()
+    current_pool = _langgraph_checkpointer_async_pool
+    if current_pool is not None and _langgraph_checkpointer_async_pool_loop is current_loop:
+        return current_pool
+
+    async with _get_async_pool_lock(current_loop):
+        current_pool = _langgraph_checkpointer_async_pool
+        if current_pool is not None and _langgraph_checkpointer_async_pool_loop is current_loop:
+            return current_pool
+
+        previous_pool = _langgraph_checkpointer_async_pool
+        pool = AsyncConnectionPool(
+            conninfo=_to_psycopg_conninfo(settings.database_url),
+            min_size=1,
+            max_size=max(1, settings.db_pool_size),
+            kwargs=_langgraph_pool_kwargs(),
+            timeout=float(settings.db_pool_timeout),
+            open=False,
+            name="langgraph-checkpointer-async",
+        )
+        await pool.open()
+
+        _langgraph_checkpointer_async_pool = pool
+        _langgraph_checkpointer_async_pool_loop = current_loop
+
+        if previous_pool is not None and previous_pool is not pool:
+            try:
+                await previous_pool.close()
+            except Exception as exc:
+                logger.warning(
+                    "Could not close previous LangGraph async checkpointer pool cleanly: %s",
+                    exc,
+                )
+
+        return pool

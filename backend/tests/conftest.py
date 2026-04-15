@@ -4,6 +4,7 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import os
+import subprocess
 import uuid
 
 import jwt
@@ -40,17 +41,20 @@ def _assert_local_schema_reset_target() -> None:
             f"got {db_url.host}:{db_url.port}/{db_url.database})."
         )
 
-
 @pytest.fixture(scope="session", autouse=True)
 def ensure_db_schema() -> None:
-    """Recreate the ORM schema once so metadata changes are reflected in the test DB."""
+    """Recreate the local test schema from Alembic so checkpoint tables exist."""
     _assert_local_schema_reset_target()
     close_all_sessions()
     with engine.begin() as connection:
         connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
         connection.execute(text("CREATE SCHEMA public"))
-    Base.metadata.create_all(bind=engine)
 
+    # The runtime schema is Alembic-driven, and LangGraph checkpoint tables are
+    # not created by ORM metadata alone.
+    # Get absolute path to backend directory. conftest.py is in backend/tests/
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    subprocess.run(["uv", "run", "alembic", "upgrade", "head"], cwd=backend_dir, check=True)
 
 @pytest.fixture(autouse=True)
 def configure_auth_env(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:

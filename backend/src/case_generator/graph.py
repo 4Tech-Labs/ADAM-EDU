@@ -35,10 +35,11 @@ Resiliencia (v9):
   - .with_fallbacks: primary → gemini-2.5-flash automático en caída de API
   - Fallback graceful: todos los nodos LLM retornan sentinel en vez de raise
   - RetryPolicy: backoff exponencial (1s → 2s → 4s, max 30s, jitter ON)
-  - Timeout global: 600 segundos por job (authoring.py)
+    - Timeout global: 900 segundos por job (authoring.py)
   - AsyncPostgresSaver: checkpointer para resume-from-failure
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -55,7 +56,7 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.runnables import RunnableConfig
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import RetryPolicy
 
@@ -94,7 +95,7 @@ from case_generator.tools_and_schemas import (
 )
 from case_generator.orchestration.frontend_adapter import adapter_canonical_to_legacy
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
-from shared.database import get_langgraph_checkpointer_pool
+from shared.database import get_langgraph_checkpointer_async_pool
 from shared.sanitization import sanitize_untrusted_payload
 
 if TYPE_CHECKING:
@@ -2763,7 +2764,7 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
 # CONSTRUCCIÓN DE SUBGRAFOS (FASE 4 - ARQUITECTURA MODULAR)
 # ─────────────────────────────────────────────────────────
 
-_RESUME_CACHE_STATE_KEY = "resume_cached_nodes"
+RESUME_CACHE_STATE_KEY = "resume_cached_nodes"
 _PARALLEL_NODES_WITHOUT_AGENT = {"case_writer", "case_questions"}
 _RESUME_NODE_AGENT_OVERRIDES = {"eda_questions_generator": "doc3_generation"}
 _RESUME_NODE_REQUIRED_OUTPUTS: dict[str, tuple[str, ...]] = {
@@ -2813,7 +2814,7 @@ def _is_resumable_state_value(value: Any) -> bool:
 
 
 def _artifact_cached_output_for_node(node_name: str, state: ADAMState) -> dict[str, Any] | None:
-    cached_nodes = state.get(_RESUME_CACHE_STATE_KEY)
+    cached_nodes = state.get(RESUME_CACHE_STATE_KEY)
     if not isinstance(cached_nodes, dict):
         return None
     node_payload = cached_nodes.get(node_name)
@@ -3130,22 +3131,59 @@ master_builder.add_edge("synthesis_flow", "output_adapter_final")
 master_builder.add_edge("output_adapter_final", END)
 
 
-def _build_postgres_checkpointer() -> PostgresSaver | None:
-    """Build a durable Postgres checkpointer using the shared DB pool."""
+class DurableCheckpointUnavailableError(RuntimeError):
+    """Raised when the durable async LangGraph checkpoint path cannot initialize."""
+
+
+_graph_singleton: Any | None = None
+_graph_singleton_loop: asyncio.AbstractEventLoop | None = None
+_graph_singleton_lock: asyncio.Lock | None = None
+
+
+def _get_graph_lock(current_loop: asyncio.AbstractEventLoop) -> asyncio.Lock:
+    """Return a loop-bound lock for async graph singleton initialization."""
+    global _graph_singleton_lock, _graph_singleton_loop
+
+    if _graph_singleton_lock is None or _graph_singleton_loop is not current_loop:
+        _graph_singleton_lock = asyncio.Lock()
+    return _graph_singleton_lock
+
+
+async def _build_async_postgres_checkpointer() -> AsyncPostgresSaver:
+    """Build the durable async Postgres checkpointer inside an active event loop."""
     try:
-        checkpointer = PostgresSaver(cast(Any, get_langgraph_checkpointer_pool()))
+        pool = await get_langgraph_checkpointer_async_pool()
+        checkpointer = AsyncPostgresSaver(cast(Any, pool))
         # Idempotent bootstrap for local/tests where Alembic metadata may be recreated.
-        checkpointer.setup()
-        logger.info("[graph] Postgres checkpointer initialized")
+        await checkpointer.setup()
+        logger.info("[graph] AsyncPostgresSaver initialized")
         return checkpointer
     except Exception as exc:
-        logger.warning("[graph] Postgres checkpointer unavailable; falling back to in-memory run: %s", exc)
-        return None
+        raise DurableCheckpointUnavailableError(
+            "Durable LangGraph checkpointing is unavailable."
+        ) from exc
 
 
-_checkpointer = _build_postgres_checkpointer()
-if _checkpointer is not None:
-    graph = master_builder.compile(name="adam-agent", checkpointer=_checkpointer)
-else:
-    graph = master_builder.compile(name="adam-agent")
+async def get_graph() -> Any:
+    """Return the compiled master graph backed by a durable async checkpointer.
+
+    This is a lazy singleton per active event loop so the async saver is always
+    created under the loop that will later execute `graph.astream(...)`.
+    """
+    global _graph_singleton, _graph_singleton_loop
+
+    current_loop = asyncio.get_running_loop()
+    if _graph_singleton is not None and _graph_singleton_loop is current_loop:
+        return _graph_singleton
+
+    async with _get_graph_lock(current_loop):
+        if _graph_singleton is not None and _graph_singleton_loop is current_loop:
+            return _graph_singleton
+
+        checkpointer = await _build_async_postgres_checkpointer()
+        compiled_graph = master_builder.compile(name="adam-agent", checkpointer=checkpointer)
+        _graph_singleton = compiled_graph
+        _graph_singleton_loop = current_loop
+        logger.info("[graph] Compiled master graph with AsyncPostgresSaver")
+        return compiled_graph
 
