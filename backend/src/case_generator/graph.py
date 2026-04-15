@@ -2844,7 +2844,12 @@ def _skip_payload_for_node(node_name: str) -> dict[str, Any]:
 def _with_resume_skip(node_name: str, node_callable: Any) -> Any:
     """Wrap a graph node to short-circuit when checkpoint/artifact state already exists."""
 
-    def _wrapped(state: ADAMState, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    def _wrapped(
+        state: ADAMState,
+        config: RunnableConfig | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         cached_payload = _artifact_cached_output_for_node(node_name, state)
         if cached_payload is not None:
             payload = dict(cached_payload)
@@ -2861,7 +2866,10 @@ def _with_resume_skip(node_name: str, node_callable: Any) -> Any:
             logger.info("[resume_skip] node=%s source=checkpoint_state", node_name)
             return _skip_payload_for_node(node_name)
 
-        return cast(dict[str, Any], node_callable(state, *args, **kwargs))
+        if config is None:
+            return cast(dict[str, Any], node_callable(state, *args, **kwargs))
+
+        return cast(dict[str, Any], node_callable(state, config, *args, **kwargs))
 
     return _wrapped
 

@@ -1,10 +1,11 @@
 """T1 smoke test live ejecutable con pytest."""
 
 import json
+import uuid
 
 import pytest
 
-pytestmark = pytest.mark.live_llm
+pytestmark = [pytest.mark.live_llm, pytest.mark.asyncio]
 
 T1_PAYLOAD = {
     "messages": [("user", "Generar caso Harvard T1 smoke test")],
@@ -47,8 +48,11 @@ def _record_generation_errors(errors: list[str], field_name: str, value: object)
         errors.append(f"[FAIL] {field_name} contiene sentinel {sentinel}")
 
 
-def test_t1_smoke() -> None:
-    from case_generator.graph import graph
+async def test_t1_smoke() -> None:
+    from case_generator.graph import get_graph
+
+    graph = await get_graph()
+    config = {"configurable": {"thread_id": f"test_t1_smoke-{uuid.uuid4()}"}}
 
     print("\n" + "=" * 60)
     print("T1 SMOKE TEST - business + harvard_only")
@@ -60,7 +64,7 @@ def test_t1_smoke() -> None:
     executed_nodes: list[str] = []
     final_state: dict = {}
 
-    for event in graph.stream(T1_PAYLOAD, stream_mode="updates"):
+    async for event in graph.astream(T1_PAYLOAD, config=config, stream_mode="updates"):
         for node_name, node_output in event.items():
             executed_nodes.append(node_name)
             print(f"  [OK] Nodo completado: {node_name}")
