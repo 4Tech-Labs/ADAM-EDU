@@ -266,6 +266,7 @@ async def test_graph_singleton_initializes_once_per_loop(monkeypatch) -> None:
     monkeypatch.setattr(graph_module, "_graph_singleton", None)
     monkeypatch.setattr(graph_module, "_graph_singleton_loop", None)
     monkeypatch.setattr(graph_module, "_graph_singleton_lock", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_lock_loop", None)
     monkeypatch.setattr(graph_module, "_build_async_postgres_checkpointer", fake_build_async_postgres_checkpointer)
     monkeypatch.setattr(graph_module.master_builder, "compile", fake_compile)
 
@@ -277,6 +278,39 @@ async def test_graph_singleton_initializes_once_per_loop(monkeypatch) -> None:
     assert first is second
     assert state["checkpointer_calls"] == 1
     assert state["compile_calls"] == 1
+
+
+def test_graph_singleton_rebuilds_when_event_loop_changes(monkeypatch) -> None:
+    state = {"checkpointer_calls": 0, "compile_calls": 0}
+
+    async def fake_build_async_postgres_checkpointer():
+        state["checkpointer_calls"] += 1
+        await asyncio.sleep(0)
+        return {"checkpointer_calls": state["checkpointer_calls"]}
+
+    def fake_compile(*, name: str, checkpointer: object):
+        state["compile_calls"] += 1
+        return {
+            "name": name,
+            "checkpointer": checkpointer,
+            "compile_calls": state["compile_calls"],
+        }
+
+    monkeypatch.setattr(graph_module, "_graph_singleton", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_loop", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_lock", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_lock_loop", None)
+    monkeypatch.setattr(graph_module, "_build_async_postgres_checkpointer", fake_build_async_postgres_checkpointer)
+    monkeypatch.setattr(graph_module.master_builder, "compile", fake_compile)
+
+    first = asyncio.run(graph_module.get_graph())
+    second = asyncio.run(graph_module.get_graph())
+
+    assert first is not second
+    assert first["compile_calls"] == 1
+    assert second["compile_calls"] == 2
+    assert state["checkpointer_calls"] == 2
+    assert state["compile_calls"] == 2
 
 
 def test_run_job_fail_closed_when_checkpoint_runtime_fails_mid_stream(

@@ -115,7 +115,7 @@ def test_legacy_suggest(client):
         "industry": "Technology",
         "studentProfile": "business",
         "caseType": "harvard_only",
-        "edaDepth": "charts_only",
+        "edaDepth": "charts_plus_explanation",
         "includePythonCode": False,
         "intent": "both",
         "scenarioDescription": "Write a short 1-paragraph story about a business.",

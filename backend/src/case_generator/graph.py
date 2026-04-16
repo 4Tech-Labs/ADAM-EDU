@@ -37,6 +37,7 @@ Resiliencia (v9):
   - RetryPolicy: backoff exponencial (1s → 2s → 4s, max 30s, jitter ON)
     - Timeout global: 900 segundos por job (authoring.py)
   - AsyncPostgresSaver: checkpointer para resume-from-failure
+    - get_graph(): singleton lazy por event loop para evitar reuse cruzado en tests/workers async
 """
 
 import asyncio
@@ -3147,18 +3148,20 @@ class DurableCheckpointUnavailableError(RuntimeError):
 _graph_singleton: Any | None = None
 _graph_singleton_loop: asyncio.AbstractEventLoop | None = None
 _graph_singleton_lock: asyncio.Lock | None = None
+_graph_singleton_lock_loop: asyncio.AbstractEventLoop | None = None
 _graph_singleton_lock_guard = threading.Lock()
 
 
 def _get_graph_lock(current_loop: asyncio.AbstractEventLoop) -> asyncio.Lock:
     """Return a loop-bound lock for async graph singleton initialization."""
-    global _graph_singleton_lock, _graph_singleton_loop
+    global _graph_singleton_lock, _graph_singleton_lock_loop
 
     with _graph_singleton_lock_guard:
-        if _graph_singleton_lock is None or _graph_singleton_loop is not current_loop:
-            # Store the loop marker when the lock is created so concurrent first
-            # callers reuse a single initialization lock on that loop.
-            _graph_singleton_loop = current_loop
+        if _graph_singleton_lock is None or _graph_singleton_lock_loop is not current_loop:
+            # Keep the lock loop separate from the compiled-graph loop marker so a
+            # new event loop cannot accidentally reuse a graph/checkpointer created
+            # for a previous loop.
+            _graph_singleton_lock_loop = current_loop
             _graph_singleton_lock = asyncio.Lock()
     return _graph_singleton_lock
 
