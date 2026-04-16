@@ -4,17 +4,37 @@ Build a resilient stateful orchestration path for authoring jobs so generation c
 
 Step 0 outcome: user chose BIG CHANGE.
 
-### Current status after backend hardening pass (2026-04-15)
+### Current status after code review hardening pass (2026-04-15)
 - Phase 1 is already landed: schema, `failed_resumable` contract, retry endpoint, and CAS retry transition exist.
-- Phase 2 backend wiring is now landed on branch `feat/issue112-stateful-recovery` in commit `790947d`.
-- `backend/src/shared/database.py` now creates the LangGraph `AsyncConnectionPool` lazily inside an active event loop, keeps the Windows selector policy fix for local async psycopg, and hardens first-use singleton lock creation against same-loop races.
+- Phase 2 backend wiring landed on branch `feat/issue112-stateful-recovery` in commit `790947d`.
+- Code review pass landed in commit `df82309` with 4 hardening fixes (see review findings below).
+- `backend/src/shared/database.py` now creates the LangGraph `AsyncConnectionPool` lazily inside an active event loop, keeps the Windows selector policy fix for local async psycopg, hardens first-use singleton lock creation against same-loop races, and wraps pool cleanup in `asyncio.wait_for` with a 5s timeout plus `finally` GC dereference to prevent connection leaks under loop churn.
 - `backend/src/case_generator/graph.py` now compiles the master graph lazily with `AsyncPostgresSaver` and includes the same first-use singleton race fix for graph initialization.
-- `backend/src/case_generator/core/authoring.py` now awaits `get_graph()`, preserves the retry CAS plus artifact prefetch flow, and hard-fails checkpoint infrastructure failures both at bootstrap and mid-stream with `checkpoint_unavailable` instead of misclassifying them as resumable provider failures.
+- `backend/src/case_generator/core/authoring.py` now awaits `get_graph()`, preserves the retry CAS plus artifact prefetch flow, hard-fails checkpoint infrastructure failures both at bootstrap and mid-stream, and has a secondary `_CHECKPOINT_INFRA_ERROR_TYPES` chain walk before string matching to prevent DB infrastructure errors from being misclassified as `failed_resumable`.
 - `backend/tests/test_authoring_progress_resilience.py` now covers duplicate retry race, bootstrap checkpointer failure, async pool first-use concurrency, graph singleton first-use concurrency, and mid-stream checkpoint fail-closed behavior.
+- `frontend/src/features/teacher-authoring/TeacherAuthoringPage.tsx` now wraps `retryJob()` in try/catch so a failed retry resets state to `error` instead of leaving the UI stuck on `generating`.
+- `frontend/src/features/teacher-authoring/useAuthoringJobProgress.ts` now validates `retryResponse.job_id` is a non-null string before passing to `startStreaming`, preventing silent 404 streaming.
 - Deterministic validation completed in this pass:
-  - `uv run --directory backend mypy src`
-  - `DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5434/postgres uv run --directory backend pytest -q tests/test_authoring_progress_resilience.py` -> `8 passed`
-- Remaining work for the next developer or agent: frontend Phase 3 continuity, backend contract coverage in `backend/tests/test_phase3_status_api.py` and `backend/tests/test_internal_tasks.py`, and a manual local checkpoint-table verification on a real authoring run.
+  - `uv run --directory backend mypy src` -> clean
+  - `uv run --directory backend pytest -q tests/test_authoring_progress_resilience.py` -> `8 passed`
+  - `npm --prefix frontend run test` -> `25 passed`
+  - `npx tsc --noEmit` -> clean
+- Remaining work for the next developer or agent: see "Handoff for next agent" section below.
+
+### Review findings applied in commit `df82309`
+| ID   | Severity | File | Fix |
+|------|----------|------|-----|
+| C-1  | CRITICAL | `backend/src/case_generator/core/authoring.py` | Added secondary `_CHECKPOINT_INFRA_ERROR_TYPES` chain walk before string matching. DB infra errors (PoolTimeout, connection reset) were matching LLM transient string markers → misclassified as `failed_resumable` → retry storm against exhausted DB pool. |
+| C-2  | CRITICAL | `frontend/src/features/teacher-authoring/TeacherAuthoringPage.tsx` | Wrapped `retryJob()` in try/catch inside `handleRetry`. `setAppState("generating")` before `await retryJob()` meant a throw left the UI stuck in generating state with no error feedback. |
+| H-1  | HIGH     | `backend/src/shared/database.py` | Added `asyncio.wait_for(..., timeout=5.0)` around `previous_pool.close()` with `finally: previous_pool = None` for GC. Prevents connection leak when pool close hangs during loop churn. |
+| H-2  | HIGH     | `frontend/src/features/teacher-authoring/useAuthoringJobProgress.ts` | Added guard `if (!retryResponse.job_id \|\| typeof retryResponse.job_id !== "string")` before `startStreaming`. Prevents silent 404 streaming from an undefined job_id. |
+
+### Dismissed false positives from review
+- **RunnableConfig loss in `_with_resume_skip`**: LangGraph injects `RunnableConfig` into each node independently via the graph executor — it is not propagated through state. No fix needed.
+- **asyncio.Lock event loop binding race**: Cloud Run runs a single event loop per process. The lazy singleton pattern with `threading.Lock` outer guard and `asyncio.Lock` inner guard is safe in this deployment model. No fix needed.
+
+### Deferred finding (INFO)
+- **I-1**: Session storage reconciliation — if a `failed_resumable` job is cleaned up server-side, the frontend session storage retains a stale entry and may attempt to rehydrate a non-existent job. Low priority; add a server-side existence check or clear session storage on 404 during rehydration in a future pass.
 
 ### What already exists
 - Job lifecycle orchestration exists in `backend/src/case_generator/core/authoring.py` at `run_job`, including transitions `pending -> processing -> completed/failed`.
@@ -299,15 +319,22 @@ Phase 2, async correction and resume orchestration, backend complete
 5. Done: preserve explicit manifest prefetch and node skip helpers.
 6. Done: fail closed when durable checkpointing cannot initialize or be read, including mid-stream checkpoint infrastructure failures after graph start.
 
+Phase 2.5, code review hardening, complete
+7. Done: hardened exception classification in `authoring.py` (C-1).
+8. Done: hardened pool cleanup timeout in `database.py` (H-1).
+9. Done: hardened frontend retry error handling in `TeacherAuthoringPage.tsx` (C-2).
+10. Done: hardened retry response validation in `useAuthoringJobProgress.ts` (H-2).
+
 Phase 3, UX and contract continuity, next active phase
-7. Next: keep frontend `failed_resumable` retry handling and persisted-job rehydration stable.
-8. Next: preserve `progress_seq/current_step` continuity on resumed stream.
+11. Next: add frontend retry/rehydration/timeline continuity tests.
+12. Next: preserve `progress_seq/current_step` continuity on resumed stream.
+13. Next: add session storage reconciliation (clear stale entries on 404 during rehydration).
 
 Phase 4, tests and evals
-9. In progress: add backend integration and contract tests for async checkpoint resume/checkpoint failure/atomic retry. Focused resilience coverage is landed; `test_phase3_status_api.py` and `test_internal_tasks.py` still need to run or expand as needed.
-10. Done in focused coverage: add dedicated concurrency tests for duplicate retry race and first-use singleton initialization.
-11. Next: add frontend retry or rehydration or timeline continuity tests.
-12. Next: run deterministic suites first, then focused `live_llm` baseline plus resume comparisons.
+14. In progress: backend contract tests in `test_phase3_status_api.py` and `test_internal_tasks.py` still need to run or expand.
+15. Done: dedicated concurrency tests for duplicate retry race and first-use singleton initialization (8 tests).
+16. Next: add frontend tests for retry UX, rehydration, and timeline continuity.
+17. Next: run deterministic suites first, then focused `live_llm` baseline plus resume comparisons.
 
 ### Verification plan
 Completed in this pass:
@@ -344,10 +371,76 @@ Live_llm baseline comparisons:
 - Step 0: Scope Challenge (user chose: BIG CHANGE)
 - Architecture Review: 2 implementation-shaping issues resolved
 - Code Quality Review: 4 direct fixes identified, backend hardening landed
+- Code Review Hardening: 4 review findings (2 CRITICAL, 2 HIGH) fixed in commit `df82309`
 - Test Review: focused backend regressions added for concurrency and fail-closed behavior
 - Performance Review: single async pool and compiled-graph singleton path preserved, with same-loop init race fixed
 - Backend Phase 2 implementation complete and pushed in commit `790947d`
+- Review hardening complete and pushed in commit `df82309`
 - Validated in this pass:
-  - `uv run --directory backend mypy src`
-  - `DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5434/postgres uv run --directory backend pytest -q tests/test_authoring_progress_resilience.py` -> `8 passed`
-- Remaining for next phase: frontend Phase 3 continuity, backend contract tests in `test_phase3_status_api.py` and `test_internal_tasks.py`, manual checkpoint-table verification on a real run, and optional `live_llm` comparisons after deterministic green
+  - `uv run --directory backend mypy src` -> clean
+  - `uv run --directory backend pytest -q tests/test_authoring_progress_resilience.py` -> `8 passed`
+  - `npm --prefix frontend run test` -> `25 passed`
+  - `npx tsc --noEmit` -> clean
+- Remaining for next phase: see handoff section below
+
+### Handoff for next agent
+
+#### What is done
+1. **Phase 1** (schema + contract): Landed on `main`. `failed_resumable` status, retry endpoint, CAS retry transition all exist.
+2. **Phase 2** (async correction + resume orchestration): Landed on `feat/issue112-stateful-recovery` in commit `790947d`. `AsyncPostgresSaver`, lazy async singleton pool+graph, fail-closed checkpoint wiring.
+3. **Phase 2.5** (code review hardening): Landed on `feat/issue112-stateful-recovery` in commit `df82309`. 4 fixes: exception classification guard, pool cleanup timeout, retry error handling, retry response validation.
+4. **Backend tests**: 8 resilience tests passing (`test_authoring_progress_resilience.py`). mypy clean.
+5. **Frontend hardening**: retry try/catch and job_id validation applied. 25 tests passing. tsc clean.
+
+#### What to do next (in priority order)
+
+**1. Backend contract test gap**
+- Run `uv run --directory backend pytest -q tests/test_phase3_status_api.py tests/test_internal_tasks.py` and verify they pass.
+- If they need updates for the new async graph initialization path, update them.
+
+**2. Manual local checkpoint-table verification**
+- Run a real authoring job against `localhost:5434` and confirm:
+  - `graph.astream()` does NOT raise `NotImplementedError` on `aget_tuple`.
+  - LangGraph checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) receive rows for the run thread/job.
+
+**3. Frontend Phase 3 tests**
+- Add or update tests in:
+  - `frontend/src/features/teacher-authoring/TeacherAuthoringPage.test.tsx` — test `handleRetry` error path shows error state
+  - `frontend/src/features/teacher-authoring/useAuthoringJobProgress.rehydration.test.ts` — test rehydration with stale session storage entry
+  - `frontend/src/shared/api.test.ts` — test retry endpoint response validation
+- Run: `npm --prefix frontend run test`, `npm --prefix frontend run lint`, `npm --prefix frontend run build`
+
+**4. Session storage reconciliation (deferred I-1)**
+- When rehydrating from session storage, check server-side job existence before resuming streaming.
+- If the job returns 404, clear the session storage entry and reset to initial state.
+- File: `frontend/src/features/teacher-authoring/useAuthoringJobProgress.ts`
+
+**5. Live LLM validation (only after all deterministic suites green)**
+- `RUN_LIVE_LLM_TESTS=1 uv run --directory backend pytest -m live_llm -q`
+- Baseline: successful full run token/call profile
+- Resume: injected M4 transient failure resume, assert lower token/call footprint than full rerun
+
+#### Key files for context
+| File | Role |
+|------|------|
+| `backend/src/case_generator/core/authoring.py` | Job lifecycle orchestration, exception classification, retry CAS |
+| `backend/src/case_generator/graph.py` | Lazy async graph/checkpointer singleton, skip wrappers |
+| `backend/src/shared/database.py` | Lazy async pool singleton, pool lifecycle |
+| `backend/tests/test_authoring_progress_resilience.py` | 8 resilience tests for concurrency and fail-closed |
+| `frontend/src/features/teacher-authoring/TeacherAuthoringPage.tsx` | Authoring page, retry handler |
+| `frontend/src/features/teacher-authoring/useAuthoringJobProgress.ts` | Job progress hook, streaming, rehydration |
+
+#### Validation commands
+```powershell
+# Backend
+uv run --directory backend mypy src
+uv run --directory backend pytest -q
+
+# Frontend
+npm --prefix frontend run lint
+npm --prefix frontend run test
+npm --prefix frontend run build
+
+# Live LLM (only after deterministic green)
+RUN_LIVE_LLM_TESTS=1 uv run --directory backend pytest -m live_llm -q
+```
