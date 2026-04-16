@@ -61,6 +61,7 @@ from shared.database import (
     close_langgraph_checkpointer_pool,
     dispose_database_engine,
     get_db,
+    snapshot_active_authoring_jobs,
     validate_runtime_database_configuration,
 )
 from shared.db_resilience import (
@@ -451,7 +452,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        logger.info("Cleaning up resources...")
+        logger.info("Cleaning up resources... active_authoring_jobs=%s", snapshot_active_authoring_jobs())
         reset_graph_singleton()
         await close_langgraph_checkpointer_async_pool()
         close_langgraph_checkpointer_pool()

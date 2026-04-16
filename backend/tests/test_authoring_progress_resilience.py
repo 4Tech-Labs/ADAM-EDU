@@ -1,4 +1,6 @@
+import contextlib
 import asyncio
+import logging
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -300,6 +302,41 @@ async def test_close_async_checkpointer_pool_clears_singleton(monkeypatch) -> No
     assert database_module._langgraph_checkpointer_async_pool_loop is None
     assert database_module._langgraph_checkpointer_async_pool_lock is None
     assert database_module._langgraph_checkpointer_async_pool_lock_loop is None
+
+
+async def test_close_async_checkpointer_pool_logs_timeout_telemetry(monkeypatch, caplog) -> None:
+    class HangingAsyncConnectionPool:
+        def get_stats(self) -> dict[str, int]:
+            return {
+                "pool_min": 1,
+                "pool_max": 5,
+                "pool_size": 3,
+                "pool_available": 1,
+                "requests_waiting": 2,
+            }
+
+        async def close(self) -> None:
+            await asyncio.Future()
+
+    leaked_task = asyncio.create_task(asyncio.Event().wait(), name="authoring-job-job-timeout")
+    database_module.register_active_authoring_job("job-timeout")
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", HangingAsyncConnectionPool())
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", asyncio.get_running_loop())
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", asyncio.Lock())
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock_loop", asyncio.get_running_loop())
+
+    caplog.set_level(logging.INFO)
+    try:
+        await database_module.close_langgraph_checkpointer_async_pool(timeout_seconds=0.01)
+    finally:
+        database_module.unregister_active_authoring_job("job-timeout")
+        leaked_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await leaked_task
+
+    assert "LEAK DETECTED" in caplog.text
+    assert "job-timeout" in caplog.text
+    assert "authoring-job-job-timeout" in caplog.text
 
 
 def test_validate_runtime_database_configuration_rejects_remote_supabase_in_development() -> None:

@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 import sys
 import threading
+from typing import Any
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from sqlalchemy import create_engine, Engine
@@ -109,11 +110,78 @@ _langgraph_checkpointer_async_pool_loop: asyncio.AbstractEventLoop | None = None
 _langgraph_checkpointer_async_pool_lock: asyncio.Lock | None = None
 _langgraph_checkpointer_async_pool_lock_loop: asyncio.AbstractEventLoop | None = None
 _langgraph_checkpointer_async_pool_lock_guard = threading.Lock()
+_active_authoring_jobs: set[str] = set()
+_active_authoring_jobs_guard = threading.Lock()
 
 class Base(DeclarativeBase):
     """Base declarative class for SQLAlchemy models."""
 
     pass
+
+
+def register_active_authoring_job(job_id: str) -> None:
+    """Track a job currently inside the durable authoring runtime path."""
+    with _active_authoring_jobs_guard:
+        _active_authoring_jobs.add(job_id)
+
+
+def unregister_active_authoring_job(job_id: str) -> None:
+    """Remove a job from the durable authoring runtime tracker."""
+    with _active_authoring_jobs_guard:
+        _active_authoring_jobs.discard(job_id)
+
+
+def snapshot_active_authoring_jobs() -> list[str]:
+    """Return the currently tracked durable authoring jobs."""
+    with _active_authoring_jobs_guard:
+        return sorted(_active_authoring_jobs)
+
+
+def _snapshot_authoring_task_names() -> list[str]:
+    """Return pending asyncio task names relevant to authoring shutdown."""
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return []
+
+    current_task = asyncio.current_task(current_loop)
+    task_names: list[str] = []
+    for task in asyncio.all_tasks(current_loop):
+        if task is current_task or task.done():
+            continue
+
+        task_name = task.get_name()
+        coro = task.get_coro()
+        coro_name = getattr(coro, "__qualname__", type(coro).__name__)
+        if task_name.startswith("authoring-job-") or "run_job" in coro_name or "_run_graph_stream" in coro_name:
+            task_names.append(f"{task_name}:{coro_name}")
+
+    return sorted(task_names)
+
+
+def _pool_stats_snapshot(pool: Any) -> dict[str, int]:
+    """Return stable pool telemetry fields even if the underlying API shifts."""
+    try:
+        stats = dict(pool.get_stats())
+    except Exception as exc:
+        logger.warning("Could not read LangGraph pool stats: %s", exc)
+        return {}
+
+    pool_size = int(stats.get("pool_size", 0))
+    available = int(stats.get("pool_available", 0))
+    return {
+        "pool_min": int(stats.get("pool_min", 0)),
+        "pool_max": int(stats.get("pool_max", 0)),
+        "pool_size": pool_size,
+        "pool_available": available,
+        "pool_busy": max(pool_size - available, 0),
+        "requests_waiting": int(stats.get("requests_waiting", 0)),
+        "requests_errors": int(stats.get("requests_errors", 0)),
+        "connections_num": int(stats.get("connections_num", 0)),
+        "connections_errors": int(stats.get("connections_errors", 0)),
+        "connections_lost": int(stats.get("connections_lost", 0)),
+        "returns_bad": int(stats.get("returns_bad", 0)),
+    }
 
 
 def validate_runtime_database_configuration(s: Settings | None = None) -> None:
@@ -280,11 +348,49 @@ async def close_langgraph_checkpointer_async_pool(timeout_seconds: float = 5.0) 
     if pool is None:
         return
 
+    active_jobs = snapshot_active_authoring_jobs()
+    pending_task_names = _snapshot_authoring_task_names()
+    initial_stats = _pool_stats_snapshot(pool)
+
     try:
-        logger.info("Closing LangGraph async checkpointer pool")
+        logger.info(
+            "Starting LangGraph async checkpointer pool shutdown. busy=%s available=%s waiting=%s active_jobs=%s pending_tasks=%s",
+            initial_stats.get("pool_busy", 0),
+            initial_stats.get("pool_available", 0),
+            initial_stats.get("requests_waiting", 0),
+            active_jobs,
+            pending_task_names,
+        )
         await asyncio.wait_for(pool.close(), timeout=timeout_seconds)
-    except (asyncio.TimeoutError, Exception) as exc:
-        logger.error("Could not close LangGraph async checkpointer pool cleanly: %s", exc)
+        closed_stats = _pool_stats_snapshot(pool)
+        logger.info(
+            "LangGraph async checkpointer pool closed successfully. busy=%s available=%s waiting=%s",
+            closed_stats.get("pool_busy", 0),
+            closed_stats.get("pool_available", 0),
+            closed_stats.get("requests_waiting", 0),
+        )
+    except asyncio.TimeoutError:
+        timed_out_stats = _pool_stats_snapshot(pool)
+        logger.error(
+            "LEAK DETECTED: LangGraph async checkpointer pool did not close in %ss. busy=%s available=%s waiting=%s active_jobs=%s pending_tasks=%s",
+            timeout_seconds,
+            timed_out_stats.get("pool_busy", 0),
+            timed_out_stats.get("pool_available", 0),
+            timed_out_stats.get("requests_waiting", 0),
+            active_jobs,
+            pending_task_names,
+        )
+    except Exception as exc:
+        failed_stats = _pool_stats_snapshot(pool)
+        logger.error(
+            "Could not close LangGraph async checkpointer pool cleanly: %s. busy=%s available=%s waiting=%s active_jobs=%s pending_tasks=%s",
+            exc,
+            failed_stats.get("pool_busy", 0),
+            failed_stats.get("pool_available", 0),
+            failed_stats.get("requests_waiting", 0),
+            active_jobs,
+            pending_task_names,
+        )
 
 
 def close_langgraph_checkpointer_pool() -> None:

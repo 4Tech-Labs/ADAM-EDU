@@ -30,7 +30,7 @@ from shared.blueprint_schema import (
     StudentArtifacts,
     ValidationContract,
 )
-from shared.database import SessionLocal
+from shared.database import SessionLocal, register_active_authoring_job, unregister_active_authoring_job
 from shared.models import (
     AUTHORING_JOB_RETRYABLE_STATUSES,
     AUTHORING_JOB_STATUS_COMPLETED,
@@ -683,61 +683,66 @@ class AuthoringService:
             for node_payload in resume_cached_nodes.values():
                 state_input.update(node_payload)
 
-            compiled_graph = await get_graph()
+            register_active_authoring_job(job_id)
+            try:
+                compiled_graph = await get_graph()
 
-            run_config: RunnableConfig = {
-                "configurable": {
-                    "thread_id": job_id,
-                    "writer_model": "gemini-3-flash-preview",
-                    "architect_model": "gemini-3-flash-preview",
-                    "job_id": job_id,
-                    "assignment_id": assignment_id,
-                    "owner_id": owner_id,
+                run_config: RunnableConfig = {
+                    "configurable": {
+                        "thread_id": job_id,
+                        "writer_model": "gemini-3-flash-preview",
+                        "architect_model": "gemini-3-flash-preview",
+                        "job_id": job_id,
+                        "assignment_id": assignment_id,
+                        "owner_id": owner_id,
+                    }
                 }
-            }
 
-            logger.info(
-                "AuthoringService: Invoking LangGraph v8 for Job %s (case_id=%s)...",
-                job_id,
-                state_input["case_id"],
-            )
-
-            async def _run_graph_stream() -> dict[str, Any]:
-                final_state: dict[str, Any] = state_input.copy()
-                current_step = payload.get("current_step")
-                last_reported_step = (
-                    _to_canonical_progress_step(current_step)
-                    if isinstance(current_step, str)
-                    else None
-                ) or _FIRST_CANONICAL_STEP
-                stream_mode: Literal["values"] = "values"
-                stream = cast(Any, compiled_graph).astream(
-                    state_input,
-                    config=run_config,
-                    stream_mode=stream_mode,
+                logger.info(
+                    "AuthoringService: Invoking LangGraph v8 for Job %s (case_id=%s)...",
+                    job_id,
+                    state_input["case_id"],
                 )
 
-                async for event in stream:
-                    final_state = dict(event)
-                    current_agent = final_state.get("current_agent")
-                    canonical_step = (
-                        _to_canonical_progress_step(current_agent)
-                        if isinstance(current_agent, str)
+                async def _run_graph_stream() -> dict[str, Any]:
+                    final_state: dict[str, Any] = state_input.copy()
+                    current_step = payload.get("current_step")
+                    last_reported_step = (
+                        _to_canonical_progress_step(current_step)
+                        if isinstance(current_step, str)
                         else None
+                    ) or _FIRST_CANONICAL_STEP
+                    stream_mode: Literal["values"] = "values"
+                    stream = cast(Any, compiled_graph).astream(
+                        state_input,
+                        config=run_config,
+                        stream_mode=stream_mode,
                     )
 
-                    if canonical_step and canonical_step != last_reported_step:
-                        persisted = await _persist_intermediate_progress_step(
-                            job_id=job_id,
-                            canonical_step=canonical_step,
+                    async for event in stream:
+                        final_state = dict(event)
+                        current_agent = final_state.get("current_agent")
+                        canonical_step = (
+                            _to_canonical_progress_step(current_agent)
+                            if isinstance(current_agent, str)
+                            else None
                         )
-                        if persisted:
-                            last_reported_step = canonical_step
 
-                return final_state
+                        if canonical_step and canonical_step != last_reported_step:
+                            persisted = await _persist_intermediate_progress_step(
+                                job_id=job_id,
+                                canonical_step=canonical_step,
+                            )
+                            if persisted:
+                                last_reported_step = canonical_step
 
-            graph_output = await asyncio.wait_for(_run_graph_stream(), timeout=900)
-            logger.info("AuthoringService: LangGraph execution finished for Job %s.", job_id)
+                    return final_state
+
+                graph_task = asyncio.create_task(_run_graph_stream(), name=f"authoring-job-{job_id}")
+                graph_output = await asyncio.wait_for(graph_task, timeout=900)
+                logger.info("AuthoringService: LangGraph execution finished for Job %s.", job_id)
+            finally:
+                unregister_active_authoring_job(job_id)
         except DurableCheckpointUnavailableError:
             logger.error(
                 "AuthoringService: Durable checkpoint wiring unavailable for Job %s",

@@ -1,7 +1,41 @@
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from case_generator.graph import reset_graph_singleton
+import shared.database as database_module
+from shared.database import close_langgraph_checkpointer_async_pool, snapshot_active_authoring_jobs
 from shared.models import Assignment, AuthoringJob
+
+
+_teardown_verification_state = {"close_calls": 0}
+
+
+@pytest.fixture(autouse=True)
+def ensure_no_authoring_runtime_leaks() -> None:
+    yield
+    assert snapshot_active_authoring_jobs() == []
+    reset_graph_singleton()
+    asyncio.run(close_langgraph_checkpointer_async_pool(timeout_seconds=0.1))
+
+
+def test_phase3_status_api_teardown_primes_pool_cleanup() -> None:
+    class FakeAsyncConnectionPool:
+        async def close(self) -> None:
+            _teardown_verification_state["close_calls"] += 1
+
+    database_module._langgraph_checkpointer_async_pool = FakeAsyncConnectionPool()
+    database_module._langgraph_checkpointer_async_pool_loop = None
+    database_module._langgraph_checkpointer_async_pool_lock = None
+    database_module._langgraph_checkpointer_async_pool_lock_loop = None
+
+
+def test_phase3_status_api_teardown_cleans_pool_before_next_test() -> None:
+    assert database_module._langgraph_checkpointer_async_pool is None
+    assert database_module._langgraph_checkpointer_async_pool_loop is None
+    assert _teardown_verification_state["close_calls"] == 1
 
 
 def test_polling_happy_path(client, db, auth_headers_factory, seed_identity) -> None:
