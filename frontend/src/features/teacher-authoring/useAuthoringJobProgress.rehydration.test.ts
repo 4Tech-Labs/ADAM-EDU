@@ -4,19 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_FORM } from "@/shared/adam-types";
 
 const {
+    MockApiError,
+    getProgressMock,
     submitJobMock,
     retryJobMock,
     streamProgressMock,
 } = vi.hoisted(() => {
-    return {
-        submitJobMock: vi.fn(),
-        retryJobMock: vi.fn(),
-        streamProgressMock: vi.fn(),
-    };
-});
-
-vi.mock("@/shared/api", () => {
-    class MockApiError extends Error {
+    class LocalMockApiError extends Error {
         readonly status: number;
         readonly retryAfterSeconds?: number;
 
@@ -28,12 +22,24 @@ vi.mock("@/shared/api", () => {
     }
 
     return {
+        MockApiError: LocalMockApiError,
+        getProgressMock: vi.fn(),
+        submitJobMock: vi.fn(),
+        retryJobMock: vi.fn(),
+        streamProgressMock: vi.fn(),
+    };
+});
+
+vi.mock("@/shared/api", () => {
+    return {
         ApiError: MockApiError,
         api: {
             authoring: {
+                getProgress: getProgressMock,
                 submitJob: submitJobMock,
                 retryJob: retryJobMock,
                 streamProgress: streamProgressMock,
+                getResult: vi.fn(),
             },
         },
     };
@@ -43,6 +49,7 @@ import { useAuthoringJobProgress } from "./useAuthoringJobProgress";
 
 describe("useAuthoringJobProgress rehydration", () => {
     beforeEach(() => {
+        getProgressMock.mockReset();
         submitJobMock.mockReset();
         retryJobMock.mockReset();
         streamProgressMock.mockReset();
@@ -55,12 +62,13 @@ describe("useAuthoringJobProgress rehydration", () => {
             JSON.stringify({ jobId: "job-42", scope: "technical" }),
         );
 
-        streamProgressMock.mockImplementation(
-            async (_jobId: string, onEvent: (event: { event: string; data: string }) => void) => {
-                onEvent({ event: "metadata", data: JSON.stringify({ status: "processing" }) });
-                onEvent({ event: "message", data: JSON.stringify({ node: "m3_content_generator" }) });
-            },
-        );
+        getProgressMock.mockResolvedValue({
+            job_id: "job-42",
+            status: "processing",
+            current_step: "m3_content_generator",
+            progress_seq: 3,
+        });
+        streamProgressMock.mockResolvedValue(undefined);
 
         const { result } = renderHook(() => useAuthoringJobProgress());
 
@@ -76,6 +84,25 @@ describe("useAuthoringJobProgress rehydration", () => {
         expect(result.current.status).toBe("processing");
         expect(result.current.activeAgent).toBe("m3_content_generator");
         expect(result.current.progressScope).toBe("technical");
+    });
+
+    it("clears stale persisted job state when bootstrap progress returns 404", async () => {
+        sessionStorage.setItem(
+            "adam_authoring_active_job",
+            JSON.stringify({ jobId: "job-404", scope: "technical" }),
+        );
+        getProgressMock.mockRejectedValue(new MockApiError(404, "missing"));
+
+        const { result } = renderHook(() => useAuthoringJobProgress());
+
+        await waitFor(() => {
+            expect(result.current.status).toBe("failed");
+        });
+
+        expect(result.current.jobId).toBeNull();
+        expect(result.current.errorTrace).toContain("sesion de recuperacion");
+        expect(sessionStorage.getItem("adam_authoring_active_job")).toBeNull();
+        expect(streamProgressMock).not.toHaveBeenCalled();
     });
 
     it("persists submitted job id and scope for refresh recovery", async () => {
@@ -135,6 +162,12 @@ describe("useAuthoringJobProgress rehydration", () => {
             status: "accepted",
             message: "Authoring retry accepted and dispatched to queue.",
         });
+        getProgressMock.mockResolvedValue({
+            job_id: "job-88",
+            status: "processing",
+            current_step: "m4_content_generator",
+            progress_seq: 4,
+        });
 
         let streamInvocation = 0;
         streamProgressMock.mockImplementation(
@@ -143,6 +176,7 @@ describe("useAuthoringJobProgress rehydration", () => {
 
                 if (streamInvocation === 1) {
                     onEvent({ event: "metadata", data: JSON.stringify({ status: "processing" }) });
+                    onEvent({ event: "message", data: JSON.stringify({ node: "m4_content_generator" }) });
                     onEvent({
                         event: "error",
                         data: JSON.stringify({ status: "failed_resumable", detail: "timeout" }),
@@ -150,8 +184,7 @@ describe("useAuthoringJobProgress rehydration", () => {
                     return;
                 }
 
-                onEvent({ event: "metadata", data: JSON.stringify({ status: "processing" }) });
-                onEvent({ event: "message", data: JSON.stringify({ node: "m4_content_generator" }) });
+                await new Promise(() => undefined);
             },
         );
 
@@ -178,6 +211,47 @@ describe("useAuthoringJobProgress rehydration", () => {
             expect(result.current.status).toBe("processing");
             expect(result.current.activeAgent).toBe("m4_content_generator");
         });
+        expect(getProgressMock).toHaveBeenCalledWith("job-88");
         expect(streamProgressMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("fails closed when retry returns an invalid payload", async () => {
+        submitJobMock.mockResolvedValue({ job_id: "job-91" });
+        retryJobMock.mockResolvedValue({
+            status: "accepted",
+            message: "Authoring retry accepted and dispatched to queue.",
+        } as never);
+        streamProgressMock.mockImplementation(
+            async (_jobId: string, onEvent: (event: { event: string; data: string }) => void) => {
+                onEvent({ event: "metadata", data: JSON.stringify({ status: "processing" }) });
+                onEvent({ event: "message", data: JSON.stringify({ node: "m4_content_generator" }) });
+                onEvent({
+                    event: "error",
+                    data: JSON.stringify({ status: "failed_resumable", detail: "timeout" }),
+                });
+            },
+        );
+
+        const { result } = renderHook(() => useAuthoringJobProgress());
+
+        await act(async () => {
+            await result.current.submitJob({
+                ...EMPTY_FORM,
+                subject: "Caso",
+                caseType: "harvard_with_eda",
+            });
+        });
+
+        await waitFor(() => {
+            expect(result.current.status).toBe("failed_resumable");
+        });
+
+        await act(async () => {
+            await result.current.retryJob();
+        });
+
+        expect(result.current.status).toBe("failed");
+        expect(result.current.errorTrace).toContain("respuesta de reintento invalida");
+        expect(getProgressMock).not.toHaveBeenCalled();
     });
 });

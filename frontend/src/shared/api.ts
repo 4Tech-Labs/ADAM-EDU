@@ -548,6 +548,9 @@ export const api = {
                 method: "POST",
             });
         },
+        async getProgress(jobId: string): Promise<AuthoringJobProgressSnapshotResponse> {
+            return parseJsonResponse<AuthoringJobProgressSnapshotResponse>(`/authoring/jobs/${jobId}/progress`);
+        },
         async getStatus(jobId: string): Promise<AuthoringJobStatusResponse> {
             return parseJsonResponse<AuthoringJobStatusResponse>(`/authoring/jobs/${jobId}`);
         },

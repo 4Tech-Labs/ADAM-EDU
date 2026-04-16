@@ -153,6 +153,27 @@ describe("api auth + stream glue", () => {
         expect(response.status).toBe("accepted");
     });
 
+    it("fetches the durable progress snapshot from the authoring progress endpoint", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({
+                job_id: "job-1",
+                status: "processing",
+                current_step: "m4_content_generator",
+                progress_seq: 4,
+            }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const response = await api.authoring.getProgress("job-1");
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/authoring/jobs/job-1/progress");
+        expect(response.current_step).toBe("m4_content_generator");
+        expect(response.progress_seq).toBe(4);
+    });
+
     it("reconciles terminal state after subscribe when initial snapshot is stale", async () => {
         vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
         vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");

@@ -2,16 +2,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, api } from "@/shared/api";
 import {
+    AUTHORING_PROGRESS_STEP_IDS,
     type AuthoringProgressStep,
     type AuthoringJobCreateRequest,
     type AuthoringJobStatusResponse,
+    type AuthoringJobResultResponse,
     type CanonicalCaseOutput,
     type CaseFormData,
 } from "@/shared/adam-types";
 
 const ACTIVE_AUTHORING_JOB_STORAGE_KEY = "adam_authoring_active_job";
+const STALE_RECOVERY_MESSAGE = "La sesion de recuperacion ya no esta disponible. Vuelve al formulario para iniciar una nueva generacion.";
 
 type ProgressScope = "narrative" | "technical";
+
+const AUTHORING_PROGRESS_STEP_SET = new Set<string>(AUTHORING_PROGRESS_STEP_IDS);
 
 interface PersistedActiveAuthoringJob {
     jobId: string;
@@ -78,6 +83,10 @@ function isAuthoringJobStatus(value: unknown): value is AuthoringJobStatusRespon
     );
 }
 
+function isAuthoringProgressStep(value: unknown): value is AuthoringProgressStep {
+    return typeof value === "string" && AUTHORING_PROGRESS_STEP_SET.has(value);
+}
+
 function getProgressStreamErrorMessage(error: unknown) {
     if (error instanceof ApiError) {
         if (error.status === 503 && error.retryAfterSeconds) {
@@ -87,6 +96,26 @@ function getProgressStreamErrorMessage(error: unknown) {
     }
 
     return "No se pudo conectar al canal de progreso en tiempo real.";
+}
+
+function getTerminalErrorMessage(status: AuthoringJobStatusResponse["status"], detail?: unknown) {
+    if (typeof detail === "string" && detail.trim() !== "") {
+        return detail;
+    }
+
+    if (status === "failed_resumable") {
+        return "La generacion se interrumpio por un error transitorio. Puedes reintentar sin perder el progreso ya completado.";
+    }
+
+    return "Error del servidor durante la generacion.";
+}
+
+function toCanonicalCaseOutput(response: AuthoringJobResultResponse): CanonicalCaseOutput {
+    if (response.canonical_output && typeof response.canonical_output === "object") {
+        return response.canonical_output as CanonicalCaseOutput;
+    }
+
+    return response as unknown as CanonicalCaseOutput;
 }
 
 export function buildAuthoringJobCreateRequest(formData: CaseFormData): AuthoringJobCreateRequest {
@@ -134,7 +163,11 @@ export function useAuthoringJobProgress() {
         clearPersistedActiveAuthoringJob();
     }, []);
 
-    const startStreaming = useCallback((id: string, scope: ProgressScope, opts?: { persist?: boolean }) => {
+    const startStreaming = useCallback((
+        id: string,
+        scope: ProgressScope,
+        opts?: { persist?: boolean; preserveActiveAgent?: boolean },
+    ) => {
         streamAbortRef.current?.abort();
 
         const controller = new AbortController();
@@ -145,7 +178,9 @@ export function useAuthoringJobProgress() {
         setIsStreaming(true);
         setErrorTrace(null);
         setResult(null);
-        setActiveAgent(undefined);
+        if (!opts?.preserveActiveAgent) {
+            setActiveAgent(undefined);
+        }
 
         if (opts?.persist !== false) {
             persistActiveAuthoringJob({ jobId: id, scope });
@@ -235,15 +270,79 @@ export function useAuthoringJobProgress() {
             });
     }, []);
 
+    const bootstrapResumedJob = useCallback(
+        async (
+            id: string,
+            scope: ProgressScope,
+            opts: { persist?: boolean },
+        ) => {
+            setJobId(id);
+            setProgressScope(scope);
+            setResult(null);
+            setErrorTrace(null);
+
+            try {
+                const snapshot = await api.authoring.getProgress(id);
+                const checkpointStep = isAuthoringProgressStep(snapshot.current_step)
+                    ? snapshot.current_step
+                    : undefined;
+
+                if (snapshot.status === "completed") {
+                    const resultResponse = await api.authoring.getResult(id);
+                    setResult(toCanonicalCaseOutput(resultResponse));
+                    setStatus("completed");
+                    setIsStreaming(false);
+                    clearPersistedActiveAuthoringJob();
+                    return;
+                }
+
+                if (snapshot.status === "failed" || snapshot.status === "failed_resumable") {
+                    setStatus(snapshot.status);
+                    setErrorTrace(getTerminalErrorMessage(snapshot.status, snapshot.error_trace));
+                    setIsStreaming(false);
+                    if (snapshot.status !== "failed_resumable") {
+                        clearPersistedActiveAuthoringJob();
+                    }
+                    return;
+                }
+
+                setStatus(snapshot.status);
+                if (checkpointStep) {
+                    setActiveAgent(checkpointStep);
+                }
+
+                startStreaming(id, scope, {
+                    persist: opts.persist,
+                    preserveActiveAgent: true,
+                });
+            } catch (error) {
+                if (error instanceof ApiError && error.status === 404) {
+                    clearPersistedActiveAuthoringJob();
+                    setJobId(null);
+                    setProgressScope(null);
+                    setActiveAgent(undefined);
+                    setErrorTrace(STALE_RECOVERY_MESSAGE);
+                    setStatus("failed");
+                    setIsStreaming(false);
+                    return;
+                }
+
+                setErrorTrace(getProgressStreamErrorMessage(error));
+                setStatus("failed");
+                setIsStreaming(false);
+            }
+        },
+        [startStreaming],
+    );
+
     useEffect(() => {
         const persisted = readPersistedActiveAuthoringJob();
         if (!persisted) {
             return;
         }
 
-        setStatus("processing");
-        startStreaming(persisted.jobId, persisted.scope, { persist: false });
-    }, [startStreaming]);
+        void bootstrapResumedJob(persisted.jobId, persisted.scope, { persist: false });
+    }, [bootstrapResumedJob]);
 
     const submitJob = useCallback(
         async (formData: CaseFormData) => {
@@ -291,12 +390,12 @@ export function useAuthoringJobProgress() {
             if (!retryResponse.job_id || typeof retryResponse.job_id !== "string") {
                 throw new Error("El servidor devolvio una respuesta de reintento invalida.");
             }
-            startStreaming(retryResponse.job_id, scope);
+            await bootstrapResumedJob(retryResponse.job_id, scope, { persist: true });
         } catch (error) {
             setErrorTrace(error instanceof Error ? error.message : "Error de red");
             setStatus("failed");
         }
-    }, [jobId, progressScope, startStreaming]);
+    }, [bootstrapResumedJob, jobId, progressScope]);
 
     return {
         jobId,
