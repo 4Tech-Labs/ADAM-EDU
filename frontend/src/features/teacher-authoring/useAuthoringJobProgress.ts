@@ -288,6 +288,9 @@ export function useAuthoringJobProgress() {
             setErrorTrace(null);
             setStatus("pending");
             const retryResponse = await api.authoring.retryJob(retryTargetJobId);
+            if (!retryResponse.job_id || typeof retryResponse.job_id !== "string") {
+                throw new Error("El servidor devolvio una respuesta de reintento invalida.");
+            }
             startStreaming(retryResponse.job_id, scope);
         } catch (error) {
             setErrorTrace(error instanceof Error ? error.message : "Error de red");

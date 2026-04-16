@@ -212,11 +212,13 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
 
         if previous_pool is not None and previous_pool is not pool:
             try:
-                await previous_pool.close()
-            except Exception as exc:
-                logger.warning(
+                await asyncio.wait_for(previous_pool.close(), timeout=5.0)
+            except (asyncio.TimeoutError, Exception) as exc:
+                logger.error(
                     "Could not close previous LangGraph async checkpointer pool cleanly: %s",
                     exc,
                 )
+            finally:
+                previous_pool = None  # allow GC regardless
 
         return pool

@@ -763,30 +763,45 @@ class AuthoringService:
                 error_code = "checkpoint_unavailable"
                 error_msg = _DURABLE_CHECKPOINT_ERROR_MESSAGE
             else:
-                logger.error("AuthoringService: LangGraph raised exception for Job %s", job_id, exc_info=True)
-                error_trace = traceback.format_exc()
-                error_str = error_trace.lower()
-                if any(marker in error_str for marker in _TRANSIENT_TIMEOUT_MARKERS):
-                    error_code = "llm_timeout"
-                    error_msg = (
-                        "Nuestros servidores de IA estan a maxima capacidad y el tiempo de espera se agoto. "
-                        "Por favor, reintenta en unos minutos."
+                # Secondary guard: catch DB/pool errors wrapped by LangGraph retry
+                # machinery that escape the outer _is_durable_checkpoint_runtime_failure
+                # check (e.g. RuntimeError -> __cause__ = PoolTimeout).
+                if any(
+                    isinstance(e, _CHECKPOINT_INFRA_ERROR_TYPES)
+                    for e in _iter_exception_chain(exc)
+                ):
+                    logger.error(
+                        "AuthoringService: Infra error in exception chain for Job %s",
+                        job_id,
+                        exc_info=True,
                     )
-                elif any(marker in error_str for marker in _TRANSIENT_PROVIDER_UNAVAILABLE_MARKERS):
-                    error_code = "llm_provider_unavailable"
-                    error_msg = (
-                        "Nuestros servidores de IA estan experimentando un pico de trafico en este momento. "
-                        "Por favor, reintenta en un par de minutos."
-                    )
-                elif "429" in error_str or "quota" in error_str:
-                    error_code = "llm_rate_limited"
-                    error_msg = (
-                        "Hemos alcanzado el limite de operaciones de IA permitidas por minuto. "
-                        "Por favor, intenta generar el caso un poco mas tarde."
-                    )
+                    error_code = "checkpoint_unavailable"
+                    error_msg = _DURABLE_CHECKPOINT_ERROR_MESSAGE
                 else:
-                    error_code = "llm_unhandled_error"
-                    error_msg = error_trace
+                    logger.error("AuthoringService: LangGraph raised exception for Job %s", job_id, exc_info=True)
+                    error_trace = traceback.format_exc()
+                    error_str = error_trace.lower()
+                    if any(marker in error_str for marker in _TRANSIENT_TIMEOUT_MARKERS):
+                        error_code = "llm_timeout"
+                        error_msg = (
+                            "Nuestros servidores de IA estan a maxima capacidad y el tiempo de espera se agoto. "
+                            "Por favor, reintenta en unos minutos."
+                        )
+                    elif any(marker in error_str for marker in _TRANSIENT_PROVIDER_UNAVAILABLE_MARKERS):
+                        error_code = "llm_provider_unavailable"
+                        error_msg = (
+                            "Nuestros servidores de IA estan experimentando un pico de trafico en este momento. "
+                            "Por favor, reintenta en un par de minutos."
+                        )
+                    elif "429" in error_str or "quota" in error_str:
+                        error_code = "llm_rate_limited"
+                        error_msg = (
+                            "Hemos alcanzado el limite de operaciones de IA permitidas por minuto. "
+                            "Por favor, intenta generar el caso un poco mas tarde."
+                        )
+                    else:
+                        error_code = "llm_unhandled_error"
+                        error_msg = error_trace
 
         # --- MICRO-SESSION 2: Persist Results ---
         db = SessionLocal()

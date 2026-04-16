@@ -81,8 +81,13 @@ export function TeacherAuthoringPage() {
   const handleRetry = useCallback(async () => {
     if (jobStatus === "failed_resumable") {
       setErrorMessage("");
-      setAppState("generating");
-      await retryJob();
+      try {
+        setAppState("generating");
+        await retryJob();
+      } catch (err) {
+        setErrorMessage(err instanceof Error ? err.message : "Error al reintentar.");
+        setAppState("error");
+      }
       return;
     }
 
