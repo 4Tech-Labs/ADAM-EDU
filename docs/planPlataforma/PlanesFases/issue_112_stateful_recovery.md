@@ -31,6 +31,10 @@ Step 0 outcome: user chose BIG CHANGE.
 - `backend/src/case_generator/graph.py` now separates the compiled-graph loop marker from the graph-init lock loop marker. This fixes the real live-LLM bug where `get_graph()` could return a compiled graph/checkpointer created on a previous pytest event loop, which then failed with `asyncio.Lock ... is bound to a different event loop` on the next `aget_tuple()`.
 - `backend/tests/test_authoring_progress_resilience.py` now includes a cross-loop regression test proving the graph singleton recompiles when the event loop changes.
 - `backend/tests/test_phase1b_real.py` now uses the current `edaDepth` enum (`charts_plus_explanation`) instead of the removed `charts_only` value.
+- Post-closure runtime hardening landed after a real remote incident on `job_id` `edba8d63-23f4-47b6-babc-939e5dfb07ec`: `/progress` still returned `200`, but Realtime subscription failed while the backend raised `psycopg_pool.PoolTimeout` and then failed closed with `checkpoint_unavailable` before any durable rows were written.
+- `backend/src/shared/database.py` now rejects the local `uv run python -m shared.app` path when `ENVIRONMENT=development` points at a remote Supabase host instead of `localhost:5434`, logs async pool open/close events, and exposes explicit close helpers for both LangGraph checkpointer pools.
+- `backend/src/shared/app.py` now validates the runtime DB target at startup and closes the async checkpointer pool, sync checkpointer pool, compiled graph singleton, and SQLAlchemy engine during FastAPI lifespan shutdown.
+- `frontend/src/shared/api.ts` now reconciles `/progress` one more time after `CHANNEL_ERROR` or `TIMED_OUT` so terminal backend failures like `checkpoint_unavailable` surface to the teacher instead of collapsing into a generic Realtime error.
 - Targeted backend contract validation is green against the repo-local Postgres target:
   - `uv run --directory backend pytest -q tests/test_phase3_status_api.py tests/test_internal_tasks.py` -> `15 passed`
 - Manual local checkpoint smoke is green against `localhost:5434` using the real `AuthoringService.run_job()` path:
@@ -49,8 +53,11 @@ Step 0 outcome: user chose BIG CHANGE.
   - observed token savings vs baseline: `20,370` total tokens
 - Post-fix backend validation is green:
   - `uv run --directory backend mypy src` -> clean
-  - `uv run --directory backend pytest -q tests/test_authoring_progress_resilience.py` -> `9 passed`
+  - `uv run --directory backend pytest -q tests/test_authoring_progress_resilience.py` -> `12 passed`
   - `uv run --directory backend pytest -q` -> `227 passed, 4 skipped`
+  - `uv run --directory backend pytest -q tests/test_phase3_status_api.py tests/test_internal_tasks.py tests/test_authoring_progress_resilience.py` -> `27 passed`
+  - `npm --prefix frontend run test -- src/shared/api.test.ts` -> `20 passed`
+  - `npm --prefix frontend run lint -- src/shared/api.ts src/shared/api.test.ts` -> clean
 - Focused live validation after the singleton fix is improved but still noisy under upstream Gemini availability:
   - `RUN_LIVE_LLM_TESTS=1 uv run --directory backend pytest -m live_llm -q` -> `6 passed, 2 failed`
   - the previous cross-loop checkpoint failure did not reproduce after the graph singleton fix
@@ -370,10 +377,10 @@ Phase 3, UX and contract continuity, complete
 13. Done: add session storage reconciliation on `404` during rehydration, non-retryable stale recovery UX, retry CTA gating, and duplicate retry click guard.
 
 Phase 4, tests and evals
-14. In progress: backend contract tests in `test_phase3_status_api.py` and `test_internal_tasks.py` still need to run or expand.
+14. Done: backend contract tests in `test_phase3_status_api.py` and `test_internal_tasks.py` still need to run or expand.
 15. Done: dedicated concurrency tests for duplicate retry race and first-use singleton initialization (8 tests).
 16. Done: add frontend tests for retry UX, rehydration, and timeline continuity.
-17. Next: run the remaining deterministic backend suites and manual checkpoint verification first, then focused `live_llm` baseline plus resume comparisons.
+17. Done: run the remaining deterministic backend suites and manual checkpoint verification first, then focused `live_llm` baseline plus resume comparisons.
 
 ### Verification plan
 Completed in this pass:

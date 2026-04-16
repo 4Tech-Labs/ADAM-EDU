@@ -400,6 +400,35 @@ async function streamRealtimeProgress(
 
     emitMonotonicProgress(snapshot.status, snapshot.current_step, snapshot.progress_seq);
 
+    const reconcileLatestSnapshot = async (): Promise<boolean> => {
+        const latestSnapshot = await parseJsonResponse<AuthoringJobProgressSnapshotResponse>(
+            `/authoring/jobs/${jobId}/progress`,
+        );
+
+        emitMonotonicProgress(
+            latestSnapshot.status,
+            latestSnapshot.current_step,
+            latestSnapshot.progress_seq,
+        );
+
+        if (latestSnapshot.status === "completed") {
+            await emitTerminalEvent(jobId, "completed", {}, onEvent);
+            return true;
+        }
+
+        if (latestSnapshot.status === "failed" || latestSnapshot.status === "failed_resumable") {
+            await emitTerminalEvent(
+                jobId,
+                latestSnapshot.status,
+                { error_trace: latestSnapshot.error_trace ?? "Error del servidor durante la generacion." },
+                onEvent,
+            );
+            return true;
+        }
+
+        return false;
+    };
+
     if (snapshot.status === "completed") {
         await emitTerminalEvent(jobId, "completed", {}, onEvent);
         return;
@@ -461,38 +490,18 @@ async function streamRealtimeProgress(
 
                 if (subscriptionStatus === "SUBSCRIBED") {
                     console.info("[authoring-progress] realtime subscribed", { jobId });
-                    void parseJsonResponse<AuthoringJobProgressSnapshotResponse>(`/authoring/jobs/${jobId}/progress`)
-                        .then((latestSnapshot) => {
+                    void reconcileLatestSnapshot()
+                        .then((reconciledTerminalState) => {
                             if (settled) {
                                 return;
                             }
 
-                            emitMonotonicProgress(
-                                latestSnapshot.status,
-                                latestSnapshot.current_step,
-                                latestSnapshot.progress_seq,
-                            );
-
-                            if (
-                                latestSnapshot.status !== "completed"
-                                && latestSnapshot.status !== "failed"
-                                && latestSnapshot.status !== "failed_resumable"
-                            ) {
+                            if (!reconciledTerminalState) {
                                 return;
                             }
 
                             settled = true;
-                            const terminalPayload =
-                                latestSnapshot.status === "failed" || latestSnapshot.status === "failed_resumable"
-                                    ? {
-                                          error_trace:
-                                              latestSnapshot.error_trace ?? "Error del servidor durante la generacion.",
-                                      }
-                                    : {};
-                            void emitTerminalEvent(jobId, latestSnapshot.status, terminalPayload, onEvent)
-                                .then(() => client.removeChannel(channel))
-                                .then(() => resolve())
-                                .catch((error) => reject(error));
+                            void client.removeChannel(channel).then(() => resolve()).catch((error) => reject(error));
                         })
                         .catch((error) => {
                             if (settled) {
@@ -510,9 +519,16 @@ async function streamRealtimeProgress(
                         subscriptionStatus,
                     });
                     settled = true;
-                    void client.removeChannel(channel).finally(() => {
-                        reject(new ApiError(502, "No se pudo abrir el canal de progreso en tiempo real."));
-                    });
+                    void client.removeChannel(channel)
+                        .catch(() => undefined)
+                        .then(async () => {
+                            const reconciledTerminalState = await reconcileLatestSnapshot();
+                            if (!reconciledTerminalState) {
+                                throw new ApiError(502, "No se pudo abrir el canal de progreso en tiempo real.");
+                            }
+                        })
+                        .then(() => resolve())
+                        .catch((error) => reject(error));
                 }
             });
 

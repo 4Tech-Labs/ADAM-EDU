@@ -290,6 +290,17 @@ describe("api auth + stream glue", () => {
                     status: 200,
                     headers: { "Content-Type": "application/json" },
                 }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "processing",
+                    current_step: "case_writer",
+                    progress_seq: 2,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
             );
         vi.stubGlobal("fetch", fetchMock);
 
@@ -312,6 +323,76 @@ describe("api auth + stream glue", () => {
             .map((event) => (JSON.parse(event.data) as { node: string }).node);
         expect(nodes).toEqual(["m3_content_generator"]);
 
+        expect(removeChannelMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("reconciles a terminal backend failure after realtime channel error", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+
+        const channel = {
+            on: vi.fn().mockReturnThis(),
+            subscribe: vi.fn((handler: (status: string) => void) => {
+                handler("SUBSCRIBED");
+                queueMicrotask(() => handler("CHANNEL_ERROR"));
+                return channel;
+            }),
+        };
+        const removeChannelMock = vi.fn().mockResolvedValue(undefined);
+
+        createClientMock.mockImplementationOnce(() => ({
+            auth: {
+                getSession: getSessionMock,
+            },
+            channel: vi.fn(() => channel),
+            removeChannel: removeChannelMock,
+        }));
+
+        const events: Array<{ event: string; data: string }> = [];
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "processing",
+                    current_step: "case_architect",
+                    progress_seq: 1,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "processing",
+                    current_step: "case_architect",
+                    progress_seq: 1,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "failed",
+                    current_step: "failed",
+                    progress_seq: 2,
+                    error_trace: "checkpoint unavailable",
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.authoring.streamProgress("job-1", (event) => events.push(event));
+
+        expect(events).toContainEqual({ event: "metadata", data: "{\"status\":\"failed\"}" });
+        expect(events).toContainEqual({
+            event: "error",
+            data: "{\"status\":\"failed\",\"detail\":\"checkpoint unavailable\"}",
+        });
         expect(removeChannelMock).toHaveBeenCalledTimes(1);
     });
 

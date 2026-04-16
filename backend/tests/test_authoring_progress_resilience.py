@@ -235,6 +235,7 @@ async def test_async_checkpointer_pool_initializes_once_per_loop(monkeypatch) ->
     monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", None)
     monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", None)
     monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock_loop", None)
     monkeypatch.setattr(database_module, "AsyncConnectionPool", FakeAsyncConnectionPool)
 
     first, second = await asyncio.gather(
@@ -245,6 +246,75 @@ async def test_async_checkpointer_pool_initializes_once_per_loop(monkeypatch) ->
     assert first is second
     assert len(created_pools) == 1
     assert state["open_calls"] == 1
+
+
+def test_async_checkpointer_pool_rebuilds_when_event_loop_changes(monkeypatch) -> None:
+    created_pools: list[object] = []
+    state = {"open_calls": 0}
+
+    class FakeAsyncConnectionPool:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            created_pools.append(self)
+
+        async def open(self) -> None:
+            state["open_calls"] += 1
+            await asyncio.sleep(0)
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock_loop", None)
+    monkeypatch.setattr(database_module, "AsyncConnectionPool", FakeAsyncConnectionPool)
+
+    first = asyncio.run(database_module.get_langgraph_checkpointer_async_pool())
+    second = asyncio.run(database_module.get_langgraph_checkpointer_async_pool())
+
+    assert first is not second
+    assert len(created_pools) == 2
+    assert state["open_calls"] == 2
+
+
+async def test_close_async_checkpointer_pool_clears_singleton(monkeypatch) -> None:
+    state = {"close_calls": 0}
+
+    class FakeAsyncConnectionPool:
+        async def close(self) -> None:
+            state["close_calls"] += 1
+
+    fake_pool = FakeAsyncConnectionPool()
+
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", fake_pool)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", asyncio.get_running_loop())
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", asyncio.Lock())
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock_loop", asyncio.get_running_loop())
+
+    await database_module.close_langgraph_checkpointer_async_pool()
+
+    assert state["close_calls"] == 1
+    assert database_module._langgraph_checkpointer_async_pool is None
+    assert database_module._langgraph_checkpointer_async_pool_loop is None
+    assert database_module._langgraph_checkpointer_async_pool_lock is None
+    assert database_module._langgraph_checkpointer_async_pool_lock_loop is None
+
+
+def test_validate_runtime_database_configuration_rejects_remote_supabase_in_development() -> None:
+    settings = database_module.Settings(
+        database_url="postgresql+psycopg://user:pass@aws-1-us-west-2.pooler.supabase.com:5432/postgres",
+        environment="development",
+    )
+
+    with patch.object(database_module, "settings", settings):
+        try:
+            database_module.validate_runtime_database_configuration(settings)
+        except RuntimeError as exc:
+            assert "localhost:5434" in str(exc)
+        else:
+            raise AssertionError("Expected development runtime validation to reject remote Supabase")
 
 
 async def test_graph_singleton_initializes_once_per_loop(monkeypatch) -> None:

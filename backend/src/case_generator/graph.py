@@ -3152,6 +3152,18 @@ _graph_singleton_lock_loop: asyncio.AbstractEventLoop | None = None
 _graph_singleton_lock_guard = threading.Lock()
 
 
+def reset_graph_singleton() -> None:
+    """Clear the cached compiled graph and its loop-bound initialization lock."""
+    global _graph_singleton, _graph_singleton_loop
+    global _graph_singleton_lock, _graph_singleton_lock_loop
+
+    _graph_singleton = None
+    _graph_singleton_loop = None
+    _graph_singleton_lock = None
+    _graph_singleton_lock_loop = None
+    logger.info("[graph] Reset compiled graph singleton")
+
+
 def _get_graph_lock(current_loop: asyncio.AbstractEventLoop) -> asyncio.Lock:
     """Return a loop-bound lock for async graph singleton initialization."""
     global _graph_singleton_lock, _graph_singleton_lock_loop
@@ -3170,12 +3182,14 @@ async def _build_async_postgres_checkpointer() -> AsyncPostgresSaver:
     """Build the durable async Postgres checkpointer inside an active event loop."""
     try:
         pool = await get_langgraph_checkpointer_async_pool()
+        logger.info("[graph] Initializing AsyncPostgresSaver", extra={"loop_id": id(asyncio.get_running_loop())})
         checkpointer = AsyncPostgresSaver(cast(Any, pool))
         # Idempotent bootstrap for local/tests where Alembic metadata may be recreated.
         await checkpointer.setup()
         logger.info("[graph] AsyncPostgresSaver initialized")
         return checkpointer
     except Exception as exc:
+        logger.error("[graph] AsyncPostgresSaver initialization failed", exc_info=True)
         raise DurableCheckpointUnavailableError(
             "Durable LangGraph checkpointing is unavailable."
         ) from exc

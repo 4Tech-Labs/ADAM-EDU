@@ -28,6 +28,7 @@ from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.orm import Session
 
 from case_generator.core.authoring import AuthoringService
+from case_generator.graph import reset_graph_singleton
 from case_generator.suggest_service import SuggestRequest, SuggestResponse, generate_suggestion
 from shared.admin_router import router as admin_router
 from shared.course_access_router import router as course_access_router
@@ -55,7 +56,13 @@ from shared.identity_activation import (
     upsert_membership as upsert_membership_impl,
     upsert_profile as upsert_profile_impl,
 )
-from shared.database import get_db
+from shared.database import (
+    close_langgraph_checkpointer_async_pool,
+    close_langgraph_checkpointer_pool,
+    dispose_database_engine,
+    get_db,
+    validate_runtime_database_configuration,
+)
 from shared.db_resilience import (
     AUTH_ME_ENDPOINT,
     AUTHORING_INTAKE_ENDPOINT,
@@ -205,6 +212,7 @@ def _run_uvicorn_profile(profile: UvicornRuntimeProfile) -> None:
 
 
 def main() -> None:
+    validate_runtime_database_configuration()
     runtime_profile = _build_uvicorn_runtime_profile()
     _run_uvicorn_profile(runtime_profile)
 
@@ -439,8 +447,15 @@ def require_teacher_actor_authoring_progress(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    yield
-    logger.info("Cleaning up resources...")
+    validate_runtime_database_configuration()
+    try:
+        yield
+    finally:
+        logger.info("Cleaning up resources...")
+        reset_graph_singleton()
+        await close_langgraph_checkpointer_async_pool()
+        close_langgraph_checkpointer_pool()
+        dispose_database_engine()
 
 
 app = FastAPI(title="adam-v8.0 - Case Generation API", lifespan=lifespan)

@@ -14,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 logger = logging.getLogger(__name__)
+_LOCAL_DATABASE_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 if sys.platform == "win32" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     # psycopg async connections are not compatible with the default Proactor loop
@@ -106,12 +107,38 @@ _langgraph_checkpointer_pool: ConnectionPool | None = None
 _langgraph_checkpointer_async_pool: AsyncConnectionPool | None = None
 _langgraph_checkpointer_async_pool_loop: asyncio.AbstractEventLoop | None = None
 _langgraph_checkpointer_async_pool_lock: asyncio.Lock | None = None
+_langgraph_checkpointer_async_pool_lock_loop: asyncio.AbstractEventLoop | None = None
 _langgraph_checkpointer_async_pool_lock_guard = threading.Lock()
 
 class Base(DeclarativeBase):
     """Base declarative class for SQLAlchemy models."""
 
     pass
+
+
+def validate_runtime_database_configuration(s: Settings | None = None) -> None:
+    """Reject the local runtime path when it points at remote Supabase.
+
+    The repo's documented development path is the Docker Postgres instance on
+    localhost:5434. Running `uv run python -m shared.app` against a remote
+    Supabase pooler keeps persistent dev pools alive against shared infra and
+    can starve the async checkpoint path.
+    """
+
+    active_settings = s or settings
+    if active_settings.environment.strip().lower() != "development":
+        return
+
+    parsed_url = make_url(active_settings.database_url)
+    host = (parsed_url.host or "").strip().lower()
+    if host in _LOCAL_DATABASE_HOSTS:
+        return
+
+    if host.endswith("supabase.com"):
+        raise RuntimeError(
+            "ENVIRONMENT=development must use the repo-local Postgres target on localhost:5434. "
+            "Remote Supabase DATABASE_URL values require the deployment runtime path, not `uv run python -m shared.app`."
+        )
 
 def get_db() -> Generator[Session, None, None]:
     """
@@ -162,16 +189,16 @@ def get_langgraph_checkpointer_pool() -> ConnectionPool:
 
 def _get_async_pool_lock(current_loop: asyncio.AbstractEventLoop) -> asyncio.Lock:
     """Return a loop-bound lock for async pool singleton initialization."""
-    global _langgraph_checkpointer_async_pool_lock, _langgraph_checkpointer_async_pool_loop
+    global _langgraph_checkpointer_async_pool_lock, _langgraph_checkpointer_async_pool_lock_loop
 
     with _langgraph_checkpointer_async_pool_lock_guard:
         if (
             _langgraph_checkpointer_async_pool_lock is None
-            or _langgraph_checkpointer_async_pool_loop is not current_loop
+            or _langgraph_checkpointer_async_pool_lock_loop is not current_loop
         ):
             # Bind the loop marker at lock creation time so concurrent first-use
             # callers on the same loop cannot mint different initialization locks.
-            _langgraph_checkpointer_async_pool_loop = current_loop
+            _langgraph_checkpointer_async_pool_lock_loop = current_loop
             _langgraph_checkpointer_async_pool_lock = asyncio.Lock()
     return _langgraph_checkpointer_async_pool_lock
 
@@ -196,6 +223,18 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
             return current_pool
 
         previous_pool = _langgraph_checkpointer_async_pool
+        parsed_url = make_url(settings.database_url)
+        logger.info(
+            "Opening LangGraph async checkpointer pool",
+            extra={
+                "pool_name": "langgraph-checkpointer-async",
+                "db_host": parsed_url.host,
+                "db_port": parsed_url.port,
+                "environment": settings.environment,
+                "max_size": max(1, settings.db_pool_size),
+                "loop_id": id(current_loop),
+            },
+        )
         pool = AsyncConnectionPool(
             conninfo=_to_psycopg_conninfo(settings.database_url),
             min_size=1,
@@ -212,6 +251,7 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
 
         if previous_pool is not None and previous_pool is not pool:
             try:
+                logger.info("Closing previous LangGraph async checkpointer pool", extra={"loop_id": id(current_loop)})
                 await asyncio.wait_for(previous_pool.close(), timeout=5.0)
             except (asyncio.TimeoutError, Exception) as exc:
                 logger.error(
@@ -222,3 +262,48 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
                 previous_pool = None  # allow GC regardless
 
         return pool
+
+
+async def close_langgraph_checkpointer_async_pool(timeout_seconds: float = 5.0) -> None:
+    """Close and clear the cached async LangGraph checkpointer pool."""
+    global _langgraph_checkpointer_async_pool
+    global _langgraph_checkpointer_async_pool_loop
+    global _langgraph_checkpointer_async_pool_lock
+    global _langgraph_checkpointer_async_pool_lock_loop
+
+    pool = _langgraph_checkpointer_async_pool
+    _langgraph_checkpointer_async_pool = None
+    _langgraph_checkpointer_async_pool_loop = None
+    _langgraph_checkpointer_async_pool_lock = None
+    _langgraph_checkpointer_async_pool_lock_loop = None
+
+    if pool is None:
+        return
+
+    try:
+        logger.info("Closing LangGraph async checkpointer pool")
+        await asyncio.wait_for(pool.close(), timeout=timeout_seconds)
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.error("Could not close LangGraph async checkpointer pool cleanly: %s", exc)
+
+
+def close_langgraph_checkpointer_pool() -> None:
+    """Close and clear the cached sync LangGraph checkpointer pool."""
+    global _langgraph_checkpointer_pool
+
+    pool = _langgraph_checkpointer_pool
+    _langgraph_checkpointer_pool = None
+    if pool is None:
+        return
+
+    try:
+        logger.info("Closing LangGraph sync checkpointer pool")
+        pool.close()
+    except Exception as exc:
+        logger.error("Could not close LangGraph sync checkpointer pool cleanly: %s", exc)
+
+
+def dispose_database_engine() -> None:
+    """Dispose the shared SQLAlchemy engine at process shutdown."""
+    logger.info("Disposing shared SQLAlchemy engine")
+    engine.dispose()
