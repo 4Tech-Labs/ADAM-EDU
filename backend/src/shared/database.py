@@ -3,6 +3,7 @@ from collections.abc import Generator
 import logging
 from pathlib import Path
 import sys
+import threading
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from sqlalchemy import create_engine, Engine
@@ -105,6 +106,7 @@ _langgraph_checkpointer_pool: ConnectionPool | None = None
 _langgraph_checkpointer_async_pool: AsyncConnectionPool | None = None
 _langgraph_checkpointer_async_pool_loop: asyncio.AbstractEventLoop | None = None
 _langgraph_checkpointer_async_pool_lock: asyncio.Lock | None = None
+_langgraph_checkpointer_async_pool_lock_guard = threading.Lock()
 
 class Base(DeclarativeBase):
     """Base declarative class for SQLAlchemy models."""
@@ -162,11 +164,15 @@ def _get_async_pool_lock(current_loop: asyncio.AbstractEventLoop) -> asyncio.Loc
     """Return a loop-bound lock for async pool singleton initialization."""
     global _langgraph_checkpointer_async_pool_lock, _langgraph_checkpointer_async_pool_loop
 
-    if (
-        _langgraph_checkpointer_async_pool_lock is None
-        or _langgraph_checkpointer_async_pool_loop is not current_loop
-    ):
-        _langgraph_checkpointer_async_pool_lock = asyncio.Lock()
+    with _langgraph_checkpointer_async_pool_lock_guard:
+        if (
+            _langgraph_checkpointer_async_pool_lock is None
+            or _langgraph_checkpointer_async_pool_loop is not current_loop
+        ):
+            # Bind the loop marker at lock creation time so concurrent first-use
+            # callers on the same loop cannot mint different initialization locks.
+            _langgraph_checkpointer_async_pool_loop = current_loop
+            _langgraph_checkpointer_async_pool_lock = asyncio.Lock()
     return _langgraph_checkpointer_async_pool_lock
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import logging
+from psycopg import Error as PsycopgError
+from psycopg_pool import PoolClosed, PoolTimeout
 import time
 import traceback
 import uuid
@@ -14,6 +16,8 @@ from case_generator.graph import DurableCheckpointUnavailableError, RESUME_CACHE
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy import update
+from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 from shared.blueprint_schema import (
     ArtifactManifestProjection,
     AssignmentBlueprint,
@@ -125,12 +129,47 @@ _TRANSIENT_PROVIDER_UNAVAILABLE_MARKERS = (
     "network is unreachable",
 )
 
+_DURABLE_CHECKPOINT_ERROR_MESSAGE = (
+    "No se pudo inicializar la persistencia durable del proceso de generacion. "
+    "Por favor, reintenta cuando el servicio de checkpoints este disponible."
+)
+_CHECKPOINT_INFRA_ERROR_TYPES = (
+    DBAPIError,
+    OperationalError,
+    SATimeoutError,
+    PsycopgError,
+    PoolClosed,
+    PoolTimeout,
+)
+
 
 def _classify_failure_status(error_code: str | None) -> str:
     """Map known transient failures to failed_resumable and default to failed."""
     if error_code in _RESUMABLE_FAILURE_CODES:
         return AUTHORING_JOB_STATUS_FAILED_RESUMABLE
     return AUTHORING_JOB_STATUS_FAILED
+
+
+def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
+    """Return the causal chain for an exception without revisiting cycles."""
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+
+    while current is not None and id(current) not in seen:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+
+    return chain
+
+
+def _is_durable_checkpoint_runtime_failure(exc: BaseException) -> bool:
+    """Return True when a graph stream error comes from checkpoint infra."""
+    return any(
+        isinstance(candidate, _CHECKPOINT_INFRA_ERROR_TYPES)
+        for candidate in _iter_exception_chain(exc)
+    )
 
 
 def _to_canonical_progress_step(raw_step: str | None) -> str | None:
@@ -706,10 +745,7 @@ class AuthoringService:
                 exc_info=True,
             )
             error_code = "checkpoint_unavailable"
-            error_msg = (
-                "No se pudo inicializar la persistencia durable del proceso de generacion. "
-                "Por favor, reintenta cuando el servicio de checkpoints este disponible."
-            )
+            error_msg = _DURABLE_CHECKPOINT_ERROR_MESSAGE
         except asyncio.TimeoutError:
             logger.error("AuthoringService: TIMEOUT — Job %s exceeded 900s", job_id)
             error_code = "llm_timeout"
@@ -717,31 +753,40 @@ class AuthoringService:
                 "Nuestros servidores de IA estan a maxima capacidad y el tiempo de espera se agoto. "
                 "Por favor, reintenta en unos minutos."
             )
-        except Exception:
-            logger.error("AuthoringService: LangGraph raised exception for Job %s", job_id, exc_info=True)
-            error_trace = traceback.format_exc()
-            error_str = error_trace.lower()
-            if any(marker in error_str for marker in _TRANSIENT_TIMEOUT_MARKERS):
-                error_code = "llm_timeout"
-                error_msg = (
-                    "Nuestros servidores de IA estan a maxima capacidad y el tiempo de espera se agoto. "
-                    "Por favor, reintenta en unos minutos."
+        except Exception as exc:
+            if _is_durable_checkpoint_runtime_failure(exc):
+                logger.error(
+                    "AuthoringService: Durable checkpoint runtime failed for Job %s",
+                    job_id,
+                    exc_info=True,
                 )
-            elif any(marker in error_str for marker in _TRANSIENT_PROVIDER_UNAVAILABLE_MARKERS):
-                error_code = "llm_provider_unavailable"
-                error_msg = (
-                    "Nuestros servidores de IA estan experimentando un pico de trafico en este momento. "
-                    "Por favor, reintenta en un par de minutos."
-                )
-            elif "429" in error_str or "quota" in error_str:
-                error_code = "llm_rate_limited"
-                error_msg = (
-                    "Hemos alcanzado el limite de operaciones de IA permitidas por minuto. "
-                    "Por favor, intenta generar el caso un poco mas tarde."
-                )
+                error_code = "checkpoint_unavailable"
+                error_msg = _DURABLE_CHECKPOINT_ERROR_MESSAGE
             else:
-                error_code = "llm_unhandled_error"
-                error_msg = error_trace
+                logger.error("AuthoringService: LangGraph raised exception for Job %s", job_id, exc_info=True)
+                error_trace = traceback.format_exc()
+                error_str = error_trace.lower()
+                if any(marker in error_str for marker in _TRANSIENT_TIMEOUT_MARKERS):
+                    error_code = "llm_timeout"
+                    error_msg = (
+                        "Nuestros servidores de IA estan a maxima capacidad y el tiempo de espera se agoto. "
+                        "Por favor, reintenta en unos minutos."
+                    )
+                elif any(marker in error_str for marker in _TRANSIENT_PROVIDER_UNAVAILABLE_MARKERS):
+                    error_code = "llm_provider_unavailable"
+                    error_msg = (
+                        "Nuestros servidores de IA estan experimentando un pico de trafico en este momento. "
+                        "Por favor, reintenta en un par de minutos."
+                    )
+                elif "429" in error_str or "quota" in error_str:
+                    error_code = "llm_rate_limited"
+                    error_msg = (
+                        "Hemos alcanzado el limite de operaciones de IA permitidas por minuto. "
+                        "Por favor, intenta generar el caso un poco mas tarde."
+                    )
+                else:
+                    error_code = "llm_unhandled_error"
+                    error_msg = error_trace
 
         # --- MICRO-SESSION 2: Persist Results ---
         db = SessionLocal()

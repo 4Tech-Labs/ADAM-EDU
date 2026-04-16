@@ -2,8 +2,11 @@ import asyncio
 import uuid
 from unittest.mock import AsyncMock, patch
 
+from psycopg_pool import PoolClosed
 from sqlalchemy.orm import Session as OrmSession
 
+import case_generator.graph as graph_module
+import shared.database as database_module
 from case_generator.core.authoring import (
     CANONICAL_TIMELINE_STEP_IDS,
     AuthoringService,
@@ -195,6 +198,116 @@ def test_run_job_fail_closed_when_checkpointer_is_unavailable(
     with (
         patch("case_generator.core.authoring.get_storage_provider", return_value=object()),
         patch("case_generator.core.authoring.get_graph", new=fail_get_graph),
+        patch("case_generator.core.authoring.ArtifactManager.orphan_job_artifacts") as orphan_mock,
+    ):
+        asyncio.run(AuthoringService.run_job(job.id))
+
+    db.expire_all()
+    refreshed = db.get(AuthoringJob, job.id)
+    assert refreshed is not None
+
+    payload = dict(refreshed.task_payload or {})
+    assert refreshed.status == "failed"
+    assert refreshed.retry_count == 1
+    assert payload.get("current_step") == "failed"
+    assert payload.get("error_code") == "checkpoint_unavailable"
+    assert "persistencia durable" in str(payload.get("error_trace", ""))
+    orphan_mock.assert_called_once()
+
+
+async def test_async_checkpointer_pool_initializes_once_per_loop(monkeypatch) -> None:
+    created_pools: list[object] = []
+    state = {"open_calls": 0}
+
+    class FakeAsyncConnectionPool:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            created_pools.append(self)
+
+        async def open(self) -> None:
+            state["open_calls"] += 1
+            await asyncio.sleep(0)
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", None)
+    monkeypatch.setattr(database_module, "AsyncConnectionPool", FakeAsyncConnectionPool)
+
+    first, second = await asyncio.gather(
+        database_module.get_langgraph_checkpointer_async_pool(),
+        database_module.get_langgraph_checkpointer_async_pool(),
+    )
+
+    assert first is second
+    assert len(created_pools) == 1
+    assert state["open_calls"] == 1
+
+
+async def test_graph_singleton_initializes_once_per_loop(monkeypatch) -> None:
+    state = {"checkpointer_calls": 0, "compile_calls": 0}
+
+    async def fake_build_async_postgres_checkpointer():
+        state["checkpointer_calls"] += 1
+        await asyncio.sleep(0)
+        return object()
+
+    def fake_compile(*, name: str, checkpointer: object):
+        state["compile_calls"] += 1
+        return {
+            "name": name,
+            "checkpointer": checkpointer,
+            "compile_calls": state["compile_calls"],
+        }
+
+    monkeypatch.setattr(graph_module, "_graph_singleton", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_loop", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_lock", None)
+    monkeypatch.setattr(graph_module, "_build_async_postgres_checkpointer", fake_build_async_postgres_checkpointer)
+    monkeypatch.setattr(graph_module.master_builder, "compile", fake_compile)
+
+    first, second = await asyncio.gather(
+        graph_module.get_graph(),
+        graph_module.get_graph(),
+    )
+
+    assert first is second
+    assert state["checkpointer_calls"] == 1
+    assert state["compile_calls"] == 1
+
+
+def test_run_job_fail_closed_when_checkpoint_runtime_fails_mid_stream(
+    db,
+    seed_identity,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-checkpoint-runtime@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+
+    job = _seed_authoring_job(
+        db,
+        teacher_id,
+        status="pending",
+        task_payload={"current_step": "case_architect", "progress_seq": 1},
+    )
+
+    class FailingGraph:
+        def astream(self, *args, **kwargs):
+            async def _stream():
+                raise PoolClosed("checkpoint pool closed")
+                yield {}
+
+            return _stream()
+
+    async def get_failing_graph():
+        return FailingGraph()
+
+    with (
+        patch("case_generator.core.authoring.get_storage_provider", return_value=object()),
+        patch("case_generator.core.authoring.get_graph", new=get_failing_graph),
         patch("case_generator.core.authoring.ArtifactManager.orphan_job_artifacts") as orphan_mock,
     ):
         asyncio.run(AuthoringService.run_job(job.id))

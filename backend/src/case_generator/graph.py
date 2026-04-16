@@ -45,6 +45,7 @@ import logging
 import os
 import random
 import re
+import threading
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -3146,14 +3147,19 @@ class DurableCheckpointUnavailableError(RuntimeError):
 _graph_singleton: Any | None = None
 _graph_singleton_loop: asyncio.AbstractEventLoop | None = None
 _graph_singleton_lock: asyncio.Lock | None = None
+_graph_singleton_lock_guard = threading.Lock()
 
 
 def _get_graph_lock(current_loop: asyncio.AbstractEventLoop) -> asyncio.Lock:
     """Return a loop-bound lock for async graph singleton initialization."""
     global _graph_singleton_lock, _graph_singleton_loop
 
-    if _graph_singleton_lock is None or _graph_singleton_loop is not current_loop:
-        _graph_singleton_lock = asyncio.Lock()
+    with _graph_singleton_lock_guard:
+        if _graph_singleton_lock is None or _graph_singleton_loop is not current_loop:
+            # Store the loop marker when the lock is created so concurrent first
+            # callers reuse a single initialization lock on that loop.
+            _graph_singleton_loop = current_loop
+            _graph_singleton_lock = asyncio.Lock()
     return _graph_singleton_lock
 
 
