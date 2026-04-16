@@ -4,11 +4,17 @@ Build a resilient stateful orchestration path for authoring jobs so generation c
 
 Step 0 outcome: user chose BIG CHANGE.
 
-### Current status after correction review
-- Phase 1 is already landed: schema, failed_resumable contract, retry endpoint, and CAS retry transition exist.
-- Phase 2 is partially landed but blocked by a critical async mismatch.
-- Root cause confirmed: `graph.astream()` runs through LangGraph's async checkpoint path, but `backend/src/case_generator/graph.py` currently instantiates the sync `PostgresSaver` instead of `AsyncPostgresSaver`.
-- Local validation target for this issue remains the repo app database on `localhost:5434`.
+### Current status after backend hardening pass (2026-04-15)
+- Phase 1 is already landed: schema, `failed_resumable` contract, retry endpoint, and CAS retry transition exist.
+- Phase 2 backend wiring is now landed on branch `feat/issue112-stateful-recovery` in commit `790947d`.
+- `backend/src/shared/database.py` now creates the LangGraph `AsyncConnectionPool` lazily inside an active event loop, keeps the Windows selector policy fix for local async psycopg, and hardens first-use singleton lock creation against same-loop races.
+- `backend/src/case_generator/graph.py` now compiles the master graph lazily with `AsyncPostgresSaver` and includes the same first-use singleton race fix for graph initialization.
+- `backend/src/case_generator/core/authoring.py` now awaits `get_graph()`, preserves the retry CAS plus artifact prefetch flow, and hard-fails checkpoint infrastructure failures both at bootstrap and mid-stream with `checkpoint_unavailable` instead of misclassifying them as resumable provider failures.
+- `backend/tests/test_authoring_progress_resilience.py` now covers duplicate retry race, bootstrap checkpointer failure, async pool first-use concurrency, graph singleton first-use concurrency, and mid-stream checkpoint fail-closed behavior.
+- Deterministic validation completed in this pass:
+  - `uv run --directory backend mypy src`
+  - `DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5434/postgres uv run --directory backend pytest -q tests/test_authoring_progress_resilience.py` -> `8 passed`
+- Remaining work for the next developer or agent: frontend Phase 3 continuity, backend contract coverage in `backend/tests/test_phase3_status_api.py` and `backend/tests/test_internal_tasks.py`, and a manual local checkpoint-table verification on a real authoring run.
 
 ### What already exists
 - Job lifecycle orchestration exists in `backend/src/case_generator/core/authoring.py` at `run_job`, including transitions `pending -> processing -> completed/failed`.
@@ -106,14 +112,14 @@ Windows local development note:
 21. Preserve the existing atomic compare-and-set retry transition to prevent duplicate resumes.
 
 ### Impact analysis
-Immediate Phase 2 correction files:
+Completed in this pass:
 - `backend/src/shared/database.py`
 - `backend/src/case_generator/graph.py`
 - `backend/src/case_generator/core/authoring.py`
+- `backend/tests/test_authoring_progress_resilience.py`
 - `docs/planPlataforma/PlanesFases/issue_112_stateful_recovery.md`
-- `TODOS.md`
 
-Later validation/continuity files after the wiring is green:
+Still pending for later validation or continuity work:
 - `backend/tests/test_authoring_progress_resilience.py`
 - `backend/tests/test_phase3_status_api.py`
 - `backend/tests/test_internal_tasks.py`
@@ -280,45 +286,46 @@ Progress path
 - Resumed progress regression:
   test required yes, error handling required yes (monotonic gating plus backend continuity), silent failure allowed no.
 
-Critical gaps flagged during review: 4.
+Critical gaps flagged during review: 4. The backend hardening gaps are resolved in this pass; the remaining work is now Phase 3 continuity plus broader contract validation.
 
 ### Implementation phases
 Phase 1, persistence and status contract
 1. Keep landed schema and contract work as-is unless an implementation mismatch is found.
 
-Phase 2, async correction and resume orchestration
-2. Add async pool wiring in `backend/src/shared/database.py`.
-3. Replace sync saver wiring with async lazy graph/checkpointer wiring in `backend/src/case_generator/graph.py`.
-4. Update `AuthoringService.run_job` to await the async graph getter in `backend/src/case_generator/core/authoring.py`.
-5. Preserve explicit manifest prefetch and node skip helpers.
-6. Fail closed when durable checkpointing cannot initialize or be read.
+Phase 2, async correction and resume orchestration, backend complete
+2. Done: add async pool wiring in `backend/src/shared/database.py`.
+3. Done: replace sync saver wiring with async lazy graph/checkpointer wiring in `backend/src/case_generator/graph.py`.
+4. Done: update `AuthoringService.run_job` to await the async graph getter in `backend/src/case_generator/core/authoring.py`.
+5. Done: preserve explicit manifest prefetch and node skip helpers.
+6. Done: fail closed when durable checkpointing cannot initialize or be read, including mid-stream checkpoint infrastructure failures after graph start.
 
-Phase 3, UX and contract continuity
-7. Keep frontend `failed_resumable` retry handling and persisted-job rehydration stable.
-8. Preserve `progress_seq/current_step` continuity on resumed stream.
+Phase 3, UX and contract continuity, next active phase
+7. Next: keep frontend `failed_resumable` retry handling and persisted-job rehydration stable.
+8. Next: preserve `progress_seq/current_step` continuity on resumed stream.
 
 Phase 4, tests and evals
-9. Add backend integration and contract tests for async checkpoint resume/checkpoint failure/atomic retry.
-10. Add dedicated concurrency tests for duplicate retry race.
-11. Add frontend retry/rehydration/timeline continuity tests.
-12. Run deterministic suites first, then focused `live_llm` baseline + resume comparisons.
+9. In progress: add backend integration and contract tests for async checkpoint resume/checkpoint failure/atomic retry. Focused resilience coverage is landed; `test_phase3_status_api.py` and `test_internal_tasks.py` still need to run or expand as needed.
+10. Done in focused coverage: add dedicated concurrency tests for duplicate retry race and first-use singleton initialization.
+11. Next: add frontend retry or rehydration or timeline continuity tests.
+12. Next: run deterministic suites first, then focused `live_llm` baseline plus resume comparisons.
 
 ### Verification plan
-Immediate async wiring validation:
-1. Run a local reproduction against `localhost:5434` and confirm `graph.astream()` no longer raises `NotImplementedError` on `aget_tuple`.
-2. Confirm LangGraph checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) receive rows for the run thread/job.
+Completed in this pass:
+1. `uv run --directory backend mypy src`
+2. `DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5434/postgres uv run --directory backend pytest -q tests/test_authoring_progress_resilience.py`
 
-Deterministic validation:
-3. `uv run --directory backend pytest -q backend/tests/test_authoring_progress_resilience.py backend/tests/test_phase3_status_api.py backend/tests/test_internal_tasks.py`
-4. `uv run --directory backend mypy src`
+Still pending before the backend track is considered fully closed:
+3. Run a local reproduction against `localhost:5434` and confirm `graph.astream()` no longer raises `NotImplementedError` on `aget_tuple` during a real authoring execution.
+4. Confirm LangGraph checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) receive rows for the run thread/job.
+5. `uv run --directory backend pytest -q tests/test_phase3_status_api.py tests/test_internal_tasks.py`
 
 Frontend validation after Phase 3 continuity updates:
-5. `npm --prefix frontend run test -- src/shared/api.test.ts src/features/teacher-authoring/useAuthoringJobProgress.rehydration.test.ts src/features/teacher-authoring/TeacherAuthoringPage.test.tsx`
-6. `npm --prefix frontend run lint`
-7. `npm --prefix frontend run build`
+6. `npm --prefix frontend run test -- src/shared/api.test.ts src/features/teacher-authoring/useAuthoringJobProgress.rehydration.test.ts src/features/teacher-authoring/TeacherAuthoringPage.test.tsx`
+7. `npm --prefix frontend run lint`
+8. `npm --prefix frontend run build`
 
 Focused live evals only after deterministic green:
-8. `RUN_LIVE_LLM_TESTS=1 uv run --directory backend pytest -m live_llm -q`
+9. `RUN_LIVE_LLM_TESTS=1 uv run --directory backend pytest -m live_llm -q`
 
 Live_llm baseline comparisons:
 - successful full run token/call profile before and after
@@ -336,10 +343,11 @@ Live_llm baseline comparisons:
 ### Completion summary
 - Step 0: Scope Challenge (user chose: BIG CHANGE)
 - Architecture Review: 2 implementation-shaping issues resolved
-- Code Quality Review: 4 direct fixes identified
-- Test Review: diagram produced, 4 gaps identified
-- Performance Review: 4 decisions fixed
-- NOT in scope: written
-- What already exists: written
-- TODOS.md updates: 4 deferred items captured
-- Failure modes: 4 critical gaps flagged
+- Code Quality Review: 4 direct fixes identified, backend hardening landed
+- Test Review: focused backend regressions added for concurrency and fail-closed behavior
+- Performance Review: single async pool and compiled-graph singleton path preserved, with same-loop init race fixed
+- Backend Phase 2 implementation complete and pushed in commit `790947d`
+- Validated in this pass:
+  - `uv run --directory backend mypy src`
+  - `DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5434/postgres uv run --directory backend pytest -q tests/test_authoring_progress_resilience.py` -> `8 passed`
+- Remaining for next phase: frontend Phase 3 continuity, backend contract tests in `test_phase3_status_api.py` and `test_internal_tasks.py`, manual checkpoint-table verification on a real run, and optional `live_llm` comparisons after deterministic green
