@@ -30,7 +30,7 @@ from shared.blueprint_schema import (
     StudentArtifacts,
     ValidationContract,
 )
-from shared.database import SessionLocal, register_active_authoring_job, unregister_active_authoring_job
+from shared.database import SessionLocal, register_active_authoring_job, settings, unregister_active_authoring_job
 from shared.models import (
     AUTHORING_JOB_RETRYABLE_STATUSES,
     AUTHORING_JOB_STATUS_COMPLETED,
@@ -63,6 +63,13 @@ CANONICAL_TIMELINE_STEP_IDS = (
     "case_writer",
     "eda_text_analyst",
     "m3_content_generator",
+    "m4_content_generator",
+    "m5_content_generator",
+    "teaching_note_part1",
+)
+NARRATIVE_TIMELINE_STEP_IDS = (
+    "case_architect",
+    "case_writer",
     "m4_content_generator",
     "m5_content_generator",
     "teaching_note_part1",
@@ -105,10 +112,23 @@ _PROGRESS_DEGRADATION_KEYS = (
 _RESUME_PREFETCH_WARN_MS = 25.0
 
 _RESUMABLE_FAILURE_CODES = {
+    "bootstrap_timeout",
+    "checkpoint_unavailable",
     "llm_timeout",
     "llm_provider_unavailable",
     "llm_rate_limited",
 }
+
+BOOTSTRAP_STATE_INITIALIZING = "initializing"
+_BOOTSTRAP_STATE_KEYS = (
+    "bootstrap_state",
+    "bootstrap_started_at",
+    "bootstrap_timeout_seconds",
+)
+
+
+class GraphBootstrapTimeoutError(RuntimeError):
+    """Raised when the graph bootstrap exceeds the configured timeout."""
 
 _TRANSIENT_TIMEOUT_MARKERS = (
     "timed out",
@@ -194,9 +214,87 @@ def _to_canonical_progress_step(raw_step: str | None) -> str | None:
     return None
 
 
+def _timeline_steps_for_payload(payload: Mapping[str, Any] | None) -> tuple[str, ...]:
+    case_type = payload.get("caseType", "harvard_only") if payload else "harvard_only"
+    return NARRATIVE_TIMELINE_STEP_IDS if case_type == "harvard_only" else CANONICAL_TIMELINE_STEP_IDS
+
+
+def derive_progress_percentage(
+    payload: Mapping[str, Any] | None,
+    *,
+    current_step: str | None,
+    status: str | None,
+) -> int | None:
+    """Match the frontend timeline percentage from the canonical persisted step."""
+    if status == AUTHORING_JOB_STATUS_COMPLETED or current_step == "completed":
+        return 100
+
+    canonical_step = _to_canonical_progress_step(current_step)
+    if canonical_step is None or canonical_step in TERMINAL_PROGRESS_STEPS:
+        return None
+
+    timeline_steps = _timeline_steps_for_payload(payload)
+    try:
+        step_index = timeline_steps.index(canonical_step)
+    except ValueError:
+        return None
+
+    return round(((step_index + 1) / len(timeline_steps)) * 100)
+
+
 def _clear_progress_degradation(payload: dict[str, Any]) -> None:
     for key in _PROGRESS_DEGRADATION_KEYS:
         payload.pop(key, None)
+
+
+def _bootstrap_timeout_seconds() -> float:
+    configured_timeout = settings.authoring_bootstrap_timeout_seconds
+    if configured_timeout is not None and configured_timeout > 0:
+        return float(configured_timeout)
+
+    normalized_environment = settings.environment.strip().lower()
+    return 120.0 if normalized_environment == "development" else 60.0
+
+
+def _clear_bootstrap_state(payload: dict[str, Any]) -> None:
+    for key in _BOOTSTRAP_STATE_KEYS:
+        payload.pop(key, None)
+
+
+def _mark_bootstrap_initializing(payload: dict[str, Any], *, timeout_seconds: float) -> None:
+    payload["bootstrap_state"] = BOOTSTRAP_STATE_INITIALIZING
+    payload["bootstrap_started_at"] = datetime.now(timezone.utc).isoformat()
+    payload["bootstrap_timeout_seconds"] = round(timeout_seconds, 3)
+
+
+def _remember_last_canonical_step(payload: dict[str, Any]) -> None:
+    current_step = payload.get("current_step")
+    if not isinstance(current_step, str):
+        return
+
+    canonical_step = _to_canonical_progress_step(current_step)
+    if canonical_step is None or canonical_step in TERMINAL_PROGRESS_STEPS:
+        return
+
+    payload["last_known_step"] = canonical_step
+
+
+def _processing_resume_step(payload: Mapping[str, Any] | None) -> str | None:
+    if not payload:
+        return None
+
+    for key in ("current_step", "last_known_step"):
+        raw_step = payload.get(key)
+        if not isinstance(raw_step, str):
+            continue
+
+        canonical_step = _to_canonical_progress_step(raw_step)
+        if canonical_step is None or canonical_step in TERMINAL_PROGRESS_STEPS:
+            continue
+
+        return canonical_step
+
+    return None
 
 
 def _persist_progress_degradation(
@@ -230,6 +328,7 @@ def _persist_progress_degradation(
             status="processing",
             current_step=canonical_current_step,
         )
+        _clear_bootstrap_state(payload)
         payload["progress_degraded"] = True
         payload["progress_degraded_step"] = canonical_step
         payload["progress_degraded_reason"] = "intermediate_checkpoint_write_failed"
@@ -291,6 +390,7 @@ async def _persist_intermediate_progress_step(
                 status="processing",
                 current_step=canonical_step,
             )
+            _clear_bootstrap_state(payload_step)
             _clear_progress_degradation(payload_step)
             job_step.task_payload = payload_step
             db_step.commit()
@@ -528,10 +628,20 @@ class AuthoringService:
                 )
                 return
 
+            bootstrap_timeout_seconds = _bootstrap_timeout_seconds()
+            processing_resume_step = _processing_resume_step(existing_job.task_payload)
             processing_payload = _next_progress_payload(
                 existing_job.task_payload,
                 status=AUTHORING_JOB_STATUS_PROCESSING,
-                current_step=_FIRST_CANONICAL_STEP,
+                current_step=processing_resume_step,
+            )
+            if processing_resume_step is None:
+                processing_payload.pop("current_step", None)
+            processing_payload.pop("error_code", None)
+            processing_payload.pop("error_trace", None)
+            _mark_bootstrap_initializing(
+                processing_payload,
+                timeout_seconds=bootstrap_timeout_seconds,
             )
             lock_stmt = (
                 update(AuthoringJob)
@@ -685,7 +795,25 @@ class AuthoringService:
 
             register_active_authoring_job(job_id)
             try:
-                compiled_graph = await get_graph()
+                bootstrap_started_at = time.perf_counter()
+                try:
+                    compiled_graph = await asyncio.wait_for(
+                        get_graph(),
+                        timeout=bootstrap_timeout_seconds,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise GraphBootstrapTimeoutError(
+                        f"Graph bootstrap exceeded {bootstrap_timeout_seconds} seconds"
+                    ) from exc
+
+                logger.info(
+                    "AuthoringService: Graph bootstrap ready for Job %s",
+                    job_id,
+                    extra={
+                        "bootstrap_latency_ms": round((time.perf_counter() - bootstrap_started_at) * 1000, 3),
+                        "bootstrap_timeout_seconds": bootstrap_timeout_seconds,
+                    },
+                )
 
                 run_config: RunnableConfig = {
                     "configurable": {
@@ -751,6 +879,17 @@ class AuthoringService:
             )
             error_code = "checkpoint_unavailable"
             error_msg = _DURABLE_CHECKPOINT_ERROR_MESSAGE
+        except GraphBootstrapTimeoutError:
+            logger.error(
+                "AuthoringService: Graph bootstrap timeout for Job %s",
+                job_id,
+                exc_info=True,
+            )
+            error_code = "bootstrap_timeout"
+            error_msg = (
+                "La infraestructura de generacion tardo demasiado en inicializarse. "
+                "Puedes reintentar sin perder el progreso ya completado."
+            )
         except asyncio.TimeoutError:
             logger.error("AuthoringService: TIMEOUT — Job %s exceeded 900s", job_id)
             error_code = "llm_timeout"
@@ -821,13 +960,16 @@ class AuthoringService:
             if error_msg:
                 failure_status = _classify_failure_status(error_code)
                 job.status = failure_status
+                existing_payload = dict(job.task_payload or {})
+                _remember_last_canonical_step(existing_payload)
                 current_payload = _next_progress_payload(
-                    job.task_payload,
+                    existing_payload,
                     status=failure_status,
                     current_step="failed",
                     error_code=error_code or "llm_failure",
                     error_trace=error_msg,
                 )
+                _clear_bootstrap_state(current_payload)
                 job.task_payload = current_payload
 
                 if failure_status == AUTHORING_JOB_STATUS_FAILED:
@@ -892,11 +1034,13 @@ class AuthoringService:
             assignment.canonical_output = canonical_result.get("canonical_output", {})
             assignment.status = "published"
             job.status = AUTHORING_JOB_STATUS_COMPLETED
-            job.task_payload = _next_progress_payload(
+            completed_payload = _next_progress_payload(
                 job.task_payload,
                 status=AUTHORING_JOB_STATUS_COMPLETED,
                 current_step="completed",
             )
+            _clear_bootstrap_state(completed_payload)
+            job.task_payload = completed_payload
 
             ArtifactManager.publish_job_artifacts(db, job_id)
             db.commit()

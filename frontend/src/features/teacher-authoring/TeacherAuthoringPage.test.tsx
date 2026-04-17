@@ -57,6 +57,7 @@ describe("TeacherAuthoringPage", () => {
             reset: vi.fn(),
             isStreaming: false,
             progressScope: null,
+            bootstrapState: undefined,
         });
 
         render(<TeacherAuthoringPage />);
@@ -78,6 +79,7 @@ describe("TeacherAuthoringPage", () => {
             reset: vi.fn(),
             isStreaming: false,
             progressScope: null,
+            bootstrapState: undefined,
         });
 
         render(<TeacherAuthoringPage />);
@@ -102,6 +104,7 @@ describe("TeacherAuthoringPage", () => {
             reset,
             isStreaming: false,
             progressScope: "technical",
+            bootstrapState: undefined,
         });
 
         render(<TeacherAuthoringPage />);
@@ -129,6 +132,7 @@ describe("TeacherAuthoringPage", () => {
             reset: vi.fn(),
             isStreaming: false,
             progressScope: null,
+            bootstrapState: undefined,
         });
 
         render(<TeacherAuthoringPage />);
@@ -150,6 +154,7 @@ describe("TeacherAuthoringPage", () => {
             reset: vi.fn(),
             isStreaming: false,
             progressScope: "technical",
+            bootstrapState: undefined,
         });
 
         render(<TeacherAuthoringPage />);
@@ -176,6 +181,7 @@ describe("TeacherAuthoringPage", () => {
             reset: vi.fn(),
             isStreaming: false,
             progressScope: "technical",
+            bootstrapState: undefined,
         });
 
         render(<TeacherAuthoringPage />);

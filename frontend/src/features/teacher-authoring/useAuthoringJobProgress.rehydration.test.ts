@@ -66,6 +66,7 @@ describe("useAuthoringJobProgress rehydration", () => {
             job_id: "job-42",
             status: "processing",
             current_step: "m3_content_generator",
+            bootstrap_state: "initializing",
             progress_seq: 3,
         });
         streamProgressMock.mockResolvedValue(undefined);
@@ -83,7 +84,32 @@ describe("useAuthoringJobProgress rehydration", () => {
         expect(result.current.jobId).toBe("job-42");
         expect(result.current.status).toBe("processing");
         expect(result.current.activeAgent).toBe("m3_content_generator");
+        expect(result.current.bootstrapState).toBe("initializing");
         expect(result.current.progressScope).toBe("technical");
+    });
+
+    it("tracks bootstrap metadata before the first canonical step is available", async () => {
+        sessionStorage.setItem(
+            "adam_authoring_active_job",
+            JSON.stringify({ jobId: "job-bootstrap", scope: "technical" }),
+        );
+
+        getProgressMock.mockResolvedValue({
+            job_id: "job-bootstrap",
+            status: "processing",
+            bootstrap_state: "initializing",
+            progress_seq: 1,
+        });
+        streamProgressMock.mockResolvedValue(undefined);
+
+        const { result } = renderHook(() => useAuthoringJobProgress());
+
+        await waitFor(() => {
+            expect(result.current.status).toBe("processing");
+            expect(result.current.bootstrapState).toBe("initializing");
+        });
+
+        expect(result.current.activeAgent).toBeUndefined();
     });
 
     it("clears stale persisted job state when bootstrap progress returns 404", async () => {

@@ -27,7 +27,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.orm import Session
 
-from case_generator.core.authoring import AuthoringService
+from case_generator.core.authoring import AuthoringService, derive_progress_percentage
 from case_generator.graph import reset_graph_singleton
 from case_generator.suggest_service import SuggestRequest, SuggestResponse, generate_suggestion
 from shared.admin_router import router as admin_router
@@ -692,6 +692,8 @@ class JobProgressResponse(BaseModel):
     job_id: str
     status: str
     current_step: str | None = None
+    progress_percentage: int | None = None
+    bootstrap_state: str | None = None
     progress_seq: int | None = None
     progress_ts: str | None = None
     error_code: str | None = None
@@ -768,12 +770,20 @@ def get_job_progress(
         progress_ts = payload.get("progress_ts")
         error_code = payload.get("error_code")
         error_trace = payload.get("error_trace")
+        bootstrap_state = payload.get("bootstrap_state")
+        current_step_value = current_step if isinstance(current_step, str) else None
 
         emit_metric("progress_snapshot_reads_total", 1, endpoint=AUTHORING_PROGRESS_ENDPOINT)
         return JobProgressResponse(
             job_id=job.id,
             status=job.status,
-            current_step=current_step if isinstance(current_step, str) else None,
+            current_step=current_step_value,
+            progress_percentage=derive_progress_percentage(
+                payload,
+                current_step=current_step_value,
+                status=job.status,
+            ),
+            bootstrap_state=bootstrap_state if isinstance(bootstrap_state, str) else None,
             progress_seq=progress_seq if isinstance(progress_seq, int) else None,
             progress_ts=progress_ts if isinstance(progress_ts, str) else None,
             error_code=error_code if isinstance(error_code, str) else None,

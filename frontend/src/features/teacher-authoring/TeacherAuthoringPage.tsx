@@ -45,6 +45,7 @@ export function TeacherAuthoringPage() {
     reset: resetJob,
     isStreaming,
     progressScope,
+    bootstrapState,
   } = useAuthoringJobProgress();
 
   useEffect(() => {
@@ -117,6 +118,7 @@ export function TeacherAuthoringPage() {
       {appState === "generating" && (
         <AuthoringProgressTimeline
           activeAgent={activeAgent}
+          bootstrapState={bootstrapState}
           jobStatus={jobStatus || undefined}
           scope={progressScope || (formData.caseType === "harvard_only" ? "narrative" : "technical")}
         />

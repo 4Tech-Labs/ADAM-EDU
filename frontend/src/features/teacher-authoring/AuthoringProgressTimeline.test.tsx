@@ -23,6 +23,20 @@ describe("AuthoringProgressTimeline", () => {
         expect(screen.getByText("14%")).toBeTruthy();
     });
 
+    it("keeps the visible timeline at zero while bootstrap is still initializing", () => {
+        render(
+            <AuthoringProgressTimeline
+                activeAgent={undefined}
+                bootstrapState="initializing"
+                scope="technical"
+                jobStatus="processing"
+            />,
+        );
+
+        expect(screen.getByText("0%")).toBeTruthy();
+        expect(screen.getByText("Preparando generador")).toBeTruthy();
+    });
+
     it("uses step index + 1 for percentage", () => {
         render(
             <AuthoringProgressTimeline

@@ -1,10 +1,11 @@
 /** AuthoringProgressTimeline: muestra progreso del pipeline */
 
 import { useEffect, useState, useRef } from "react";
-import type { AuthoringProgressStep } from "@/shared/adam-types";
+import type { AuthoringBootstrapState, AuthoringProgressStep } from "@/shared/adam-types";
 
 interface Props {
   activeAgent?: AuthoringProgressStep;
+  bootstrapState?: AuthoringBootstrapState;
   scope: "narrative" | "technical";
   jobStatus?: "pending" | "processing" | "completed" | "failed" | "failed_resumable";
 }
@@ -79,7 +80,7 @@ function getStepStatus(
   return "pending";
 }
 
-export function AuthoringProgressTimeline({ activeAgent, scope, jobStatus }: Props) {
+export function AuthoringProgressTimeline({ activeAgent, bootstrapState, scope, jobStatus }: Props) {
   const [dots, setDots] = useState("");
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const lastValidIndexRef = useRef<number>(-1);
@@ -100,10 +101,11 @@ export function AuthoringProgressTimeline({ activeAgent, scope, jobStatus }: Pro
   // nos quedamos en el último paso conocido en lugar de resetear el progreso a 0.
   if (activeIndex >= 0) lastValidIndexRef.current = activeIndex;
   const effectiveIndex = activeIndex >= 0 ? activeIndex : lastValidIndexRef.current;
+  const isBootstrapInitializing = bootstrapState === "initializing";
 
   const inferredActiveIndex = effectiveIndex >= 0
     ? effectiveIndex
-    : (jobStatus === "processing" ? 0 : -1);
+    : (jobStatus === "processing" && !isBootstrapInitializing ? 0 : -1);
   const currentProgressIndex = jobStatus === "completed"
     ? visibleSteps.length
     : (inferredActiveIndex >= 0 ? inferredActiveIndex + 1 : 0);
@@ -153,11 +155,13 @@ export function AuthoringProgressTimeline({ activeAgent, scope, jobStatus }: Pro
             <div className="space-y-2 w-full">
               {/* Textos escalados de 3xl a 2xl, y base a sm */}
               <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-tight flex items-end justify-center md:justify-start">
-                Generando caso
+                {isBootstrapInitializing ? "Preparando generador" : "Generando caso"}
                 <span className="inline-block w-4 text-left text-[#0144a0] animate-pulse">{dots}</span>
               </h2>
               <p className="text-sm text-slate-500 leading-relaxed max-w-[240px] mx-auto md:mx-0 text-center md:text-left">
-                Los agentes de ADAM están analizando y construyendo tu caso de forma orquestada.
+                {isBootstrapInitializing
+                  ? "Inicializando la persistencia durable y compilando el flujo antes de arrancar el primer paso visible."
+                  : "Los agentes de ADAM están analizando y construyendo tu caso de forma orquestada."}
               </p>
             </div>
           </div>

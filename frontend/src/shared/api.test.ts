@@ -20,6 +20,21 @@ vi.mock("@supabase/supabase-js", () => ({
 
 import { ApiError, api, formatHttpError, resetApiClientForTests } from "./api";
 
+async function flushAsyncWork() {
+    for (let tick = 0; tick < 10; tick += 1) {
+        await Promise.resolve();
+    }
+}
+
+async function flushAsyncWorkUntil(check: () => boolean, maxTicks = 50) {
+    for (let tick = 0; tick < maxTicks; tick += 1) {
+        if (check()) {
+            return;
+        }
+        await Promise.resolve();
+    }
+}
+
 describe("api auth + stream glue", () => {
     beforeEach(() => {
         resetApiClientForTests();
@@ -35,6 +50,7 @@ describe("api auth + stream glue", () => {
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         vi.restoreAllMocks();
     });
 
@@ -245,6 +261,7 @@ describe("api auth + stream glue", () => {
     });
 
     it("ignores stale post-subscribe snapshots after newer realtime progress", async () => {
+        vi.useFakeTimers();
         vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
         vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
 
@@ -267,6 +284,7 @@ describe("api auth + stream glue", () => {
         }));
 
         const events: Array<{ event: string; data: string }> = [];
+        const controller = new AbortController();
 
         const fetchMock = vi.fn()
             .mockResolvedValueOnce(
@@ -304,14 +322,15 @@ describe("api auth + stream glue", () => {
             );
         vi.stubGlobal("fetch", fetchMock);
 
-        const streamPromise = api.authoring.streamProgress("job-1", (event) => events.push(event));
-
-        await expect(streamPromise).rejects.toMatchObject(
-            {
-                status: 502,
-                message: "No se pudo abrir el canal de progreso en tiempo real.",
-            } satisfies Pick<ApiError, "status" | "message">,
+        const streamPromise = api.authoring.streamProgress(
+            "job-1",
+            (event) => events.push(event),
+            controller.signal,
         );
+
+        await flushAsyncWork();
+        controller.abort();
+        await streamPromise;
 
         const statuses = events
             .filter((event) => event.event === "metadata")
@@ -324,6 +343,7 @@ describe("api auth + stream glue", () => {
         expect(nodes).toEqual(["m3_content_generator"]);
 
         expect(removeChannelMock).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
     });
 
     it("reconciles a terminal backend failure after realtime channel error", async () => {
@@ -415,30 +435,79 @@ describe("api auth + stream glue", () => {
         );
     });
 
-    it("fails with explicit realtime channel error when client is unavailable", async () => {
-        vi.stubGlobal(
-            "fetch",
-            vi.fn().mockResolvedValue(
+    it("falls back to polling when realtime client is unavailable and stops on completed", async () => {
+        vi.useFakeTimers();
+
+        const events: Array<{ event: string; data: string }> = [];
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(
                 new Response(JSON.stringify({
                     job_id: "job-1",
                     status: "processing",
                     current_step: "case_writer",
+                    progress_seq: 2,
                 }), {
                     status: 200,
                     headers: { "Content-Type": "application/json" },
                 }),
-            ),
-        );
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "processing",
+                    current_step: "m4_content_generator",
+                    progress_seq: 4,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "completed",
+                    current_step: "completed",
+                    progress_seq: 5,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    assignment_id: "assignment-1",
+                    blueprint: {},
+                    canonical_output: { title: "Case" },
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
 
-        await expect(api.authoring.streamProgress("job-1", () => undefined)).rejects.toMatchObject(
-            {
-                status: 503,
-                message: "No se pudo conectar al canal de progreso en tiempo real.",
-            } satisfies Pick<ApiError, "status" | "message">,
-        );
+        const streamPromise = api.authoring.streamProgress("job-1", (event) => events.push(event));
+
+        await flushAsyncWork();
+        await vi.advanceTimersByTimeAsync(3000);
+        await streamPromise;
+
+        const nodes = events
+            .filter((event) => event.event === "message")
+            .map((event) => (JSON.parse(event.data) as { node: string }).node);
+        expect(nodes).toEqual(["case_writer", "m4_content_generator"]);
+        expect(events).toContainEqual({ event: "metadata", data: "{\"status\":\"completed\"}" });
+        expect(events[events.length - 1]).toEqual({
+            event: "result",
+            data: "{\"canonical_output\":{\"title\":\"Case\"}}",
+        });
+        expect(vi.getTimerCount()).toBe(0);
     });
 
-    it("ignores non-canonical current_step values", async () => {
+    it("ignores non-canonical current_step values while polling fallback stays active", async () => {
+        vi.useFakeTimers();
+
+        const controller = new AbortController();
         const events: Array<{ event: string; data: string }> = [];
         const fetchMock = vi.fn().mockResolvedValue(
             new Response(JSON.stringify({
@@ -452,16 +521,95 @@ describe("api auth + stream glue", () => {
         );
         vi.stubGlobal("fetch", fetchMock);
 
-        await expect(api.authoring.streamProgress("job-1", (event) => events.push(event))).rejects.toMatchObject(
-            {
-                status: 503,
-                message: "No se pudo conectar al canal de progreso en tiempo real.",
-            } satisfies Pick<ApiError, "status" | "message">,
+        const streamPromise = api.authoring.streamProgress(
+            "job-1",
+            (event) => events.push(event),
+            controller.signal,
         );
+
+        await flushAsyncWork();
+        controller.abort();
+        await streamPromise;
 
         expect(events).toEqual([
             { event: "metadata", data: "{\"status\":\"processing\"}" },
         ]);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("does not overlap HTTP polling requests during realtime fallback", async () => {
+        vi.useFakeTimers();
+
+        let resolvePendingPoll: ((value: Response) => void) | undefined;
+        const pendingPollResponse = new Promise<Response>((resolve) => {
+            resolvePendingPoll = resolve;
+        });
+
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "processing",
+                    current_step: "case_writer",
+                    progress_seq: 1,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    status: "processing",
+                    current_step: "case_writer",
+                    progress_seq: 1,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockImplementationOnce(() => pendingPollResponse)
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-1",
+                    assignment_id: "assignment-1",
+                    blueprint: {},
+                    canonical_output: { title: "Case" },
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const streamPromise = api.authoring.streamProgress("job-1", () => undefined);
+
+        await flushAsyncWorkUntil(() => fetchMock.mock.calls.length >= 2);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+
+        await vi.advanceTimersByTimeAsync(3000);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+
+        await vi.advanceTimersByTimeAsync(3000);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+
+        resolvePendingPoll?.(
+            new Response(JSON.stringify({
+                job_id: "job-1",
+                status: "completed",
+                current_step: "completed",
+                progress_seq: 2,
+            }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+
+        await flushAsyncWorkUntil(() => fetchMock.mock.calls.length >= 4);
+        await streamPromise;
+
+        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(vi.getTimerCount()).toBe(0);
     });
 
     it("surfaces retry-after metadata when progress snapshot receives 503 backpressure", async () => {

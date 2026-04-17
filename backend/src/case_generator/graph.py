@@ -47,6 +47,7 @@ import os
 import random
 import re
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -3183,10 +3184,14 @@ async def _build_async_postgres_checkpointer() -> AsyncPostgresSaver:
     try:
         pool = await get_langgraph_checkpointer_async_pool()
         logger.info("[graph] Initializing AsyncPostgresSaver", extra={"loop_id": id(asyncio.get_running_loop())})
+        setup_started_at = time.perf_counter()
         checkpointer = AsyncPostgresSaver(cast(Any, pool))
         # Idempotent bootstrap for local/tests where Alembic metadata may be recreated.
         await checkpointer.setup()
-        logger.info("[graph] AsyncPostgresSaver initialized")
+        logger.info(
+            "[graph] AsyncPostgresSaver initialized",
+            extra={"latency_ms": round((time.perf_counter() - setup_started_at) * 1000, 3)},
+        )
         return checkpointer
     except Exception as exc:
         logger.error("[graph] AsyncPostgresSaver initialization failed", exc_info=True)
@@ -3212,9 +3217,13 @@ async def get_graph() -> Any:
             return _graph_singleton
 
         checkpointer = await _build_async_postgres_checkpointer()
+        compile_started_at = time.perf_counter()
         compiled_graph = master_builder.compile(name="adam-agent", checkpointer=checkpointer)
         _graph_singleton = compiled_graph
         _graph_singleton_loop = current_loop
-        logger.info("[graph] Compiled master graph with AsyncPostgresSaver")
+        logger.info(
+            "[graph] Compiled master graph with AsyncPostgresSaver",
+            extra={"latency_ms": round((time.perf_counter() - compile_started_at) * 1000, 3)},
+        )
         return compiled_graph
 

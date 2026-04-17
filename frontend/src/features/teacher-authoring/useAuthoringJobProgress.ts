@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "@/shared/api";
 import {
     AUTHORING_PROGRESS_STEP_IDS,
+    type AuthoringBootstrapState,
     type AuthoringProgressStep,
     type AuthoringJobCreateRequest,
     type AuthoringJobStatusResponse,
@@ -87,6 +88,10 @@ function isAuthoringProgressStep(value: unknown): value is AuthoringProgressStep
     return typeof value === "string" && AUTHORING_PROGRESS_STEP_SET.has(value);
 }
 
+function isAuthoringBootstrapState(value: unknown): value is AuthoringBootstrapState {
+    return value === "initializing";
+}
+
 function getProgressStreamErrorMessage(error: unknown) {
     if (error instanceof ApiError) {
         if (error.status === 503 && error.retryAfterSeconds) {
@@ -147,6 +152,7 @@ export function useAuthoringJobProgress() {
     const [result, setResult] = useState<CanonicalCaseOutput | null>(null);
     const [isStreaming, setIsStreaming] = useState(false);
     const [progressScope, setProgressScope] = useState<ProgressScope | null>(null);
+    const [bootstrapState, setBootstrapState] = useState<AuthoringBootstrapState | undefined>(undefined);
 
     const streamAbortRef = useRef<AbortController | null>(null);
 
@@ -160,13 +166,14 @@ export function useAuthoringJobProgress() {
         setResult(null);
         setIsStreaming(false);
         setProgressScope(null);
+        setBootstrapState(undefined);
         clearPersistedActiveAuthoringJob();
     }, []);
 
     const startStreaming = useCallback((
         id: string,
         scope: ProgressScope,
-        opts?: { persist?: boolean; preserveActiveAgent?: boolean },
+        opts?: { persist?: boolean; preserveActiveAgent?: boolean; preserveActiveBootstrapState?: boolean },
     ) => {
         streamAbortRef.current?.abort();
 
@@ -180,6 +187,9 @@ export function useAuthoringJobProgress() {
         setResult(null);
         if (!opts?.preserveActiveAgent) {
             setActiveAgent(undefined);
+        }
+        if (!opts?.preserveActiveBootstrapState) {
+            setBootstrapState(undefined);
         }
 
         if (opts?.persist !== false) {
@@ -198,6 +208,12 @@ export function useAuthoringJobProgress() {
                             if (isAuthoringJobStatus(nextStatus)) {
                                 setStatus(nextStatus);
                             }
+                            const nextBootstrapState = payload.bootstrap_state;
+                            setBootstrapState(
+                                isAuthoringBootstrapState(nextBootstrapState)
+                                    ? nextBootstrapState
+                                    : undefined,
+                            );
                             return;
                         }
 
@@ -205,6 +221,7 @@ export function useAuthoringJobProgress() {
                             const node = payload.node;
                             if (typeof node === "string") {
                                 setActiveAgent(node as AuthoringProgressStep);
+                                setBootstrapState(undefined);
                             }
                             return;
                         }
@@ -220,6 +237,7 @@ export function useAuthoringJobProgress() {
 
                             setStatus("completed");
                             setIsStreaming(false);
+                            setBootstrapState(undefined);
                             clearPersistedActiveAuthoringJob();
                             controller.abort();
                             return;
@@ -238,6 +256,7 @@ export function useAuthoringJobProgress() {
                             );
                             setStatus(nextStatus);
                             setIsStreaming(false);
+                            setBootstrapState(undefined);
                             if (nextStatus !== "failed_resumable") {
                                 clearPersistedActiveAuthoringJob();
                             }
@@ -261,6 +280,7 @@ export function useAuthoringJobProgress() {
                 setErrorTrace(getProgressStreamErrorMessage(error));
                 setStatus("failed");
                 setIsStreaming(false);
+                setBootstrapState(undefined);
                 clearPersistedActiveAuthoringJob();
             })
             .finally(() => {
@@ -286,12 +306,16 @@ export function useAuthoringJobProgress() {
                 const checkpointStep = isAuthoringProgressStep(snapshot.current_step)
                     ? snapshot.current_step
                     : undefined;
+                const nextBootstrapState = isAuthoringBootstrapState(snapshot.bootstrap_state)
+                    ? snapshot.bootstrap_state
+                    : undefined;
 
                 if (snapshot.status === "completed") {
                     const resultResponse = await api.authoring.getResult(id);
                     setResult(toCanonicalCaseOutput(resultResponse));
                     setStatus("completed");
                     setIsStreaming(false);
+                    setBootstrapState(undefined);
                     clearPersistedActiveAuthoringJob();
                     return;
                 }
@@ -300,6 +324,7 @@ export function useAuthoringJobProgress() {
                     setStatus(snapshot.status);
                     setErrorTrace(getTerminalErrorMessage(snapshot.status, snapshot.error_trace));
                     setIsStreaming(false);
+                    setBootstrapState(undefined);
                     if (snapshot.status !== "failed_resumable") {
                         clearPersistedActiveAuthoringJob();
                     }
@@ -307,6 +332,7 @@ export function useAuthoringJobProgress() {
                 }
 
                 setStatus(snapshot.status);
+                setBootstrapState(nextBootstrapState);
                 if (checkpointStep) {
                     setActiveAgent(checkpointStep);
                 }
@@ -314,6 +340,7 @@ export function useAuthoringJobProgress() {
                 startStreaming(id, scope, {
                     persist: opts.persist,
                     preserveActiveAgent: true,
+                    preserveActiveBootstrapState: true,
                 });
             } catch (error) {
                 if (error instanceof ApiError && error.status === 404) {
@@ -321,6 +348,7 @@ export function useAuthoringJobProgress() {
                     setJobId(null);
                     setProgressScope(null);
                     setActiveAgent(undefined);
+                    setBootstrapState(undefined);
                     setErrorTrace(STALE_RECOVERY_MESSAGE);
                     setStatus("failed");
                     setIsStreaming(false);
@@ -330,6 +358,7 @@ export function useAuthoringJobProgress() {
                 setErrorTrace(getProgressStreamErrorMessage(error));
                 setStatus("failed");
                 setIsStreaming(false);
+                setBootstrapState(undefined);
             }
         },
         [startStreaming],
@@ -408,5 +437,6 @@ export function useAuthoringJobProgress() {
         reset,
         isStreaming,
         progressScope,
+        bootstrapState,
     };
 }

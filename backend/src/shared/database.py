@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 import sys
 import threading
+import time
 from typing import Any
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
@@ -43,6 +44,7 @@ class Settings(BaseSettings):
     db_lock_timeout_ms: int = 5000
     db_retry_after_seconds: int = 3
     db_critical_endpoint_budget: int = 64
+    authoring_bootstrap_timeout_seconds: int | None = None
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 
@@ -303,6 +305,7 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
                 "loop_id": id(current_loop),
             },
         )
+        pool_open_started_at = time.perf_counter()
         pool = AsyncConnectionPool(
             conninfo=_to_psycopg_conninfo(settings.database_url),
             min_size=1,
@@ -313,6 +316,15 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
             name="langgraph-checkpointer-async",
         )
         await pool.open()
+        logger.info(
+            "LangGraph async checkpointer pool opened",
+            extra={
+                "pool_name": "langgraph-checkpointer-async",
+                "environment": settings.environment,
+                "loop_id": id(current_loop),
+                "latency_ms": round((time.perf_counter() - pool_open_started_at) * 1000, 3),
+            },
+        )
 
         _langgraph_checkpointer_async_pool = pool
         _langgraph_checkpointer_async_pool_loop = current_loop

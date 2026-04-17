@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session as OrmSession
 import case_generator.graph as graph_module
 import shared.database as database_module
 from case_generator.core.authoring import (
+    BOOTSTRAP_STATE_INITIALIZING,
     CANONICAL_TIMELINE_STEP_IDS,
     AuthoringService,
     _persist_intermediate_progress_step,
@@ -209,12 +210,99 @@ def test_run_job_fail_closed_when_checkpointer_is_unavailable(
     assert refreshed is not None
 
     payload = dict(refreshed.task_payload or {})
-    assert refreshed.status == "failed"
+    assert refreshed.status == "failed_resumable"
     assert refreshed.retry_count == 1
     assert payload.get("current_step") == "failed"
     assert payload.get("error_code") == "checkpoint_unavailable"
+    assert payload.get("last_known_step") == "case_architect"
+    assert payload.get("bootstrap_state") is None
     assert "persistencia durable" in str(payload.get("error_trace", ""))
-    orphan_mock.assert_called_once()
+    orphan_mock.assert_not_called()
+
+
+def test_run_job_marks_bootstrap_initializing_before_graph_start(
+    db,
+    seed_identity,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-bootstrap-state@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+
+    job = _seed_authoring_job(
+        db,
+        teacher_id,
+        status="pending",
+        task_payload={},
+    )
+
+    gate = asyncio.Event()
+
+    async def block_get_graph():
+        processing_db = database_module.SessionLocal()
+        try:
+            processing_job = processing_db.get(AuthoringJob, job.id)
+            assert processing_job is not None
+            payload = dict(processing_job.task_payload or {})
+            assert payload.get("bootstrap_state") == BOOTSTRAP_STATE_INITIALIZING
+            assert payload.get("current_step") is None
+            assert payload.get("error_code") is None
+            assert isinstance(payload.get("bootstrap_started_at"), str)
+            assert payload.get("bootstrap_timeout_seconds") is not None
+        finally:
+            processing_db.close()
+            gate.set()
+
+        raise DurableCheckpointUnavailableError("checkpoint bootstrap failed")
+
+    with (
+        patch("case_generator.core.authoring.get_storage_provider", return_value=object()),
+        patch("case_generator.core.authoring.get_graph", new=block_get_graph),
+    ):
+        asyncio.run(AuthoringService.run_job(job.id))
+
+    assert gate.is_set()
+
+
+def test_run_job_classifies_bootstrap_timeout_as_resumable(
+    db,
+    seed_identity,
+    monkeypatch,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-bootstrap-timeout@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+
+    job = _seed_authoring_job(
+        db,
+        teacher_id,
+        status="pending",
+        task_payload={},
+    )
+
+    async def get_graph_success() -> object:
+        return object()
+
+    async def fake_wait_for(awaitable, timeout):
+        await awaitable
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr("case_generator.core.authoring._bootstrap_timeout_seconds", lambda: 1.0)
+
+    with (
+        patch("case_generator.core.authoring.get_storage_provider", return_value=object()),
+        patch("case_generator.core.authoring.get_graph", new=get_graph_success),
+        patch("case_generator.core.authoring.asyncio.wait_for", new=fake_wait_for),
+    ):
+        asyncio.run(AuthoringService.run_job(job.id))
+
+    db.expire_all()
+    refreshed = db.get(AuthoringJob, job.id)
+    assert refreshed is not None
+
+    payload = dict(refreshed.task_payload or {})
+    assert refreshed.status == "failed_resumable"
+    assert payload.get("error_code") == "bootstrap_timeout"
+    assert payload.get("bootstrap_state") is None
 
 
 async def test_async_checkpointer_pool_initializes_once_per_loop(monkeypatch) -> None:
@@ -458,12 +546,13 @@ def test_run_job_fail_closed_when_checkpoint_runtime_fails_mid_stream(
     assert refreshed is not None
 
     payload = dict(refreshed.task_payload or {})
-    assert refreshed.status == "failed"
+    assert refreshed.status == "failed_resumable"
     assert refreshed.retry_count == 1
     assert payload.get("current_step") == "failed"
     assert payload.get("error_code") == "checkpoint_unavailable"
+    assert payload.get("last_known_step") == "case_architect"
     assert "persistencia durable" in str(payload.get("error_trace", ""))
-    orphan_mock.assert_called_once()
+    orphan_mock.assert_not_called()
 
 
 def test_run_job_duplicate_retry_race_allows_only_one_checkpoint_attempt(
@@ -516,6 +605,7 @@ def test_run_job_duplicate_retry_race_allows_only_one_checkpoint_attempt(
     assert state["get_graph_calls"] == 1
     assert prefetch_mock.await_count == 1
     assert refreshed.retry_count == 1
-    assert refreshed.status == "failed"
+    assert refreshed.status == "failed_resumable"
     assert payload.get("error_code") == "checkpoint_unavailable"
-    orphan_mock.assert_called_once()
+    assert payload.get("last_known_step") == "case_writer"
+    orphan_mock.assert_not_called()

@@ -202,6 +202,7 @@ export const AUTHORING_PROGRESS_STEP_IDS = [
 
 export type AuthoringProgressStep = (typeof AUTHORING_PROGRESS_STEP_IDS)[number];
 export type AuthoringProgressCheckpoint = AuthoringProgressStep | "completed" | "failed";
+export type AuthoringBootstrapState = "initializing";
 
 export interface AuthoringJobStatusResponse {
     job_id: string;
@@ -216,6 +217,8 @@ export interface AuthoringJobProgressSnapshotResponse {
     job_id: string;
     status: AuthoringJobStatus;
     current_step?: AuthoringProgressCheckpoint;
+    progress_percentage?: number;
+    bootstrap_state?: AuthoringBootstrapState;
     progress_seq?: number;
     progress_ts?: string;
     error_code?: string;
