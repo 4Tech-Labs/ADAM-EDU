@@ -59,9 +59,10 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.runnables import RunnableConfig
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver as LangGraphAsyncPostgresSaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import RetryPolicy
+from psycopg.errors import UndefinedTable
 
 from case_generator.state import ADAMState
 from case_generator.configuration import Configuration
@@ -115,6 +116,48 @@ load_dotenv()
 
 if os.getenv("GEMINI_API_KEY") is None:
     raise ValueError("GEMINI_API_KEY is not set")
+
+
+class AsyncPostgresSaver(LangGraphAsyncPostgresSaver):
+    """Skip LangGraph DDL when Alembic already aligned checkpoint schema."""
+
+    async def setup(self) -> None:
+        async with self._cursor() as cur:
+            try:
+                results = await cur.execute(
+                    "SELECT v FROM checkpoint_migrations ORDER BY v DESC LIMIT 1"
+                )
+                row = await results.fetchone()
+            except UndefinedTable:
+                await cur.execute(self.MIGRATIONS[0])
+                await cur.execute(
+                    "INSERT INTO checkpoint_migrations (v) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (0,),
+                )
+                version = 0
+            else:
+                if row is None:
+                    await cur.execute(
+                        "INSERT INTO checkpoint_migrations (v) VALUES (%s) ON CONFLICT DO NOTHING",
+                        (0,),
+                    )
+                    version = 0
+                else:
+                    version = row["v"]
+
+            for v, migration in zip(
+                range(version + 1, len(self.MIGRATIONS)),
+                self.MIGRATIONS[version + 1 :],
+                strict=False,
+            ):
+                await cur.execute(migration)
+                await cur.execute(
+                    "INSERT INTO checkpoint_migrations (v) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (v,),
+                )
+
+        if self.pipe:
+            await self.pipe.sync()
 
 
 # Rate limiter compartido por TODOS los LLMs de esta instancia de Cloud Run.

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from psycopg_pool import PoolClosed
 import pytest
+from sqlalchemy import text
 from sqlalchemy.orm import Session as OrmSession
 
 import case_generator.graph as graph_module
@@ -699,6 +700,66 @@ async def test_build_async_postgres_checkpointer_preserves_failure_when_diagnost
     assert error_record.checkpoint_migrations_version == 3
     assert error_record.pool_busy == 1
     assert error_record.requests_waiting == 2
+
+
+def test_alembic_upgrade_head_seeds_checkpoint_migrations_to_latest_version(db) -> None:
+    max_version = db.execute(text("SELECT max(v) FROM checkpoint_migrations")).scalar_one()
+
+    assert max_version == 9
+
+
+async def test_async_postgres_saver_setup_emits_no_ddl_on_migrated_schema(monkeypatch) -> None:
+    await database_module.close_langgraph_checkpointer_async_pool()
+    pool = await database_module.get_langgraph_checkpointer_async_pool()
+    recorded_statements: list[str] = []
+    original_cursor = graph_module.AsyncPostgresSaver._cursor
+
+    @contextlib.asynccontextmanager
+    async def recording_cursor(self, *args, **kwargs):
+        async with original_cursor(self, *args, **kwargs) as cur:
+            class RecordingCursor:
+                def __init__(self, wrapped_cursor):
+                    self._wrapped_cursor = wrapped_cursor
+
+                async def execute(self, query, params=None, *execute_args, **execute_kwargs):
+                    normalized_query = " ".join(str(query).split())
+                    recorded_statements.append(normalized_query)
+                    if params is None:
+                        return await self._wrapped_cursor.execute(
+                            query,
+                            *execute_args,
+                            **execute_kwargs,
+                        )
+                    return await self._wrapped_cursor.execute(
+                        query,
+                        params,
+                        *execute_args,
+                        **execute_kwargs,
+                    )
+
+                def __getattr__(self, name):
+                    return getattr(self._wrapped_cursor, name)
+
+            yield RecordingCursor(cur)
+
+    monkeypatch.setattr(graph_module.AsyncPostgresSaver, "_cursor", recording_cursor)
+
+    try:
+        checkpointer = graph_module.AsyncPostgresSaver(pool)
+        await checkpointer.setup()
+    finally:
+        await database_module.close_langgraph_checkpointer_async_pool()
+
+    non_select_statements = [
+        statement
+        for statement in recorded_statements
+        if not statement.upper().startswith("SELECT ")
+    ]
+
+    assert recorded_statements == [
+        "SELECT v FROM checkpoint_migrations ORDER BY v DESC LIMIT 1"
+    ]
+    assert non_select_statements == []
 
 
 def test_graph_singleton_rebuilds_when_event_loop_changes(monkeypatch) -> None:
