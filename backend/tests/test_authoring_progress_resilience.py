@@ -5,6 +5,7 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 from psycopg_pool import PoolClosed
+import pytest
 from sqlalchemy.orm import Session as OrmSession
 
 import case_generator.graph as graph_module
@@ -427,6 +428,63 @@ async def test_close_async_checkpointer_pool_logs_timeout_telemetry(monkeypatch,
     assert "authoring-job-job-timeout" in caplog.text
 
 
+async def test_async_checkpointer_pool_logs_stable_pool_open_key_and_warning(monkeypatch, caplog) -> None:
+    state = {"open_calls": 0}
+
+    class FakeAsyncConnectionPool:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+        def get_stats(self) -> dict[str, int]:
+            return {
+                "pool_min": 1,
+                "pool_max": 5,
+                "pool_size": 1,
+                "pool_available": 1,
+                "requests_waiting": 0,
+            }
+
+        async def open(self) -> None:
+            state["open_calls"] += 1
+            await asyncio.sleep(0)
+
+        async def close(self) -> None:
+            return None
+
+    perf_counter_values = iter((0.0, 5.5))
+
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock_loop", None)
+    monkeypatch.setattr(database_module, "AsyncConnectionPool", FakeAsyncConnectionPool)
+    monkeypatch.setattr(database_module.time, "perf_counter", lambda: next(perf_counter_values))
+
+    caplog.set_level(logging.INFO)
+
+    pool = await database_module.get_langgraph_checkpointer_async_pool()
+
+    assert pool is not None
+    assert state["open_calls"] == 1
+
+    info_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "LangGraph async checkpointer pool opened"
+    )
+    warning_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "LangGraph bootstrap pool.open() exceeded slow-path threshold"
+    )
+
+    assert info_record.bootstrap_pool_open_ms == 5500.0
+    assert warning_record.bootstrap_pool_open_ms == 5500.0
+
+    await database_module.close_langgraph_checkpointer_async_pool()
+
+
 def test_validate_runtime_database_configuration_rejects_remote_supabase_in_development() -> None:
     settings = database_module.Settings(
         database_url="postgresql+psycopg://user:pass@aws-1-us-west-2.pooler.supabase.com:5432/postgres",
@@ -508,7 +566,8 @@ async def test_langgraph_checkpointer_async_pool_caps_size_in_production(monkeyp
 async def test_graph_singleton_initializes_once_per_loop(monkeypatch) -> None:
     state = {"checkpointer_calls": 0, "compile_calls": 0}
 
-    async def fake_build_async_postgres_checkpointer():
+    async def fake_build_async_postgres_checkpointer(*, is_first_init: bool):
+        assert is_first_init is True
         state["checkpointer_calls"] += 1
         await asyncio.sleep(0)
         return object()
@@ -538,13 +597,120 @@ async def test_graph_singleton_initializes_once_per_loop(monkeypatch) -> None:
     assert state["compile_calls"] == 1
 
 
+async def test_build_async_postgres_checkpointer_logs_stable_setup_keys_and_warning(monkeypatch, caplog) -> None:
+    fake_pool = object()
+
+    class FakeAsyncPostgresSaver:
+        def __init__(self, pool):
+            self.pool = pool
+
+        async def setup(self) -> None:
+            await asyncio.sleep(0)
+
+    perf_counter_values = iter((0.0, 10.5))
+
+    async def fake_get_pool():
+        return fake_pool
+
+    async def fake_get_checkpoint_migrations_version(_pool):
+        return 9
+
+    monkeypatch.setattr(graph_module, "get_langgraph_checkpointer_async_pool", fake_get_pool)
+    monkeypatch.setattr(graph_module, "get_checkpoint_migrations_version", fake_get_checkpoint_migrations_version)
+    monkeypatch.setattr(graph_module, "AsyncPostgresSaver", FakeAsyncPostgresSaver)
+    monkeypatch.setattr(graph_module.time, "perf_counter", lambda: next(perf_counter_values))
+
+    caplog.set_level(logging.INFO, logger="adam.graph")
+
+    checkpointer = await graph_module._build_async_postgres_checkpointer(is_first_init=True)
+
+    assert isinstance(checkpointer, FakeAsyncPostgresSaver)
+
+    info_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "[graph] AsyncPostgresSaver initialized"
+    )
+    warning_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "[graph] LangGraph bootstrap setup() exceeded slow-path threshold"
+    )
+
+    assert info_record.bootstrap_setup_ms == 10500.0
+    assert info_record.checkpoint_migrations_version == 9
+    assert info_record.bootstrap_is_first_init is True
+    assert warning_record.bootstrap_setup_ms == 10500.0
+
+
+async def test_build_async_postgres_checkpointer_preserves_failure_when_diagnostics_raise(
+    monkeypatch,
+    caplog,
+) -> None:
+    fake_pool = object()
+
+    class FailingAsyncPostgresSaver:
+        def __init__(self, pool):
+            self.pool = pool
+
+        async def setup(self) -> None:
+            raise RuntimeError("setup failed")
+
+    perf_counter_values = iter((0.0, 10.2))
+
+    async def fake_get_pool():
+        return fake_pool
+
+    async def fake_get_checkpoint_migrations_version(_pool):
+        return 3
+
+    async def fake_collect_diagnostics(_pool):
+        raise RuntimeError("permission denied")
+
+    monkeypatch.setattr(graph_module, "get_langgraph_checkpointer_async_pool", fake_get_pool)
+    monkeypatch.setattr(graph_module, "get_checkpoint_migrations_version", fake_get_checkpoint_migrations_version)
+    monkeypatch.setattr(graph_module, "collect_langgraph_bootstrap_diagnostics", fake_collect_diagnostics)
+    monkeypatch.setattr(
+        graph_module,
+        "snapshot_langgraph_pool_stats",
+        lambda _pool: {"pool_busy": 1, "pool_available": 0, "requests_waiting": 2},
+    )
+    monkeypatch.setattr(graph_module, "AsyncPostgresSaver", FailingAsyncPostgresSaver)
+    monkeypatch.setattr(graph_module.time, "perf_counter", lambda: next(perf_counter_values))
+
+    caplog.set_level(logging.WARNING, logger="adam.graph")
+
+    with pytest.raises(DurableCheckpointUnavailableError):
+        await graph_module._build_async_postgres_checkpointer(is_first_init=False)
+
+    warning_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("[graph] Bootstrap diagnostics collection failed:")
+    )
+    error_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "[graph] AsyncPostgresSaver setup failed"
+    )
+
+    assert warning_record.bootstrap_setup_ms == 10200.0
+    assert error_record.bootstrap_setup_ms == 10200.0
+    assert error_record.checkpoint_migrations_version == 3
+    assert error_record.pool_busy == 1
+    assert error_record.requests_waiting == 2
+
+
 def test_graph_singleton_rebuilds_when_event_loop_changes(monkeypatch) -> None:
     state = {"checkpointer_calls": 0, "compile_calls": 0}
 
-    async def fake_build_async_postgres_checkpointer():
+    async def fake_build_async_postgres_checkpointer(*, is_first_init: bool):
         state["checkpointer_calls"] += 1
         await asyncio.sleep(0)
-        return {"checkpointer_calls": state["checkpointer_calls"]}
+        return {
+            "checkpointer_calls": state["checkpointer_calls"],
+            "is_first_init": is_first_init,
+        }
 
     def fake_compile(*, name: str, checkpointer: object):
         state["compile_calls"] += 1
@@ -569,6 +735,45 @@ def test_graph_singleton_rebuilds_when_event_loop_changes(monkeypatch) -> None:
     assert second["compile_calls"] == 2
     assert state["checkpointer_calls"] == 2
     assert state["compile_calls"] == 2
+
+
+async def test_get_graph_logs_compile_and_total_bootstrap_keys(monkeypatch, caplog) -> None:
+    async def fake_build_async_postgres_checkpointer(*, is_first_init: bool):
+        assert is_first_init is True
+        await asyncio.sleep(0)
+        return {"checkpointer": "ok"}
+
+    def fake_compile(*, name: str, checkpointer: object):
+        return {
+            "name": name,
+            "checkpointer": checkpointer,
+        }
+
+    perf_counter_values = iter((100.0, 101.0, 103.5, 104.0))
+
+    monkeypatch.setattr(graph_module, "_graph_singleton", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_loop", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_lock", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_lock_loop", None)
+    monkeypatch.setattr(graph_module, "_build_async_postgres_checkpointer", fake_build_async_postgres_checkpointer)
+    monkeypatch.setattr(graph_module.master_builder, "compile", fake_compile)
+    monkeypatch.setattr(graph_module.time, "perf_counter", lambda: next(perf_counter_values))
+
+    caplog.set_level(logging.INFO, logger="adam.graph")
+
+    compiled_graph = await graph_module.get_graph()
+
+    assert compiled_graph["name"] == "adam-agent"
+
+    info_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "[graph] Compiled master graph with AsyncPostgresSaver"
+    )
+
+    assert info_record.bootstrap_compile_ms == 2500.0
+    assert info_record.bootstrap_total_ms == 4000.0
+    assert info_record.bootstrap_is_first_init is True
 
 
 def test_run_job_fail_closed_when_checkpoint_runtime_fails_mid_stream(

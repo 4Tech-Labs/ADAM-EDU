@@ -186,6 +186,113 @@ def _pool_stats_snapshot(pool: Any) -> dict[str, int]:
     }
 
 
+def snapshot_langgraph_pool_stats(pool: Any) -> dict[str, int]:
+    """Return normalized LangGraph pool telemetry for structured logs."""
+    return _pool_stats_snapshot(pool)
+
+
+def _extract_row_value(row: Any, column_name: str) -> Any:
+    """Return a column value from psycopg mapping rows or tuple-like rows."""
+    if row is None:
+        return None
+
+    if isinstance(row, dict):
+        return row.get(column_name)
+
+    try:
+        return row[column_name]
+    except Exception:
+        pass
+
+    try:
+        return row[0]
+    except Exception:
+        return None
+
+
+def _row_to_log_dict(row: Any) -> dict[str, Any]:
+    """Best-effort normalization for diagnostic rows before logging."""
+    if isinstance(row, dict):
+        return dict(row)
+
+    try:
+        return dict(row)
+    except Exception:
+        return {"value": row}
+
+
+async def get_checkpoint_migrations_version(pool: AsyncConnectionPool) -> int | None:
+    """Return the best-effort checkpoint_migrations version before LangGraph setup."""
+    try:
+        async with pool.connection() as conn:
+            result = await conn.execute(
+                "SELECT max(v) AS checkpoint_migrations_version FROM checkpoint_migrations"
+            )
+            row = await result.fetchone()
+    except Exception as exc:
+        logger.warning("Could not read checkpoint_migrations state before LangGraph setup(): %s", exc)
+        return None
+
+    raw_version = _extract_row_value(row, "checkpoint_migrations_version")
+    if raw_version is None:
+        return None
+
+    try:
+        return int(raw_version)
+    except (TypeError, ValueError):
+        logger.warning("Could not parse checkpoint_migrations version value: %r", raw_version)
+        return None
+
+
+async def collect_langgraph_bootstrap_diagnostics(pool: AsyncConnectionPool) -> dict[str, Any]:
+    """Return best-effort Postgres diagnostics for LangGraph bootstrap failures."""
+    diagnostics: dict[str, Any] = {}
+
+    try:
+        async with pool.connection() as conn:
+            try:
+                activity_result = await conn.execute(
+                    "SELECT pid, state, wait_event_type, wait_event, LEFT(query, 160) AS query "
+                    "FROM pg_stat_activity "
+                    "WHERE datname = current_database() "
+                    "ORDER BY state, wait_event_type NULLS LAST, pid "
+                    "LIMIT 10"
+                )
+                diagnostics["pg_stat_activity"] = [
+                    _row_to_log_dict(row) for row in await activity_result.fetchall()
+                ]
+            except Exception as exc:
+                logger.warning("Diagnostic query failed for pg_stat_activity (may lack permissions): %s", exc)
+
+            try:
+                locks_result = await conn.execute(
+                    "SELECT locktype, mode, granted, pid "
+                    "FROM pg_locks "
+                    "WHERE NOT granted "
+                    "ORDER BY pid, locktype, mode "
+                    "LIMIT 10"
+                )
+                diagnostics["pg_locks"] = [
+                    _row_to_log_dict(row) for row in await locks_result.fetchall()
+                ]
+            except Exception as exc:
+                logger.warning("Diagnostic query failed for pg_locks (may lack permissions): %s", exc)
+    except Exception as exc:
+        logger.warning("Diagnostic query failed (may lack permissions): %s", exc)
+
+    return diagnostics
+
+
+def _bootstrap_timeout_budget_ms() -> float:
+    """Return the outer authoring bootstrap budget in milliseconds."""
+    configured_timeout = settings.authoring_bootstrap_timeout_seconds
+    if configured_timeout is not None and configured_timeout > 0:
+        return float(configured_timeout) * 1000.0
+
+    normalized_environment = settings.environment.strip().lower()
+    return 120000.0 if normalized_environment == "development" else 60000.0
+
+
 def validate_runtime_database_configuration(s: Settings | None = None) -> None:
     """Reject the local runtime path when it points at remote Supabase.
 
@@ -326,7 +433,7 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
         previous_pool = _langgraph_checkpointer_async_pool
         parsed_url = make_url(settings.database_url)
         min_size, max_size = _langgraph_checkpointer_pool_bounds()
-        logger.info(
+        logger.debug(
             "Opening LangGraph async checkpointer pool",
             extra={
                 "pool_name": "langgraph-checkpointer-async",
@@ -363,15 +470,39 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
                 max_lifetime=max_lifetime,
             )
         await pool.open()
+        pool_open_ms = round((time.perf_counter() - pool_open_started_at) * 1000, 3)
         logger.info(
             "LangGraph async checkpointer pool opened",
             extra={
                 "pool_name": "langgraph-checkpointer-async",
                 "environment": settings.environment,
                 "loop_id": id(current_loop),
-                "latency_ms": round((time.perf_counter() - pool_open_started_at) * 1000, 3),
+                "bootstrap_pool_open_ms": pool_open_ms,
             },
         )
+        budget_ms = _bootstrap_timeout_budget_ms()
+        if pool_open_ms >= budget_ms * 0.8:
+            logger.error(
+                "LangGraph bootstrap pool.open() consumed most of the outer bootstrap budget",
+                extra={
+                    "pool_name": "langgraph-checkpointer-async",
+                    "environment": settings.environment,
+                    "loop_id": id(current_loop),
+                    "bootstrap_pool_open_ms": pool_open_ms,
+                    **snapshot_langgraph_pool_stats(pool),
+                },
+            )
+        elif pool_open_ms > 5000.0:
+            logger.warning(
+                "LangGraph bootstrap pool.open() exceeded slow-path threshold",
+                extra={
+                    "pool_name": "langgraph-checkpointer-async",
+                    "environment": settings.environment,
+                    "loop_id": id(current_loop),
+                    "bootstrap_pool_open_ms": pool_open_ms,
+                    **snapshot_langgraph_pool_stats(pool),
+                },
+            )
 
         _langgraph_checkpointer_async_pool = pool
         _langgraph_checkpointer_async_pool_loop = current_loop
