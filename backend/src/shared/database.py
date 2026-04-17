@@ -247,15 +247,12 @@ def _langgraph_checkpointer_pool_bounds() -> tuple[int, int]:
     return (1, max(1, settings.db_pool_size))
 
 
-def _langgraph_checkpointer_pool_tuning() -> dict[str, float]:
+def _langgraph_checkpointer_pool_tuning() -> tuple[float | None, float | None]:
     """Use short-lived checkpoint connections in production to avoid sticky sessions."""
     if settings.environment.strip().lower() != "production":
-        return {}
+        return (None, None)
 
-    return {
-        "max_idle": 5.0,
-        "max_lifetime": 60.0,
-    }
+    return (5.0, 60.0)
 
 
 def get_langgraph_checkpointer_pool() -> ConnectionPool:
@@ -264,16 +261,29 @@ def get_langgraph_checkpointer_pool() -> ConnectionPool:
 
     if _langgraph_checkpointer_pool is None:
         min_size, max_size = _langgraph_checkpointer_pool_bounds()
-        _langgraph_checkpointer_pool = ConnectionPool(
-            conninfo=_to_psycopg_conninfo(settings.database_url),
-            min_size=min_size,
-            max_size=max_size,
-            kwargs=_langgraph_pool_kwargs(),
-            timeout=float(settings.db_pool_timeout),
-            open=True,
-            name="langgraph-checkpointer",
-            **_langgraph_checkpointer_pool_tuning(),
-        )
+        max_idle, max_lifetime = _langgraph_checkpointer_pool_tuning()
+        if max_idle is None or max_lifetime is None:
+            _langgraph_checkpointer_pool = ConnectionPool(
+                conninfo=_to_psycopg_conninfo(settings.database_url),
+                min_size=min_size,
+                max_size=max_size,
+                kwargs=_langgraph_pool_kwargs(),
+                timeout=float(settings.db_pool_timeout),
+                open=True,
+                name="langgraph-checkpointer",
+            )
+        else:
+            _langgraph_checkpointer_pool = ConnectionPool(
+                conninfo=_to_psycopg_conninfo(settings.database_url),
+                min_size=min_size,
+                max_size=max_size,
+                kwargs=_langgraph_pool_kwargs(),
+                timeout=float(settings.db_pool_timeout),
+                open=True,
+                name="langgraph-checkpointer",
+                max_idle=max_idle,
+                max_lifetime=max_lifetime,
+            )
 
     return _langgraph_checkpointer_pool
 
@@ -329,16 +339,29 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
             },
         )
         pool_open_started_at = time.perf_counter()
-        pool = AsyncConnectionPool(
-            conninfo=_to_psycopg_conninfo(settings.database_url),
-            min_size=min_size,
-            max_size=max_size,
-            kwargs=_langgraph_pool_kwargs(),
-            timeout=float(settings.db_pool_timeout),
-            open=False,
-            name="langgraph-checkpointer-async",
-            **_langgraph_checkpointer_pool_tuning(),
-        )
+        max_idle, max_lifetime = _langgraph_checkpointer_pool_tuning()
+        if max_idle is None or max_lifetime is None:
+            pool = AsyncConnectionPool(
+                conninfo=_to_psycopg_conninfo(settings.database_url),
+                min_size=min_size,
+                max_size=max_size,
+                kwargs=_langgraph_pool_kwargs(),
+                timeout=float(settings.db_pool_timeout),
+                open=False,
+                name="langgraph-checkpointer-async",
+            )
+        else:
+            pool = AsyncConnectionPool(
+                conninfo=_to_psycopg_conninfo(settings.database_url),
+                min_size=min_size,
+                max_size=max_size,
+                kwargs=_langgraph_pool_kwargs(),
+                timeout=float(settings.db_pool_timeout),
+                open=False,
+                name="langgraph-checkpointer-async",
+                max_idle=max_idle,
+                max_lifetime=max_lifetime,
+            )
         await pool.open()
         logger.info(
             "LangGraph async checkpointer pool opened",
