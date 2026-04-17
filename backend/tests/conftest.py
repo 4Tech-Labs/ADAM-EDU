@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 import os
 import uuid
 
+from alembic import command
+from alembic.config import Config
 import jwt
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +20,13 @@ from shared.app import app
 from shared.auth import get_auth_settings, get_jwt_verifier, get_supabase_admin_auth_client
 from shared.database import SessionLocal, engine, settings
 from shared.models import Base, Course, CourseAccessLink, CourseMembership, Invite, Membership, Profile, Tenant, User
+
+
+_CHECKPOINT_TABLES = (
+    "checkpoint_writes",
+    "checkpoint_blobs",
+    "checkpoints",
+)
 
 
 def _assert_local_schema_reset_target() -> None:
@@ -40,17 +49,27 @@ def _assert_local_schema_reset_target() -> None:
             f"got {db_url.host}:{db_url.port}/{db_url.database})."
         )
 
-
 @pytest.fixture(scope="session", autouse=True)
 def ensure_db_schema() -> None:
-    """Recreate the ORM schema once so metadata changes are reflected in the test DB."""
+    """Recreate the local test schema from Alembic so checkpoint tables exist."""
     _assert_local_schema_reset_target()
     close_all_sessions()
     with engine.begin() as connection:
         connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
         connection.execute(text("CREATE SCHEMA public"))
-    Base.metadata.create_all(bind=engine)
 
+    _run_alembic_upgrade_head()
+
+
+def _run_alembic_upgrade_head() -> None:
+    """Run Alembic migrations in-process so tests reuse the active virtualenv."""
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    alembic_config = Config()
+    alembic_config.set_main_option("path_separator", "os")
+    alembic_config.set_main_option("script_location", os.path.join(backend_dir, "alembic"))
+    alembic_config.set_main_option("prepend_sys_path", backend_dir)
+    alembic_config.set_main_option("sqlalchemy.url", settings.database_url)
+    command.upgrade(alembic_config, "head")
 
 @pytest.fixture(autouse=True)
 def configure_auth_env(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
@@ -99,10 +118,13 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def _truncate_all_tables() -> None:
-    table_names = ", ".join(table.name for table in Base.metadata.sorted_tables)
-    if not table_names:
+    table_names = [table.name for table in Base.metadata.sorted_tables]
+    table_names.extend(_CHECKPOINT_TABLES)
+    ordered_table_names = list(dict.fromkeys(table_names))
+    table_names_csv = ", ".join(ordered_table_names)
+    if not table_names_csv:
         return
-    truncate_sql = text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE")
+    truncate_sql = text(f"TRUNCATE TABLE {table_names_csv} RESTART IDENTITY CASCADE")
     close_all_sessions()
     # The backend suite assumes exclusive ownership of the local test DB while it runs.
     with engine.begin() as connection:

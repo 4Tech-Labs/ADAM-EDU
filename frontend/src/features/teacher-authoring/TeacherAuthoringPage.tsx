@@ -1,6 +1,6 @@
 /** ADAM v8 - Portal Profesor: Builder Mode (Supabase Realtime Flow) */
 
-import { Suspense, lazy, useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import type { CaseFormData, CanonicalCaseOutput } from "@/shared/adam-types";
 import { EMPTY_FORM } from "@/shared/adam-types";
 import { TeacherLayout } from "@/features/teacher-layout/TeacherLayout";
@@ -33,6 +33,7 @@ export function TeacherAuthoringPage() {
   const [formData, setFormData] = useState<CaseFormData>(EMPTY_FORM);
   const [caseResult, setCaseResult] = useState<CanonicalCaseOutput | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const retryInFlightRef = useRef(false);
 
   const {
     status: jobStatus,
@@ -40,18 +41,26 @@ export function TeacherAuthoringPage() {
     result: jobResult,
     activeAgent,
     submitJob,
+    retryJob,
     reset: resetJob,
     isStreaming,
     progressScope,
+    bootstrapState,
   } = useAuthoringJobProgress();
 
   useEffect(() => {
     if (isStreaming || jobStatus === "pending" || jobStatus === "processing") {
       setAppState("generating");
       setErrorMessage("");
-    } else if (jobStatus === "failed") {
+    } else if (jobStatus === "failed" || jobStatus === "failed_resumable") {
       setAppState("error");
-      setErrorMessage(errorTrace || "Error desconocido durante la generacion.");
+      if (errorTrace && errorTrace.trim() !== "") {
+        setErrorMessage(errorTrace);
+      } else if (jobStatus === "failed_resumable") {
+        setErrorMessage("La generacion se interrumpio por un error transitorio. Puedes reintentar sin perder el progreso ya completado.");
+      } else {
+        setErrorMessage("Error desconocido durante la generacion.");
+      }
     } else if (jobStatus === "completed" && jobResult) {
       setCaseResult(jobResult);
       setAppState("success");
@@ -71,10 +80,29 @@ export function TeacherAuthoringPage() {
     // Placeholder para un futuro flujo HITL.
   }, []);
 
-  const handleRetry = () => {
+  const handleRetry = useCallback(async () => {
+    if (jobStatus === "failed_resumable") {
+      if (retryInFlightRef.current) {
+        return;
+      }
+
+      retryInFlightRef.current = true;
+      setErrorMessage("");
+      try {
+        setAppState("generating");
+        await retryJob();
+      } catch (err) {
+        setErrorMessage(err instanceof Error ? err.message : "Error al reintentar.");
+        setAppState("error");
+      } finally {
+        retryInFlightRef.current = false;
+      }
+      return;
+    }
+
     resetJob();
     setAppState("idle");
-  };
+  }, [jobStatus, resetJob, retryJob]);
 
   return (
     <TeacherLayout testId="teacher-authoring-page" contentClassName="mx-auto w-full max-w-6xl">
@@ -90,6 +118,7 @@ export function TeacherAuthoringPage() {
       {appState === "generating" && (
         <AuthoringProgressTimeline
           activeAgent={activeAgent}
+          bootstrapState={bootstrapState}
           jobStatus={jobStatus || undefined}
           scope={progressScope || (formData.caseType === "harvard_only" ? "narrative" : "technical")}
         />
@@ -109,7 +138,7 @@ export function TeacherAuthoringPage() {
       {appState === "error" && (
         <AuthoringErrorState
           message={errorMessage}
-          onRetry={handleRetry}
+          onRetry={jobStatus === "failed_resumable" ? handleRetry : undefined}
           onBack={() => setAppState("idle")}
         />
       )}

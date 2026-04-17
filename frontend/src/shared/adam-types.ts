@@ -183,7 +183,12 @@ export interface SuggestResponse {
 
 
 // API responses used by the teacher authoring flow.
-export type AuthoringJobStatus = "pending" | "processing" | "completed" | "failed";
+export type AuthoringJobStatus =
+    | "pending"
+    | "processing"
+    | "completed"
+    | "failed"
+    | "failed_resumable";
 
 export const AUTHORING_PROGRESS_STEP_IDS = [
     "case_architect",
@@ -197,6 +202,7 @@ export const AUTHORING_PROGRESS_STEP_IDS = [
 
 export type AuthoringProgressStep = (typeof AUTHORING_PROGRESS_STEP_IDS)[number];
 export type AuthoringProgressCheckpoint = AuthoringProgressStep | "completed" | "failed";
+export type AuthoringBootstrapState = "initializing";
 
 export interface AuthoringJobStatusResponse {
     job_id: string;
@@ -211,6 +217,8 @@ export interface AuthoringJobProgressSnapshotResponse {
     job_id: string;
     status: AuthoringJobStatus;
     current_step?: AuthoringProgressCheckpoint;
+    progress_percentage?: number;
+    bootstrap_state?: AuthoringBootstrapState;
     progress_seq?: number;
     progress_ts?: string;
     error_code?: string;
@@ -225,6 +233,12 @@ export interface AuthoringJobResultResponse {
         student_artifacts?: Record<string, unknown>;
     };
     canonical_output?: CanonicalCaseOutput;    // v5.0 — Option D
+}
+
+export interface AuthoringJobRetryResponse {
+    job_id: string;
+    status: "accepted";
+    message: string;
 }
 
 export type AppState = "idle" | "generating" | "success" | "editing" | "error";

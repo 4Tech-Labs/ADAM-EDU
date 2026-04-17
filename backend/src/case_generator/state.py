@@ -147,6 +147,10 @@ class ADAMState(CanonicalInputState):
     m5_content: NotRequired[str]
     # m5_questions: ya existe
 
+    # Optional node output cache hydrated from persisted artifacts before graph execution.
+    # Shape: {"node_name": {"state_key": "value"}}
+    resume_cached_nodes: NotRequired[dict[str, dict[str, str]]]
+
     # Derived helper fields built from the generated case context.
     nombre_empresa: NotRequired[str]      # extraído del título
     dilema_hypotheses: NotRequired[str]   # extraído del dilema_brief

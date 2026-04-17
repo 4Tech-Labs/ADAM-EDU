@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from shared.database import SessionLocal
 from shared.models import Assignment, AuthoringJob
@@ -22,6 +22,14 @@ async def _failing_astream(*args, **kwargs):
     yield {}
 
 
+class _StubGraph:
+    def __init__(self, stream_impl):
+        self._stream_impl = stream_impl
+
+    def astream(self, *args, **kwargs):
+        return self._stream_impl(*args, **kwargs)
+
+
 def test_phase1b_intake_and_authoring_stubbed(client, auth_headers_factory, seed_identity) -> None:
     teacher_email = "teacher102@example.edu"
     seed_identity(user_id=TEACHER_ID, email=teacher_email, role="teacher")
@@ -30,12 +38,13 @@ def test_phase1b_intake_and_authoring_stubbed(client, auth_headers_factory, seed
         "assignment_title": "Phase 1B Integration Test Title",
     }
 
-    with patch("case_generator.core.authoring.graph.astream") as mock_astream:
-        mock_astream.side_effect = _successful_astream
+    graph_getter = AsyncMock(return_value=_StubGraph(_successful_astream))
+
+    with patch("case_generator.core.authoring.get_graph", new=graph_getter):
         response = client.post("/api/authoring/jobs", json=payload, headers=headers)
         assert response.status_code == 202
         job_id = response.json()["job_id"]
-        mock_astream.assert_called_once()
+        graph_getter.assert_awaited_once()
 
     db = SessionLocal()
     try:
@@ -67,11 +76,14 @@ def test_phase1b_authoring_service_failure(client, auth_headers_factory, seed_id
         "assignment_title": "Phase 1B Error Test Title",
     }
 
-    with patch("case_generator.core.authoring.graph.astream") as mock_astream:
-        mock_astream.side_effect = _failing_astream
+    graph_getter = AsyncMock(return_value=_StubGraph(_failing_astream))
+
+    with patch("case_generator.core.authoring.get_graph", new=graph_getter):
         response = client.post("/api/authoring/jobs", json=payload, headers=headers)
         assert response.status_code == 202
         job_id = response.json()["job_id"]
+
+    graph_getter.assert_awaited_once()
 
     db = SessionLocal()
     try:

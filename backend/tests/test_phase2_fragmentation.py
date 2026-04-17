@@ -268,13 +268,15 @@ async def test_retry_idempotency():
 
 async def test_legacy_compatibility():
     print("\n--- Test 4: Legacy /suggest Compatibility ---")
-    from case_generator.graph import graph as legacy_graph
+    from case_generator.graph import get_graph
     from case_generator.suggest_service import generate_suggestion
 
-    assert legacy_graph is not None, "Legacy graph must remain importable"
+    compiled_graph = await get_graph()
+
+    assert compiled_graph is not None, "Graph getter must return a compiled graph"
     assert callable(generate_suggestion), "generate_suggestion must remain callable"
 
-    print("  [OK] Legacy graph imported successfully")
+    print("  [OK] Async graph getter resolved successfully")
     print("  [OK] generate_suggestion callable")
     print("  [OK] Legacy Compatibility PASSED")
 

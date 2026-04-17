@@ -27,6 +27,7 @@ Este repo mantiene su base principal local fuera de Supabase CLI.
 
 `DATABASE_URL` siempre apunta a este Postgres del repo cuando trabajas localmente.
 No lo apuntes al Postgres interno de Supabase CLI.
+El launcher `uv run --directory backend python -m shared.app` ahora valida esto en startup y rechaza hosts remotos de Supabase cuando corres en `development`.
 
 ## Plano 2: auth local y tooling de Supabase
 
@@ -79,6 +80,8 @@ Los prerrequisitos anteriores no cuentan dentro de este flujo.
 7. `uv run --directory backend python -m shared.app`
 8. `npm --prefix frontend install`
 9. `npm --prefix frontend run dev`
+
+Si usas el atajo opcional del root en entornos Unix-like, `make dev-backend` ya fuerza `DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5434/postgres` para evitar arrancar accidentalmente contra un pooler remoto.
 
 ## Traduccion de `supabase status -o env`
 

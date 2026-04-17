@@ -35,15 +35,19 @@ Resiliencia (v9):
   - .with_fallbacks: primary → gemini-2.5-flash automático en caída de API
   - Fallback graceful: todos los nodos LLM retornan sentinel en vez de raise
   - RetryPolicy: backoff exponencial (1s → 2s → 4s, max 30s, jitter ON)
-  - Timeout global: 600 segundos por job (authoring.py)
+    - Timeout global: 900 segundos por job (authoring.py)
   - AsyncPostgresSaver: checkpointer para resume-from-failure
+    - get_graph(): singleton lazy por event loop para evitar reuse cruzado en tests/workers async
 """
 
+import asyncio
 import json
 import logging
 import os
 import random
 import re
+import threading
+import time
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -55,6 +59,7 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.runnables import RunnableConfig
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import RetryPolicy
 
@@ -93,6 +98,7 @@ from case_generator.tools_and_schemas import (
 )
 from case_generator.orchestration.frontend_adapter import adapter_canonical_to_legacy
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
+from shared.database import get_langgraph_checkpointer_async_pool
 from shared.sanitization import sanitize_untrusted_payload
 
 if TYPE_CHECKING:
@@ -2761,6 +2767,115 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
 # CONSTRUCCIÓN DE SUBGRAFOS (FASE 4 - ARQUITECTURA MODULAR)
 # ─────────────────────────────────────────────────────────
 
+RESUME_CACHE_STATE_KEY = "resume_cached_nodes"
+_PARALLEL_NODES_WITHOUT_AGENT = {"case_writer", "case_questions"}
+_RESUME_NODE_AGENT_OVERRIDES = {"eda_questions_generator": "doc3_generation"}
+_RESUME_NODE_REQUIRED_OUTPUTS: dict[str, tuple[str, ...]] = {
+    "case_architect": (
+        "titulo",
+        "industria",
+        "company_profile",
+        "dilema_brief",
+        "doc1_instrucciones",
+        "doc1_anexo_financiero",
+        "doc1_anexo_operativo",
+        "doc1_anexo_stakeholders",
+    ),
+    "case_writer": ("doc1_narrativa",),
+    "case_questions": ("doc1_preguntas",),
+    "eda_text_analyst": ("doc2_eda",),
+    "eda_chart_generator": ("doc2_eda_charts",),
+    "eda_questions_generator": ("doc2_preguntas_eda",),
+    "m3_content_generator": ("m3_content", "m3_mode"),
+    "m3_questions_generator": ("m3_questions",),
+    "m3_notebook_generator": ("m3_notebook_code",),
+    "m4_content_generator": ("m4_content",),
+    "m4_questions_generator": ("m4_questions",),
+    "m4_chart_generator": ("m4_charts",),
+    "m5_content_generator": ("m5_content",),
+    "m5_questions_generator": ("m5_questions",),
+    "teaching_note_part1": ("doc3_teaching_note_part1",),
+    "teaching_note_part2": ("doc3_teaching_note_part2",),
+}
+
+
+def _is_resumable_state_value(value: Any) -> bool:
+    """Return True when a state value is usable for resume skip decisions."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return False
+        # Sentinel placeholders indicate generation failures and should be recomputed.
+        if normalized.startswith("[") and ("_ERROR]" in normalized or "_NOT_EXECUTED]" in normalized):
+            return False
+        return True
+    if isinstance(value, (list, dict, tuple, set)):
+        return len(value) > 0
+    return True
+
+
+def _artifact_cached_output_for_node(node_name: str, state: ADAMState) -> dict[str, Any] | None:
+    cached_nodes = state.get(RESUME_CACHE_STATE_KEY)
+    if not isinstance(cached_nodes, dict):
+        return None
+    node_payload = cached_nodes.get(node_name)
+    if not isinstance(node_payload, dict):
+        return None
+    hydrated_payload = {
+        key: value
+        for key, value in node_payload.items()
+        if _is_resumable_state_value(value)
+    }
+    return hydrated_payload or None
+
+
+def _checkpoint_has_node_output(node_name: str, state: ADAMState) -> bool:
+    required_keys = _RESUME_NODE_REQUIRED_OUTPUTS.get(node_name, ())
+    if not required_keys:
+        return False
+    return all(_is_resumable_state_value(state.get(key)) for key in required_keys)
+
+
+def _skip_payload_for_node(node_name: str) -> dict[str, Any]:
+    if node_name in _PARALLEL_NODES_WITHOUT_AGENT:
+        return {}
+    return {"current_agent": _RESUME_NODE_AGENT_OVERRIDES.get(node_name, node_name)}
+
+
+def _with_resume_skip(node_name: str, node_callable: Any) -> Any:
+    """Wrap a graph node to short-circuit when checkpoint/artifact state already exists."""
+
+    def _wrapped(
+        state: ADAMState,
+        config: RunnableConfig | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        cached_payload = _artifact_cached_output_for_node(node_name, state)
+        if cached_payload is not None:
+            payload = dict(cached_payload)
+            if node_name not in _PARALLEL_NODES_WITHOUT_AGENT:
+                payload.setdefault("current_agent", _RESUME_NODE_AGENT_OVERRIDES.get(node_name, node_name))
+            logger.info(
+                "[resume_skip] node=%s source=artifact_cache keys=%s",
+                node_name,
+                sorted(payload.keys()),
+            )
+            return payload
+
+        if _checkpoint_has_node_output(node_name, state):
+            logger.info("[resume_skip] node=%s source=checkpoint_state", node_name)
+            return _skip_payload_for_node(node_name)
+
+        if config is None:
+            return cast(dict[str, Any], node_callable(state, *args, **kwargs))
+
+        return cast(dict[str, Any], node_callable(state, config, *args, **kwargs))
+
+    return _wrapped
+
 # Política de reintento estándar para manejar fallos de red / timeouts del LLM
 # Verificado contra Context7 docs (langchain-ai/langgraph): RetryPolicy soporta
 # backoff_factor (multiplica interval en cada intento), max_interval (techo en segundos),
@@ -2776,9 +2891,9 @@ standard_retry = RetryPolicy(
 
 # --- 1. SUBGRAFO: DOC 1 (Arquitecto, Redactor, Preguntas) ---
 doc1_builder = StateGraph(ADAMState)
-doc1_builder.add_node("case_architect", case_architect, retry_policy=standard_retry)
-doc1_builder.add_node("case_writer", case_writer, retry_policy=standard_retry)
-doc1_builder.add_node("case_questions", case_questions, retry_policy=standard_retry)
+doc1_builder.add_node("case_architect", _with_resume_skip("case_architect", case_architect), retry_policy=standard_retry)
+doc1_builder.add_node("case_writer", _with_resume_skip("case_writer", case_writer), retry_policy=standard_retry)
+doc1_builder.add_node("case_questions", _with_resume_skip("case_questions", case_questions), retry_policy=standard_retry)
 doc1_builder.add_node("doc1_complete", doc1_complete)
 
 doc1_builder.add_edge(START, "case_architect")
@@ -2810,9 +2925,21 @@ def m3_sync(state: ADAMState) -> dict:
 # ml_ds:    m3_content (Experiment Engineer) → [m3_questions ∥ m3_notebook] → m3_sync → END
 # m3_notebook_generator es noop para business.
 m3_builder = StateGraph(ADAMState)
-m3_builder.add_node("m3_content_generator", m3_content_generator, retry_policy=standard_retry)
-m3_builder.add_node("m3_questions_generator", m3_questions_generator, retry_policy=standard_retry)
-m3_builder.add_node("m3_notebook_generator", m3_notebook_generator, retry_policy=standard_retry)
+m3_builder.add_node(
+    "m3_content_generator",
+    _with_resume_skip("m3_content_generator", m3_content_generator),
+    retry_policy=standard_retry,
+)
+m3_builder.add_node(
+    "m3_questions_generator",
+    _with_resume_skip("m3_questions_generator", m3_questions_generator),
+    retry_policy=standard_retry,
+)
+m3_builder.add_node(
+    "m3_notebook_generator",
+    _with_resume_skip("m3_notebook_generator", m3_notebook_generator),
+    retry_policy=standard_retry,
+)
 m3_builder.add_node("m3_sync", m3_sync)
 
 m3_builder.add_edge(START, "m3_content_generator")
@@ -2835,9 +2962,21 @@ def m4_sync(state: ADAMState) -> dict:
 # --- 3. SUBGRAFO: M4 (Impacto y Valor) ---
 # m4_content → [m4_questions_generator ∥ m4_chart_generator] → m4_sync → END
 m4_builder = StateGraph(ADAMState)
-m4_builder.add_node("m4_content_generator", m4_content_generator, retry_policy=standard_retry)
-m4_builder.add_node("m4_questions_generator", m4_questions_generator, retry_policy=standard_retry)
-m4_builder.add_node("m4_chart_generator", m4_chart_generator, retry_policy=standard_retry)
+m4_builder.add_node(
+    "m4_content_generator",
+    _with_resume_skip("m4_content_generator", m4_content_generator),
+    retry_policy=standard_retry,
+)
+m4_builder.add_node(
+    "m4_questions_generator",
+    _with_resume_skip("m4_questions_generator", m4_questions_generator),
+    retry_policy=standard_retry,
+)
+m4_builder.add_node(
+    "m4_chart_generator",
+    _with_resume_skip("m4_chart_generator", m4_chart_generator),
+    retry_policy=standard_retry,
+)
 m4_builder.add_node("m4_sync", m4_sync)
 
 m4_builder.add_edge(START, "m4_content_generator")
@@ -2860,14 +2999,26 @@ m4_graph = m4_builder.compile()
 eda_builder = StateGraph(ADAMState)
 
 # ── Dataset pipeline (3 nodos) ───────────────────────────────────────────────
-eda_builder.add_node("schema_designer", schema_designer, retry_policy=standard_retry)
+eda_builder.add_node("schema_designer", _with_resume_skip("schema_designer", schema_designer), retry_policy=standard_retry)
 eda_builder.add_node("data_generator", data_generator)
 eda_builder.add_node("data_validator", data_validator)
 
 # ── Resto del flujo EDA ──────────────────────────────────────────────────────
-eda_builder.add_node("eda_text_analyst", eda_text_analyst, retry_policy=standard_retry)
-eda_builder.add_node("eda_chart_generator", eda_chart_generator, retry_policy=standard_retry)
-eda_builder.add_node("eda_questions_generator", eda_questions_generator, retry_policy=standard_retry)
+eda_builder.add_node(
+    "eda_text_analyst",
+    _with_resume_skip("eda_text_analyst", eda_text_analyst),
+    retry_policy=standard_retry,
+)
+eda_builder.add_node(
+    "eda_chart_generator",
+    _with_resume_skip("eda_chart_generator", eda_chart_generator),
+    retry_policy=standard_retry,
+)
+eda_builder.add_node(
+    "eda_questions_generator",
+    _with_resume_skip("eda_questions_generator", eda_questions_generator),
+    retry_policy=standard_retry,
+)
 eda_builder.add_node("eda_phase2_sync", eda_phase2_sync)
 
 # Dataset pipeline: schema_designer → data_serializer → data_validator
@@ -2908,15 +3059,27 @@ eda_graph = eda_builder.compile()
 # Post-sync1 es SECUENCIAL: m5_questions_generator → teaching_note_part2 → sync2.
 # Ventaja: teaching_note_part2 recibe m5_questions ya escritos en state.
 synthesis_builder = StateGraph(ADAMState)
-synthesis_builder.add_node("m5_content_generator", m5_content_generator,
-                            retry_policy=standard_retry)
-synthesis_builder.add_node("teaching_note_part1", teaching_note_part1,
-                            retry_policy=standard_retry)
+synthesis_builder.add_node(
+    "m5_content_generator",
+    _with_resume_skip("m5_content_generator", m5_content_generator),
+    retry_policy=standard_retry,
+)
+synthesis_builder.add_node(
+    "teaching_note_part1",
+    _with_resume_skip("teaching_note_part1", teaching_note_part1),
+    retry_policy=standard_retry,
+)
 synthesis_builder.add_node("synthesis_phase1_sync", synthesis_phase1_sync)
-synthesis_builder.add_node("m5_questions_generator", m5_questions_generator,
-                            retry_policy=standard_retry)
-synthesis_builder.add_node("teaching_note_part2", teaching_note_part2,
-                            retry_policy=standard_retry)
+synthesis_builder.add_node(
+    "m5_questions_generator",
+    _with_resume_skip("m5_questions_generator", m5_questions_generator),
+    retry_policy=standard_retry,
+)
+synthesis_builder.add_node(
+    "teaching_note_part2",
+    _with_resume_skip("teaching_note_part2", teaching_note_part2),
+    retry_policy=standard_retry,
+)
 synthesis_builder.add_node("synthesis_phase2_sync", synthesis_phase2_sync)
 
 # Fan-out paralelo desde START
@@ -2979,5 +3142,88 @@ master_builder.add_edge("synthesis_flow", "output_adapter_final")
 master_builder.add_edge("output_adapter_final", END)
 
 
-graph = master_builder.compile(name="adam-agent")
+class DurableCheckpointUnavailableError(RuntimeError):
+    """Raised when the durable async LangGraph checkpoint path cannot initialize."""
+
+
+_graph_singleton: Any | None = None
+_graph_singleton_loop: asyncio.AbstractEventLoop | None = None
+_graph_singleton_lock: asyncio.Lock | None = None
+_graph_singleton_lock_loop: asyncio.AbstractEventLoop | None = None
+_graph_singleton_lock_guard = threading.Lock()
+
+
+def reset_graph_singleton() -> None:
+    """Clear the cached compiled graph and its loop-bound initialization lock."""
+    global _graph_singleton, _graph_singleton_loop
+    global _graph_singleton_lock, _graph_singleton_lock_loop
+
+    _graph_singleton = None
+    _graph_singleton_loop = None
+    _graph_singleton_lock = None
+    _graph_singleton_lock_loop = None
+    logger.info("[graph] Reset compiled graph singleton")
+
+
+def _get_graph_lock(current_loop: asyncio.AbstractEventLoop) -> asyncio.Lock:
+    """Return a loop-bound lock for async graph singleton initialization."""
+    global _graph_singleton_lock, _graph_singleton_lock_loop
+
+    with _graph_singleton_lock_guard:
+        if _graph_singleton_lock is None or _graph_singleton_lock_loop is not current_loop:
+            # Keep the lock loop separate from the compiled-graph loop marker so a
+            # new event loop cannot accidentally reuse a graph/checkpointer created
+            # for a previous loop.
+            _graph_singleton_lock_loop = current_loop
+            _graph_singleton_lock = asyncio.Lock()
+    return _graph_singleton_lock
+
+
+async def _build_async_postgres_checkpointer() -> AsyncPostgresSaver:
+    """Build the durable async Postgres checkpointer inside an active event loop."""
+    try:
+        pool = await get_langgraph_checkpointer_async_pool()
+        logger.info("[graph] Initializing AsyncPostgresSaver", extra={"loop_id": id(asyncio.get_running_loop())})
+        setup_started_at = time.perf_counter()
+        checkpointer = AsyncPostgresSaver(cast(Any, pool))
+        # Idempotent bootstrap for local/tests where Alembic metadata may be recreated.
+        await checkpointer.setup()
+        logger.info(
+            "[graph] AsyncPostgresSaver initialized",
+            extra={"latency_ms": round((time.perf_counter() - setup_started_at) * 1000, 3)},
+        )
+        return checkpointer
+    except Exception as exc:
+        logger.error("[graph] AsyncPostgresSaver initialization failed", exc_info=True)
+        raise DurableCheckpointUnavailableError(
+            "Durable LangGraph checkpointing is unavailable."
+        ) from exc
+
+
+async def get_graph() -> Any:
+    """Return the compiled master graph backed by a durable async checkpointer.
+
+    This is a lazy singleton per active event loop so the async saver is always
+    created under the loop that will later execute `graph.astream(...)`.
+    """
+    global _graph_singleton, _graph_singleton_loop
+
+    current_loop = asyncio.get_running_loop()
+    if _graph_singleton is not None and _graph_singleton_loop is current_loop:
+        return _graph_singleton
+
+    async with _get_graph_lock(current_loop):
+        if _graph_singleton is not None and _graph_singleton_loop is current_loop:
+            return _graph_singleton
+
+        checkpointer = await _build_async_postgres_checkpointer()
+        compile_started_at = time.perf_counter()
+        compiled_graph = master_builder.compile(name="adam-agent", checkpointer=checkpointer)
+        _graph_singleton = compiled_graph
+        _graph_singleton_loop = current_loop
+        logger.info(
+            "[graph] Compiled master graph with AsyncPostgresSaver",
+            extra={"latency_ms": round((time.perf_counter() - compile_started_at) * 1000, 3)},
+        )
+        return compiled_graph
 

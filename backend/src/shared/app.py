@@ -27,7 +27,8 @@ from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.orm import Session
 
-from case_generator.core.authoring import AuthoringService
+from case_generator.core.authoring import AuthoringService, derive_progress_percentage
+from case_generator.graph import reset_graph_singleton
 from case_generator.suggest_service import SuggestRequest, SuggestResponse, generate_suggestion
 from shared.admin_router import router as admin_router
 from shared.course_access_router import router as course_access_router
@@ -55,7 +56,14 @@ from shared.identity_activation import (
     upsert_membership as upsert_membership_impl,
     upsert_profile as upsert_profile_impl,
 )
-from shared.database import get_db
+from shared.database import (
+    close_langgraph_checkpointer_async_pool,
+    close_langgraph_checkpointer_pool,
+    dispose_database_engine,
+    get_db,
+    snapshot_active_authoring_jobs,
+    validate_runtime_database_configuration,
+)
 from shared.db_resilience import (
     AUTH_ME_ENDPOINT,
     AUTHORING_INTAKE_ENDPOINT,
@@ -66,6 +74,11 @@ from shared.db_resilience import (
 )
 from shared.invite_status import invite_effective_status
 from shared.models import (
+    AUTHORING_JOB_RETRYABLE_STATUSES,
+    AUTHORING_JOB_STATUS_FAILED,
+    AUTHORING_JOB_STATUS_FAILED_RESUMABLE,
+    AUTHORING_JOB_STATUS_PENDING,
+    AUTHORING_JOB_STATUS_PROCESSING,
     Assignment,
     AuthoringJob,
     Course,
@@ -200,6 +213,7 @@ def _run_uvicorn_profile(profile: UvicornRuntimeProfile) -> None:
 
 
 def main() -> None:
+    validate_runtime_database_configuration()
     runtime_profile = _build_uvicorn_runtime_profile()
     _run_uvicorn_profile(runtime_profile)
 
@@ -434,8 +448,15 @@ def require_teacher_actor_authoring_progress(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    yield
-    logger.info("Cleaning up resources...")
+    validate_runtime_database_configuration()
+    try:
+        yield
+    finally:
+        logger.info("Cleaning up resources... active_authoring_jobs=%s", snapshot_active_authoring_jobs())
+        reset_graph_singleton()
+        await close_langgraph_checkpointer_async_pool()
+        close_langgraph_checkpointer_pool()
+        dispose_database_engine()
 
 
 app = FastAPI(title="adam-v8.0 - Case Generation API", lifespan=lifespan)
@@ -522,6 +543,12 @@ class JobCreatedResponse(BaseModel):
     message: str
 
 
+class RetryJobResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+
 @app.post(
     "/api/authoring/jobs",
     response_model=JobCreatedResponse,
@@ -553,7 +580,7 @@ def create_authoring_job(
         job = AuthoringJob(
             assignment_id=assignment.id,
             idempotency_key=idempotency_key,
-            status="pending",
+            status=AUTHORING_JOB_STATUS_PENDING,
             task_payload={
                 "step": "authoring",
                 "asignatura": req.subject or req.assignment_title,
@@ -595,6 +622,46 @@ def create_authoring_job(
         )
 
 
+@app.post(
+    "/api/authoring/jobs/{job_id}/retry",
+    response_model=RetryJobResponse,
+    status_code=202,
+)
+def retry_authoring_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    actor: CurrentActor = Depends(require_teacher_actor_authoring_intake),
+    db: Session = Depends(get_db),
+) -> RetryJobResponse:
+    job = get_owned_job_or_404(db, job_id, actor)
+
+    if job.status == AUTHORING_JOB_STATUS_PROCESSING:
+        return RetryJobResponse(
+            job_id=job.id,
+            status="accepted",
+            message="Authoring job already in progress.",
+        )
+
+    if job.status not in AUTHORING_JOB_RETRYABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Job not retryable",
+            headers={"X-Job-Status": job.status},
+        )
+
+    logger.info(
+        "Authoring retry accepted for job %s (status=%s)",
+        job.id,
+        job.status,
+    )
+    background_tasks.add_task(AuthoringService.run_job, job.id)
+    return RetryJobResponse(
+        job_id=job.id,
+        status="accepted",
+        message="Authoring retry accepted and dispatched to queue.",
+    )
+
+
 # Cloud Tasks internal endpoint — handler lives in shared.internal_tasks
 # to avoid import side effects when worker_app.py mounts the same route.
 app.add_api_route(
@@ -625,6 +692,8 @@ class JobProgressResponse(BaseModel):
     job_id: str
     status: str
     current_step: str | None = None
+    progress_percentage: int | None = None
+    bootstrap_state: str | None = None
     progress_seq: int | None = None
     progress_ts: str | None = None
     error_code: str | None = None
@@ -639,7 +708,7 @@ def get_job_status(
 ) -> JobStatusResponse:
     job = get_owned_job_or_404(db, job_id, actor)
     error_trace = None
-    if job.status == "failed" and job.task_payload:
+    if job.status in {AUTHORING_JOB_STATUS_FAILED, AUTHORING_JOB_STATUS_FAILED_RESUMABLE} and job.task_payload:
         error_trace = job.task_payload.get("error_trace")
 
     return JobStatusResponse(
@@ -701,12 +770,20 @@ def get_job_progress(
         progress_ts = payload.get("progress_ts")
         error_code = payload.get("error_code")
         error_trace = payload.get("error_trace")
+        bootstrap_state = payload.get("bootstrap_state")
+        current_step_value = current_step if isinstance(current_step, str) else None
 
         emit_metric("progress_snapshot_reads_total", 1, endpoint=AUTHORING_PROGRESS_ENDPOINT)
         return JobProgressResponse(
             job_id=job.id,
             status=job.status,
-            current_step=current_step if isinstance(current_step, str) else None,
+            current_step=current_step_value,
+            progress_percentage=derive_progress_percentage(
+                payload,
+                current_step=current_step_value,
+                status=job.status,
+            ),
+            bootstrap_state=bootstrap_state if isinstance(bootstrap_state, str) else None,
             progress_seq=progress_seq if isinstance(progress_seq, int) else None,
             progress_ts=progress_ts if isinstance(progress_ts, str) else None,
             error_code=error_code if isinstance(error_code, str) else None,

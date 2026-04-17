@@ -2,7 +2,7 @@
 
 interface AuthoringErrorStateProps {
     message: string;
-    onRetry: () => void;
+    onRetry?: () => void;
     onBack: () => void;
 }
 
@@ -28,12 +28,14 @@ export function AuthoringErrorState({ message, onRetry, onBack }: AuthoringError
                     >
                         ← Volver al formulario
                     </button>
-                    <button
-                        onClick={onRetry}
-                        className="rounded-input bg-adam-accent px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-adam-accent/90 focus-visible:outline-2 focus-visible:outline-adam-accent"
-                    >
-                        Reintentar
-                    </button>
+                    {onRetry ? (
+                        <button
+                            onClick={onRetry}
+                            className="rounded-input bg-adam-accent px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-adam-accent/90 focus-visible:outline-2 focus-visible:outline-adam-accent"
+                        >
+                            Reintentar
+                        </button>
+                    ) : null}
                 </div>
             </div>
         </div>

@@ -134,3 +134,67 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Context:** Registrado como follow-up de hardening después de estabilizar el contrato canónico de pasos y la persistencia resiliente introducidos en esta entrega.
 
 **Depends on / blocked by:** Alineación con la estrategia de observabilidad de la plataforma (métricas, logs y alerting) y disponibilidad del destino de métricas en ambientes compartidos.
+
+---
+
+## TODO-009: Política de retención y purge de checkpoints LangGraph
+
+**What:** Definir e implementar una política explícita de retención para tablas de checkpoints (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) con purge seguro por antigüedad/estado terminal y guardrails para no borrar sesiones activas.
+
+**Why:** La persistencia stateful de Issue #112 agrega crecimiento continuo de datos de checkpoint. Sin retención, la base acumula payloads JSONB/BYTEA y degrada costo/operación a mediano plazo.
+
+**Pros:** Control de crecimiento de almacenamiento, mejor performance operacional, y ciclo de vida claro de datos transitorios de ejecución.
+
+**Cons:** Requiere definir ventana de retención por entorno, estrategia de borrado incremental y observabilidad para evitar borrados agresivos.
+
+**Context:** Reconfirmado en la corrección async de Issue #112. La decisión explícita es mantener Fase 2 enfocada en `AsyncPostgresSaver` + resume funcional y diferir la política de retención hasta que el flujo durable esté estable.
+
+**Depends on / blocked by:** Estabilizar primero el flujo de resume con el wiring async lazy/fail-closed y acordar política de compliance para retención de trazas de ejecución.
+
+---
+
+## TODO-010: Utilidad de reconciliación de artefactos huérfanos legacy
+
+**What:** Crear una utilidad operativa para reconciliar artefactos huérfanos históricos (manifest en DB vs blob en storage) y aplicar remediación controlada (marcar, limpiar o re-vincular según reglas).
+
+**Why:** Aunque el pipeline actual maneja orphaning/publish por job, existen escenarios legacy y fallos previos donde pueden quedar inconsistencias entre DB y storage.
+
+**Pros:** Reduce deuda de datos históricos, mejora integridad de inventario de artifacts y simplifica troubleshooting de casos antiguos.
+
+**Cons:** Tiene riesgo de limpieza incorrecta si la heurística no es conservadora; requiere modo dry-run y auditoría de cambios.
+
+**Context:** Reconfirmado en la revisión de corrección de Issue #112. La Fase 2 queda checkpoint-first; la reconciliación histórica sigue fuera de alcance para no mezclar cleanup legado con el fix del blocker async.
+
+**Depends on / blocked by:** Definir criterios de reconciliación por tipo de artifact y ventana temporal, más aprobación operativa para ejecutar limpieza en ambientes compartidos después de estabilizar el resume durable.
+
+---
+
+## TODO-011: Política de retry budget y circuit breaker para authoring
+
+**What:** Diseñar una política de presupuesto de reintentos por job/tenant y un circuit breaker para fallos transientes repetidos del proveedor LLM, con telemetría y mensajes de fallback consistentes.
+
+**Why:** El estado `failed_resumable` habilita reintentos manuales, pero sin límites puede generar loops costosos de reintento y mala experiencia bajo incidentes prolongados.
+
+**Pros:** Control de costo/estabilidad, prevención de tormentas de retry y comportamiento predecible durante degradaciones externas.
+
+**Cons:** Requiere calibración fina por tipo de error y coordinación entre backend, UX y métricas para no bloquear reintentos legítimos.
+
+**Context:** Reconfirmado durante la corrección async de Issue #112. La decisión explícita fue no diseñar budget/circuit breaker antes de tener baseline determinístico y `live_llm` del flujo de resume desde M4.
+
+**Depends on / blocked by:** Baseline de métricas de fallos transientes en producción, validación del resume durable con `AsyncPostgresSaver`, y definición de política de producto sobre reintentos permitidos por usuario/curso.
+
+---
+
+## TODO-012: Lifecycle explícito para el singleton async de checkpoints
+
+**What:** Evaluar si el singleton async lazy de `AsyncConnectionPool` + `AsyncPostgresSaver` + grafo compilado debe migrarse a ownership explícito por `lifespan` en `shared.app` y `shared.worker_app`.
+
+**Why:** La Fase 2 de Issue #112 eligió el patrón lazy async por minimal diff. Si aparecen problemas de cleanup en shutdown, churn de event loops en tests o necesidad de teardown más predecible, conviene promover estos recursos a lifecycle explícito.
+
+**Pros:** Cierre determinístico de recursos, menos ambigüedad en tests/multi-loop, ownership operacional más obvio.
+
+**Cons:** Amplía scope a `shared.app` y `shared.worker_app`, añade más superficie sensible y no desbloquea el bug actual por sí mismo.
+
+**Context:** Esta fue la alternativa 1B considerada en la revisión de corrección de Issue #112. Se rechazó para el fix inicial por preferencia de diff mínimo, pero queda capturada como hardening posterior si el patrón lazy muestra límites reales.
+
+**Depends on / blocked by:** Observar primero el comportamiento del wiring async lazy en validación local, tests y worker real después de que el blocker quede resuelto.

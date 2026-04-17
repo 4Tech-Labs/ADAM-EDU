@@ -33,7 +33,12 @@ from sqlalchemy.orm import Session
 
 from case_generator.core.authoring import AuthoringService
 from shared.database import get_db
-from shared.models import AuthoringJob
+from shared.models import (
+    AUTHORING_JOB_STATUS_COMPLETED,
+    AUTHORING_JOB_STATUS_FAILED,
+    AUTHORING_JOB_STATUS_PROCESSING,
+    AuthoringJob,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +137,11 @@ async def process_authoring_job_task(
         logger.error("cloud_task_job_not_found", extra={"job_id": payload.job_id})
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.status in ["completed", "failed", "processing"]:
+    if job.status in [
+        AUTHORING_JOB_STATUS_COMPLETED,
+        AUTHORING_JOB_STATUS_FAILED,
+        AUTHORING_JOB_STATUS_PROCESSING,
+    ]:
         logger.warning(
             "cloud_task_idempotency_barrier",
             extra={"job_id": job.id, "status": job.status},

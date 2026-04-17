@@ -17,8 +17,10 @@ import type {
     AdminTeacherInviteRequest,
     AdminTeacherInviteResponse,
     AdminTeacherOptionsResponse,
+    AuthoringBootstrapState,
     AuthoringJobCreateRequest,
     AuthoringJobCreateResponse,
+    AuthoringJobRetryResponse,
     AuthoringProgressStep,
     AuthoringJobProgressSnapshotResponse,
     AuthoringJobResultResponse,
@@ -70,6 +72,14 @@ interface AuthoringJobRealtimeRow {
 }
 
 const AUTHORING_PROGRESS_STEP_SET = new Set<string>(AUTHORING_PROGRESS_STEP_IDS);
+const AUTHORING_PROGRESS_POLL_INTERVAL_MS = 3000;
+
+class ProgressPollingFallbackError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "ProgressPollingFallbackError";
+    }
+}
 
 export interface ApiValidationErrorDetail {
     type: string;
@@ -259,11 +269,30 @@ function asObject(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
-function emitStatusEvent(onEvent: (event: ProgressEvent) => void, status: unknown): void {
+function normalizeBootstrapState(value: unknown): AuthoringBootstrapState | null {
+    if (value !== "initializing") {
+        return null;
+    }
+
+    return value;
+}
+
+function emitMetadataEvent(
+    onEvent: (event: ProgressEvent) => void,
+    status: unknown,
+    bootstrapState?: unknown,
+): void {
     if (typeof status !== "string") {
         return;
     }
-    onEvent({ event: "metadata", data: JSON.stringify({ status }) });
+
+    const normalizedBootstrapState = normalizeBootstrapState(bootstrapState);
+    const payload: { status: string; bootstrap_state?: AuthoringBootstrapState } = { status };
+    if (normalizedBootstrapState) {
+        payload.bootstrap_state = normalizedBootstrapState;
+    }
+
+    onEvent({ event: "metadata", data: JSON.stringify(payload) });
 }
 
 function normalizeProgressStep(value: unknown): AuthoringProgressStep | null {
@@ -309,11 +338,12 @@ async function emitTerminalEvent(
         return;
     }
 
-    if (status === "failed") {
+    if (status === "failed" || status === "failed_resumable") {
         const detail = taskPayload.error_trace;
         onEvent({
             event: "error",
             data: JSON.stringify({
+                status,
                 detail:
                     typeof detail === "string" && detail.trim() !== ""
                         ? detail
@@ -330,15 +360,18 @@ async function streamRealtimeProgress(
 ): Promise<void> {
     const snapshot = await parseJsonResponse<AuthoringJobProgressSnapshotResponse>(
         `/authoring/jobs/${jobId}/progress`,
+        { signal },
     );
     let lastProgressSeq = normalizeProgressSeq(snapshot.progress_seq);
     let lastEmittedStatus: string | null = null;
     let lastEmittedStep: AuthoringProgressStep | null = null;
+    let lastBootstrapState: AuthoringBootstrapState | null = null;
 
     const emitMonotonicProgress = (
         status: unknown,
         step: unknown,
         progressSeq: unknown,
+        bootstrapState?: unknown,
     ): void => {
         if (typeof status !== "string") {
             return;
@@ -346,6 +379,7 @@ async function streamRealtimeProgress(
 
         const normalizedStep = normalizeProgressStep(step);
         const normalizedSeq = normalizeProgressSeq(progressSeq);
+        const normalizedBootstrapState = normalizeBootstrapState(bootstrapState);
         const previousStepIndex = getProgressStepIndex(lastEmittedStep);
         const nextStepIndex = getProgressStepIndex(normalizedStep);
 
@@ -385,9 +419,10 @@ async function streamRealtimeProgress(
             lastProgressSeq = normalizedSeq;
         }
 
-        if (status !== lastEmittedStatus) {
-            emitStatusEvent(onEvent, status);
+        if (status !== lastEmittedStatus || normalizedBootstrapState !== lastBootstrapState) {
+            emitMetadataEvent(onEvent, status, normalizedBootstrapState);
             lastEmittedStatus = status;
+            lastBootstrapState = normalizedBootstrapState;
         }
 
         if (normalizedStep && normalizedStep !== lastEmittedStep) {
@@ -396,17 +431,133 @@ async function streamRealtimeProgress(
         }
     };
 
-    emitMonotonicProgress(snapshot.status, snapshot.current_step, snapshot.progress_seq);
+    emitMonotonicProgress(
+        snapshot.status,
+        snapshot.current_step,
+        snapshot.progress_seq,
+        snapshot.bootstrap_state,
+    );
+
+    const reconcileLatestSnapshot = async (): Promise<boolean> => {
+        const latestSnapshot = await parseJsonResponse<AuthoringJobProgressSnapshotResponse>(
+            `/authoring/jobs/${jobId}/progress`,
+            { signal },
+        );
+
+        emitMonotonicProgress(
+            latestSnapshot.status,
+            latestSnapshot.current_step,
+            latestSnapshot.progress_seq,
+            latestSnapshot.bootstrap_state,
+        );
+
+        if (latestSnapshot.status === "completed") {
+            await emitTerminalEvent(jobId, "completed", {}, onEvent);
+            return true;
+        }
+
+        if (latestSnapshot.status === "failed" || latestSnapshot.status === "failed_resumable") {
+            await emitTerminalEvent(
+                jobId,
+                latestSnapshot.status,
+                { error_trace: latestSnapshot.error_trace ?? "Error del servidor durante la generacion." },
+                onEvent,
+            );
+            return true;
+        }
+
+        return false;
+    };
+
+    // Realtime is the preferred path. Polling is the durable fallback when the
+    // channel cannot be established or later degrades with CHANNEL_ERROR/TIMED_OUT.
+    const pollProgressUntilTerminal = async (): Promise<void> => {
+        await new Promise<void>((resolve, reject) => {
+            let settled = false;
+            let timer: ReturnType<typeof setInterval> | null = null;
+            let pollInFlight = false;
+
+            const clearTimer = () => {
+                if (timer !== null) {
+                    clearInterval(timer);
+                    timer = null;
+                }
+            };
+
+            const onAbort = () => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimer();
+                resolve();
+            };
+
+            const fail = (error: unknown) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimer();
+                reject(error);
+            };
+
+            const finish = () => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimer();
+                resolve();
+            };
+
+            const pollOnce = async () => {
+                if (settled || pollInFlight) {
+                    return;
+                }
+
+                pollInFlight = true;
+                try {
+                    const isTerminal = await reconcileLatestSnapshot();
+                    if (isTerminal) {
+                        finish();
+                    }
+                } catch (error) {
+                    fail(error);
+                } finally {
+                    pollInFlight = false;
+                }
+            };
+
+            if (signal) {
+                if (signal.aborted) {
+                    finish();
+                    return;
+                }
+                signal.addEventListener("abort", onAbort, { once: true });
+            }
+
+            void pollOnce().then(() => {
+                if (settled) {
+                    return;
+                }
+
+                timer = setInterval(() => {
+                    void pollOnce();
+                }, AUTHORING_PROGRESS_POLL_INTERVAL_MS);
+            });
+        });
+    };
 
     if (snapshot.status === "completed") {
         await emitTerminalEvent(jobId, "completed", {}, onEvent);
         return;
     }
 
-    if (snapshot.status === "failed") {
+    if (snapshot.status === "failed" || snapshot.status === "failed_resumable") {
         await emitTerminalEvent(
             jobId,
-            "failed",
+            snapshot.status,
             { error_trace: snapshot.error_trace ?? "Error del servidor durante la generacion." },
             onEvent,
         );
@@ -415,113 +566,111 @@ async function streamRealtimeProgress(
 
     const client = getSupabaseClient();
     if (!client || typeof client.channel !== "function" || typeof client.removeChannel !== "function") {
-        throw new ApiError(503, "No se pudo conectar al canal de progreso en tiempo real.");
+        await pollProgressUntilTerminal();
+        return;
     }
 
-    await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const channel = client
-            .channel(`authoring-job-${jobId}`)
-            .on(
-                "postgres_changes",
-                {
-                    event: "UPDATE",
-                    schema: "public",
-                    table: "authoring_jobs",
-                    filter: `id=eq.${jobId}`,
-                },
-                (payload: { new: AuthoringJobRealtimeRow | null }) => {
-                    if (settled || !payload.new) {
-                        return;
-                    }
+    try {
+        await new Promise<void>((resolve, reject) => {
+            let settled = false;
 
-                    const taskPayload = asObject(payload.new.task_payload);
-                    emitMonotonicProgress(payload.new.status, taskPayload.current_step, taskPayload.progress_seq);
+            const channel = client
+                .channel(`authoring-job-${jobId}`)
+                .on(
+                    "postgres_changes",
+                    {
+                        event: "UPDATE",
+                        schema: "public",
+                        table: "authoring_jobs",
+                        filter: `id=eq.${jobId}`,
+                    },
+                    (payload: { new: AuthoringJobRealtimeRow | null }) => {
+                        if (settled || !payload.new) {
+                            return;
+                        }
 
-                    const nextStatus = payload.new.status;
-                    if (nextStatus === "completed" || nextStatus === "failed") {
-                        settled = true;
-                        void emitTerminalEvent(jobId, nextStatus, taskPayload, onEvent)
-                            .then(() => client.removeChannel(channel))
-                            .then(() => resolve())
-                            .catch((error) => reject(error));
-                    }
-                },
-            )
-            .subscribe((subscriptionStatus) => {
-                if (settled) {
-                    return;
-                }
+                        const taskPayload = asObject(payload.new.task_payload);
+                        emitMonotonicProgress(payload.new.status, taskPayload.current_step, taskPayload.progress_seq);
 
-                if (subscriptionStatus === "SUBSCRIBED") {
-                    console.info("[authoring-progress] realtime subscribed", { jobId });
-                    void parseJsonResponse<AuthoringJobProgressSnapshotResponse>(`/authoring/jobs/${jobId}/progress`)
-                        .then((latestSnapshot) => {
-                            if (settled) {
-                                return;
-                            }
-
-                            emitMonotonicProgress(
-                                latestSnapshot.status,
-                                latestSnapshot.current_step,
-                                latestSnapshot.progress_seq,
-                            );
-
-                            if (latestSnapshot.status !== "completed" && latestSnapshot.status !== "failed") {
-                                return;
-                            }
-
+                        const nextStatus = payload.new.status;
+                        if (
+                            nextStatus === "completed"
+                            || nextStatus === "failed"
+                            || nextStatus === "failed_resumable"
+                        ) {
                             settled = true;
-                            const terminalPayload =
-                                latestSnapshot.status === "failed"
-                                    ? {
-                                          error_trace:
-                                              latestSnapshot.error_trace ?? "Error del servidor durante la generacion.",
-                                      }
-                                    : {};
-                            void emitTerminalEvent(jobId, latestSnapshot.status, terminalPayload, onEvent)
+                            void emitTerminalEvent(jobId, nextStatus, taskPayload, onEvent)
                                 .then(() => client.removeChannel(channel))
                                 .then(() => resolve())
                                 .catch((error) => reject(error));
-                        })
-                        .catch((error) => {
-                            if (settled) {
-                                return;
-                            }
-                            settled = true;
-                            void client.removeChannel(channel).finally(() => reject(error));
+                        }
+                    },
+                )
+                .subscribe((subscriptionStatus) => {
+                    if (settled) {
+                        return;
+                    }
+
+                    if (subscriptionStatus === "SUBSCRIBED") {
+                        console.info("[authoring-progress] realtime subscribed", { jobId });
+                        void reconcileLatestSnapshot()
+                            .then((reconciledTerminalState) => {
+                                if (settled) {
+                                    return;
+                                }
+
+                                if (!reconciledTerminalState) {
+                                    return;
+                                }
+
+                                settled = true;
+                                void client.removeChannel(channel).then(() => resolve()).catch((error) => reject(error));
+                            })
+                            .catch((error) => {
+                                if (settled) {
+                                    return;
+                                }
+                                settled = true;
+                                void client.removeChannel(channel).finally(() => reject(error));
+                            });
+                        return;
+                    }
+
+                    if (subscriptionStatus === "CHANNEL_ERROR" || subscriptionStatus === "TIMED_OUT") {
+                        console.error("[authoring-progress] realtime subscription failed", {
+                            jobId,
+                            subscriptionStatus,
                         });
+                        settled = true;
+                        void client.removeChannel(channel)
+                            .catch(() => undefined)
+                            .then(() => reject(new ProgressPollingFallbackError(subscriptionStatus)));
+                    }
+                });
+
+            const onAbort = () => {
+                if (settled) {
                     return;
                 }
+                settled = true;
+                void client.removeChannel(channel).finally(() => resolve());
+            };
 
-                if (subscriptionStatus === "CHANNEL_ERROR" || subscriptionStatus === "TIMED_OUT") {
-                    console.error("[authoring-progress] realtime subscription failed", {
-                        jobId,
-                        subscriptionStatus,
-                    });
-                    settled = true;
-                    void client.removeChannel(channel).finally(() => {
-                        reject(new ApiError(502, "No se pudo abrir el canal de progreso en tiempo real."));
-                    });
+            if (signal) {
+                if (signal.aborted) {
+                    onAbort();
+                    return;
                 }
-            });
-
-        const onAbort = () => {
-            if (settled) {
-                return;
+                signal.addEventListener("abort", onAbort, { once: true });
             }
-            settled = true;
-            void client.removeChannel(channel).finally(() => resolve());
-        };
-
-        if (signal) {
-            if (signal.aborted) {
-                onAbort();
-                return;
-            }
-            signal.addEventListener("abort", onAbort, { once: true });
+        });
+    } catch (error) {
+        if (error instanceof ProgressPollingFallbackError) {
+            await pollProgressUntilTerminal();
+            return;
         }
-    });
+        throw error;
+    }
 }
 
 export const api = {
@@ -532,6 +681,14 @@ export const api = {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(reqBody),
             });
+        },
+        async retryJob(jobId: string): Promise<AuthoringJobRetryResponse> {
+            return parseJsonResponse<AuthoringJobRetryResponse>(`/authoring/jobs/${jobId}/retry`, {
+                method: "POST",
+            });
+        },
+        async getProgress(jobId: string): Promise<AuthoringJobProgressSnapshotResponse> {
+            return parseJsonResponse<AuthoringJobProgressSnapshotResponse>(`/authoring/jobs/${jobId}/progress`);
         },
         async getStatus(jobId: string): Promise<AuthoringJobStatusResponse> {
             return parseJsonResponse<AuthoringJobStatusResponse>(`/authoring/jobs/${jobId}`);

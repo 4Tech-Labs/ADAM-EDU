@@ -128,4 +128,61 @@ class ArtifactManager:
             logger.info(f"ArtifactManager: Promoted {len(manifests)} manifests to 'published_v5' for Job {job_id}")
             db.commit()
 
+    @classmethod
+    async def prefetch_resume_artifacts(
+        cls,
+        *,
+        db: Session,
+        storage_provider: IStorageProvider,
+        assignment_id: str,
+    ) -> dict[str, dict[str, str]]:
+        """
+        Load resumable artifacts in one query and map them into node->state payloads.
+
+        This avoids N+1 manifest reads when rehydrating state for resume attempts.
+        """
+        hydration_map = {
+            ("narrative_text", "case_writer"): ("case_writer", "doc1_narrativa"),
+            ("eda_report", "eda_text_analyst"): ("eda_text_analyst", "doc2_eda"),
+        }
+
+        manifests = (
+            db.query(ArtifactManifest)
+            .filter(
+                ArtifactManifest.assignment_id == assignment_id,
+                ArtifactManifest.status.in_(("published_v5", "unvalidated")),
+                ArtifactManifest.artifact_type.in_(("narrative_text", "eda_report")),
+            )
+            .order_by(ArtifactManifest.created_at.desc())
+            .all()
+        )
+
+        selected_by_kind: dict[tuple[str, str], ArtifactManifest] = {}
+        for manifest in manifests:
+            lookup_key = (manifest.artifact_type, manifest.producer_node)
+            if lookup_key in hydration_map and lookup_key not in selected_by_kind:
+                selected_by_kind[lookup_key] = manifest
+
+        cached_nodes: dict[str, dict[str, str]] = {}
+        for lookup_key, manifest in selected_by_kind.items():
+            node_name, state_key = hydration_map[lookup_key]
+            try:
+                artifact_text = await storage_provider.download_text(manifest.gcs_uri)
+            except Exception as exc:
+                logger.warning(
+                    "ArtifactManager: Could not hydrate %s/%s from %s: %s",
+                    manifest.artifact_type,
+                    manifest.producer_node,
+                    manifest.gcs_uri,
+                    exc,
+                )
+                continue
+
+            if not artifact_text.strip():
+                continue
+
+            cached_nodes.setdefault(node_name, {})[state_key] = artifact_text
+
+        return cached_nodes
+
 

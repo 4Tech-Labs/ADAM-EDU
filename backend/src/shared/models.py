@@ -347,6 +347,18 @@ class Assignment(Base):
     artifacts: Mapped[list["ArtifactManifest"]] = relationship(back_populates="assignment")
 
 
+AUTHORING_JOB_STATUS_PENDING = "pending"
+AUTHORING_JOB_STATUS_PROCESSING = "processing"
+AUTHORING_JOB_STATUS_COMPLETED = "completed"
+AUTHORING_JOB_STATUS_FAILED = "failed"
+AUTHORING_JOB_STATUS_FAILED_RESUMABLE = "failed_resumable"
+
+AUTHORING_JOB_RETRYABLE_STATUSES = (
+    AUTHORING_JOB_STATUS_PENDING,
+    AUTHORING_JOB_STATUS_FAILED_RESUMABLE,
+)
+
+
 class AuthoringJob(Base):
     """
     Tracks asynchronous authoring execution.
@@ -354,6 +366,12 @@ class AuthoringJob(Base):
     """
 
     __tablename__ = "authoring_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'completed', 'failed', 'failed_resumable')",
+            name="ck_authoring_jobs_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     assignment_id: Mapped[str] = mapped_column(String(36), ForeignKey("assignments.id"), nullable=False)
@@ -362,7 +380,7 @@ class AuthoringJob(Base):
     idempotency_key: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
 
     # State tracking for the authoring job lifecycle.
-    status: Mapped[str] = mapped_column(String(50), default="pending")
+    status: Mapped[str] = mapped_column(String(50), default=AUTHORING_JOB_STATUS_PENDING)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
 
     # Normalized intake payload that drives the authoring run.

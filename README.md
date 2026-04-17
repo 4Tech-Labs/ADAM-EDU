@@ -122,6 +122,7 @@ Resumen corto:
 - plano `authoring/app DB local`: `docker compose up -d adam-edu-postgres` en `5434`
 - plano `auth local`: `supabase start` con API `54321`, DB `54322`, Studio `54323` y Mailpit `54324`
 - referencias remotas: `5432` para session mode y `6543` para transaction mode, nunca como default local del repo
+- el launcher local `uv run --directory backend python -m shared.app` ahora falla rapido si `ENVIRONMENT=development` apunta a un host remoto de Supabase; para local, usa siempre `localhost:5434`
 
 El error mas comun en esta fase es apuntar `DATABASE_URL` al Postgres de Supabase local.
 No lo hagas. `DATABASE_URL` local del repo sigue apuntando a `localhost:5434`.
