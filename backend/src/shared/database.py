@@ -61,14 +61,19 @@ def _validate_production_database_url(s: Settings) -> None:
         )
 
 
+def _build_postgres_timeout_options(s: Settings) -> str:
+    """Return the libpq options string for Postgres session-level timeouts."""
+    statement_timeout_ms = max(1, s.db_statement_timeout_ms)
+    lock_timeout_ms = max(1, s.db_lock_timeout_ms)
+    return (
+        f"-c statement_timeout={statement_timeout_ms} "
+        f"-c lock_timeout={lock_timeout_ms}"
+    )
+
+
 def _build_connect_args(s: Settings) -> dict[str, str]:
     """Set session-level statement and lock timeout for every DB connection."""
-    return {
-        "options": (
-            f"-c statement_timeout={max(1, s.db_statement_timeout_ms)} "
-            f"-c lock_timeout={max(1, s.db_lock_timeout_ms)}"
-        )
-    }
+    return {"options": _build_postgres_timeout_options(s)}
 
 
 def _make_engine(s: Settings) -> Engine:
@@ -343,6 +348,7 @@ def _langgraph_pool_kwargs() -> dict[str, object]:
         "autocommit": True,
         "row_factory": dict_row,
         "prepare_threshold": 0,
+        "options": _build_postgres_timeout_options(settings),
     }
 
 
