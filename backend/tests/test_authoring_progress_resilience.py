@@ -442,6 +442,69 @@ def test_validate_runtime_database_configuration_rejects_remote_supabase_in_deve
             raise AssertionError("Expected development runtime validation to reject remote Supabase")
 
 
+def test_langgraph_checkpointer_sync_pool_caps_size_in_production(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeConnectionPool:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+    production_settings = database_module.Settings(
+        database_url="postgresql+psycopg://user:pass@aws-1-us-west-2.pooler.supabase.com:6543/postgres",
+        environment="production",
+        db_pool_size=8,
+    )
+
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_pool", None)
+    monkeypatch.setattr(database_module, "ConnectionPool", FakeConnectionPool)
+    monkeypatch.setattr(database_module, "settings", production_settings)
+
+    database_module.get_langgraph_checkpointer_pool()
+
+    kwargs = captured["kwargs"]
+    assert kwargs["min_size"] == 1
+    assert kwargs["max_size"] == 1
+    assert kwargs["max_idle"] == 5.0
+    assert kwargs["max_lifetime"] == 60.0
+
+
+async def test_langgraph_checkpointer_async_pool_caps_size_in_production(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAsyncConnectionPool:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+        async def open(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    production_settings = database_module.Settings(
+        database_url="postgresql+psycopg://user:pass@aws-1-us-west-2.pooler.supabase.com:6543/postgres",
+        environment="production",
+        db_pool_size=8,
+    )
+
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock_loop", None)
+    monkeypatch.setattr(database_module, "AsyncConnectionPool", FakeAsyncConnectionPool)
+    monkeypatch.setattr(database_module, "settings", production_settings)
+
+    await database_module.get_langgraph_checkpointer_async_pool()
+
+    kwargs = captured["kwargs"]
+    assert kwargs["min_size"] == 1
+    assert kwargs["max_size"] == 1
+    assert kwargs["max_idle"] == 5.0
+    assert kwargs["max_lifetime"] == 60.0
+
+
 async def test_graph_singleton_initializes_once_per_loop(monkeypatch) -> None:
     state = {"checkpointer_calls": 0, "compile_calls": 0}
 

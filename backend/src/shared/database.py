@@ -239,19 +239,40 @@ def _langgraph_pool_kwargs() -> dict[str, object]:
     }
 
 
+def _langgraph_checkpointer_pool_bounds() -> tuple[int, int]:
+    """Keep production checkpoint pools compatible with Supavisor transaction mode."""
+    if settings.environment.strip().lower() == "production":
+        return (1, 1)
+
+    return (1, max(1, settings.db_pool_size))
+
+
+def _langgraph_checkpointer_pool_tuning() -> dict[str, float]:
+    """Use short-lived checkpoint connections in production to avoid sticky sessions."""
+    if settings.environment.strip().lower() != "production":
+        return {}
+
+    return {
+        "max_idle": 5.0,
+        "max_lifetime": 60.0,
+    }
+
+
 def get_langgraph_checkpointer_pool() -> ConnectionPool:
     """Return a shared psycopg pool configured from existing DB settings."""
     global _langgraph_checkpointer_pool
 
     if _langgraph_checkpointer_pool is None:
+        min_size, max_size = _langgraph_checkpointer_pool_bounds()
         _langgraph_checkpointer_pool = ConnectionPool(
             conninfo=_to_psycopg_conninfo(settings.database_url),
-            min_size=1,
-            max_size=max(1, settings.db_pool_size),
+            min_size=min_size,
+            max_size=max_size,
             kwargs=_langgraph_pool_kwargs(),
             timeout=float(settings.db_pool_timeout),
             open=True,
             name="langgraph-checkpointer",
+            **_langgraph_checkpointer_pool_tuning(),
         )
 
     return _langgraph_checkpointer_pool
@@ -294,6 +315,7 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
 
         previous_pool = _langgraph_checkpointer_async_pool
         parsed_url = make_url(settings.database_url)
+        min_size, max_size = _langgraph_checkpointer_pool_bounds()
         logger.info(
             "Opening LangGraph async checkpointer pool",
             extra={
@@ -301,19 +323,21 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
                 "db_host": parsed_url.host,
                 "db_port": parsed_url.port,
                 "environment": settings.environment,
-                "max_size": max(1, settings.db_pool_size),
+                "min_size": min_size,
+                "max_size": max_size,
                 "loop_id": id(current_loop),
             },
         )
         pool_open_started_at = time.perf_counter()
         pool = AsyncConnectionPool(
             conninfo=_to_psycopg_conninfo(settings.database_url),
-            min_size=1,
-            max_size=max(1, settings.db_pool_size),
+            min_size=min_size,
+            max_size=max_size,
             kwargs=_langgraph_pool_kwargs(),
             timeout=float(settings.db_pool_timeout),
             open=False,
             name="langgraph-checkpointer-async",
+            **_langgraph_checkpointer_pool_tuning(),
         )
         await pool.open()
         logger.info(
