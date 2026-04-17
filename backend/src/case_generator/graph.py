@@ -98,7 +98,13 @@ from case_generator.tools_and_schemas import (
 )
 from case_generator.orchestration.frontend_adapter import adapter_canonical_to_legacy
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
-from shared.database import get_langgraph_checkpointer_async_pool
+from shared.database import (
+    collect_langgraph_bootstrap_diagnostics,
+    get_checkpoint_migrations_version,
+    get_langgraph_checkpointer_async_pool,
+    settings,
+    snapshot_langgraph_pool_stats,
+)
 from shared.sanitization import sanitize_untrusted_payload
 
 if TYPE_CHECKING:
@@ -3179,25 +3185,156 @@ def _get_graph_lock(current_loop: asyncio.AbstractEventLoop) -> asyncio.Lock:
     return _graph_singleton_lock
 
 
-async def _build_async_postgres_checkpointer() -> AsyncPostgresSaver:
-    """Build the durable async Postgres checkpointer inside an active event loop."""
+_BOOTSTRAP_SETUP_WARNING_MS = 10000.0
+_BOOTSTRAP_COMPILE_WARNING_MS = 5000.0
+_BOOTSTRAP_PHASE_BUDGET_RATIO = 0.8
+
+
+def _bootstrap_timeout_budget_ms() -> float:
+    """Return the outer bootstrap budget used by authoring wait_for()."""
+    configured_timeout = settings.authoring_bootstrap_timeout_seconds
+    if configured_timeout is not None and configured_timeout > 0:
+        return float(configured_timeout) * 1000.0
+
+    normalized_environment = settings.environment.strip().lower()
+    return 120000.0 if normalized_environment == "development" else 60000.0
+
+
+def _log_bootstrap_phase_threshold(
+    *,
+    phase_label: str,
+    elapsed_ms: float,
+    warning_ms: float,
+    extra: dict[str, Any],
+) -> None:
+    """Emit slow-path signals without changing bootstrap control flow."""
+    budget_ms = _bootstrap_timeout_budget_ms()
+    if elapsed_ms >= budget_ms * _BOOTSTRAP_PHASE_BUDGET_RATIO:
+        logger.error(
+            "[graph] LangGraph bootstrap %s consumed most of the outer bootstrap budget",
+            phase_label,
+            extra=extra,
+        )
+    elif elapsed_ms > warning_ms:
+        logger.warning(
+            "[graph] LangGraph bootstrap %s exceeded slow-path threshold",
+            phase_label,
+            extra=extra,
+        )
+
+
+async def _log_checkpointer_setup_failure(
+    *,
+    pool: Any,
+    exc: BaseException,
+    setup_ms: float,
+    checkpoint_migrations_version: int | None,
+    is_first_init: bool,
+    loop_id: int,
+) -> None:
+    """Emit enriched setup failure diagnostics without masking the original error."""
+    diagnostics: dict[str, Any] = {}
     try:
-        pool = await get_langgraph_checkpointer_async_pool()
-        logger.info("[graph] Initializing AsyncPostgresSaver", extra={"loop_id": id(asyncio.get_running_loop())})
-        setup_started_at = time.perf_counter()
-        checkpointer = AsyncPostgresSaver(cast(Any, pool))
+        diagnostics = await collect_langgraph_bootstrap_diagnostics(cast(Any, pool))
+    except Exception as diag_exc:
+        logger.warning(
+            "[graph] Bootstrap diagnostics collection failed: %s",
+            diag_exc,
+            extra={
+                "loop_id": loop_id,
+                "bootstrap_setup_ms": setup_ms,
+                "checkpoint_migrations_version": checkpoint_migrations_version,
+                "bootstrap_is_first_init": is_first_init,
+            },
+        )
+
+    event_message = (
+        "[graph] AsyncPostgresSaver setup cancelled"
+        if isinstance(exc, asyncio.CancelledError)
+        else "[graph] AsyncPostgresSaver setup failed"
+    )
+    logger.error(
+        event_message,
+        exc_info=(type(exc), exc, exc.__traceback__),
+        extra={
+            "loop_id": loop_id,
+            "bootstrap_setup_ms": setup_ms,
+            "checkpoint_migrations_version": checkpoint_migrations_version,
+            "bootstrap_is_first_init": is_first_init,
+            **snapshot_langgraph_pool_stats(pool),
+            "pg_stat_activity": diagnostics.get("pg_stat_activity", []),
+            "pg_locks": diagnostics.get("pg_locks", []),
+        },
+    )
+
+
+async def _build_async_postgres_checkpointer(*, is_first_init: bool) -> AsyncPostgresSaver:
+    """Build the durable async Postgres checkpointer inside an active event loop."""
+    current_loop = asyncio.get_running_loop()
+    loop_id = id(current_loop)
+    pool = await get_langgraph_checkpointer_async_pool()
+    checkpoint_migrations_version = await get_checkpoint_migrations_version(pool)
+    logger.debug(
+        "[graph] Initializing AsyncPostgresSaver",
+        extra={
+            "loop_id": loop_id,
+            "checkpoint_migrations_version": checkpoint_migrations_version,
+            "bootstrap_is_first_init": is_first_init,
+        },
+    )
+    setup_started_at = time.perf_counter()
+    checkpointer = AsyncPostgresSaver(cast(Any, pool))
+
+    try:
         # Idempotent bootstrap for local/tests where Alembic metadata may be recreated.
         await checkpointer.setup()
-        logger.info(
-            "[graph] AsyncPostgresSaver initialized",
-            extra={"latency_ms": round((time.perf_counter() - setup_started_at) * 1000, 3)},
+    except asyncio.CancelledError as exc:
+        setup_ms = round((time.perf_counter() - setup_started_at) * 1000, 3)
+        await _log_checkpointer_setup_failure(
+            pool=pool,
+            exc=exc,
+            setup_ms=setup_ms,
+            checkpoint_migrations_version=checkpoint_migrations_version,
+            is_first_init=is_first_init,
+            loop_id=loop_id,
         )
-        return checkpointer
+        raise
     except Exception as exc:
-        logger.error("[graph] AsyncPostgresSaver initialization failed", exc_info=True)
+        setup_ms = round((time.perf_counter() - setup_started_at) * 1000, 3)
+        await _log_checkpointer_setup_failure(
+            pool=pool,
+            exc=exc,
+            setup_ms=setup_ms,
+            checkpoint_migrations_version=checkpoint_migrations_version,
+            is_first_init=is_first_init,
+            loop_id=loop_id,
+        )
         raise DurableCheckpointUnavailableError(
             "Durable LangGraph checkpointing is unavailable."
         ) from exc
+
+    setup_ms = round((time.perf_counter() - setup_started_at) * 1000, 3)
+    logger.info(
+        "[graph] AsyncPostgresSaver initialized",
+        extra={
+            "loop_id": loop_id,
+            "bootstrap_setup_ms": setup_ms,
+            "checkpoint_migrations_version": checkpoint_migrations_version,
+            "bootstrap_is_first_init": is_first_init,
+        },
+    )
+    _log_bootstrap_phase_threshold(
+        phase_label="setup()",
+        elapsed_ms=setup_ms,
+        warning_ms=_BOOTSTRAP_SETUP_WARNING_MS,
+        extra={
+            "loop_id": loop_id,
+            "bootstrap_setup_ms": setup_ms,
+            "checkpoint_migrations_version": checkpoint_migrations_version,
+            "bootstrap_is_first_init": is_first_init,
+        },
+    )
+    return checkpointer
 
 
 async def get_graph() -> Any:
@@ -3216,14 +3353,34 @@ async def get_graph() -> Any:
         if _graph_singleton is not None and _graph_singleton_loop is current_loop:
             return _graph_singleton
 
-        checkpointer = await _build_async_postgres_checkpointer()
+        is_first_init = _graph_singleton is None
+        bootstrap_started_at = time.perf_counter()
+        checkpointer = await _build_async_postgres_checkpointer(is_first_init=is_first_init)
         compile_started_at = time.perf_counter()
         compiled_graph = master_builder.compile(name="adam-agent", checkpointer=checkpointer)
+        compile_ms = round((time.perf_counter() - compile_started_at) * 1000, 3)
+        total_ms = round((time.perf_counter() - bootstrap_started_at) * 1000, 3)
         _graph_singleton = compiled_graph
         _graph_singleton_loop = current_loop
         logger.info(
             "[graph] Compiled master graph with AsyncPostgresSaver",
-            extra={"latency_ms": round((time.perf_counter() - compile_started_at) * 1000, 3)},
+            extra={
+                "loop_id": id(current_loop),
+                "bootstrap_compile_ms": compile_ms,
+                "bootstrap_total_ms": total_ms,
+                "bootstrap_is_first_init": is_first_init,
+            },
+        )
+        _log_bootstrap_phase_threshold(
+            phase_label="compile()",
+            elapsed_ms=compile_ms,
+            warning_ms=_BOOTSTRAP_COMPILE_WARNING_MS,
+            extra={
+                "loop_id": id(current_loop),
+                "bootstrap_compile_ms": compile_ms,
+                "bootstrap_total_ms": total_ms,
+                "bootstrap_is_first_init": is_first_init,
+            },
         )
         return compiled_graph
 
