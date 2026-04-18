@@ -5,6 +5,7 @@ import { EMPTY_FORM } from "@/shared/adam-types";
 
 const {
     MockApiError,
+    MockProgressTransportDegradedError,
     getProgressMock,
     submitJobMock,
     retryJobMock,
@@ -21,8 +22,16 @@ const {
         }
     }
 
+    class LocalMockProgressTransportDegradedError extends Error {
+        constructor(message: string) {
+            super(message);
+            this.name = "ProgressTransportDegradedError";
+        }
+    }
+
     return {
         MockApiError: LocalMockApiError,
+        MockProgressTransportDegradedError: LocalMockProgressTransportDegradedError,
         getProgressMock: vi.fn(),
         submitJobMock: vi.fn(),
         retryJobMock: vi.fn(),
@@ -33,6 +42,7 @@ const {
 vi.mock("@/shared/api", () => {
     return {
         ApiError: MockApiError,
+        ProgressTransportDegradedError: MockProgressTransportDegradedError,
         api: {
             authoring: {
                 getProgress: getProgressMock,
@@ -239,6 +249,48 @@ describe("useAuthoringJobProgress rehydration", () => {
         });
         expect(getProgressMock).toHaveBeenCalledWith("job-88");
         expect(streamProgressMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("self-heals a recoverable transport degradation without requiring refresh", async () => {
+        submitJobMock.mockResolvedValue({ job_id: "job-125" });
+        getProgressMock.mockResolvedValue({
+            job_id: "job-125",
+            status: "processing",
+            current_step: "case_writer",
+            bootstrap_state: "initializing",
+            progress_seq: 1,
+        });
+
+        let streamInvocation = 0;
+        streamProgressMock.mockImplementation(async () => {
+            streamInvocation += 1;
+
+            if (streamInvocation === 1) {
+                throw new MockProgressTransportDegradedError("SUBSCRIBE_TIMEOUT");
+            }
+
+            await new Promise(() => undefined);
+        });
+
+        const { result } = renderHook(() => useAuthoringJobProgress());
+
+        await act(async () => {
+            await result.current.submitJob({
+                ...EMPTY_FORM,
+                subject: "Caso",
+                caseType: "harvard_with_eda",
+            });
+        });
+
+        await waitFor(() => {
+            expect(streamProgressMock).toHaveBeenCalledTimes(2);
+        });
+
+        expect(getProgressMock).toHaveBeenCalledWith("job-125");
+        expect(result.current.status).toBe("processing");
+        expect(result.current.activeAgent).toBe("case_writer");
+        expect(result.current.bootstrapState).toBe("initializing");
+        expect(sessionStorage.getItem("adam_authoring_active_job")).toContain("job-125");
     });
 
     it("fails closed when retry returns an invalid payload", async () => {

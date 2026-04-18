@@ -260,6 +260,80 @@ describe("api auth + stream glue", () => {
         expect(removeChannelMock).toHaveBeenCalledTimes(1);
     });
 
+    it("reconciles an ultra-fast job that completes before realtime subscribes", async () => {
+        vi.useFakeTimers();
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+
+        const channel = {
+            on: vi.fn().mockReturnThis(),
+            subscribe: vi.fn(() => channel),
+        };
+        const removeChannelMock = vi.fn().mockResolvedValue(undefined);
+
+        createClientMock.mockImplementationOnce(() => ({
+            auth: {
+                getSession: getSessionMock,
+            },
+            channel: vi.fn(() => channel),
+            removeChannel: removeChannelMock,
+        }));
+
+        const events: Array<{ event: string; data: string }> = [];
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-fast",
+                    status: "processing",
+                    bootstrap_state: "initializing",
+                    progress_seq: 1,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-fast",
+                    status: "completed",
+                    current_step: "completed",
+                    progress_seq: 2,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-fast",
+                    assignment_id: "assignment-1",
+                    blueprint: {},
+                    canonical_output: { title: "Ultra fast case" },
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const streamPromise = api.authoring.streamProgress("job-fast", (event) => events.push(event));
+
+        await flushAsyncWork();
+        await vi.advanceTimersByTimeAsync(2000);
+        await streamPromise;
+
+        expect(events).toContainEqual({
+            event: "metadata",
+            data: "{\"status\":\"processing\",\"bootstrap_state\":\"initializing\"}",
+        });
+        expect(events).toContainEqual({ event: "metadata", data: "{\"status\":\"completed\"}" });
+        expect(events[events.length - 1]).toEqual({
+            event: "result",
+            data: "{\"canonical_output\":{\"title\":\"Ultra fast case\"}}",
+        });
+        expect(removeChannelMock).toHaveBeenCalledTimes(1);
+    });
+
     it("ignores stale post-subscribe snapshots after newer realtime progress", async () => {
         vi.useFakeTimers();
         vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
@@ -412,6 +486,94 @@ describe("api auth + stream glue", () => {
         expect(events).toContainEqual({
             event: "error",
             data: "{\"status\":\"failed\",\"detail\":\"checkpoint unavailable\"}",
+        });
+        expect(removeChannelMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("rehydrates state when a subscribed channel stays silent and the backend completes", async () => {
+        vi.useFakeTimers();
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+
+        const channel = {
+            on: vi.fn().mockReturnThis(),
+            subscribe: vi.fn((handler: (status: string) => void) => {
+                handler("SUBSCRIBED");
+                return channel;
+            }),
+        };
+        const removeChannelMock = vi.fn().mockResolvedValue(undefined);
+
+        createClientMock.mockImplementationOnce(() => ({
+            auth: {
+                getSession: getSessionMock,
+            },
+            channel: vi.fn(() => channel),
+            removeChannel: removeChannelMock,
+        }));
+
+        const events: Array<{ event: string; data: string }> = [];
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-silent",
+                    status: "processing",
+                    bootstrap_state: "initializing",
+                    progress_seq: 1,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-silent",
+                    status: "processing",
+                    bootstrap_state: "initializing",
+                    progress_seq: 1,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-silent",
+                    status: "completed",
+                    current_step: "completed",
+                    progress_seq: 2,
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-silent",
+                    assignment_id: "assignment-1",
+                    blueprint: {},
+                    canonical_output: { title: "Recovered case" },
+                }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const streamPromise = api.authoring.streamProgress("job-silent", (event) => events.push(event));
+
+        await flushAsyncWork();
+        await vi.advanceTimersByTimeAsync(3000);
+        await streamPromise;
+
+        expect(events).toContainEqual({
+            event: "metadata",
+            data: "{\"status\":\"processing\",\"bootstrap_state\":\"initializing\"}",
+        });
+        expect(events).toContainEqual({ event: "metadata", data: "{\"status\":\"completed\"}" });
+        expect(events[events.length - 1]).toEqual({
+            event: "result",
+            data: "{\"canonical_output\":{\"title\":\"Recovered case\"}}",
         });
         expect(removeChannelMock).toHaveBeenCalledTimes(1);
     });
