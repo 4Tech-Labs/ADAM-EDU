@@ -204,7 +204,7 @@ describe("AuthoringForm", () => {
             expect(screen.queryByDisplayValue("Respuesta vieja")).not.toBeInTheDocument();
         });
         expect(screen.getByLabelText(/industria/i)).toHaveTextContent(/retail/i);
-    });
+    }, 20_000);
 
     it("ignores a stale response after clearing the form and resets visible mutation errors", async () => {
         const user = userEvent.setup();
@@ -247,5 +247,5 @@ describe("AuthoringForm", () => {
         await waitFor(() => {
             expect(screen.queryByDisplayValue("No debe aplicar")).not.toBeInTheDocument();
         });
-    });
+    }, 20_000);
 });

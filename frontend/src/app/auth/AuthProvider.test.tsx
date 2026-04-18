@@ -170,7 +170,9 @@ describe("AuthProvider", () => {
         );
 
         queryClient.setQueryData(["admin", "summary"], { value: 1 });
-        capturedCallback!("SIGNED_OUT", null);
+        await act(async () => {
+            capturedCallback!("SIGNED_OUT", null);
+        });
 
         await waitFor(() =>
             expect(screen.getByTestId("actor").textContent).toBe("none"),
@@ -235,7 +237,9 @@ describe("AuthProvider", () => {
         );
         expect(mockApiFetch).toHaveBeenCalledTimes(1);
 
-        capturedCallback!("TOKEN_REFRESHED", { access_token: "jwt-refreshed" });
+        await act(async () => {
+            capturedCallback!("TOKEN_REFRESHED", { access_token: "jwt-refreshed" });
+        });
 
         await waitFor(() =>
             expect(screen.getByTestId("session-token").textContent).toBe("jwt-refreshed"),
