@@ -100,6 +100,7 @@ from case_generator.tools_and_schemas import (
 from case_generator.orchestration.frontend_adapter import adapter_canonical_to_legacy
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
 from shared.database import (
+    close_langgraph_checkpointer_async_pool,
     collect_langgraph_bootstrap_diagnostics,
     get_checkpoint_migrations_version,
     get_langgraph_checkpointer_async_pool,
@@ -3315,48 +3316,77 @@ async def _build_async_postgres_checkpointer(*, is_first_init: bool) -> AsyncPos
     """Build the durable async Postgres checkpointer inside an active event loop."""
     current_loop = asyncio.get_running_loop()
     loop_id = id(current_loop)
-    pool = await get_langgraph_checkpointer_async_pool()
-    checkpoint_migrations_version = await get_checkpoint_migrations_version(pool)
-    logger.debug(
-        "[graph] Initializing AsyncPostgresSaver",
-        extra={
-            "loop_id": loop_id,
-            "checkpoint_migrations_version": checkpoint_migrations_version,
-            "bootstrap_is_first_init": is_first_init,
-        },
-    )
-    setup_started_at = time.perf_counter()
-    checkpointer = AsyncPostgresSaver(cast(Any, pool))
+    pool: Any | None = None
+    checkpoint_migrations_version: int | None = None
+    setup_started_at: float | None = None
 
     try:
+        pool = await get_langgraph_checkpointer_async_pool()
+        checkpoint_migrations_version = await get_checkpoint_migrations_version(pool)
+        logger.debug(
+            "[graph] Initializing AsyncPostgresSaver",
+            extra={
+                "loop_id": loop_id,
+                "checkpoint_migrations_version": checkpoint_migrations_version,
+                "bootstrap_is_first_init": is_first_init,
+            },
+        )
+        checkpointer = AsyncPostgresSaver(cast(Any, pool))
+        setup_started_at = time.perf_counter()
         # Idempotent bootstrap for local/tests where Alembic metadata may be recreated.
         await checkpointer.setup()
     except asyncio.CancelledError as exc:
-        setup_ms = round((time.perf_counter() - setup_started_at) * 1000, 3)
-        await _log_checkpointer_setup_failure(
-            pool=pool,
-            exc=exc,
-            setup_ms=setup_ms,
-            checkpoint_migrations_version=checkpoint_migrations_version,
-            is_first_init=is_first_init,
-            loop_id=loop_id,
-        )
+        setup_ms = 0.0 if setup_started_at is None else round((time.perf_counter() - setup_started_at) * 1000, 3)
+        if pool is not None:
+            await _log_checkpointer_setup_failure(
+                pool=pool,
+                exc=exc,
+                setup_ms=setup_ms,
+                checkpoint_migrations_version=checkpoint_migrations_version,
+                is_first_init=is_first_init,
+                loop_id=loop_id,
+            )
+        else:
+            logger.error(
+                "[graph] AsyncPostgresSaver setup cancelled before pool bootstrap finished",
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={
+                    "loop_id": loop_id,
+                    "bootstrap_setup_ms": setup_ms,
+                    "checkpoint_migrations_version": checkpoint_migrations_version,
+                    "bootstrap_is_first_init": is_first_init,
+                },
+            )
+        await close_langgraph_checkpointer_async_pool()
+        reset_graph_singleton()
         raise
     except Exception as exc:
-        setup_ms = round((time.perf_counter() - setup_started_at) * 1000, 3)
-        await _log_checkpointer_setup_failure(
-            pool=pool,
-            exc=exc,
-            setup_ms=setup_ms,
-            checkpoint_migrations_version=checkpoint_migrations_version,
-            is_first_init=is_first_init,
-            loop_id=loop_id,
-        )
-        raise DurableCheckpointUnavailableError(
-            "Durable LangGraph checkpointing is unavailable."
-        ) from exc
+        setup_ms = 0.0 if setup_started_at is None else round((time.perf_counter() - setup_started_at) * 1000, 3)
+        if pool is not None:
+            await _log_checkpointer_setup_failure(
+                pool=pool,
+                exc=exc,
+                setup_ms=setup_ms,
+                checkpoint_migrations_version=checkpoint_migrations_version,
+                is_first_init=is_first_init,
+                loop_id=loop_id,
+            )
+        else:
+            logger.error(
+                "[graph] AsyncPostgresSaver setup failed before pool bootstrap finished",
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={
+                    "loop_id": loop_id,
+                    "bootstrap_setup_ms": setup_ms,
+                    "checkpoint_migrations_version": checkpoint_migrations_version,
+                    "bootstrap_is_first_init": is_first_init,
+                },
+            )
+        await close_langgraph_checkpointer_async_pool()
+        reset_graph_singleton()
+        raise
 
-    setup_ms = round((time.perf_counter() - setup_started_at) * 1000, 3)
+    setup_ms = 0.0 if setup_started_at is None else round((time.perf_counter() - setup_started_at) * 1000, 3)
     logger.info(
         "[graph] AsyncPostgresSaver initialized",
         extra={

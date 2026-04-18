@@ -4,7 +4,7 @@ import logging
 import uuid
 from unittest.mock import AsyncMock, patch
 
-from psycopg_pool import PoolClosed
+from psycopg_pool import PoolClosed, PoolTimeout
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session as OrmSession
@@ -486,6 +486,53 @@ async def test_async_checkpointer_pool_logs_stable_pool_open_key_and_warning(mon
     await database_module.close_langgraph_checkpointer_async_pool()
 
 
+async def test_langgraph_async_pool_propagates_statement_timeout_to_real_connection() -> None:
+    await database_module.close_langgraph_checkpointer_async_pool()
+
+    try:
+        pool = await database_module.get_langgraph_checkpointer_async_pool()
+        async with pool.connection() as conn:
+            result = await conn.execute("SHOW statement_timeout")
+            row = await result.fetchone()
+    finally:
+        await database_module.close_langgraph_checkpointer_async_pool()
+
+    statement_timeout = database_module._extract_row_value(row, "statement_timeout")
+    if statement_timeout is None:
+        statement_timeout = row[0]
+
+    assert str(statement_timeout).strip().lower() not in {"0", "0ms", "0s"}
+
+
+async def test_langgraph_async_pool_passes_timeout_options_in_pool_kwargs(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAsyncConnectionPool:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+        async def open(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock_loop", None)
+    monkeypatch.setattr(database_module, "AsyncConnectionPool", FakeAsyncConnectionPool)
+
+    await database_module.get_langgraph_checkpointer_async_pool()
+
+    pool_kwargs = captured["kwargs"]
+    connect_kwargs = pool_kwargs["kwargs"]
+    timeout_options = connect_kwargs["options"]
+    assert f"statement_timeout={database_module.settings.db_statement_timeout_ms}" in timeout_options
+    assert f"lock_timeout={database_module.settings.db_lock_timeout_ms}" in timeout_options
+
+
 def test_validate_runtime_database_configuration_rejects_remote_supabase_in_development() -> None:
     settings = database_module.Settings(
         database_url="postgresql+psycopg://user:pass@aws-1-us-west-2.pooler.supabase.com:5432/postgres",
@@ -608,12 +655,14 @@ async def test_build_async_postgres_checkpointer_logs_stable_setup_keys_and_warn
         async def setup(self) -> None:
             await asyncio.sleep(0)
 
-    perf_counter_values = iter((0.0, 10.5))
+    perf_counter_values = iter((1.0, 4.0, 10.0, 20.5))
 
     async def fake_get_pool():
+        graph_module.time.perf_counter()
         return fake_pool
 
     async def fake_get_checkpoint_migrations_version(_pool):
+        graph_module.time.perf_counter()
         return 9
 
     monkeypatch.setattr(graph_module, "get_langgraph_checkpointer_async_pool", fake_get_pool)
@@ -650,19 +699,23 @@ async def test_build_async_postgres_checkpointer_preserves_failure_when_diagnost
 ) -> None:
     fake_pool = object()
 
+    original_error = PoolTimeout("setup timed out")
+
     class FailingAsyncPostgresSaver:
         def __init__(self, pool):
             self.pool = pool
 
         async def setup(self) -> None:
-            raise RuntimeError("setup failed")
+            raise original_error
 
-    perf_counter_values = iter((0.0, 10.2))
+    perf_counter_values = iter((1.0, 3.0, 10.0, 20.2))
 
     async def fake_get_pool():
+        graph_module.time.perf_counter()
         return fake_pool
 
     async def fake_get_checkpoint_migrations_version(_pool):
+        graph_module.time.perf_counter()
         return 3
 
     async def fake_collect_diagnostics(_pool):
@@ -681,8 +734,10 @@ async def test_build_async_postgres_checkpointer_preserves_failure_when_diagnost
 
     caplog.set_level(logging.WARNING, logger="adam.graph")
 
-    with pytest.raises(DurableCheckpointUnavailableError):
+    with pytest.raises(PoolTimeout) as exc_info:
         await graph_module._build_async_postgres_checkpointer(is_first_init=False)
+
+    assert exc_info.value is original_error
 
     warning_record = next(
         record
@@ -700,6 +755,64 @@ async def test_build_async_postgres_checkpointer_preserves_failure_when_diagnost
     assert error_record.checkpoint_migrations_version == 3
     assert error_record.pool_busy == 1
     assert error_record.requests_waiting == 2
+
+
+async def test_build_async_postgres_checkpointer_cleans_up_and_retries_with_fresh_pool(monkeypatch) -> None:
+    created_pools: list[object] = []
+    setup_calls = {"count": 0}
+
+    class FakeAsyncConnectionPool:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            created_pools.append(self)
+
+        async def open(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    class FlakyAsyncPostgresSaver:
+        def __init__(self, pool):
+            self.pool = pool
+
+        async def setup(self) -> None:
+            setup_calls["count"] += 1
+            if setup_calls["count"] == 1:
+                raise PoolTimeout("setup timed out")
+
+    async def fake_get_checkpoint_migrations_version(_pool):
+        return 9
+
+    async def wrapped_close(*args, **kwargs):
+        await database_module.close_langgraph_checkpointer_async_pool(*args, **kwargs)
+
+    reset_mock = patch.object(graph_module, "reset_graph_singleton", wraps=graph_module.reset_graph_singleton)
+
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock_loop", None)
+    monkeypatch.setattr(database_module, "AsyncConnectionPool", FakeAsyncConnectionPool)
+    monkeypatch.setattr(graph_module, "get_langgraph_checkpointer_async_pool", database_module.get_langgraph_checkpointer_async_pool)
+    monkeypatch.setattr(graph_module, "get_checkpoint_migrations_version", fake_get_checkpoint_migrations_version)
+    monkeypatch.setattr(graph_module, "AsyncPostgresSaver", FlakyAsyncPostgresSaver)
+
+    with reset_mock as reset_graph_singleton_mock:
+        close_mock = AsyncMock(side_effect=wrapped_close)
+        monkeypatch.setattr(graph_module, "close_langgraph_checkpointer_async_pool", close_mock)
+
+        with pytest.raises(PoolTimeout):
+            await graph_module._build_async_postgres_checkpointer(is_first_init=True)
+
+        retry_checkpointer = await graph_module._build_async_postgres_checkpointer(is_first_init=True)
+
+    assert close_mock.await_count == 1
+    assert reset_graph_singleton_mock.call_count == 1
+    assert len(created_pools) == 2
+    assert created_pools[0] is not created_pools[1]
+    assert retry_checkpointer.pool is created_pools[1]
 
 
 def test_alembic_upgrade_head_seeds_checkpoint_migrations_to_latest_version(db) -> None:
