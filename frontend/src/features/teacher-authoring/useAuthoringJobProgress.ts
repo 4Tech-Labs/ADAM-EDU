@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, api } from "@/shared/api";
+import { ApiError, api, ProgressTransportDegradedError } from "@/shared/api";
 import {
     AUTHORING_PROGRESS_STEP_IDS,
     type AuthoringBootstrapState,
@@ -155,6 +155,10 @@ export function useAuthoringJobProgress() {
     const [bootstrapState, setBootstrapState] = useState<AuthoringBootstrapState | undefined>(undefined);
 
     const streamAbortRef = useRef<AbortController | null>(null);
+    const bootstrapResumedJobRef = useRef<
+        ((id: string, scope: ProgressScope, opts: { persist?: boolean; recoveryAttempt?: number }) => Promise<void>)
+        | null
+    >(null);
 
     const reset = useCallback(() => {
         streamAbortRef.current?.abort();
@@ -173,7 +177,12 @@ export function useAuthoringJobProgress() {
     const startStreaming = useCallback((
         id: string,
         scope: ProgressScope,
-        opts?: { persist?: boolean; preserveActiveAgent?: boolean; preserveActiveBootstrapState?: boolean },
+        opts?: {
+            persist?: boolean;
+            preserveActiveAgent?: boolean;
+            preserveActiveBootstrapState?: boolean;
+            recoveryAttempt?: number;
+        },
     ) => {
         streamAbortRef.current?.abort();
 
@@ -277,6 +286,14 @@ export function useAuthoringJobProgress() {
                     return;
                 }
 
+                if (error instanceof ProgressTransportDegradedError && (opts?.recoveryAttempt ?? 0) < 1) {
+                    void bootstrapResumedJobRef.current?.(id, scope, {
+                        persist: opts?.persist,
+                        recoveryAttempt: (opts?.recoveryAttempt ?? 0) + 1,
+                    });
+                    return;
+                }
+
                 setErrorTrace(getProgressStreamErrorMessage(error));
                 setStatus("failed");
                 setIsStreaming(false);
@@ -294,7 +311,7 @@ export function useAuthoringJobProgress() {
         async (
             id: string,
             scope: ProgressScope,
-            opts: { persist?: boolean },
+            opts: { persist?: boolean; recoveryAttempt?: number },
         ) => {
             setJobId(id);
             setProgressScope(scope);
@@ -341,6 +358,7 @@ export function useAuthoringJobProgress() {
                     persist: opts.persist,
                     preserveActiveAgent: true,
                     preserveActiveBootstrapState: true,
+                    recoveryAttempt: opts.recoveryAttempt,
                 });
             } catch (error) {
                 if (error instanceof ApiError && error.status === 404) {
@@ -363,6 +381,8 @@ export function useAuthoringJobProgress() {
         },
         [startStreaming],
     );
+
+    bootstrapResumedJobRef.current = bootstrapResumedJob;
 
     useEffect(() => {
         const persisted = readPersistedActiveAuthoringJob();

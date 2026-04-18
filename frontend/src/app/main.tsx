@@ -8,6 +8,10 @@ import "./global.css";
 import App from "./App.tsx";
 import { AuthProvider } from "./auth/AuthContext.tsx";
 
+// Plotly dependencies still expect a Node-style global in some browser bundles.
+// Mirror window onto global before importing any charting code at runtime.
+(window as typeof window & { global?: Window }).global = window;
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter basename="/app/">
