@@ -32,6 +32,15 @@ uv run pytest -q
 uv run mypy src
 ```
 
+Ordinary DB-backed tests run under a per-test dedicated connection + outer transaction +
+`SAVEPOINT` session contract. Keep shared seed fixtures flush-only unless a test needs an
+explicit commit.
+
+Use explicit pytest markers when a test cannot fit the default harness:
+
+- `ddl_isolation` for temp-database or DDL-heavy tests
+- `shared_db_commit_visibility` for tests that need real committed visibility across independent connections and fall back to `TRUNCATE` cleanup
+
 If the change touches live LLM behavior, only run marked live tests explicitly:
 
 ```powershell

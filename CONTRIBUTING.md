@@ -51,6 +51,16 @@ npm --prefix frontend run test
 La suite backend actual debe correr en serie. No uses `pytest-xdist` ni `pytest -n ...`
 mientras el harness siga compartiendo una sola base de datos local.
 
+Para tests backend DB-backed ordinarios, el harness usa una conexion dedicada por test,
+una transaccion externa y `SAVEPOINT` por sesion. Los fixtures compartidos deben sembrar
+con `add()` + `flush()`; `commit()` solo se permite cuando el comportamiento del test lo
+requiere de forma explicita.
+
+Carve-outs explicitos del harness:
+
+- `@pytest.mark.ddl_isolation`: tests que crean su propia base temporal o ejercen DDL fuera del contrato normal
+- `@pytest.mark.shared_db_commit_visibility`: tests que necesitan visibilidad real entre conexiones independientes y vuelven temporalmente a cleanup por `TRUNCATE`
+
 Nota: la prueba de migracion del Issue 23 crea y elimina bases temporales. En el entorno
 local default eso funciona con el usuario `postgres`, pero en otros entornos necesitaras
 permisos `CREATE DATABASE` y `DROP DATABASE` para que `pytest` pase completo.
@@ -98,6 +108,8 @@ worker:
 - no uses `pytest -n auto` ni otra variante con `pytest-xdist`
 - si alguien fuerza `xdist`, la suite debe fallar rapido con un mensaje explicito
 - no dejes backend local, shells `psql` u otras sesiones conectadas a la misma DB mientras corre la suite
+- asume `SAVEPOINT` como aislamiento default para tests DB-backed ordinarios
+- usa markers explicitos cuando un test no cabe en ese contrato, en lugar de introducir `commit()` oculto en fixtures compartidos
 
 ## Reglas para agentes
 

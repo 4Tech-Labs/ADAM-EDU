@@ -230,3 +230,19 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Context:** Esta fue la alternativa 1B considerada en la revisión de corrección de Issue #112. Se rechazó para el fix inicial por preferencia de diff mínimo, pero queda capturada como hardening posterior si el patrón lazy muestra límites reales.
 
 **Depends on / blocked by:** Observar primero el comportamiento del wiring async lazy en validación local, tests y worker real después de que el blocker quede resuelto.
+
+---
+
+## TODO-015: Aislamiento por worker para habilitar pytest-xdist
+
+**What:** Diseñar aislamiento de base por worker para la suite backend, de modo que `pytest-xdist` pueda habilitarse sin compartir la misma DB entre workers.
+
+**Why:** Issue #128 deja la suite serial determinística con `SAVEPOINT` por test, pero no resuelve paralelización. Mientras todos los workers apunten a la misma base, `xdist` sigue siendo inseguro.
+
+**Pros:** Desbloquea paralelización real del backend, reduce tiempo de CI y elimina la restricción operativa de correr siempre en serie.
+
+**Cons:** Requiere crear o aprovisionar una DB por worker, coordinar bootstrap de Alembic por worker y revisar tests con carve-outs (`ddl_isolation`, `shared_db_commit_visibility`). Es cambio de infraestructura de harness, no un patch chico.
+
+**Context:** Diferido explícitamente durante Issue #128 para mantener el diff enfocado en la causa raíz de la contaminación cruzada: commits opacos, ausencia de transacción externa por test y teardown global insuficiente.
+
+**Depends on / blocked by:** Mantener estable el harness serial con `SAVEPOINT` durante varias corridas de CI y definir estrategia de naming/bootstrap para DBs temporales por worker.
