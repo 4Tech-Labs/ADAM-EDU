@@ -121,7 +121,39 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
-## TODO-008: Monitoreo y alertas de salud del stream de authoring
+## TODO-008: Pool sizing de LangGraph checkpointer para concurrencia bajo Supavisor
+
+**What:** Evaluar y ajustar el pool sizing `(1,1)` del `AsyncConnectionPool` de LangGraph cuando corre sobre Supavisor transaction mode, para soportar 2-5 teachers concurrentes sin serialización innecesaria.
+
+**Why:** Con `max_size=1`, jobs concurrentes de authoring compiten por la misma conexión del checkpointer. Bajo carga, esto serializa operaciones que podrían ser paralelas.
+
+**Pros:** Desbloquea concurrencia real en authoring sin cambiar arquitectura. Mejora latencia percibida cuando múltiples teachers generan casos simultáneamente.
+
+**Cons:** Requiere entender los límites de conexión de Supavisor y el comportamiento de transaction mode con pools más grandes. Riesgo de agotar connection slots si se sobredimensiona.
+
+**Context:** Identificado en la revisión de eng-review de Issues #117-#120. La configuración actual en `_langgraph_checkpointer_pool_bounds()` (database.py:242-246) fue correcta para MVP single-teacher. Ver Issue #121.
+
+**Depends on / blocked by:** Issues #118/#120 (alineación de schema y hardening de pool). Puede implementarse después o en paralelo.
+
+---
+
+## TODO-009: Ceremonia de upgrade de `langgraph-checkpoint-postgres`
+
+**What:** Documentar y seguir una ceremonia explícita cada vez que se actualice la versión de `langgraph-checkpoint-postgres` en `pyproject.toml`: verificar nuevas migraciones en `MIGRATIONS`, crear migración Alembic que siembre versiones adicionales en `checkpoint_migrations`, alinear DDL nuevo con nombres de LangGraph.
+
+**Why:** El root cause del bootstrap timeout (#117) fue la desalineación entre Alembic y el ledger de migraciones de LangGraph. Si se actualiza la dependencia sin verificar migraciones nuevas, el mismo problema puede reaparecer.
+
+**Pros:** Previene regresión del bootstrap timeout en futuras actualizaciones. Formaliza un proceso que hoy es implícito.
+
+**Cons:** Añade un paso manual al upgrade de dependencias. Requiere que quien actualice la dependencia conozca la estructura de `MIGRATIONS` en el paquete.
+
+**Context:** Identificado en la revisión de eng-review de Issue #118. La ceremonia debe incluir: (1) diff de `MIGRATIONS` list, (2) nueva migración Alembic si hay versiones nuevas, (3) alineación de nombres DDL, (4) actualización del pin exacto en `pyproject.toml`.
+
+**Depends on / blocked by:** Issue #118 (establece la línea base de alineación Alembic/LangGraph). No bloquea nada inmediato.
+
+---
+
+## TODO-010: Monitoreo y alertas de salud del stream de authoring
 
 **What:** Agregar telemetría estructurada y tableros/alertas para el flujo realtime de authoring: tasa de suscripción fallida, reconexiones por job, latencia entre persistencia backend y render frontend, y porcentaje de jobs que llegan a `completed` sin eventos intermedios.
 
@@ -137,7 +169,7 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
-## TODO-009: Política de retención y purge de checkpoints LangGraph
+## TODO-011: Política de retención y purge de checkpoints LangGraph
 
 **What:** Definir e implementar una política explícita de retención para tablas de checkpoints (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) con purge seguro por antigüedad/estado terminal y guardrails para no borrar sesiones activas.
 
@@ -153,7 +185,7 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
-## TODO-010: Utilidad de reconciliación de artefactos huérfanos legacy
+## TODO-012: Utilidad de reconciliación de artefactos huérfanos legacy
 
 **What:** Crear una utilidad operativa para reconciliar artefactos huérfanos históricos (manifest en DB vs blob en storage) y aplicar remediación controlada (marcar, limpiar o re-vincular según reglas).
 
@@ -169,7 +201,7 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
-## TODO-011: Política de retry budget y circuit breaker para authoring
+## TODO-013: Política de retry budget y circuit breaker para authoring
 
 **What:** Diseñar una política de presupuesto de reintentos por job/tenant y un circuit breaker para fallos transientes repetidos del proveedor LLM, con telemetría y mensajes de fallback consistentes.
 
@@ -185,7 +217,7 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
-## TODO-012: Lifecycle explícito para el singleton async de checkpoints
+## TODO-014: Lifecycle explícito para el singleton async de checkpoints
 
 **What:** Evaluar si el singleton async lazy de `AsyncConnectionPool` + `AsyncPostgresSaver` + grafo compilado debe migrarse a ownership explícito por `lifespan` en `shared.app` y `shared.worker_app`.
 

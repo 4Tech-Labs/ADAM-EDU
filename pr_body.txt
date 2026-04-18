@@ -1,0 +1,29 @@
+﻿## Summary
+- fixes the frontend race where ultra-fast authoring jobs could finish before the realtime subscription settled, leaving the progress UI stuck until refresh
+- adds realtime watchdogs for subscribe timeout, silent channels, and `CLOSED` transport degradation in the authoring progress client
+- propagates `bootstrap_state` consistently from durable snapshots and realtime events so the bootstrap timeline remains visible during startup
+- makes `useAuthoringJobProgress` self-heal once via `bootstrapResumedJob` when the transport degrades instead of failing closed immediately
+- adds a Plotly compatibility shim in the app entrypoint to prevent `ReferenceError: global is not defined` in browser bundles
+- records follow-up backend debt separately via issues #126, #127, and #128
+
+## Pre-Landing Review
+Pre-Landing Review: 2 issues (0 critical, 2 informational)
+
+**AUTO-FIXED:**
+- [TODOS.md:156] Duplicate TODO identifiers after adding new LangGraph follow-ups → renumbered downstream TODOs to keep IDs unique and monotonic
+- [pr_body.txt:1] Stale PR body content from an unrelated bootstrap observability change → replaced with the actual PR #125 summary, review notes, and test plan
+
+## Eval Results
+No prompt-related files changed — evals skipped.
+
+## Test Plan
+- [x] `uv run --directory backend pytest -q` (240 passed, 12 skipped)
+- [x] `npm --prefix frontend run test` (231 passed, 34 files)
+- [x] Targeted authoring hot path remained green during backend baseline audit
+
+## Backend Baseline Debt
+- #126 Normalize backend auth error contracts that leak `profile_incomplete` into unrelated flows
+- #127 Fix full-suite instability in authoring resilience and status backend tests
+- #128 Stabilize backend pytest isolation across full-suite runs
+
+🤖 Generated with GitHub Copilot
