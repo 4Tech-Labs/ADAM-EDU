@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from shared.database import SessionLocal
 from shared.models import Assignment, AuthoringJob
+
+
+pytestmark = pytest.mark.shared_db_commit_visibility
 
 TEACHER_ID = "00000000-0000-0000-0000-000000000102"
 ERROR_TEACHER_ID = "00000000-0000-0000-0000-000000000103"
@@ -30,9 +35,10 @@ class _StubGraph:
         return self._stream_impl(*args, **kwargs)
 
 
-def test_phase1b_intake_and_authoring_stubbed(client, auth_headers_factory, seed_identity) -> None:
+def test_phase1b_intake_and_authoring_stubbed(client, db, auth_headers_factory, seed_identity) -> None:
     teacher_email = "teacher102@example.edu"
     seed_identity(user_id=TEACHER_ID, email=teacher_email, role="teacher")
+    db.commit()
     headers = auth_headers_factory(sub=TEACHER_ID, email=teacher_email)
     payload = {
         "assignment_title": "Phase 1B Integration Test Title",
@@ -68,9 +74,10 @@ def test_phase1b_intake_and_authoring_stubbed(client, auth_headers_factory, seed
         db.close()
 
 
-def test_phase1b_authoring_service_failure(client, auth_headers_factory, seed_identity) -> None:
+def test_phase1b_authoring_service_failure(client, db, auth_headers_factory, seed_identity) -> None:
     teacher_email = "teacher103@example.edu"
     seed_identity(user_id=ERROR_TEACHER_ID, email=teacher_email, role="teacher")
+    db.commit()
     headers = auth_headers_factory(sub=ERROR_TEACHER_ID, email=teacher_email)
     payload = {
         "assignment_title": "Phase 1B Error Test Title",

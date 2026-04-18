@@ -1,8 +1,13 @@
 from unittest.mock import patch
 import uuid
 
+import pytest
+
 from shared.database import SessionLocal
 from shared.models import Assignment, AuthoringJob
+
+
+pytestmark = pytest.mark.shared_db_commit_visibility
 
 
 def test_database_connection() -> None:
@@ -13,10 +18,11 @@ def test_database_connection() -> None:
         db.close()
 
 
-def test_intake_and_idempotency_workflow(client, auth_headers_factory, seed_identity) -> None:
+def test_intake_and_idempotency_workflow(client, db, auth_headers_factory, seed_identity) -> None:
     teacher_id = "00000000-0000-0000-0000-000000000101"
     teacher_email = "teacher101@example.edu"
     seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    db.commit()
     headers = auth_headers_factory(sub=teacher_id, email=teacher_email)
 
     payload = {
@@ -107,7 +113,7 @@ def test_intake_and_idempotency_workflow(client, auth_headers_factory, seed_iden
         finally:
             db2.close()
 
-    with patch("shared.app.AuthoringService.run_job", side_effect=_stub_run_job):
+    with patch("shared.internal_tasks.AuthoringService.run_job", side_effect=_stub_run_job):
         internal_response = client.post(
             "/api/internal/tasks/authoring_step",
             json=task_payload,

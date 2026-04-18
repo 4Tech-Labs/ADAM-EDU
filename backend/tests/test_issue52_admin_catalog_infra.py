@@ -139,6 +139,7 @@ def _seed_issue52_legacy_course(engine) -> None:
         )
 
 
+@pytest.mark.ddl_isolation
 def test_issue52_alembic_upgrade_backfill_and_downgrade() -> None:
     with temporary_database() as db_url:
         config = _alembic_config(db_url)
@@ -241,6 +242,7 @@ def test_issue52_alembic_upgrade_backfill_and_downgrade() -> None:
         engine.dispose()
 
 
+@pytest.mark.ddl_isolation
 def test_issue52_downgrade_rejects_pending_teacher_only_courses() -> None:
     with temporary_database() as db_url:
         config = _alembic_config(db_url)

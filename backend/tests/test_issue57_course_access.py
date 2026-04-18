@@ -194,6 +194,7 @@ def test_issue57_course_access_enroll_validates_actor_email_domain(
     assert response.json()["detail"] == "email_domain_not_allowed"
 
 
+@pytest.mark.shared_db_commit_visibility
 def test_issue57_course_access_enroll_is_idempotent_under_concurrency(
     client,
     db,
@@ -222,6 +223,7 @@ def test_issue57_course_access_enroll_is_idempotent_under_concurrency(
         code="COURSE-ACCESS-004",
     )
     _, token = seed_course_access_link(course_id=course.id, status="active")
+    db.commit()
     headers = auth_headers_factory(sub=student["profile"].id, email="student.concurrent@example.edu")
     barrier = threading.Barrier(2)
 

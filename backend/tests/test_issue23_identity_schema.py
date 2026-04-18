@@ -96,6 +96,7 @@ def _seed_legacy_tenant_and_user(
         )
 
 
+@pytest.mark.ddl_isolation
 def test_issue23_alembic_upgrade_and_downgrade() -> None:
     with temporary_database() as db_url:
         config = _alembic_config(db_url)
@@ -286,6 +287,7 @@ def test_issue23_rls_sql_exists() -> None:
     assert "hmac.compare_digest()" in content
 
 
+@pytest.mark.ddl_isolation
 def test_issue23_migration_rejects_unknown_legacy_roles() -> None:
     with temporary_database() as db_url:
         config = _alembic_config(db_url)
@@ -305,6 +307,7 @@ def test_issue23_migration_rejects_unknown_legacy_roles() -> None:
         engine.dispose()
 
 
+@pytest.mark.ddl_isolation
 def test_issue23_migration_rejects_non_uuid_legacy_user_ids() -> None:
     with temporary_database() as db_url:
         config = _alembic_config(db_url)

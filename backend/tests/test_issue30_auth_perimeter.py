@@ -724,6 +724,7 @@ def test_redeem_success_and_repeat_is_idempotent(
     assert refreshed_invite.status == "consumed"
 
 
+@pytest.mark.shared_db_commit_visibility
 def test_redeem_concurrent_double_redemption_is_idempotent(
     client, seed_course, seed_identity, seed_invite, auth_headers_factory, db
 ) -> None:
@@ -761,6 +762,7 @@ def test_redeem_concurrent_double_redemption_is_idempotent(
         role="student",
         course_id=course.id,
     )
+    db.commit()
     headers = auth_headers_factory(sub=student_id, email="concurrent-student@example.edu")
 
     barrier = threading.Barrier(2)
