@@ -596,215 +596,212 @@ async function streamRealtimeProgress(
         await pollProgressUntilTerminal();
         return;
     }
+    const realtimeClient = client;
 
-    try {
-        await new Promise<void>((resolve, reject) => {
-            let settled = false;
-            let subscribed = false;
-            let subscribeWatchdog: ReturnType<typeof setTimeout> | null = null;
-            let silenceWatchdog: ReturnType<typeof setTimeout> | null = null;
+    await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let subscribed = false;
+        let subscribeWatchdog: ReturnType<typeof setTimeout> | null = null;
+        let silenceWatchdog: ReturnType<typeof setTimeout> | null = null;
 
-            const channel = client
-                .channel(`authoring-job-${jobId}`)
-                .on(
-                    "postgres_changes",
-                    {
-                        event: "UPDATE",
-                        schema: "public",
-                        table: "authoring_jobs",
-                        filter: `id=eq.${jobId}`,
-                    },
-                    (payload: { new: AuthoringJobRealtimeRow | null }) => {
-                        if (settled || !payload.new) {
-                            return;
-                        }
-
-                        const taskPayload = asObject(payload.new.task_payload);
-                        applyProgressUpdate(
-                            payload.new.status,
-                            taskPayload.current_step,
-                            taskPayload.progress_seq,
-                            taskPayload.bootstrap_state,
-                        );
-                        armSilenceWatchdog();
-
-                        const nextStatus = payload.new.status;
-                        if (
-                            nextStatus === "completed"
-                            || nextStatus === "failed"
-                            || nextStatus === "failed_resumable"
-                        ) {
-                            settled = true;
-                            void emitTerminalEvent(jobId, nextStatus, taskPayload, onEvent)
-                                .then(() => client.removeChannel(channel))
-                                .then(() => resolve())
-                                .catch((error) => reject(error));
-                        }
-                    },
-                )
-                .subscribe((subscriptionStatus) => {
-                    if (settled) {
+        const channel = realtimeClient
+            .channel(`authoring-job-${jobId}`)
+            .on(
+                "postgres_changes",
+                {
+                    event: "UPDATE",
+                    schema: "public",
+                    table: "authoring_jobs",
+                    filter: `id=eq.${jobId}`,
+                },
+                (payload: { new: AuthoringJobRealtimeRow | null }) => {
+                    if (settled || !payload.new) {
                         return;
                     }
 
-                    if (subscriptionStatus === "SUBSCRIBED") {
-                        subscribed = true;
-                        clearSubscribeWatchdog();
-                        console.info("[authoring-progress] realtime subscribed", { jobId });
-                        void reconcileLatestSnapshot()
-                            .then((reconciledTerminalState) => {
-                                if (settled) {
-                                    return;
-                                }
+                    const taskPayload = asObject(payload.new.task_payload);
+                    applyProgressUpdate(
+                        payload.new.status,
+                        taskPayload.current_step,
+                        taskPayload.progress_seq,
+                        taskPayload.bootstrap_state,
+                    );
+                    armSilenceWatchdog();
 
-                                if (!reconciledTerminalState) {
-                                    armSilenceWatchdog();
-                                    return;
-                                }
-
-                                settled = true;
-                                void client.removeChannel(channel).then(() => resolve()).catch((error) => reject(error));
-                            })
-                            .catch((error) => {
-                                if (settled) {
-                                    return;
-                                }
-                                settled = true;
-                                void client.removeChannel(channel).finally(() => reject(error));
-                            });
-                        return;
-                    }
-
-                    if (subscriptionStatus === "CHANNEL_ERROR" || subscriptionStatus === "TIMED_OUT" || subscriptionStatus === "CLOSED") {
-                        console.error("[authoring-progress] realtime subscription failed", {
-                            jobId,
-                            subscriptionStatus,
-                        });
-                        clearSubscribeWatchdog();
-                        clearSilenceWatchdog();
-
-                        if (!subscribed) {
-                            settled = true;
-                            void client.removeChannel(channel)
-                                .catch(() => undefined)
-                                .then(async () => {
-                                    const reconciledTerminalState = await reconcileLatestSnapshot();
-                                    if (reconciledTerminalState) {
-                                        resolve();
-                                        return;
-                                    }
-
-                                    reject(new ProgressTransportDegradedError(subscriptionStatus));
-                                })
-                                .catch((error) => reject(error));
-                            return;
-                        }
-
+                    const nextStatus = payload.new.status;
+                    if (
+                        nextStatus === "completed"
+                        || nextStatus === "failed"
+                        || nextStatus === "failed_resumable"
+                    ) {
                         settled = true;
-                        void client.removeChannel(channel)
-                            .catch(() => undefined)
-                            .then(() => pollProgressUntilTerminal())
+                        void emitTerminalEvent(jobId, nextStatus, taskPayload, onEvent)
+                            .then(() => realtimeClient.removeChannel(channel))
                             .then(() => resolve())
                             .catch((error) => reject(error));
                     }
-                });
-
-            function clearSubscribeWatchdog() {
-                if (subscribeWatchdog !== null) {
-                    clearTimeout(subscribeWatchdog);
-                    subscribeWatchdog = null;
-                }
-            }
-
-            function clearSilenceWatchdog() {
-                if (silenceWatchdog !== null) {
-                    clearTimeout(silenceWatchdog);
-                    silenceWatchdog = null;
-                }
-            }
-
-            function armSilenceWatchdog() {
-                if (!subscribed || settled) {
+                },
+            )
+            .subscribe((subscriptionStatus) => {
+                if (settled) {
                     return;
                 }
 
-                clearSilenceWatchdog();
-                silenceWatchdog = setTimeout(() => {
-                    if (settled) {
-                        return;
-                    }
-
-                    console.warn("[authoring-progress] realtime silence detected", { jobId });
+                if (subscriptionStatus === "SUBSCRIBED") {
+                    subscribed = true;
+                    clearSubscribeWatchdog();
+                    console.info("[authoring-progress] realtime subscribed", { jobId });
                     void reconcileLatestSnapshot()
                         .then((reconciledTerminalState) => {
                             if (settled) {
                                 return;
                             }
 
-                            if (reconciledTerminalState) {
-                                settled = true;
-                                clearSilenceWatchdog();
-                                void client.removeChannel(channel).then(() => resolve()).catch((error) => reject(error));
+                            if (!reconciledTerminalState) {
+                                armSilenceWatchdog();
                                 return;
                             }
 
-                            armSilenceWatchdog();
+                            settled = true;
+                            void realtimeClient.removeChannel(channel).then(() => resolve()).catch((error) => reject(error));
                         })
                         .catch((error) => {
                             if (settled) {
                                 return;
                             }
-
                             settled = true;
-                            clearSilenceWatchdog();
-                            void client.removeChannel(channel).finally(() => reject(error));
+                            void realtimeClient.removeChannel(channel).finally(() => reject(error));
                         });
-                }, AUTHORING_REALTIME_SILENCE_TIMEOUT_MS);
-            }
-
-            subscribeWatchdog = setTimeout(() => {
-                if (settled || subscribed) {
                     return;
                 }
 
-                console.warn("[authoring-progress] realtime subscribe watchdog triggered", { jobId });
-                settled = true;
-                clearSubscribeWatchdog();
-                void client.removeChannel(channel)
-                    .catch(() => undefined)
-                    .then(async () => {
-                        const reconciledTerminalState = await reconcileLatestSnapshot();
-                        if (reconciledTerminalState) {
-                            resolve();
-                            return;
-                        }
+                if (subscriptionStatus === "CHANNEL_ERROR" || subscriptionStatus === "TIMED_OUT" || subscriptionStatus === "CLOSED") {
+                    console.error("[authoring-progress] realtime subscription failed", {
+                        jobId,
+                        subscriptionStatus,
+                    });
+                    clearSubscribeWatchdog();
+                    clearSilenceWatchdog();
 
-                        reject(new ProgressTransportDegradedError("SUBSCRIBE_TIMEOUT"));
-                    })
-                    .catch((error) => reject(error));
-            }, AUTHORING_REALTIME_SUBSCRIBE_TIMEOUT_MS);
+                    if (!subscribed) {
+                        settled = true;
+                        void realtimeClient.removeChannel(channel)
+                            .catch(() => undefined)
+                            .then(async () => {
+                                const reconciledTerminalState = await reconcileLatestSnapshot();
+                                if (reconciledTerminalState) {
+                                    resolve();
+                                    return;
+                                }
 
-            const onAbort = () => {
+                                reject(new ProgressTransportDegradedError(subscriptionStatus));
+                            })
+                            .catch((error) => reject(error));
+                        return;
+                    }
+
+                    settled = true;
+                    void realtimeClient.removeChannel(channel)
+                        .catch(() => undefined)
+                        .then(() => pollProgressUntilTerminal())
+                        .then(() => resolve())
+                        .catch((error) => reject(error));
+                }
+            });
+
+        function clearSubscribeWatchdog() {
+            if (subscribeWatchdog !== null) {
+                clearTimeout(subscribeWatchdog);
+                subscribeWatchdog = null;
+            }
+        }
+
+        function clearSilenceWatchdog() {
+            if (silenceWatchdog !== null) {
+                clearTimeout(silenceWatchdog);
+                silenceWatchdog = null;
+            }
+        }
+
+        function armSilenceWatchdog() {
+            if (!subscribed || settled) {
+                return;
+            }
+
+            clearSilenceWatchdog();
+            silenceWatchdog = setTimeout(() => {
                 if (settled) {
                     return;
                 }
-                settled = true;
-                clearSubscribeWatchdog();
-                clearSilenceWatchdog();
-                void client.removeChannel(channel).finally(() => resolve());
-            };
 
-            if (signal) {
-                if (signal.aborted) {
-                    onAbort();
-                    return;
-                }
-                signal.addEventListener("abort", onAbort, { once: true });
+                console.warn("[authoring-progress] realtime silence detected", { jobId });
+                void reconcileLatestSnapshot()
+                    .then((reconciledTerminalState) => {
+                        if (settled) {
+                            return;
+                        }
+
+                        if (reconciledTerminalState) {
+                            settled = true;
+                            clearSilenceWatchdog();
+                            void realtimeClient.removeChannel(channel).then(() => resolve()).catch((error) => reject(error));
+                            return;
+                        }
+
+                        armSilenceWatchdog();
+                    })
+                    .catch((error) => {
+                        if (settled) {
+                            return;
+                        }
+
+                        settled = true;
+                        clearSilenceWatchdog();
+                        void realtimeClient.removeChannel(channel).finally(() => reject(error));
+                    });
+            }, AUTHORING_REALTIME_SILENCE_TIMEOUT_MS);
+        }
+
+        subscribeWatchdog = setTimeout(() => {
+            if (settled || subscribed) {
+                return;
             }
-        });
-    } catch (error) {
-        throw error;
-    }
+
+            console.warn("[authoring-progress] realtime subscribe watchdog triggered", { jobId });
+            settled = true;
+            clearSubscribeWatchdog();
+            void realtimeClient.removeChannel(channel)
+                .catch(() => undefined)
+                .then(async () => {
+                    const reconciledTerminalState = await reconcileLatestSnapshot();
+                    if (reconciledTerminalState) {
+                        resolve();
+                        return;
+                    }
+
+                    reject(new ProgressTransportDegradedError("SUBSCRIBE_TIMEOUT"));
+                })
+                .catch((error) => reject(error));
+        }, AUTHORING_REALTIME_SUBSCRIBE_TIMEOUT_MS);
+
+        const onAbort = () => {
+                    if (settled) {
+                        return;
+                    }
+            settled = true;
+            clearSubscribeWatchdog();
+            clearSilenceWatchdog();
+            void realtimeClient.removeChannel(channel).finally(() => resolve());
+        };
+
+        if (signal) {
+            if (signal.aborted) {
+                onAbort();
+                return;
+            }
+            signal.addEventListener("abort", onAbort, { once: true });
+        }
+    });
 }
 
 export const api = {
