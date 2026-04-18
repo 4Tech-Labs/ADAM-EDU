@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import os
+import threading
 import uuid
 
 from alembic import command
@@ -11,14 +13,26 @@ from alembic.config import Config
 import jwt
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select, text
+from sqlalchemy import Connection, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import close_all_sessions
+from sqlalchemy.orm import Session, close_all_sessions, sessionmaker
 
+from case_generator.graph import reset_graph_singleton
 from shared.app import app
 from shared.auth import get_auth_settings, get_jwt_verifier, get_supabase_admin_auth_client
-from shared.database import SessionLocal, engine, settings
+from shared.database import (
+    SessionLocal,
+    close_langgraph_checkpointer_async_pool,
+    close_langgraph_checkpointer_pool,
+    engine,
+    get_db,
+    install_session_factory_override,
+    reset_active_authoring_job_registry,
+    reset_session_factory_override,
+    settings,
+    snapshot_authoring_runtime_state,
+)
 from shared.models import Base, Course, CourseAccessLink, CourseMembership, Invite, Membership, Profile, Tenant, User
 
 
@@ -104,6 +118,14 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "ddl_isolation: tests that manage their own temporary database and bypass the default SAVEPOINT harness",
+    )
+    config.addinivalue_line(
+        "markers",
+        "shared_db_commit_visibility: tests that need real committed visibility across independent DB connections and fall back to truncate cleanup",
+    )
     numprocesses = getattr(config.option, "numprocesses", None)
     if getattr(config, "workerinput", None) is not None:
         raise pytest.UsageError(
@@ -117,6 +139,18 @@ def pytest_configure(config: pytest.Config) -> None:
         )
 
 
+def _uses_ddl_isolation(request: pytest.FixtureRequest) -> bool:
+    return request.node.get_closest_marker("ddl_isolation") is not None
+
+
+def _uses_shared_db_commit_visibility(request: pytest.FixtureRequest) -> bool:
+    return request.node.get_closest_marker("shared_db_commit_visibility") is not None
+
+
+def _uses_default_transactional_harness(request: pytest.FixtureRequest) -> bool:
+    return not _uses_ddl_isolation(request) and not _uses_shared_db_commit_visibility(request)
+
+
 def _truncate_all_tables() -> None:
     table_names = [table.name for table in Base.metadata.sorted_tables]
     table_names.extend(_CHECKPOINT_TABLES)
@@ -124,22 +158,120 @@ def _truncate_all_tables() -> None:
     table_names_csv = ", ".join(ordered_table_names)
     if not table_names_csv:
         return
+
     truncate_sql = text(f"TRUNCATE TABLE {table_names_csv} RESTART IDENTITY CASCADE")
     close_all_sessions()
-    # The backend suite assumes exclusive ownership of the local test DB while it runs.
     with engine.begin() as connection:
         connection.execute(truncate_sql)
 
 
-@pytest.fixture(autouse=True)
-def clean_db(ensure_db_schema: None, request: pytest.FixtureRequest) -> Generator[None, None, None]:
-    if request.node.module.__name__.endswith("test_issue23_identity_schema"):
-        yield
-        return
+def _build_test_session_factory(connection: Connection) -> sessionmaker[Session]:
+    return sessionmaker(
+        bind=connection,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    )
 
-    _truncate_all_tables()
-    yield
-    _truncate_all_tables()
+
+def _close_async_checkpointer_pool_for_test(timeout_seconds: float = 5.0) -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(close_langgraph_checkpointer_async_pool(timeout_seconds=timeout_seconds))
+
+    result: dict[str, bool] = {}
+    errors: list[BaseException] = []
+
+    def _runner() -> None:
+        try:
+            result["closed_cleanly"] = asyncio.run(
+                close_langgraph_checkpointer_async_pool(timeout_seconds=timeout_seconds)
+            )
+        except BaseException as exc:  # pragma: no cover - defensive bridge
+            errors.append(exc)
+
+    cleanup_thread = threading.Thread(target=_runner, name="test-runtime-cleanup", daemon=True)
+    cleanup_thread.start()
+    cleanup_thread.join()
+    if errors:
+        raise errors[0]
+    return result.get("closed_cleanly", False)
+
+
+def _cleanup_runtime_state() -> None:
+    close_all_sessions()
+    async_pool_closed_cleanly = _close_async_checkpointer_pool_for_test()
+    sync_pool_closed_cleanly = close_langgraph_checkpointer_pool()
+    pre_reset_state = snapshot_authoring_runtime_state()
+    reset_graph_singleton()
+    reset_active_authoring_job_registry()
+    post_reset_state = snapshot_authoring_runtime_state()
+
+    failures: list[str] = []
+    if pre_reset_state["active_jobs"]:
+        failures.append(f"active authoring jobs leaked across test boundary: {pre_reset_state['active_jobs']}")
+    if not async_pool_closed_cleanly:
+        failures.append("LangGraph async checkpointer pool did not close cleanly")
+    if not sync_pool_closed_cleanly:
+        failures.append("LangGraph sync checkpointer pool did not close cleanly")
+    if post_reset_state["pending_tasks"]:
+        failures.append(f"authoring tasks still pending after cleanup: {post_reset_state['pending_tasks']}")
+    if post_reset_state["active_jobs"]:
+        failures.append(f"active authoring job registry still populated after cleanup: {post_reset_state['active_jobs']}")
+
+    if failures:
+        raise AssertionError("; ".join(failures))
+
+
+@pytest.fixture(autouse=True)
+def transactional_test_harness(
+    ensure_db_schema: None,
+    request: pytest.FixtureRequest,
+) -> Generator[None, None, None]:
+    """Default DB-backed tests run inside one outer transaction plus SAVEPOINT sessions.
+
+    test
+      -> dedicated connection
+      -> outer transaction
+      -> SessionLocal() uses SAVEPOINT join mode
+      -> test cleanup rolls back outer transaction
+    """
+    connection: Connection | None = None
+    transaction = None
+    use_transactional_harness = _uses_default_transactional_harness(request)
+    use_truncate_cleanup = _uses_shared_db_commit_visibility(request)
+
+    if use_transactional_harness:
+        close_all_sessions()
+        connection = engine.connect()
+        transaction = connection.begin()
+        install_session_factory_override(_build_test_session_factory(connection))
+
+    try:
+        yield
+    finally:
+        close_all_sessions()
+        runtime_cleanup_error: AssertionError | None = None
+        try:
+            _cleanup_runtime_state()
+        except AssertionError as exc:
+            runtime_cleanup_error = exc
+
+        reset_session_factory_override()
+        try:
+            if transaction is not None and transaction.is_active:
+                transaction.rollback()
+        finally:
+            if connection is not None:
+                connection.close()
+
+        if use_truncate_cleanup:
+            _truncate_all_tables()
+
+        if runtime_cleanup_error is not None:
+            pytest.fail(str(runtime_cleanup_error))
 
 
 @pytest.fixture
@@ -148,14 +280,42 @@ def db(ensure_db_schema: None):
     try:
         yield session
     finally:
-        session.rollback()
+        if session.in_transaction():
+            session.rollback()
         session.close()
 
 
 @pytest.fixture
-def client() -> Generator[TestClient, None, None]:
-    with TestClient(app) as test_client:
-        yield test_client
+def client(request: pytest.FixtureRequest) -> Generator[TestClient, None, None]:
+    if _uses_default_transactional_harness(request):
+        def _get_test_db() -> Generator[Session, None, None]:
+            session = SessionLocal()
+            try:
+                yield session
+            finally:
+                if session.in_transaction():
+                    session.rollback()
+                session.close()
+
+        app.dependency_overrides[get_db] = _get_test_db
+
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture
+def independent_session() -> Generator[Session, None, None]:
+    """Yield a real engine-bound session for lock and visibility tests."""
+    session = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)()
+    try:
+        yield session
+    finally:
+        if session.in_transaction():
+            session.rollback()
+        session.close()
 
 
 @pytest.fixture
@@ -257,7 +417,7 @@ def seed_identity(db) -> Callable[..., dict[str, object]]:
                 db.add(legacy_user)
                 db.flush()
 
-        db.commit()
+        db.flush()
         return {
             "tenant": tenant,
             "profile": profile,
@@ -297,7 +457,7 @@ def seed_course(db):
             status=status,
         )
         db.add(course)
-        db.commit()
+        db.flush()
         db.refresh(course)
         return course
 
@@ -337,7 +497,7 @@ def seed_invite(db):
             expires_at=expires_at or (datetime.now(timezone.utc) + timedelta(days=1)),
         )
         db.add(invite)
-        db.commit()
+        db.flush()
         db.refresh(invite)
         return invite, token
 
@@ -363,7 +523,7 @@ def seed_course_access_link(db):
             rotated_at=rotated_at,
         )
         db.add(access_link)
-        db.commit()
+        db.flush()
         db.refresh(access_link)
         return access_link, token
 
@@ -378,7 +538,7 @@ def seed_course_membership(db):
             membership_id=membership_id,
         )
         db.add(course_membership)
-        db.commit()
+        db.flush()
         db.refresh(course_membership)
         return course_membership
 
