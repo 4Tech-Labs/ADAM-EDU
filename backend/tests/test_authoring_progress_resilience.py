@@ -655,12 +655,14 @@ async def test_build_async_postgres_checkpointer_logs_stable_setup_keys_and_warn
         async def setup(self) -> None:
             await asyncio.sleep(0)
 
-    perf_counter_values = iter((0.0, 10.5))
+    perf_counter_values = iter((1.0, 4.0, 10.0, 20.5))
 
     async def fake_get_pool():
+        graph_module.time.perf_counter()
         return fake_pool
 
     async def fake_get_checkpoint_migrations_version(_pool):
+        graph_module.time.perf_counter()
         return 9
 
     monkeypatch.setattr(graph_module, "get_langgraph_checkpointer_async_pool", fake_get_pool)
@@ -706,12 +708,14 @@ async def test_build_async_postgres_checkpointer_preserves_failure_when_diagnost
         async def setup(self) -> None:
             raise original_error
 
-    perf_counter_values = iter((0.0, 10.2))
+    perf_counter_values = iter((1.0, 3.0, 10.0, 20.2))
 
     async def fake_get_pool():
+        graph_module.time.perf_counter()
         return fake_pool
 
     async def fake_get_checkpoint_migrations_version(_pool):
+        graph_module.time.perf_counter()
         return 3
 
     async def fake_collect_diagnostics(_pool):

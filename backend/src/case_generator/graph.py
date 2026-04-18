@@ -3318,7 +3318,7 @@ async def _build_async_postgres_checkpointer(*, is_first_init: bool) -> AsyncPos
     loop_id = id(current_loop)
     pool: Any | None = None
     checkpoint_migrations_version: int | None = None
-    setup_started_at = time.perf_counter()
+    setup_started_at: float | None = None
 
     try:
         pool = await get_langgraph_checkpointer_async_pool()
@@ -3332,10 +3332,11 @@ async def _build_async_postgres_checkpointer(*, is_first_init: bool) -> AsyncPos
             },
         )
         checkpointer = AsyncPostgresSaver(cast(Any, pool))
+        setup_started_at = time.perf_counter()
         # Idempotent bootstrap for local/tests where Alembic metadata may be recreated.
         await checkpointer.setup()
     except asyncio.CancelledError as exc:
-        setup_ms = round((time.perf_counter() - setup_started_at) * 1000, 3)
+        setup_ms = 0.0 if setup_started_at is None else round((time.perf_counter() - setup_started_at) * 1000, 3)
         if pool is not None:
             await _log_checkpointer_setup_failure(
                 pool=pool,
@@ -3360,7 +3361,7 @@ async def _build_async_postgres_checkpointer(*, is_first_init: bool) -> AsyncPos
         reset_graph_singleton()
         raise
     except Exception as exc:
-        setup_ms = round((time.perf_counter() - setup_started_at) * 1000, 3)
+        setup_ms = 0.0 if setup_started_at is None else round((time.perf_counter() - setup_started_at) * 1000, 3)
         if pool is not None:
             await _log_checkpointer_setup_failure(
                 pool=pool,
@@ -3385,7 +3386,7 @@ async def _build_async_postgres_checkpointer(*, is_first_init: bool) -> AsyncPos
         reset_graph_singleton()
         raise
 
-    setup_ms = round((time.perf_counter() - setup_started_at) * 1000, 3)
+    setup_ms = 0.0 if setup_started_at is None else round((time.perf_counter() - setup_started_at) * 1000, 3)
     logger.info(
         "[graph] AsyncPostgresSaver initialized",
         extra={
