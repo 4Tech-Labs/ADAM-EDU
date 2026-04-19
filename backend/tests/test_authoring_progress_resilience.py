@@ -4,6 +4,7 @@ import logging
 import uuid
 from unittest.mock import AsyncMock, patch
 
+from psycopg.errors import LockNotAvailable
 from psycopg_pool import PoolClosed, PoolTimeout
 import pytest
 from sqlalchemy import text
@@ -66,6 +67,40 @@ def _seed_authoring_job(
     db.commit()
     db.refresh(job)
     return job
+
+
+def _insert_checkpoint_lineage(db, thread_id: str) -> str:
+    checkpoint_id = f"checkpoint-{uuid.uuid4()}"
+    db.execute(
+        text(
+            "INSERT INTO checkpoints ("
+            "thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata"
+            ") VALUES ("
+            ":thread_id, :checkpoint_ns, :checkpoint_id, :parent_checkpoint_id, :type, "
+            "CAST(:checkpoint AS jsonb), CAST(:metadata AS jsonb)"
+            ")"
+        ),
+        {
+            "thread_id": thread_id,
+            "checkpoint_ns": "",
+            "checkpoint_id": checkpoint_id,
+            "parent_checkpoint_id": None,
+            "type": "json",
+            "checkpoint": "{}",
+            "metadata": "{}",
+        },
+    )
+    db.commit()
+    return checkpoint_id
+
+
+def _count_checkpoint_lineage(db, thread_id: str) -> int:
+    return int(
+        db.execute(
+            text("SELECT count(*) FROM checkpoints WHERE thread_id = :thread_id"),
+            {"thread_id": thread_id},
+        ).scalar_one()
+    )
 
 
 def test_canonical_progress_step_mapping_is_stable() -> None:
@@ -785,8 +820,8 @@ async def test_build_async_postgres_checkpointer_cleans_up_and_retries_with_fres
     async def fake_get_checkpoint_migrations_version(_pool):
         return 9
 
-    async def wrapped_close(*args, **kwargs):
-        await database_module.close_langgraph_checkpointer_async_pool(*args, **kwargs)
+    async def wrapped_clean_room(*args, **kwargs):
+        return await database_module.clean_authoring_runtime(*args, **kwargs)
 
     reset_mock = patch.object(graph_module, "reset_graph_singleton", wraps=graph_module.reset_graph_singleton)
 
@@ -800,15 +835,16 @@ async def test_build_async_postgres_checkpointer_cleans_up_and_retries_with_fres
     monkeypatch.setattr(graph_module, "AsyncPostgresSaver", FlakyAsyncPostgresSaver)
 
     with reset_mock as reset_graph_singleton_mock:
-        close_mock = AsyncMock(side_effect=wrapped_close)
-        monkeypatch.setattr(graph_module, "close_langgraph_checkpointer_async_pool", close_mock)
+        clean_room_mock = AsyncMock(side_effect=wrapped_clean_room)
+        monkeypatch.setattr(graph_module, "clean_authoring_runtime", clean_room_mock)
 
         with pytest.raises(PoolTimeout):
             await graph_module._build_async_postgres_checkpointer(is_first_init=True)
 
         retry_checkpointer = await graph_module._build_async_postgres_checkpointer(is_first_init=True)
 
-    assert close_mock.await_count == 1
+    assert clean_room_mock.await_count == 1
+    assert clean_room_mock.await_args.kwargs["reason"] == "graph_bootstrap_failed"
     assert reset_graph_singleton_mock.call_count == 1
     assert len(created_pools) == 2
     assert created_pools[0] is not created_pools[1]
@@ -1051,3 +1087,183 @@ def test_run_job_duplicate_retry_race_allows_only_one_checkpoint_attempt(
     assert payload.get("error_code") == "checkpoint_unavailable"
     assert payload.get("last_known_step") == "case_writer"
     orphan_mock.assert_not_called()
+
+
+async def test_run_job_same_thread_retry_preserves_checkpoint_lineage_and_rebuilds_runtime(
+    db,
+    seed_identity,
+    monkeypatch,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-same-thread-retry@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+
+    job = _seed_authoring_job(
+        db,
+        teacher_id,
+        status="failed_resumable",
+        task_payload={
+            "current_step": "case_writer",
+            "progress_seq": 4,
+            "error_code": "checkpoint_unavailable",
+        },
+    )
+    _insert_checkpoint_lineage(db, job.id)
+
+    class CorruptGraph:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def astream(self, *args, **kwargs):
+            self.calls += 1
+
+            async def _stream():
+                raise PoolClosed("checkpoint pool closed")
+                yield {}
+
+            return _stream()
+
+    class FreshGraph:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def astream(self, *args, **kwargs):
+            self.calls += 1
+
+            async def _stream():
+                yield {
+                    "doc1_narrativa": "Narrative text with enough detail to finalize the retry path.",
+                    "doc2_eda": "",
+                    "current_agent": "case_writer",
+                }
+
+            return _stream()
+
+    state = {"checkpointer_calls": 0, "compile_calls": 0}
+    corrupt_graph = CorruptGraph()
+    fresh_graph = FreshGraph()
+
+    async def fake_build_async_postgres_checkpointer(*, is_first_init: bool):
+        state["checkpointer_calls"] += 1
+        await asyncio.sleep(0)
+        return {
+            "checkpointer_calls": state["checkpointer_calls"],
+            "is_first_init": is_first_init,
+        }
+
+    def fake_compile(*, name: str, checkpointer: object):
+        state["compile_calls"] += 1
+        assert name == "adam-agent"
+        return fresh_graph
+
+    monkeypatch.setattr(graph_module, "_graph_singleton", corrupt_graph)
+    monkeypatch.setattr(graph_module, "_graph_singleton_loop", asyncio.get_running_loop())
+    monkeypatch.setattr(graph_module, "_graph_singleton_lock", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_lock_loop", None)
+    monkeypatch.setattr(graph_module, "_build_async_postgres_checkpointer", fake_build_async_postgres_checkpointer)
+    monkeypatch.setattr(graph_module.master_builder, "compile", fake_compile)
+
+    prefetch_mock = AsyncMock(return_value={})
+    save_artifact_mock = AsyncMock(return_value="artifact-1")
+
+    with (
+        patch("case_generator.core.authoring.get_storage_provider", return_value=object()),
+        patch("case_generator.core.authoring.ArtifactManager.prefetch_resume_artifacts", new=prefetch_mock),
+        patch("case_generator.core.authoring.ArtifactManager.save_artifact", new=save_artifact_mock),
+        patch("case_generator.core.authoring.ArtifactManager.publish_job_artifacts") as publish_mock,
+        patch(
+            "case_generator.core.authoring.adapter_legacy_to_canonical_output",
+            return_value={"canonical_output": {}},
+        ),
+        patch("case_generator.core.authoring.ArtifactManager.orphan_job_artifacts") as orphan_mock,
+    ):
+        await AuthoringService.run_job(job.id)
+
+        assert graph_module._graph_singleton is None
+        assert database_module._langgraph_checkpointer_async_pool is None
+        assert _count_checkpoint_lineage(db, job.id) == 1
+
+        db.expire_all()
+        failed_retry = db.get(AuthoringJob, job.id)
+        assert failed_retry is not None
+        failed_payload = dict(failed_retry.task_payload or {})
+        assert failed_retry.status == "failed_resumable"
+        assert failed_retry.retry_count == 1
+        assert failed_payload.get("error_code") == "checkpoint_unavailable"
+        assert failed_payload.get("last_known_step") == "case_writer"
+
+        await AuthoringService.run_job(job.id)
+
+    db.expire_all()
+    refreshed = db.get(AuthoringJob, job.id)
+    assert refreshed is not None
+
+    payload = dict(refreshed.task_payload or {})
+    assert refreshed.status == "completed"
+    assert refreshed.retry_count == 2
+    assert payload.get("current_step") == "completed"
+    assert corrupt_graph.calls == 1
+    assert fresh_graph.calls == 1
+    assert state["checkpointer_calls"] == 1
+    assert state["compile_calls"] == 1
+    assert prefetch_mock.await_count == 2
+    assert save_artifact_mock.await_count == 1
+    assert _count_checkpoint_lineage(db, job.id) == 1
+    publish_mock.assert_called_once()
+    assert publish_mock.call_args.args[1] == job.id
+    orphan_mock.assert_not_called()
+
+
+@pytest.mark.shared_db_commit_visibility
+async def test_build_async_postgres_checkpointer_reproduces_lock_not_available_and_recovers(
+    independent_session,
+    monkeypatch,
+    caplog,
+) -> None:
+    await database_module.clean_authoring_runtime(
+        reason="test_lock_contention_preflight",
+        timeout_seconds=0.1,
+        clear_active_jobs=True,
+    )
+
+    monkeypatch.setattr(database_module.settings, "db_lock_timeout_ms", 50, raising=False)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", None)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock_loop", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_loop", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_lock", None)
+    monkeypatch.setattr(graph_module, "_graph_singleton_lock_loop", None)
+
+    caplog.set_level(logging.INFO, logger="adam.graph")
+
+    independent_session.execute(text("LOCK TABLE checkpoint_migrations IN ACCESS EXCLUSIVE MODE"))
+
+    try:
+        with pytest.raises(LockNotAvailable):
+            await graph_module._build_async_postgres_checkpointer(is_first_init=True)
+    finally:
+        independent_session.rollback()
+
+    error_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "[graph] AsyncPostgresSaver setup failed"
+    )
+
+    assert isinstance(error_record.pg_locks, list)
+    assert isinstance(error_record.pg_stat_activity, list)
+    assert error_record.pg_locks or error_record.pg_stat_activity
+    assert database_module._langgraph_checkpointer_async_pool is None
+    assert graph_module._graph_singleton is None
+
+    retry_checkpointer = await graph_module._build_async_postgres_checkpointer(is_first_init=True)
+
+    assert retry_checkpointer is not None
+
+    await database_module.clean_authoring_runtime(
+        reason="test_lock_contention_recovery",
+        timeout_seconds=0.1,
+        clear_active_jobs=True,
+    )
