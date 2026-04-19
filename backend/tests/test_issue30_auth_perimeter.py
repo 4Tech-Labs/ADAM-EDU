@@ -272,7 +272,7 @@ def test_auth_me_account_suspended(client, auth_headers_factory, seed_identity) 
     assert response.json()["detail"] == "account_suspended"
 
 
-def test_auth_me_profile_incomplete_when_full_name_blank(client, auth_headers_factory, seed_identity) -> None:
+def test_auth_me_bootstrap_allows_blank_full_name(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "blank-profile@example.edu"
     seed_identity(
@@ -285,8 +285,10 @@ def test_auth_me_profile_incomplete_when_full_name_blank(client, auth_headers_fa
 
     response = client.get("/api/auth/me", headers=headers)
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "profile_incomplete"
+    assert response.status_code == 200
+    assert response.json()["auth_user_id"] == user_id
+    assert response.json()["profile"]["full_name"] == "   "
+    assert response.json()["primary_role"] == "teacher"
 
 
 def test_auth_me_keeps_password_rotation_bootstrap_visible(client, auth_headers_factory, seed_identity) -> None:
@@ -888,6 +890,49 @@ def test_redeem_membership_required_audit_reason_matches_response_detail(
     assert response.json()["detail"] == "membership_required"
     assert mock_audit.call_args.args[:2] == ("invite.redeem", "denied")
     assert mock_audit.call_args.kwargs["reason"] == "membership_required"
+
+
+def test_redeem_password_rotation_required_precedes_membership_checks(
+    client,
+    auth_headers_factory,
+    seed_course,
+    seed_identity,
+    seed_invite,
+) -> None:
+    teacher_seed = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="redeem-rotate-teacher@example.edu",
+        role="teacher",
+        university_id="10000000-0000-0000-0000-000000000067",
+    )
+    course = seed_course(
+        university_id=teacher_seed["tenant"].id,
+        teacher_membership_id=teacher_seed["membership"].id,
+        title="Redeem Rotate Course",
+    )
+    student_id = str(uuid.uuid4())
+    student_email = "redeem-rotate-student@example.edu"
+    seed_identity(
+        user_id=student_id,
+        email=student_email,
+        role="student",
+        university_id=teacher_seed["tenant"].id,
+        must_rotate_password=True,
+    )
+    _, token = seed_invite(
+        email=student_email,
+        university_id=teacher_seed["tenant"].id,
+        role="student",
+        course_id=course.id,
+    )
+    headers = auth_headers_factory(sub=student_id, email=student_email)
+
+    with patch("shared.auth.audit_event") as mock_audit:
+        response = client.post("/api/invites/redeem", json={"invite_token": token}, headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "password_rotation_required"
+    assert mock_audit.call_args.kwargs["reason"] == "password_rotation_required"
 
 
 @pytest.mark.shared_db_commit_visibility

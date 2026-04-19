@@ -37,7 +37,8 @@ Notas de precedencia auditada:
 - `profile_incomplete` solo sale desde profile-state.
 - `membership_required` solo sale desde membership-state.
 - `password_rotation_required` se evalúa antes de errores de rol/contexto en rutas protegidas de negocio.
-- `GET /api/auth/me` y `POST /api/auth/change-password` permanecen fuera del guard compartido de `password_rotation_required` para no romper bootstrap ni recuperación.
+- `GET /api/auth/me` permanece fuera del guard compartido de `password_rotation_required` y del check de required profile fields para no romper bootstrap; si falta la fila `Profile`, sigue respondiendo `profile_incomplete`.
+- `POST /api/auth/change-password` permanece fuera del guard compartido de `password_rotation_required` para no romper recuperación.
 
 ## Auditoría
 

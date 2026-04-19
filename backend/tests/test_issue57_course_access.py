@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import threading
 import uuid
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
@@ -192,6 +193,47 @@ def test_issue57_course_access_enroll_validates_actor_email_domain(
 
     assert response.status_code == 422
     assert response.json()["detail"] == "email_domain_not_allowed"
+
+
+def test_issue57_course_access_enroll_password_rotation_required_precedes_student_checks(
+    client,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.rotate@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student.rotate@example.edu",
+        role="student",
+        university_id=university_id,
+        must_rotate_password=True,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Rotate",
+        code="COURSE-ACCESS-ROTATE",
+    )
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+
+    with patch("shared.auth.audit_event") as mock_audit:
+        response = client.post(
+            "/api/course-access/enroll",
+            json=_resolve_payload(token),
+            headers=auth_headers_factory(sub=student["profile"].id, email="student.rotate@example.edu"),
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "password_rotation_required"
+    assert mock_audit.call_args.kwargs["reason"] == "password_rotation_required"
 
 
 @pytest.mark.shared_db_commit_visibility

@@ -526,14 +526,21 @@ def _profile_has_required_fields(profile: Profile) -> bool:
     return bool(profile.full_name and profile.full_name.strip())
 
 
-def resolve_current_actor(db: Session, verified_token: VerifiedToken) -> CurrentActor:
+def resolve_current_actor(
+    db: Session,
+    verified_token: VerifiedToken,
+    *,
+    require_profile_fields: bool = True,
+) -> CurrentActor:
     profile = (
         db.query(Profile)
         .options(joinedload(Profile.memberships))
         .filter(Profile.id == verified_token.auth_user_id)
         .first()
     )
-    if profile is None or not _profile_has_required_fields(profile):
+    if profile is None:
+        raise AuthorizationError(AuthDetailCode.PROFILE_INCOMPLETE)
+    if require_profile_fields and not _profile_has_required_fields(profile):
         raise AuthorizationError(AuthDetailCode.PROFILE_INCOMPLETE)
 
     memberships = [
@@ -567,8 +574,14 @@ def resolve_current_actor(db: Session, verified_token: VerifiedToken) -> Current
 def require_current_actor(
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
+    *,
+    require_profile_fields: bool = True,
 ) -> CurrentActor:
-    return resolve_current_actor(db, get_verified_token(authorization))
+    return resolve_current_actor(
+        db,
+        get_verified_token(authorization),
+        require_profile_fields=require_profile_fields,
+    )
 
 
 # Protected route precedence:

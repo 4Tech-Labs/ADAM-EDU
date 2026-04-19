@@ -83,7 +83,7 @@ Use the repo-driven gstack runtime materialized from the pinned lock in `scripts
 - `profile_incomplete` belongs only to profile-state failures, including missing profile rows or missing required profile fields.
 - `membership_required` belongs only to membership-state failures.
 - `password_rotation_required` blocks protected business routes after identity/profile/membership pass.
-- `GET /api/auth/me` remains bootstrap-safe and still returns actor state including `must_rotate_password`.
+- `GET /api/auth/me` remains bootstrap-safe, bypasses shared required-profile-field checks and `password_rotation_required`, and still returns actor state including `must_rotate_password` when the profile row exists.
 - `POST /api/auth/change-password` is explicitly exempt from the shared password-rotation guard so it cannot self-block.
 
 ## Supabase Infrastructure Guardrails

@@ -41,13 +41,16 @@ from shared.auth import (
     audit_log,
     ensure_password_rotation_cleared,
     ensure_legacy_teacher_bridge,
+    get_verified_token,
     get_supabase_admin_auth_client,
     hash_invite_token,
     mask_email,
     normalize_email,
     require_current_actor,
+    require_current_actor_password_ready,
     require_teacher_actor,
     require_verified_identity,
+    resolve_current_actor,
 )
 from shared.identity_activation import (
     derive_activation_full_name,
@@ -413,7 +416,11 @@ def require_current_actor_auth_me(
     db: Session = Depends(get_db),
 ) -> CurrentActor:
     try:
-        return require_current_actor(authorization=authorization, db=db)
+        return require_current_actor(
+            authorization=authorization,
+            db=db,
+            require_profile_fields=False,
+        )
     except AuthError:
         raise
     except (SATimeoutError, OperationalError, DBAPIError) as exc:
@@ -969,9 +976,9 @@ def resolve_invite(req: InviteResolveRequest, db: Session = Depends(get_db)) -> 
             "invalid",
             invite_hash_prefix=invite_hash_prefix,
             http_status=status.HTTP_404_NOT_FOUND,
-            reason="invalid_invite",
+            reason=AuthDetailCode.INVITE_INVALID,
         )
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="invalid_invite")
+        raise AuthError(status.HTTP_404_NOT_FOUND, AuthDetailCode.INVITE_INVALID)
 
     tenant = db.scalar(select(Tenant).where(Tenant.id == invite.university_id))
     course_title = None
@@ -1020,7 +1027,7 @@ class InviteRedeemResponse(BaseModel):
 @app.post("/api/invites/redeem", response_model=InviteRedeemResponse)
 def redeem_invite(
     req: InviteRedeemRequest,
-    actor: CurrentActor = Depends(require_current_actor),
+    actor: CurrentActor = Depends(require_current_actor_password_ready),
     db: Session = Depends(get_db),
 ) -> InviteRedeemResponse:
     if not actor.has_active_role("student"):
@@ -1041,9 +1048,9 @@ def redeem_invite(
             auth_user_id=actor.auth_user_id,
             invite_hash_prefix=hash_invite_token(req.invite_token)[:12],
             http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            reason="invalid_invite",
+            reason=AuthDetailCode.INVITE_INVALID,
         )
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
+        raise AuthError(status.HTTP_422_UNPROCESSABLE_CONTENT, AuthDetailCode.INVITE_INVALID)
 
     require_invite_email_match(invite, actor.email)
     membership = next(
@@ -1094,9 +1101,9 @@ def redeem_invite(
             invite_id=invite.id,
             invite_hash_prefix=invite.token_hash[:12],
             http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            reason="invalid_invite",
+            reason=AuthDetailCode.INVITE_INVALID,
         )
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
+        raise AuthError(status.HTTP_422_UNPROCESSABLE_CONTENT, AuthDetailCode.INVITE_INVALID)
 
     try:
         _, created_course_membership = upsert_course_membership(db, invite.course_id, membership.id)
@@ -1127,9 +1134,9 @@ def redeem_invite(
                 invite_id=invite.id,
                 invite_hash_prefix=invite.token_hash[:12],
                 http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                reason="invalid_invite",
+                reason=AuthDetailCode.INVITE_INVALID,
             )
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
+            raise AuthError(status.HTTP_422_UNPROCESSABLE_CONTENT, AuthDetailCode.INVITE_INVALID)
         db.commit()
     except IntegrityError:
         db.rollback()

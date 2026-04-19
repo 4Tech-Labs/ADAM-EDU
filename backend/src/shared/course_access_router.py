@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from shared.auth import CurrentActor, VerifiedIdentity, require_current_actor, require_verified_identity
+from shared.auth import CurrentActor, VerifiedIdentity, require_current_actor_password_ready, require_verified_identity
 from shared.course_access import (
     CourseAccessActivateCompleteRequest,
     CourseAccessActivateCompleteResponse,
@@ -39,7 +39,7 @@ def post_course_access_resolve(
 @router.post("/enroll", response_model=CourseAccessEnrollResponse)
 def post_course_access_enroll(
     request: CourseAccessEnrollRequest,
-    actor: Annotated[CurrentActor, Depends(require_current_actor)],
+    actor: Annotated[CurrentActor, Depends(require_current_actor_password_ready)],
     db: Session = Depends(get_db),
 ) -> CourseAccessEnrollResponse:
     return enroll_with_course_access(db, actor, request)
