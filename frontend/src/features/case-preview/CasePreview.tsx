@@ -12,8 +12,8 @@
  * the path selected by the teacher in the form.
  */
 
-import { useState, useRef, useCallback, useMemo, useEffect, type ReactNode } from "react";
-import { marked, Tokens } from "marked";
+import { Suspense, lazy, useState, useRef, useCallback, useMemo, useEffect, type ReactNode } from "react";
+import { marked, type Tokens } from "marked";
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -45,11 +45,40 @@ marked.use({ renderer });
 
 import type { CanonicalCaseOutput, PreguntaMinimalista, EDASocraticQuestion, EDASolucionEsperada, ModuleId } from "@/shared/adam-types";
 import { M1StoryReader } from "./modules/M1StoryReader";
-import { M2Eda } from "./modules/M2Eda";
-import { M3AuditSection } from "./modules/M3AuditSection";
-import { M4Finance } from "./modules/M4Finance";
-import { M5ExecutiveReport } from "./modules/M5ExecutiveReport";
-import { M6MasterSolution } from "./modules/M6MasterSolution";
+
+// Issue #130 async boundary
+// App route -> TeacherAuthoringPage -> CasePreview -> lazy non-M1 modules -> lazy PlotlyComponent
+const M2Eda = lazy(() =>
+    import("./modules/M2Eda").then((module) => ({ default: module.M2Eda })),
+);
+const M3AuditSection = lazy(() =>
+    import("./modules/M3AuditSection").then((module) => ({ default: module.M3AuditSection })),
+);
+const M4Finance = lazy(() =>
+    import("./modules/M4Finance").then((module) => ({ default: module.M4Finance })),
+);
+const M5ExecutiveReport = lazy(() =>
+    import("./modules/M5ExecutiveReport").then((module) => ({ default: module.M5ExecutiveReport })),
+);
+const M6MasterSolution = lazy(() =>
+    import("./modules/M6MasterSolution").then((module) => ({ default: module.M6MasterSolution })),
+);
+
+function PreviewModuleFallback() {
+    return (
+        <div
+            data-testid="case-preview-module-loading"
+            className="flex min-h-[320px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50"
+        >
+            <div className="flex flex-col items-center gap-3 text-center">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-slate-500" />
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Cargando módulo...
+                </span>
+            </div>
+        </div>
+    );
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 /**
@@ -788,10 +817,12 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
                                 {/* La hoja de papel */}
                                 <div className="paper-shadow bg-white rounded-xl overflow-hidden mb-8">
                                     <div ref={caseContentRef}
-                                        id="module-content-panel"
-                                        className="px-14 py-12 fade-in">
-                                        {renderActiveModule()}
-                                    </div>
+                                            id="module-content-panel"
+                                            className="px-14 py-12 fade-in">
+                                            <Suspense fallback={<PreviewModuleFallback />}>
+                                                {renderActiveModule()}
+                                            </Suspense>
+                                        </div>
                                 </div>
                             </div>
                         </div>
