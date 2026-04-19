@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from typing import Any
+from weakref import WeakSet
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from sqlalchemy import create_engine, Engine
@@ -110,7 +111,9 @@ def _make_engine(s: Settings) -> Engine:
 
 settings = Settings()
 engine = _make_engine(settings)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+_default_session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+_session_factory_override: sessionmaker[Session] | None = None
+_session_factory_override_guard = threading.Lock()
 _langgraph_checkpointer_pool: ConnectionPool | None = None
 _langgraph_checkpointer_async_pool: AsyncConnectionPool | None = None
 _langgraph_checkpointer_async_pool_loop: asyncio.AbstractEventLoop | None = None
@@ -119,6 +122,26 @@ _langgraph_checkpointer_async_pool_lock_loop: asyncio.AbstractEventLoop | None =
 _langgraph_checkpointer_async_pool_lock_guard = threading.Lock()
 _active_authoring_jobs: set[str] = set()
 _active_authoring_jobs_guard = threading.Lock()
+_tracked_authoring_tasks: WeakSet[asyncio.Task[Any]] = WeakSet()
+_tracked_authoring_tasks_guard = threading.Lock()
+
+
+class _SessionFactoryProxy:
+    """Dispatch SessionLocal() calls to the default or a test-scoped override."""
+
+    def __init__(self, default_factory: sessionmaker[Session]) -> None:
+        self._default_factory = default_factory
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Session:
+        with _session_factory_override_guard:
+            active_factory = _session_factory_override or self._default_factory
+        return active_factory(*args, **kwargs)
+
+    def configure(self, **kwargs: Any) -> None:
+        self._default_factory.configure(**kwargs)
+
+
+SessionLocal = _SessionFactoryProxy(_default_session_factory)
 
 class Base(DeclarativeBase):
     """Base declarative class for SQLAlchemy models."""
@@ -144,24 +167,92 @@ def snapshot_active_authoring_jobs() -> list[str]:
         return sorted(_active_authoring_jobs)
 
 
+def reset_active_authoring_job_registry() -> None:
+    """Clear tracked durable authoring jobs for test or shutdown cleanup."""
+    with _active_authoring_jobs_guard:
+        _active_authoring_jobs.clear()
+
+
+def register_authoring_task(task: asyncio.Task[Any]) -> asyncio.Task[Any]:
+    """Track authoring tasks independently from the currently running event loop."""
+    with _tracked_authoring_tasks_guard:
+        _tracked_authoring_tasks.add(task)
+    task.add_done_callback(unregister_authoring_task)
+    return task
+
+
+def unregister_authoring_task(task: asyncio.Task[Any]) -> None:
+    """Remove a finished authoring task from the runtime tracker."""
+    with _tracked_authoring_tasks_guard:
+        _tracked_authoring_tasks.discard(task)
+
+
+def install_session_factory_override(factory: sessionmaker[Session]) -> None:
+    """Route SessionLocal() calls through a test-scoped session factory."""
+    global _session_factory_override
+
+    with _session_factory_override_guard:
+        _session_factory_override = factory
+
+
+def reset_session_factory_override() -> None:
+    """Restore SessionLocal() calls to the default runtime session factory."""
+    global _session_factory_override
+
+    with _session_factory_override_guard:
+        _session_factory_override = None
+
+
+def snapshot_authoring_runtime_state() -> dict[str, list[str]]:
+    """Return authoring runtime residue relevant to harness teardown."""
+    return {
+        "active_jobs": snapshot_active_authoring_jobs(),
+        "pending_tasks": _snapshot_authoring_task_names(),
+    }
+
+
+def _describe_authoring_task(task: asyncio.Task[Any]) -> str | None:
+    if task.done():
+        return None
+
+    task_name = task.get_name()
+    coro = task.get_coro()
+    coro_name = getattr(coro, "__qualname__", type(coro).__name__)
+    if task_name.startswith("authoring-job-") or "run_job" in coro_name or "_run_graph_stream" in coro_name:
+        return f"{task_name}:{coro_name}"
+
+    return None
+
+
+def _snapshot_tracked_authoring_task_names() -> list[str]:
+    with _tracked_authoring_tasks_guard:
+        tracked_tasks = list(_tracked_authoring_tasks)
+
+    task_names = {
+        task_name
+        for task in tracked_tasks
+        if (task_name := _describe_authoring_task(task)) is not None
+    }
+    return sorted(task_names)
+
+
 def _snapshot_authoring_task_names() -> list[str]:
     """Return pending asyncio task names relevant to authoring shutdown."""
+    task_names = set(_snapshot_tracked_authoring_task_names())
+
     try:
         current_loop = asyncio.get_running_loop()
     except RuntimeError:
-        return []
+        return sorted(task_names)
 
     current_task = asyncio.current_task(current_loop)
-    task_names: list[str] = []
     for task in asyncio.all_tasks(current_loop):
         if task is current_task or task.done():
             continue
 
-        task_name = task.get_name()
-        coro = task.get_coro()
-        coro_name = getattr(coro, "__qualname__", type(coro).__name__)
-        if task_name.startswith("authoring-job-") or "run_job" in coro_name or "_run_graph_stream" in coro_name:
-            task_names.append(f"{task_name}:{coro_name}")
+        described_task = _describe_authoring_task(task)
+        if described_task is not None:
+            task_names.add(described_task)
 
     return sorted(task_names)
 
@@ -528,7 +619,7 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
         return pool
 
 
-async def close_langgraph_checkpointer_async_pool(timeout_seconds: float = 5.0) -> None:
+async def close_langgraph_checkpointer_async_pool(timeout_seconds: float = 5.0) -> bool:
     """Close and clear the cached async LangGraph checkpointer pool."""
     global _langgraph_checkpointer_async_pool
     global _langgraph_checkpointer_async_pool_loop
@@ -536,13 +627,18 @@ async def close_langgraph_checkpointer_async_pool(timeout_seconds: float = 5.0) 
     global _langgraph_checkpointer_async_pool_lock_loop
 
     pool = _langgraph_checkpointer_async_pool
+    pool_loop = _langgraph_checkpointer_async_pool_loop
     _langgraph_checkpointer_async_pool = None
     _langgraph_checkpointer_async_pool_loop = None
     _langgraph_checkpointer_async_pool_lock = None
     _langgraph_checkpointer_async_pool_lock_loop = None
 
     if pool is None:
-        return
+        return True
+
+    if pool_loop is not None and pool_loop.is_closed():
+        logger.warning("Skipping LangGraph async checkpointer pool close because the owning event loop is already closed")
+        return True
 
     active_jobs = snapshot_active_authoring_jobs()
     pending_task_names = _snapshot_authoring_task_names()
@@ -565,6 +661,7 @@ async def close_langgraph_checkpointer_async_pool(timeout_seconds: float = 5.0) 
             closed_stats.get("pool_available", 0),
             closed_stats.get("requests_waiting", 0),
         )
+        return True
     except asyncio.TimeoutError:
         timed_out_stats = _pool_stats_snapshot(pool)
         logger.error(
@@ -576,6 +673,12 @@ async def close_langgraph_checkpointer_async_pool(timeout_seconds: float = 5.0) 
             active_jobs,
             pending_task_names,
         )
+        return False
+    except asyncio.CancelledError:
+        logger.warning(
+            "LangGraph async checkpointer pool close was cancelled after the owning loop changed or shut down"
+        )
+        return pool_loop is not None and pool_loop.is_closed()
     except Exception as exc:
         failed_stats = _pool_stats_snapshot(pool)
         logger.error(
@@ -587,22 +690,28 @@ async def close_langgraph_checkpointer_async_pool(timeout_seconds: float = 5.0) 
             active_jobs,
             pending_task_names,
         )
+        return False
 
 
-def close_langgraph_checkpointer_pool() -> None:
+def close_langgraph_checkpointer_pool() -> bool:
     """Close and clear the cached sync LangGraph checkpointer pool."""
     global _langgraph_checkpointer_pool
 
     pool = _langgraph_checkpointer_pool
     _langgraph_checkpointer_pool = None
     if pool is None:
-        return
+        return True
+
+    if not hasattr(pool, "close"):
+        return True
 
     try:
         logger.info("Closing LangGraph sync checkpointer pool")
         pool.close()
+        return True
     except Exception as exc:
         logger.error("Could not close LangGraph sync checkpointer pool cleanly: %s", exc)
+        return False
 
 
 def dispose_database_engine() -> None:

@@ -66,6 +66,7 @@ def clean_db():
     yield
 
 
+@pytest.mark.ddl_isolation
 def test_issue90_alembic_upgrade_and_downgrade() -> None:
     with temporary_database() as db_url:
         config = _alembic_config(db_url)

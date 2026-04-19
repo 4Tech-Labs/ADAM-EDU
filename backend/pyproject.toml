@@ -77,6 +77,8 @@ convention = "google"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = [
+    "ddl_isolation: tests that manage their own temporary database and bypass the default SAVEPOINT harness",
+    "shared_db_commit_visibility: tests that need real committed visibility across independent DB connections and fall back to truncate cleanup",
     "live_llm: tests that require Gemini/network and only run when RUN_LIVE_LLM_TESTS=1",
 ]
 

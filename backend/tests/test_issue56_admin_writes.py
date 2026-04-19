@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import timedelta
 import uuid
 
+import pytest
 from sqlalchemy import func, select
 
 from shared.course_access_links import course_regeneration_lock_key
-from shared.database import SessionLocal
 from shared.invite_status import utc_now
 from shared.models import Course, CourseAccessLink, CourseMembership, Invite, Membership, UniversitySsoConfig
 
@@ -191,8 +191,11 @@ def test_issue56_create_course_rejects_stale_pending_teacher_invite(
     assert response.json()["detail"] == "stale_pending_teacher_invite"
 
 
+@pytest.mark.shared_db_commit_visibility
 def test_issue56_create_course_rejects_pending_teacher_invite_locked_by_activation(
     client,
+    db,
+    independent_session,
     seed_identity,
     seed_invite,
     auth_headers_factory,
@@ -205,8 +208,9 @@ def test_issue56_create_course_rejects_pending_teacher_invite_locked_by_activati
         role="teacher",
         full_name="Locked Create",
     )
+    db.commit()
 
-    blocking_session = SessionLocal()
+    blocking_session = independent_session
     try:
         locked_invite = blocking_session.scalar(
             select(Invite).where(Invite.id == invite.id).with_for_update()
@@ -574,8 +578,11 @@ def test_issue56_patch_course_rejects_stale_pending_teacher_invite(
     assert response.json()["detail"] == "stale_pending_teacher_invite"
 
 
+@pytest.mark.shared_db_commit_visibility
 def test_issue56_patch_course_rejects_pending_teacher_invite_locked_by_activation(
     client,
+    db,
+    independent_session,
     seed_identity,
     seed_course,
     seed_invite,
@@ -601,8 +608,9 @@ def test_issue56_patch_course_rejects_pending_teacher_invite_locked_by_activatio
         title="Locked Patch Course",
         code="LOCKED-PATCH-001",
     )
+    db.commit()
 
-    blocking_session = SessionLocal()
+    blocking_session = independent_session
     try:
         locked_invite = blocking_session.scalar(
             select(Invite).where(Invite.id == invite.id).with_for_update()
@@ -881,8 +889,11 @@ def test_issue56_regenerate_course_access_link_rejects_inactive_course(
     assert response.json()["detail"] == "course_inactive"
 
 
+@pytest.mark.shared_db_commit_visibility
 def test_issue56_regenerate_course_access_link_returns_conflict_when_lock_is_held(
     client,
+    db,
+    independent_session,
     seed_identity,
     seed_course,
     seed_course_access_link,
@@ -903,8 +914,9 @@ def test_issue56_regenerate_course_access_link_returns_conflict_when_lock_is_hel
         code="ROTATE-CONCURRENT-001",
     )
     seed_course_access_link(course_id=course.id, status="active")
+    db.commit()
 
-    blocking_session = SessionLocal()
+    blocking_session = independent_session
     try:
         blocking_session.execute(select(func.pg_advisory_xact_lock(course_regeneration_lock_key(course.id))))
 

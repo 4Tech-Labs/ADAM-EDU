@@ -257,6 +257,7 @@ def test_change_password_clears_all_university_admin_memberships(
     assert resp.status_code == 200
 
     # Both memberships must have flag cleared
+    db.expire_all()
     memberships = db.scalars(
         select(Membership).where(
             Membership.user_id == user_id,

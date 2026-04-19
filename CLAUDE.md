@@ -96,6 +96,13 @@ Issue 23 adds a migration test that creates and drops temporary databases. In th
 local Docker Postgres this works with the `postgres` user. On other Postgres environments,
 the backend test suite now assumes `CREATE DATABASE` and `DROP DATABASE` privileges.
 
+Ordinary backend DB-backed tests now run under a per-test dedicated connection + outer
+transaction + `SAVEPOINT` session contract. Shared seed fixtures should stay flush-only by
+default. Use explicit pytest markers for carve-outs:
+
+- `ddl_isolation` for temp-database or DDL-heavy tests
+- `shared_db_commit_visibility` for tests that require real cross-connection committed visibility and fall back to `TRUNCATE` cleanup
+
 Issue 23 also introduces `backend/sql/rls_policies.sql` as a separate artifact. Alembic
 does not apply that file. Treat it as an explicit secondary-RLS deployment step only for
 Supabase or another environment that exposes compatible Auth helpers like `auth.uid()`.

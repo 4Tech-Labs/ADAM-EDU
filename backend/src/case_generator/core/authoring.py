@@ -30,7 +30,13 @@ from shared.blueprint_schema import (
     StudentArtifacts,
     ValidationContract,
 )
-from shared.database import SessionLocal, register_active_authoring_job, settings, unregister_active_authoring_job
+from shared.database import (
+    SessionLocal,
+    register_active_authoring_job,
+    register_authoring_task,
+    settings,
+    unregister_active_authoring_job,
+)
 from shared.models import (
     AUTHORING_JOB_RETRYABLE_STATUSES,
     AUTHORING_JOB_STATUS_COMPLETED,
@@ -866,7 +872,9 @@ class AuthoringService:
 
                     return final_state
 
-                graph_task = asyncio.create_task(_run_graph_stream(), name=f"authoring-job-{job_id}")
+                graph_task = register_authoring_task(
+                    asyncio.create_task(_run_graph_stream(), name=f"authoring-job-{job_id}")
+                )
                 graph_output = await asyncio.wait_for(graph_task, timeout=900)
                 logger.info("AuthoringService: LangGraph execution finished for Job %s.", job_id)
             finally:
