@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from typing import Any
+from weakref import WeakSet
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from sqlalchemy import create_engine, Engine
@@ -121,6 +122,8 @@ _langgraph_checkpointer_async_pool_lock_loop: asyncio.AbstractEventLoop | None =
 _langgraph_checkpointer_async_pool_lock_guard = threading.Lock()
 _active_authoring_jobs: set[str] = set()
 _active_authoring_jobs_guard = threading.Lock()
+_tracked_authoring_tasks: WeakSet[asyncio.Task[Any]] = WeakSet()
+_tracked_authoring_tasks_guard = threading.Lock()
 
 
 class _SessionFactoryProxy:
@@ -170,6 +173,20 @@ def reset_active_authoring_job_registry() -> None:
         _active_authoring_jobs.clear()
 
 
+def register_authoring_task(task: asyncio.Task[Any]) -> asyncio.Task[Any]:
+    """Track authoring tasks independently from the currently running event loop."""
+    with _tracked_authoring_tasks_guard:
+        _tracked_authoring_tasks.add(task)
+    task.add_done_callback(unregister_authoring_task)
+    return task
+
+
+def unregister_authoring_task(task: asyncio.Task[Any]) -> None:
+    """Remove a finished authoring task from the runtime tracker."""
+    with _tracked_authoring_tasks_guard:
+        _tracked_authoring_tasks.discard(task)
+
+
 def install_session_factory_override(factory: sessionmaker[Session]) -> None:
     """Route SessionLocal() calls through a test-scoped session factory."""
     global _session_factory_override
@@ -194,24 +211,48 @@ def snapshot_authoring_runtime_state() -> dict[str, list[str]]:
     }
 
 
+def _describe_authoring_task(task: asyncio.Task[Any]) -> str | None:
+    if task.done():
+        return None
+
+    task_name = task.get_name()
+    coro = task.get_coro()
+    coro_name = getattr(coro, "__qualname__", type(coro).__name__)
+    if task_name.startswith("authoring-job-") or "run_job" in coro_name or "_run_graph_stream" in coro_name:
+        return f"{task_name}:{coro_name}"
+
+    return None
+
+
+def _snapshot_tracked_authoring_task_names() -> list[str]:
+    with _tracked_authoring_tasks_guard:
+        tracked_tasks = list(_tracked_authoring_tasks)
+
+    task_names = {
+        task_name
+        for task in tracked_tasks
+        if (task_name := _describe_authoring_task(task)) is not None
+    }
+    return sorted(task_names)
+
+
 def _snapshot_authoring_task_names() -> list[str]:
     """Return pending asyncio task names relevant to authoring shutdown."""
+    task_names = set(_snapshot_tracked_authoring_task_names())
+
     try:
         current_loop = asyncio.get_running_loop()
     except RuntimeError:
-        return []
+        return sorted(task_names)
 
     current_task = asyncio.current_task(current_loop)
-    task_names: list[str] = []
     for task in asyncio.all_tasks(current_loop):
         if task is current_task or task.done():
             continue
 
-        task_name = task.get_name()
-        coro = task.get_coro()
-        coro_name = getattr(coro, "__qualname__", type(coro).__name__)
-        if task_name.startswith("authoring-job-") or "run_job" in coro_name or "_run_graph_stream" in coro_name:
-            task_names.append(f"{task_name}:{coro_name}")
+        described_task = _describe_authoring_task(task)
+        if described_task is not None:
+            task_names.add(described_task)
 
     return sorted(task_names)
 

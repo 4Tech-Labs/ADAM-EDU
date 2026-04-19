@@ -5,7 +5,12 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 import uuid
 
-from shared.database import register_active_authoring_job, reset_active_authoring_job_registry, snapshot_authoring_runtime_state
+from shared.database import (
+    register_active_authoring_job,
+    register_authoring_task,
+    reset_active_authoring_job_registry,
+    snapshot_authoring_runtime_state,
+)
 from shared.models import Profile
 
 _previous_test_user_id: str | None = None
@@ -81,12 +86,16 @@ async def test_runtime_state_snapshot_reports_active_jobs_and_pending_authoring_
         await gate.wait()
 
     register_active_authoring_job(job_id)
-    task = asyncio.create_task(_pending_authoring_task(), name=f"authoring-job-{job_id}")
+    task = register_authoring_task(asyncio.create_task(_pending_authoring_task(), name=f"authoring-job-{job_id}"))
     await asyncio.sleep(0)
 
     state = snapshot_authoring_runtime_state()
     assert state["active_jobs"] == [job_id]
     assert any(entry.startswith(f"authoring-job-{job_id}:") for entry in state["pending_tasks"])
+
+    state_without_active_loop = await asyncio.to_thread(snapshot_authoring_runtime_state)
+    assert state_without_active_loop["active_jobs"] == [job_id]
+    assert any(entry.startswith(f"authoring-job-{job_id}:") for entry in state_without_active_loop["pending_tasks"])
 
     gate.set()
     await task
