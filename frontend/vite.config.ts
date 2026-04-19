@@ -10,28 +10,6 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: "/app/",
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (id.includes("react-plotly.js/factory")) {
-            return "plotly-react";
-          }
-          if (id.includes("plotly.js/lib/")) {
-            return "plotly-traces";
-          }
-          if (
-            id.includes("plotly.js/src/") ||
-            id.includes("gl-") ||
-            id.includes("regl") ||
-            id.includes("mapbox")
-          ) {
-            return "plotly-core";
-          }
-        },
-      },
-    },
-  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
