@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from shared.auth import CurrentActor, require_current_actor
+from shared.auth import CurrentActor, require_current_actor_password_ready
 from shared.database import get_db
 from shared.teacher_context import TeacherContext, require_teacher_context
 from shared.teacher_reads import TeacherCoursesResponse, list_teacher_active_cases, list_teacher_courses
@@ -53,7 +53,7 @@ def get_teacher_courses(
 @router.get("/cases", response_model=TeacherCasesResponse)
 def get_teacher_cases(
     _: Annotated[TeacherContext, Depends(require_teacher_context)],
-    actor: CurrentActor = Depends(require_current_actor),
+    actor: CurrentActor = Depends(require_current_actor_password_ready),
     db: Session = Depends(get_db),
 ) -> TeacherCasesResponse:
     now = datetime.now(timezone.utc)

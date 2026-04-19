@@ -26,10 +26,19 @@ Mensajes de error auditados en Issue #46 (todos conformes):
 | Endpoint | Códigos 4xx |
 |---|---|
 | `POST /api/auth/change-password` | `admin_role_required`, `password_rotation_not_required` |
+| Rutas protegidas por actor compartido (`/api/admin/*`, `/api/teacher/*`, authoring teacher-only) | `invalid_token`, `profile_incomplete`, `membership_required`, `account_suspended`, `password_rotation_required`, `admin_role_required`, `teacher_role_required`, `admin_membership_context_required`, `teacher_membership_context_required` |
 | `POST /api/invites/resolve` | `invalid_invite` |
 | `POST /api/invites/redeem` | `membership_required`, `invalid_invite` |
 | `POST /api/auth/activate/password` | `password_mismatch`, `invalid_invite`, `full_name_required` |
 | `POST /api/auth/activate/oauth/complete` | `invalid_invite`, `invite_email_mismatch` |
+
+Notas de precedencia auditada:
+
+- `profile_incomplete` solo sale desde profile-state.
+- `membership_required` solo sale desde membership-state.
+- `password_rotation_required` se evalúa antes de errores de rol/contexto en rutas protegidas de negocio.
+- `GET /api/auth/me` permanece fuera del guard compartido de `password_rotation_required` y del check de required profile fields para no romper bootstrap; si falta la fila `Profile`, sigue respondiendo `profile_incomplete`.
+- `POST /api/auth/change-password` permanece fuera del guard compartido de `password_rotation_required` para no romper recuperación.
 
 ## Auditoría
 

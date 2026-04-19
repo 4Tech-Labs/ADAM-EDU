@@ -16,6 +16,10 @@ Covered paths:
   6. provision_admin: new user → Auth user + Profile + Membership created
   7. provision_admin idempotent: existing Auth user → Membership updated, password unchanged
   8. provision_admin invalid university_id → sys.exit(1), no Auth user created
+
+Shared auth guard contract note:
+    - POST /api/auth/change-password stays exempt from password_rotation_required.
+    - Endpoint-local denials must log the same semantic detail code they return.
 """
 from __future__ import annotations
 
@@ -124,14 +128,22 @@ def test_change_password_not_admin_returns_403(
     )
 
     headers = auth_headers_factory(sub=user_id, email=email)
-    resp = client.post(
-        "/api/auth/change-password",
-        json={"new_password": "NewSecure123!"},
-        headers=headers,
-    )
+    with patch("shared.app.audit_log") as mock_audit:
+        resp = client.post(
+            "/api/auth/change-password",
+            json={"new_password": "NewSecure123!"},
+            headers=headers,
+        )
 
     assert resp.status_code == 403
     assert resp.json()["detail"] == "admin_role_required"
+    mock_audit.assert_called_once_with(
+        "admin.change_password",
+        "denied",
+        auth_user_id=user_id,
+        http_status=403,
+        reason="admin_role_required",
+    )
     # Auth API must NOT have been called
     assert user_id not in fake_admin_client.updated_passwords
 
@@ -154,14 +166,22 @@ def test_change_password_flag_already_false_returns_403(
     )
 
     headers = auth_headers_factory(sub=user_id, email=email)
-    resp = client.post(
-        "/api/auth/change-password",
-        json={"new_password": "NewSecure123!"},
-        headers=headers,
-    )
+    with patch("shared.app.audit_log") as mock_audit:
+        resp = client.post(
+            "/api/auth/change-password",
+            json={"new_password": "NewSecure123!"},
+            headers=headers,
+        )
 
     assert resp.status_code == 403
     assert resp.json()["detail"] == "password_rotation_not_required"
+    mock_audit.assert_called_once_with(
+        "admin.change_password",
+        "denied",
+        auth_user_id=user_id,
+        http_status=403,
+        reason="password_rotation_not_required",
+    )
     assert user_id not in fake_admin_client.updated_passwords
 
 

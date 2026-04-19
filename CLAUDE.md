@@ -76,6 +76,16 @@ Use the repo-driven gstack runtime materialized from the pinned lock in `scripts
 - Schema changes for the app runtime go through Alembic migrations.
 - Keep `backend/.env.example`, local defaults, and documented setup aligned when database expectations change.
 
+## Auth Error Precedence
+
+- For protected backend authz routes in `backend/src/shared/**`, evaluate auth failures in this order:
+  - `verified_identity -> profile_state -> membership_state -> password_rotation -> role/context -> handler`
+- `profile_incomplete` belongs only to profile-state failures, including missing profile rows or missing required profile fields.
+- `membership_required` belongs only to membership-state failures.
+- `password_rotation_required` blocks protected business routes after identity/profile/membership pass.
+- `GET /api/auth/me` remains bootstrap-safe, bypasses shared required-profile-field checks and `password_rotation_required`, and still returns actor state including `must_rotate_password` when the profile row exists.
+- `POST /api/auth/change-password` is explicitly exempt from the shared password-rotation guard so it cannot self-block.
+
 ## Supabase Infrastructure Guardrails
 
 - ADAM-EDU production progress infrastructure is Supabase-native: Postgres durability + Supabase Realtime (`postgres_changes` on `public.authoring_jobs`).

@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends
 
-from shared.auth import CurrentActor, require_current_actor
+from shared.auth import (
+    AuthContextError,
+    AuthDetailCode,
+    AuthorizationError,
+    CurrentActor,
+    require_current_actor_password_ready,
+)
 
 
 @dataclass(slots=True)
@@ -25,16 +31,10 @@ def resolve_teacher_context(actor: CurrentActor) -> TeacherContext:
     ]
 
     if not active_teacher_memberships:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="teacher_role_required",
-        )
+        raise AuthorizationError(AuthDetailCode.TEACHER_ROLE_REQUIRED)
 
     if len(active_teacher_memberships) > 1:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="teacher_membership_context_required",
-        )
+        raise AuthContextError(AuthDetailCode.TEACHER_MEMBERSHIP_CONTEXT_REQUIRED)
 
     membership = active_teacher_memberships[0]
     return TeacherContext(
@@ -45,7 +45,7 @@ def resolve_teacher_context(actor: CurrentActor) -> TeacherContext:
 
 
 def require_teacher_context(
-    actor: CurrentActor = Depends(require_current_actor),
+    actor: CurrentActor = Depends(require_current_actor_password_ready),
 ) -> TeacherContext:
     """FastAPI dependency that enforces a single active teacher membership."""
     return resolve_teacher_context(actor)

@@ -34,17 +34,23 @@ from shared.course_access_router import router as course_access_router
 from shared.teacher_router import router as teacher_router
 from shared.auth import (
     AuthError,
+    AuthDetailCode,
+    AuthorizationError,
     CurrentActor,
     VerifiedIdentity,
     audit_log,
+    ensure_password_rotation_cleared,
     ensure_legacy_teacher_bridge,
+    get_verified_token,
     get_supabase_admin_auth_client,
     hash_invite_token,
     mask_email,
     normalize_email,
     require_current_actor,
+    require_current_actor_password_ready,
     require_teacher_actor,
     require_verified_identity,
+    resolve_current_actor,
 )
 from shared.identity_activation import (
     derive_activation_full_name,
@@ -410,7 +416,11 @@ def require_current_actor_auth_me(
     db: Session = Depends(get_db),
 ) -> CurrentActor:
     try:
-        return require_current_actor(authorization=authorization, db=db)
+        return require_current_actor(
+            authorization=authorization,
+            db=db,
+            require_profile_fields=False,
+        )
     except AuthError:
         raise
     except (SATimeoutError, OperationalError, DBAPIError) as exc:
@@ -423,6 +433,7 @@ def require_teacher_actor_authoring_intake(
 ) -> CurrentActor:
     try:
         actor = require_current_actor(authorization=authorization, db=db)
+        actor = ensure_password_rotation_cleared(actor)
         return require_teacher_actor(actor=actor)
     except AuthError:
         raise
@@ -436,6 +447,7 @@ def require_teacher_actor_authoring_progress(
 ) -> CurrentActor:
     try:
         actor = require_current_actor(authorization=authorization, db=db)
+        actor = ensure_password_rotation_cleared(actor)
         return require_teacher_actor(actor=actor)
     except AuthError:
         raise
@@ -508,7 +520,7 @@ app.add_middleware(
 @app.exception_handler(AuthError)
 async def handle_auth_error(_: Request, exc: AuthError) -> JSONResponse:
     headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == status.HTTP_401_UNAUTHORIZED else None
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.code}, headers=headers)
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail_code}, headers=headers)
 
 
 @app.get("/health")
@@ -871,6 +883,10 @@ def change_admin_password(
 ) -> ChangePasswordResponse:
     """Rotate password for a university_admin with must_rotate_password=True.
 
+        Shared auth guard exemption:
+            verified_identity -> profile_state -> membership_state -> role/context -> handler
+            password_rotation_required is enforced on protected business routes, but NOT here.
+
     FAIL-CLOSED flow:
       [D] update_user_password → Supabase Auth API   (if fails: 500, DB untouched)
       [E] UPDATE memberships SET must_rotate_password=False  (if fails: 500, Auth updated)
@@ -885,9 +901,9 @@ def change_admin_password(
             "denied",
             auth_user_id=actor.auth_user_id,
             http_status=403,
-            reason="not_admin",
+            reason=AuthDetailCode.ADMIN_ROLE_REQUIRED,
         )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin_role_required")
+        raise AuthorizationError(AuthDetailCode.ADMIN_ROLE_REQUIRED)
 
     # [C] Rotation guard — 403 if flag already cleared
     if not actor.must_rotate_password:
@@ -896,12 +912,9 @@ def change_admin_password(
             "denied",
             auth_user_id=actor.auth_user_id,
             http_status=403,
-            reason="rotation_not_required",
+            reason=AuthDetailCode.PASSWORD_ROTATION_NOT_REQUIRED,
         )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="password_rotation_not_required",
-        )
+        raise AuthorizationError(AuthDetailCode.PASSWORD_ROTATION_NOT_REQUIRED)
 
     # [D] Update Supabase Auth FIRST — fail-closed: DB untouched if this raises
     admin_client = get_supabase_admin_auth_client()
@@ -913,12 +926,9 @@ def change_admin_password(
             "error",
             auth_user_id=actor.auth_user_id,
             http_status=500,
-            reason="auth_update_failed",
+            reason=AuthDetailCode.PASSWORD_UPDATE_FAILED,
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="password_update_failed",
-        ) from exc
+        raise AuthError(status.HTTP_500_INTERNAL_SERVER_ERROR, AuthDetailCode.PASSWORD_UPDATE_FAILED) from exc
 
     # [E] Clear must_rotate_password for ALL university_admin memberships of this user.
     # Auth password is global (not per-university), so all flags clear together.
@@ -966,9 +976,9 @@ def resolve_invite(req: InviteResolveRequest, db: Session = Depends(get_db)) -> 
             "invalid",
             invite_hash_prefix=invite_hash_prefix,
             http_status=status.HTTP_404_NOT_FOUND,
-            reason="invalid_invite",
+            reason=AuthDetailCode.INVITE_INVALID,
         )
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="invalid_invite")
+        raise AuthError(status.HTTP_404_NOT_FOUND, AuthDetailCode.INVITE_INVALID)
 
     tenant = db.scalar(select(Tenant).where(Tenant.id == invite.university_id))
     course_title = None
@@ -1017,7 +1027,7 @@ class InviteRedeemResponse(BaseModel):
 @app.post("/api/invites/redeem", response_model=InviteRedeemResponse)
 def redeem_invite(
     req: InviteRedeemRequest,
-    actor: CurrentActor = Depends(require_current_actor),
+    actor: CurrentActor = Depends(require_current_actor_password_ready),
     db: Session = Depends(get_db),
 ) -> InviteRedeemResponse:
     if not actor.has_active_role("student"):
@@ -1026,9 +1036,9 @@ def redeem_invite(
             "denied",
             auth_user_id=actor.auth_user_id,
             http_status=status.HTTP_403_FORBIDDEN,
-            reason="student_membership_required",
+            reason=AuthDetailCode.MEMBERSHIP_REQUIRED,
         )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="membership_required")
+        raise AuthorizationError(AuthDetailCode.MEMBERSHIP_REQUIRED)
 
     invite = get_invite_by_token(db, req.invite_token)
     if invite is None or invite.role != "student" or invite.course_id is None:
@@ -1038,9 +1048,9 @@ def redeem_invite(
             auth_user_id=actor.auth_user_id,
             invite_hash_prefix=hash_invite_token(req.invite_token)[:12],
             http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            reason="invalid_invite",
+            reason=AuthDetailCode.INVITE_INVALID,
         )
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
+        raise AuthError(status.HTTP_422_UNPROCESSABLE_CONTENT, AuthDetailCode.INVITE_INVALID)
 
     require_invite_email_match(invite, actor.email)
     membership = next(
@@ -1052,7 +1062,16 @@ def redeem_invite(
         None,
     )
     if membership is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="membership_required")
+        audit_log(
+            "invite.redeem",
+            "denied",
+            auth_user_id=actor.auth_user_id,
+            invite_id=invite.id,
+            invite_hash_prefix=invite.token_hash[:12],
+            http_status=status.HTTP_403_FORBIDDEN,
+            reason=AuthDetailCode.MEMBERSHIP_REQUIRED,
+        )
+        raise AuthorizationError(AuthDetailCode.MEMBERSHIP_REQUIRED)
 
     existing_course_membership = db.scalar(
         select(CourseMembership).where(
@@ -1075,7 +1094,16 @@ def redeem_invite(
         return InviteRedeemResponse(status="already_enrolled")
 
     if invite_effective_status(invite) != "pending":
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
+        audit_log(
+            "invite.redeem",
+            "invalid",
+            auth_user_id=actor.auth_user_id,
+            invite_id=invite.id,
+            invite_hash_prefix=invite.token_hash[:12],
+            http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            reason=AuthDetailCode.INVITE_INVALID,
+        )
+        raise AuthError(status.HTTP_422_UNPROCESSABLE_CONTENT, AuthDetailCode.INVITE_INVALID)
 
     try:
         _, created_course_membership = upsert_course_membership(db, invite.course_id, membership.id)
@@ -1099,7 +1127,16 @@ def redeem_invite(
                     reason="already_enrolled",
                 )
                 return InviteRedeemResponse(status="already_enrolled")
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_invite")
+            audit_log(
+                "invite.redeem",
+                "invalid",
+                auth_user_id=actor.auth_user_id,
+                invite_id=invite.id,
+                invite_hash_prefix=invite.token_hash[:12],
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                reason=AuthDetailCode.INVITE_INVALID,
+            )
+            raise AuthError(status.HTTP_422_UNPROCESSABLE_CONTENT, AuthDetailCode.INVITE_INVALID)
         db.commit()
     except IntegrityError:
         db.rollback()
