@@ -246,3 +246,35 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Context:** Diferido explícitamente durante Issue #128 para mantener el diff enfocado en la causa raíz de la contaminación cruzada: commits opacos, ausencia de transacción externa por test y teardown global insuficiente.
 
 **Depends on / blocked by:** Mantener estable el harness serial con `SAVEPOINT` durante varias corridas de CI y definir estrategia de naming/bootstrap para DBs temporales por worker.
+
+---
+
+## TODO-016: Documentar el contrato operativo de clean-room para Authoring
+
+**What:** Documentar el contrato operativo canonico del clean-room de Authoring: ownership de teardown, simbolos reutilizables, politica de purge de checkpoints y evidencia minima de logs para diagnostico de fugas o contencion.
+
+**Why:** La estabilizacion de Authoring depende de una frontera precisa entre el harness de pytest, el runtime de `AuthoringService` y el lifecycle de LangGraph. Si esa frontera queda solo implícita en el codigo o en una PR, es facil reintroducir residuos de pools, tareas o checkpoints en cambios futuros.
+
+**Pros:** Preserva el razonamiento operativo, reduce regresiones por drift entre tests y runtime, y acelera debugging cuando reaparezcan sintomas como `LockNotAvailable` o leaks de pools.
+
+**Cons:** Añade trabajo de documentacion fuera del fix principal y exige mantener sincronizado el texto cuando cambie el contrato de cleanup.
+
+**Context:** Aceptado durante la revision de rediseño de Issue #127. El objetivo es que la solucion de clean-room sea invisible para quien escriba nuevos tests, pero explicita para quien mantenga el runtime. La documentacion debe referenciar el contrato centralizado una vez exista como superficie canonica.
+
+**Depends on / blocked by:** Depende de cerrar primero la implementacion de Issue #127 y de fijar cuales helpers quedan como API operativa estable para clean-room y diagnostico.
+
+---
+
+## TODO-017: Stress harness post-fix para contencion de checkpoints y churn de event loops
+
+**What:** Evaluar un stress harness diferido que repita secuencias de bootstrap, retry, teardown y cambio de event loop para el path de checkpoints de LangGraph mas alla de `test_authoring_progress_resilience.py` y `test_phase3_status_api.py`.
+
+**Why:** Issue #127 debe resolver la inestabilidad determinista actual con el menor diff posible. Un soak test o stress harness mas amplio puede ser valioso despues, pero mezclarlo ahora convertiria un fix de integracion Authoring en una epica de validacion de carga.
+
+**Pros:** Captura una siguiente capa de hardening para detectar contencion intermitente, churn multi-loop y regresiones de lifecycle antes de que aparezcan en CI o staging.
+
+**Cons:** Puede inflar scope y tiempo de mantenimiento; si se adelanta demasiado, corre el riesgo de probar comportamientos todavia no estabilizados por el fix principal.
+
+**Context:** Aceptado como follow-up durante la revision de la nueva especificacion de Issue #127. La evidencia actual apunta a dos modulos pesados concretos; el stress harness seria una fase posterior una vez el clean-room de Authoring quede estable y reusable.
+
+**Depends on / blocked by:** Bloqueado por la implementacion y validacion completa de Issue #127, incluyendo el contrato de clean-room, la reproduccion determinista del path de locks y tres corridas full-suite consecutivas en verde.
