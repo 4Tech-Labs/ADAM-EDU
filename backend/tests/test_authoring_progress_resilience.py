@@ -1,6 +1,7 @@
 import contextlib
 import asyncio
 import logging
+import threading
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -406,6 +407,81 @@ def test_async_checkpointer_pool_rebuilds_when_event_loop_changes(monkeypatch) -
     assert state["open_calls"] == 2
 
 
+def test_close_async_checkpointer_pool_uses_owner_loop_when_running_in_other_thread(monkeypatch) -> None:
+    state = {
+        "close_calls": 0,
+        "close_loop_id": None,
+        "owner_loop_id": None,
+    }
+    ready = threading.Event()
+    stop_requested = threading.Event()
+    owner_loop_holder: dict[str, asyncio.AbstractEventLoop] = {}
+
+    class FakeAsyncConnectionPool:
+        async def close(self) -> None:
+            state["close_calls"] += 1
+            state["close_loop_id"] = id(asyncio.get_running_loop())
+
+    def _run_owner_loop() -> None:
+        owner_loop = asyncio.new_event_loop()
+        owner_loop_holder["loop"] = owner_loop
+        state["owner_loop_id"] = id(owner_loop)
+        asyncio.set_event_loop(owner_loop)
+        ready.set()
+        try:
+            owner_loop.run_until_complete(_wait_for_stop())
+        finally:
+            owner_loop.close()
+
+    async def _wait_for_stop() -> None:
+        while not stop_requested.is_set():
+            await asyncio.sleep(0.01)
+
+    cleanup_thread = threading.Thread(target=_run_owner_loop, name="langgraph-owner-loop", daemon=True)
+    cleanup_thread.start()
+    assert ready.wait(timeout=5.0)
+
+    fake_pool = FakeAsyncConnectionPool()
+    owner_loop = owner_loop_holder["loop"]
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", fake_pool)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", owner_loop)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", asyncio.Lock())
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock_loop", owner_loop)
+
+    try:
+        assert asyncio.run(database_module.close_langgraph_checkpointer_async_pool()) is True
+    finally:
+        stop_requested.set()
+        owner_loop.call_soon_threadsafe(lambda: None)
+        cleanup_thread.join(timeout=5.0)
+
+    assert state["close_calls"] == 1
+    assert state["close_loop_id"] == state["owner_loop_id"]
+    assert database_module._langgraph_checkpointer_async_pool is None
+    assert database_module._langgraph_checkpointer_async_pool_loop is None
+
+
+async def test_close_async_checkpointer_pool_keeps_registration_on_close_failure(monkeypatch) -> None:
+    class BrokenAsyncConnectionPool:
+        async def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    fake_pool = BrokenAsyncConnectionPool()
+    current_loop = asyncio.get_running_loop()
+    current_lock = asyncio.Lock()
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool", fake_pool)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_loop", current_loop)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock", current_lock)
+    monkeypatch.setattr(database_module, "_langgraph_checkpointer_async_pool_lock_loop", current_loop)
+
+    assert await database_module.close_langgraph_checkpointer_async_pool() is False
+    assert database_module._langgraph_checkpointer_async_pool is fake_pool
+    assert database_module._langgraph_checkpointer_async_pool_loop is current_loop
+    assert database_module._langgraph_checkpointer_async_pool_lock is current_lock
+    assert database_module._langgraph_checkpointer_async_pool_lock_loop is current_loop
+    database_module._clear_langgraph_checkpointer_async_pool_registration(expected_pool=fake_pool)
+
+
 async def test_close_async_checkpointer_pool_clears_singleton(monkeypatch) -> None:
     state = {"close_calls": 0}
 
@@ -462,6 +538,7 @@ async def test_close_async_checkpointer_pool_logs_timeout_telemetry(monkeypatch,
     assert "LEAK DETECTED" in caplog.text
     assert "job-timeout" in caplog.text
     assert "authoring-job-job-timeout" in caplog.text
+    database_module._clear_langgraph_checkpointer_async_pool_registration()
 
 
 async def test_async_checkpointer_pool_logs_stable_pool_open_key_and_warning(monkeypatch, caplog) -> None:
