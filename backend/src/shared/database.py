@@ -714,6 +714,103 @@ def close_langgraph_checkpointer_pool() -> bool:
         return False
 
 
+async def clean_authoring_runtime(
+    *,
+    reason: str,
+    timeout_seconds: float = 5.0,
+    clear_active_jobs: bool = False,
+) -> dict[str, Any]:
+    """Reset Authoring runtime residue without purging durable checkpoints.
+
+    This is the canonical clean-room surface for test teardown, process shutdown,
+    and checkpoint-infrastructure failure recovery. It closes the LangGraph pools,
+    resets the loop-bound compiled graph state, and optionally clears the in-memory
+    active-job registry. Durable checkpoints are intentionally preserved so normal
+    retries with the same thread_id/job_id can resume lineage; test-local purge of
+    checkpoint rows remains owned by the pytest harness when it opts into TRUNCATE
+    cleanup via shared_db_commit_visibility.
+    """
+
+    async_pool = _langgraph_checkpointer_async_pool
+    sync_pool = _langgraph_checkpointer_pool
+    pre_reset_state = snapshot_authoring_runtime_state()
+    async_pool_stats_before = _pool_stats_snapshot(async_pool) if async_pool is not None else {}
+    sync_pool_stats_before = _pool_stats_snapshot(sync_pool) if sync_pool is not None else {}
+
+    logger.info(
+        "Starting Authoring clean-room cleanup",
+        extra={
+            "clean_room_reason": reason,
+            "clean_room_clear_active_jobs": clear_active_jobs,
+            "clean_room_preserves_checkpoints": True,
+            "active_jobs_before": pre_reset_state["active_jobs"],
+            "pending_tasks_before": pre_reset_state["pending_tasks"],
+            "async_pool_stats_before": async_pool_stats_before,
+            "sync_pool_stats_before": sync_pool_stats_before,
+        },
+    )
+
+    async_pool_closed_cleanly = await close_langgraph_checkpointer_async_pool(timeout_seconds=timeout_seconds)
+    sync_pool_closed_cleanly = close_langgraph_checkpointer_pool()
+
+    from case_generator.graph import reset_graph_singleton
+
+    reset_graph_singleton()
+    if clear_active_jobs:
+        reset_active_authoring_job_registry()
+
+    post_reset_state = snapshot_authoring_runtime_state()
+    result = {
+        "reason": reason,
+        "preserved_checkpoints": True,
+        "clear_active_jobs": clear_active_jobs,
+        "async_pool_closed_cleanly": async_pool_closed_cleanly,
+        "sync_pool_closed_cleanly": sync_pool_closed_cleanly,
+        "pre_reset_state": pre_reset_state,
+        "post_reset_state": post_reset_state,
+        "async_pool_stats_before": async_pool_stats_before,
+        "sync_pool_stats_before": sync_pool_stats_before,
+    }
+
+    if (
+        not async_pool_closed_cleanly
+        or not sync_pool_closed_cleanly
+        or post_reset_state["pending_tasks"]
+        or (clear_active_jobs and post_reset_state["active_jobs"])
+    ):
+        logger.warning(
+            "Authoring clean-room cleanup finished with residue",
+            extra={
+                "clean_room_reason": reason,
+                "clean_room_clear_active_jobs": clear_active_jobs,
+                "clean_room_preserves_checkpoints": True,
+                "async_pool_closed_cleanly": async_pool_closed_cleanly,
+                "sync_pool_closed_cleanly": sync_pool_closed_cleanly,
+                "active_jobs_before": pre_reset_state["active_jobs"],
+                "pending_tasks_before": pre_reset_state["pending_tasks"],
+                "active_jobs_after": post_reset_state["active_jobs"],
+                "pending_tasks_after": post_reset_state["pending_tasks"],
+                "async_pool_stats_before": async_pool_stats_before,
+                "sync_pool_stats_before": sync_pool_stats_before,
+            },
+        )
+    else:
+        logger.info(
+            "Authoring clean-room cleanup completed",
+            extra={
+                "clean_room_reason": reason,
+                "clean_room_clear_active_jobs": clear_active_jobs,
+                "clean_room_preserves_checkpoints": True,
+                "async_pool_closed_cleanly": async_pool_closed_cleanly,
+                "sync_pool_closed_cleanly": sync_pool_closed_cleanly,
+                "active_jobs_after": post_reset_state["active_jobs"],
+                "pending_tasks_after": post_reset_state["pending_tasks"],
+            },
+        )
+
+    return result
+
+
 def dispose_database_engine() -> None:
     """Dispose the shared SQLAlchemy engine at process shutdown."""
     logger.info("Disposing shared SQLAlchemy engine")

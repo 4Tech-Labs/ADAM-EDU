@@ -18,20 +18,16 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, close_all_sessions, sessionmaker
 
-from case_generator.graph import reset_graph_singleton
 from shared.app import app
 from shared.auth import get_auth_settings, get_jwt_verifier, get_supabase_admin_auth_client
 from shared.database import (
     SessionLocal,
-    close_langgraph_checkpointer_async_pool,
-    close_langgraph_checkpointer_pool,
+    clean_authoring_runtime,
     engine,
     get_db,
     install_session_factory_override,
-    reset_active_authoring_job_registry,
     reset_session_factory_override,
     settings,
-    snapshot_authoring_runtime_state,
 )
 from shared.models import Base, Course, CourseAccessLink, CourseMembership, Invite, Membership, Profile, Tenant, User
 
@@ -175,19 +171,29 @@ def _build_test_session_factory(connection: Connection) -> sessionmaker[Session]
     )
 
 
-def _close_async_checkpointer_pool_for_test(timeout_seconds: float = 5.0) -> bool:
+def _run_authoring_clean_room_for_test(timeout_seconds: float = 5.0) -> dict[str, object]:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(close_langgraph_checkpointer_async_pool(timeout_seconds=timeout_seconds))
+        return asyncio.run(
+            clean_authoring_runtime(
+                reason="pytest_test_teardown",
+                timeout_seconds=timeout_seconds,
+                clear_active_jobs=True,
+            )
+        )
 
-    result: dict[str, bool] = {}
+    result: dict[str, dict[str, object]] = {}
     errors: list[BaseException] = []
 
     def _runner() -> None:
         try:
-            result["closed_cleanly"] = asyncio.run(
-                close_langgraph_checkpointer_async_pool(timeout_seconds=timeout_seconds)
+            result["clean_room"] = asyncio.run(
+                clean_authoring_runtime(
+                    reason="pytest_test_teardown",
+                    timeout_seconds=timeout_seconds,
+                    clear_active_jobs=True,
+                )
             )
         except BaseException as exc:  # pragma: no cover - defensive bridge
             errors.append(exc)
@@ -197,28 +203,27 @@ def _close_async_checkpointer_pool_for_test(timeout_seconds: float = 5.0) -> boo
     cleanup_thread.join()
     if errors:
         raise errors[0]
-    return result.get("closed_cleanly", False)
+    return result.get("clean_room", {})
 
 
 def _cleanup_runtime_state() -> None:
     close_all_sessions()
-    async_pool_closed_cleanly = _close_async_checkpointer_pool_for_test()
-    sync_pool_closed_cleanly = close_langgraph_checkpointer_pool()
-    pre_reset_state = snapshot_authoring_runtime_state()
-    reset_graph_singleton()
-    reset_active_authoring_job_registry()
-    post_reset_state = snapshot_authoring_runtime_state()
+    cleanup_result = _run_authoring_clean_room_for_test()
+    async_pool_closed_cleanly = bool(cleanup_result.get("async_pool_closed_cleanly", False))
+    sync_pool_closed_cleanly = bool(cleanup_result.get("sync_pool_closed_cleanly", False))
+    pre_reset_state = dict(cleanup_result.get("pre_reset_state", {}))
+    post_reset_state = dict(cleanup_result.get("post_reset_state", {}))
 
     failures: list[str] = []
-    if pre_reset_state["active_jobs"]:
+    if pre_reset_state.get("active_jobs"):
         failures.append(f"active authoring jobs leaked across test boundary: {pre_reset_state['active_jobs']}")
     if not async_pool_closed_cleanly:
         failures.append("LangGraph async checkpointer pool did not close cleanly")
     if not sync_pool_closed_cleanly:
         failures.append("LangGraph sync checkpointer pool did not close cleanly")
-    if post_reset_state["pending_tasks"]:
+    if post_reset_state.get("pending_tasks"):
         failures.append(f"authoring tasks still pending after cleanup: {post_reset_state['pending_tasks']}")
-    if post_reset_state["active_jobs"]:
+    if post_reset_state.get("active_jobs"):
         failures.append(f"active authoring job registry still populated after cleanup: {post_reset_state['active_jobs']}")
 
     if failures:
