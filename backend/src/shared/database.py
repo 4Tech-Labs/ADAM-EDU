@@ -257,6 +257,55 @@ def _snapshot_authoring_task_names() -> list[str]:
     return sorted(task_names)
 
 
+def _clear_langgraph_checkpointer_async_pool_registration(*, expected_pool: AsyncConnectionPool | None = None) -> None:
+    """Clear cached async-pool registration, optionally only for one pool instance."""
+    global _langgraph_checkpointer_async_pool
+    global _langgraph_checkpointer_async_pool_loop
+    global _langgraph_checkpointer_async_pool_lock
+    global _langgraph_checkpointer_async_pool_lock_loop
+
+    with _langgraph_checkpointer_async_pool_lock_guard:
+        if expected_pool is not None and _langgraph_checkpointer_async_pool is not expected_pool:
+            return
+
+        _langgraph_checkpointer_async_pool = None
+        _langgraph_checkpointer_async_pool_loop = None
+        _langgraph_checkpointer_async_pool_lock = None
+        _langgraph_checkpointer_async_pool_lock_loop = None
+
+
+async def _await_langgraph_async_pool_close(
+    pool: AsyncConnectionPool,
+    *,
+    pool_loop: asyncio.AbstractEventLoop | None,
+    timeout_seconds: float,
+    close_reason: str,
+) -> None:
+    """Close a psycopg async pool on the loop that owns its worker tasks."""
+    current_loop = asyncio.get_running_loop()
+    if pool_loop is None or pool_loop is current_loop:
+        await asyncio.wait_for(pool.close(), timeout=timeout_seconds)
+        return
+
+    if pool_loop.is_closed():
+        raise RuntimeError("LangGraph async checkpointer pool owner loop is already closed")
+
+    logger.info(
+        "Closing LangGraph async checkpointer pool on owning event loop",
+        extra={
+            "close_reason": close_reason,
+            "current_loop_id": id(current_loop),
+            "owner_loop_id": id(pool_loop),
+        },
+    )
+    close_future = asyncio.run_coroutine_threadsafe(pool.close(), pool_loop)
+    try:
+        await asyncio.wait_for(asyncio.wrap_future(close_future), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        close_future.cancel()
+        raise
+
+
 def _pool_stats_snapshot(pool: Any) -> dict[str, int]:
     """Return stable pool telemetry fields even if the underlying API shifts."""
     try:
@@ -528,6 +577,16 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
             return current_pool
 
         previous_pool = _langgraph_checkpointer_async_pool
+        previous_pool_loop = _langgraph_checkpointer_async_pool_loop
+        if previous_pool is not None:
+            previous_pool_closed_cleanly = await close_langgraph_checkpointer_async_pool(timeout_seconds=5.0)
+            if not previous_pool_closed_cleanly and _langgraph_checkpointer_async_pool is previous_pool:
+                previous_loop_id = None if previous_pool_loop is None else id(previous_pool_loop)
+                raise RuntimeError(
+                    "LangGraph async checkpointer pool rotation aborted because the previous pool could not be closed "
+                    f"cleanly on loop {previous_loop_id}."
+                )
+
         parsed_url = make_url(settings.database_url)
         min_size, max_size = _langgraph_checkpointer_pool_bounds()
         logger.debug(
@@ -604,40 +663,16 @@ async def get_langgraph_checkpointer_async_pool() -> AsyncConnectionPool:
         _langgraph_checkpointer_async_pool = pool
         _langgraph_checkpointer_async_pool_loop = current_loop
 
-        if previous_pool is not None and previous_pool is not pool:
-            try:
-                logger.info("Closing previous LangGraph async checkpointer pool", extra={"loop_id": id(current_loop)})
-                await asyncio.wait_for(previous_pool.close(), timeout=5.0)
-            except (asyncio.TimeoutError, Exception) as exc:
-                logger.error(
-                    "Could not close previous LangGraph async checkpointer pool cleanly: %s",
-                    exc,
-                )
-            finally:
-                previous_pool = None  # allow GC regardless
-
         return pool
 
 
 async def close_langgraph_checkpointer_async_pool(timeout_seconds: float = 5.0) -> bool:
     """Close and clear the cached async LangGraph checkpointer pool."""
-    global _langgraph_checkpointer_async_pool
-    global _langgraph_checkpointer_async_pool_loop
-    global _langgraph_checkpointer_async_pool_lock
-    global _langgraph_checkpointer_async_pool_lock_loop
-
     pool = _langgraph_checkpointer_async_pool
     pool_loop = _langgraph_checkpointer_async_pool_loop
-    _langgraph_checkpointer_async_pool = None
-    _langgraph_checkpointer_async_pool_loop = None
-    _langgraph_checkpointer_async_pool_lock = None
-    _langgraph_checkpointer_async_pool_lock_loop = None
 
     if pool is None:
-        return True
-
-    if pool_loop is not None and pool_loop.is_closed():
-        logger.warning("Skipping LangGraph async checkpointer pool close because the owning event loop is already closed")
+        _clear_langgraph_checkpointer_async_pool_registration()
         return True
 
     active_jobs = snapshot_active_authoring_jobs()
@@ -653,8 +688,20 @@ async def close_langgraph_checkpointer_async_pool(timeout_seconds: float = 5.0) 
             active_jobs,
             pending_task_names,
         )
-        await asyncio.wait_for(pool.close(), timeout=timeout_seconds)
+        if pool_loop is not None and pool_loop.is_closed():
+            logger.warning(
+                "LangGraph async checkpointer pool owner loop is already closed; attempting best-effort close on the current loop"
+            )
+            await asyncio.wait_for(pool.close(), timeout=timeout_seconds)
+        else:
+            await _await_langgraph_async_pool_close(
+                pool,
+                pool_loop=pool_loop,
+                timeout_seconds=timeout_seconds,
+                close_reason="clean_room_shutdown",
+            )
         closed_stats = _pool_stats_snapshot(pool)
+        _clear_langgraph_checkpointer_async_pool_registration(expected_pool=pool)
         logger.info(
             "LangGraph async checkpointer pool closed successfully. busy=%s available=%s waiting=%s",
             closed_stats.get("pool_busy", 0),
@@ -712,6 +759,103 @@ def close_langgraph_checkpointer_pool() -> bool:
     except Exception as exc:
         logger.error("Could not close LangGraph sync checkpointer pool cleanly: %s", exc)
         return False
+
+
+async def clean_authoring_runtime(
+    *,
+    reason: str,
+    timeout_seconds: float = 5.0,
+    clear_active_jobs: bool = False,
+) -> dict[str, Any]:
+    """Reset Authoring runtime residue without purging durable checkpoints.
+
+    This is the canonical clean-room surface for test teardown, process shutdown,
+    and checkpoint-infrastructure failure recovery. It closes the LangGraph pools,
+    resets the loop-bound compiled graph state, and optionally clears the in-memory
+    active-job registry. Durable checkpoints are intentionally preserved so normal
+    retries with the same thread_id/job_id can resume lineage; test-local purge of
+    checkpoint rows remains owned by the pytest harness when it opts into TRUNCATE
+    cleanup via shared_db_commit_visibility.
+    """
+
+    async_pool = _langgraph_checkpointer_async_pool
+    sync_pool = _langgraph_checkpointer_pool
+    pre_reset_state = snapshot_authoring_runtime_state()
+    async_pool_stats_before = _pool_stats_snapshot(async_pool) if async_pool is not None else {}
+    sync_pool_stats_before = _pool_stats_snapshot(sync_pool) if sync_pool is not None else {}
+
+    logger.info(
+        "Starting Authoring clean-room cleanup",
+        extra={
+            "clean_room_reason": reason,
+            "clean_room_clear_active_jobs": clear_active_jobs,
+            "clean_room_preserves_checkpoints": True,
+            "active_jobs_before": pre_reset_state["active_jobs"],
+            "pending_tasks_before": pre_reset_state["pending_tasks"],
+            "async_pool_stats_before": async_pool_stats_before,
+            "sync_pool_stats_before": sync_pool_stats_before,
+        },
+    )
+
+    async_pool_closed_cleanly = await close_langgraph_checkpointer_async_pool(timeout_seconds=timeout_seconds)
+    sync_pool_closed_cleanly = close_langgraph_checkpointer_pool()
+
+    from case_generator.graph import reset_graph_singleton
+
+    reset_graph_singleton()
+    if clear_active_jobs:
+        reset_active_authoring_job_registry()
+
+    post_reset_state = snapshot_authoring_runtime_state()
+    result = {
+        "reason": reason,
+        "preserved_checkpoints": True,
+        "clear_active_jobs": clear_active_jobs,
+        "async_pool_closed_cleanly": async_pool_closed_cleanly,
+        "sync_pool_closed_cleanly": sync_pool_closed_cleanly,
+        "pre_reset_state": pre_reset_state,
+        "post_reset_state": post_reset_state,
+        "async_pool_stats_before": async_pool_stats_before,
+        "sync_pool_stats_before": sync_pool_stats_before,
+    }
+
+    if (
+        not async_pool_closed_cleanly
+        or not sync_pool_closed_cleanly
+        or post_reset_state["pending_tasks"]
+        or (clear_active_jobs and post_reset_state["active_jobs"])
+    ):
+        logger.warning(
+            "Authoring clean-room cleanup finished with residue",
+            extra={
+                "clean_room_reason": reason,
+                "clean_room_clear_active_jobs": clear_active_jobs,
+                "clean_room_preserves_checkpoints": True,
+                "async_pool_closed_cleanly": async_pool_closed_cleanly,
+                "sync_pool_closed_cleanly": sync_pool_closed_cleanly,
+                "active_jobs_before": pre_reset_state["active_jobs"],
+                "pending_tasks_before": pre_reset_state["pending_tasks"],
+                "active_jobs_after": post_reset_state["active_jobs"],
+                "pending_tasks_after": post_reset_state["pending_tasks"],
+                "async_pool_stats_before": async_pool_stats_before,
+                "sync_pool_stats_before": sync_pool_stats_before,
+            },
+        )
+    else:
+        logger.info(
+            "Authoring clean-room cleanup completed",
+            extra={
+                "clean_room_reason": reason,
+                "clean_room_clear_active_jobs": clear_active_jobs,
+                "clean_room_preserves_checkpoints": True,
+                "async_pool_closed_cleanly": async_pool_closed_cleanly,
+                "sync_pool_closed_cleanly": sync_pool_closed_cleanly,
+                "active_jobs_after": post_reset_state["active_jobs"],
+                "pending_tasks_after": post_reset_state["pending_tasks"],
+            },
+        )
+
+    return result
 
 
 def dispose_database_engine() -> None:

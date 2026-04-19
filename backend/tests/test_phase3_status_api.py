@@ -4,9 +4,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from case_generator.graph import reset_graph_singleton
 import shared.database as database_module
-from shared.database import close_langgraph_checkpointer_async_pool, snapshot_active_authoring_jobs
+from shared.database import clean_authoring_runtime, snapshot_active_authoring_jobs
 from shared.models import Assignment, AuthoringJob
 
 
@@ -17,8 +16,13 @@ _teardown_verification_state = {"close_calls": 0}
 def ensure_no_authoring_runtime_leaks() -> None:
     yield
     assert snapshot_active_authoring_jobs() == []
-    reset_graph_singleton()
-    asyncio.run(close_langgraph_checkpointer_async_pool(timeout_seconds=0.1))
+    asyncio.run(
+        clean_authoring_runtime(
+            reason="test_phase3_status_api_teardown",
+            timeout_seconds=0.1,
+            clear_active_jobs=True,
+        )
+    )
 
 
 def test_phase3_status_api_teardown_primes_pool_cleanup() -> None:

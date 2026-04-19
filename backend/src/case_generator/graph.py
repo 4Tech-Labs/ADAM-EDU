@@ -100,7 +100,7 @@ from case_generator.tools_and_schemas import (
 from case_generator.orchestration.frontend_adapter import adapter_canonical_to_legacy
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
 from shared.database import (
-    close_langgraph_checkpointer_async_pool,
+    clean_authoring_runtime,
     collect_langgraph_bootstrap_diagnostics,
     get_checkpoint_migrations_version,
     get_langgraph_checkpointer_async_pool,
@@ -3357,8 +3357,11 @@ async def _build_async_postgres_checkpointer(*, is_first_init: bool) -> AsyncPos
                     "bootstrap_is_first_init": is_first_init,
                 },
             )
-        await close_langgraph_checkpointer_async_pool()
-        reset_graph_singleton()
+        await clean_authoring_runtime(
+            reason="graph_bootstrap_cancelled",
+            timeout_seconds=5.0,
+            clear_active_jobs=False,
+        )
         raise
     except Exception as exc:
         setup_ms = 0.0 if setup_started_at is None else round((time.perf_counter() - setup_started_at) * 1000, 3)
@@ -3382,8 +3385,11 @@ async def _build_async_postgres_checkpointer(*, is_first_init: bool) -> AsyncPos
                     "bootstrap_is_first_init": is_first_init,
                 },
             )
-        await close_langgraph_checkpointer_async_pool()
-        reset_graph_singleton()
+        await clean_authoring_runtime(
+            reason="graph_bootstrap_failed",
+            timeout_seconds=5.0,
+            clear_active_jobs=False,
+        )
         raise
 
     setup_ms = 0.0 if setup_started_at is None else round((time.perf_counter() - setup_started_at) * 1000, 3)

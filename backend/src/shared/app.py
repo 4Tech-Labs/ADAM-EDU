@@ -28,7 +28,6 @@ from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.orm import Session
 
 from case_generator.core.authoring import AuthoringService, derive_progress_percentage
-from case_generator.graph import reset_graph_singleton
 from case_generator.suggest_service import SuggestRequest, SuggestResponse, generate_suggestion
 from shared.admin_router import router as admin_router
 from shared.course_access_router import router as course_access_router
@@ -57,11 +56,9 @@ from shared.identity_activation import (
     upsert_profile as upsert_profile_impl,
 )
 from shared.database import (
-    close_langgraph_checkpointer_async_pool,
-    close_langgraph_checkpointer_pool,
+    clean_authoring_runtime,
     dispose_database_engine,
     get_db,
-    snapshot_active_authoring_jobs,
     validate_runtime_database_configuration,
 )
 from shared.db_resilience import (
@@ -452,10 +449,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        logger.info("Cleaning up resources... active_authoring_jobs=%s", snapshot_active_authoring_jobs())
-        reset_graph_singleton()
-        await close_langgraph_checkpointer_async_pool()
-        close_langgraph_checkpointer_pool()
+        await clean_authoring_runtime(
+            reason="fastapi_lifespan_shutdown",
+            timeout_seconds=5.0,
+            clear_active_jobs=True,
+        )
         dispose_database_engine()
 
 

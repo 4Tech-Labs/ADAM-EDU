@@ -32,6 +32,7 @@ from shared.blueprint_schema import (
 )
 from shared.database import (
     SessionLocal,
+    clean_authoring_runtime,
     register_active_authoring_job,
     register_authoring_task,
     settings,
@@ -747,6 +748,7 @@ class AuthoringService:
         #     -> completed | failed_resumable | failed
         graph_output: dict[str, Any] | None = None
         error_msg: str | None = None
+        clean_room_reason: str | None = None
         try:
             level_map = {
                 "pregrado": "undergrad",
@@ -887,6 +889,7 @@ class AuthoringService:
             )
             error_code = "checkpoint_unavailable"
             error_msg = _DURABLE_CHECKPOINT_ERROR_MESSAGE
+            clean_room_reason = "authoring_checkpoint_bootstrap_unavailable"
         except GraphBootstrapTimeoutError:
             logger.error(
                 "AuthoringService: Graph bootstrap timeout for Job %s",
@@ -898,6 +901,7 @@ class AuthoringService:
                 "La infraestructura de generacion tardo demasiado en inicializarse. "
                 "Puedes reintentar sin perder el progreso ya completado."
             )
+            clean_room_reason = "authoring_checkpoint_bootstrap_timeout"
         except asyncio.TimeoutError:
             logger.error("AuthoringService: TIMEOUT — Job %s exceeded 900s", job_id)
             error_code = "llm_timeout"
@@ -914,6 +918,7 @@ class AuthoringService:
                 )
                 error_code = "checkpoint_unavailable"
                 error_msg = _DURABLE_CHECKPOINT_ERROR_MESSAGE
+                clean_room_reason = "authoring_checkpoint_runtime_failed"
             else:
                 # Secondary guard: catch DB/pool errors wrapped by LangGraph retry
                 # machinery that escape the outer _is_durable_checkpoint_runtime_failure
@@ -929,6 +934,7 @@ class AuthoringService:
                     )
                     error_code = "checkpoint_unavailable"
                     error_msg = _DURABLE_CHECKPOINT_ERROR_MESSAGE
+                    clean_room_reason = "authoring_checkpoint_runtime_failed"
                 else:
                     logger.error("AuthoringService: LangGraph raised exception for Job %s", job_id, exc_info=True)
                     error_trace = traceback.format_exc()
@@ -954,6 +960,13 @@ class AuthoringService:
                     else:
                         error_code = "llm_unhandled_error"
                         error_msg = error_trace
+
+        if clean_room_reason is not None:
+            await clean_authoring_runtime(
+                reason=clean_room_reason,
+                timeout_seconds=5.0,
+                clear_active_jobs=False,
+            )
 
         # --- MICRO-SESSION 2: Persist Results ---
         db = SessionLocal()
