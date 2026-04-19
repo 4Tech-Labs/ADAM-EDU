@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends
 
-from shared.auth import CurrentActor, require_current_actor
+from shared.auth import (
+    AuthContextError,
+    AuthDetailCode,
+    AuthorizationError,
+    CurrentActor,
+    require_current_actor_password_ready,
+)
 
 
 @dataclass(slots=True)
@@ -25,16 +31,10 @@ def resolve_admin_context(actor: CurrentActor) -> AdminContext:
     ]
 
     if not active_admin_memberships:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="admin_role_required",
-        )
+        raise AuthorizationError(AuthDetailCode.ADMIN_ROLE_REQUIRED)
 
     if len(active_admin_memberships) > 1:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="admin_membership_context_required",
-        )
+        raise AuthContextError(AuthDetailCode.ADMIN_MEMBERSHIP_CONTEXT_REQUIRED)
 
     membership = active_admin_memberships[0]
     return AdminContext(
@@ -45,7 +45,7 @@ def resolve_admin_context(actor: CurrentActor) -> AdminContext:
 
 
 def require_admin_context(
-    actor: CurrentActor = Depends(require_current_actor),
+    actor: CurrentActor = Depends(require_current_actor_password_ready),
 ) -> AdminContext:
     """FastAPI dependency that enforces a single active admin membership."""
     return resolve_admin_context(actor)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 from functools import lru_cache
 import hashlib
 import hmac
@@ -32,11 +33,47 @@ PRIMARY_ROLE_ORDER = {"university_admin": 0, "teacher": 1, "student": 2}
 logger = logging.getLogger(__name__)
 
 
+class AuthDetailCode(StrEnum):
+    INVALID_TOKEN = "invalid_token"
+    PROFILE_INCOMPLETE = "profile_incomplete"
+    MEMBERSHIP_REQUIRED = "membership_required"
+    ACCOUNT_SUSPENDED = "account_suspended"
+    PASSWORD_ROTATION_REQUIRED = "password_rotation_required"
+    PASSWORD_ROTATION_NOT_REQUIRED = "password_rotation_not_required"
+    ADMIN_ROLE_REQUIRED = "admin_role_required"
+    TEACHER_ROLE_REQUIRED = "teacher_role_required"
+    ADMIN_MEMBERSHIP_CONTEXT_REQUIRED = "admin_membership_context_required"
+    TEACHER_MEMBERSHIP_CONTEXT_REQUIRED = "teacher_membership_context_required"
+    AUTHORING_FORBIDDEN = "authoring_forbidden"
+    LEGACY_BRIDGE_MISSING = "legacy_bridge_missing"
+    PASSWORD_UPDATE_FAILED = "password_update_failed"
+    INVITE_INVALID = "invalid_invite"
+    INVITE_EXPIRED = "invite_expired"
+    REDEEM_FORBIDDEN = "redeem_forbidden"
+
+
 class AuthError(Exception):
-    def __init__(self, status_code: int, code: str) -> None:
-        super().__init__(code)
+    def __init__(self, status_code: int, detail_code: str | AuthDetailCode) -> None:
+        normalized_detail_code = str(detail_code)
+        super().__init__(normalized_detail_code)
         self.status_code = status_code
-        self.code = code
+        self.detail_code = normalized_detail_code
+        self.code = normalized_detail_code
+
+
+class AuthenticationError(AuthError):
+    def __init__(self, detail_code: str | AuthDetailCode = AuthDetailCode.INVALID_TOKEN) -> None:
+        super().__init__(401, detail_code)
+
+
+class AuthorizationError(AuthError):
+    def __init__(self, detail_code: str | AuthDetailCode, *, status_code: int = 403) -> None:
+        super().__init__(status_code, detail_code)
+
+
+class AuthContextError(AuthorizationError):
+    def __init__(self, detail_code: str | AuthDetailCode) -> None:
+        super().__init__(detail_code, status_code=409)
 
 
 class AuthSettings(BaseSettings):
@@ -271,7 +308,7 @@ class JwtVerifier:
         try:
             header = jwt.get_unverified_header(token)
         except InvalidTokenError as exc:
-            raise AuthError(401, "invalid_token") from exc
+            raise AuthenticationError() from exc
 
         algorithm = header.get("alg")
         try:
@@ -284,7 +321,7 @@ class JwtVerifier:
 
         auth_user_id = claims.get("sub")
         if not auth_user_id:
-            raise AuthError(401, "invalid_token")
+            raise AuthenticationError()
 
         return VerifiedToken(auth_user_id=auth_user_id, email=claims.get("email"), claims=claims)
 
@@ -298,13 +335,13 @@ class JwtVerifier:
                 issuer=self.settings.issuer,
             )
         except InvalidTokenError as exc:
-            raise AuthError(401, "invalid_token") from exc
+            raise AuthenticationError() from exc
 
     def _decode_with_jwks(self, token: str, header: dict[str, Any]) -> dict[str, Any]:
         kid = header.get("kid")
         algorithm = header.get("alg")
         if not kid or algorithm not in _JWKS_ALGORITHMS:
-            raise AuthError(401, "invalid_token")
+            raise AuthenticationError()
 
         try:
             signing_key = self._jwks_client.get_signing_key(kid)
@@ -313,9 +350,9 @@ class JwtVerifier:
                 self._jwks_client.get_signing_keys(refresh=True)
                 signing_key = self._jwks_client.get_signing_key(kid)
             except (PyJWKClientError, httpx.HTTPError) as refresh_exc:
-                raise AuthError(401, "invalid_token") from refresh_exc
+                raise AuthenticationError() from refresh_exc
         except Exception as exc:  # pragma: no cover
-            raise AuthError(401, "invalid_token") from exc
+            raise AuthenticationError() from exc
 
         try:
             return jwt.decode(
@@ -327,7 +364,7 @@ class JwtVerifier:
                 leeway=timedelta(seconds=30),
             )
         except InvalidTokenError as exc:
-            raise AuthError(401, "invalid_token") from exc
+            raise AuthenticationError() from exc
 
 
 @lru_cache
@@ -474,15 +511,19 @@ def get_supabase_admin_auth_client() -> SupabaseAdminAuthClient:
 
 def get_verified_token(authorization: str | None) -> VerifiedToken:
     if authorization is None or not authorization.startswith("Bearer "):
-        raise AuthError(401, "invalid_token")
+        raise AuthenticationError()
     token = authorization.removeprefix("Bearer ").strip()
     if not token:
-        raise AuthError(401, "invalid_token")
+        raise AuthenticationError()
     return get_auth_verifier().verify_token(token)
 
 
 def require_verified_identity(authorization: str | None = Header(None)) -> VerifiedToken:
     return get_verified_token(authorization)
+
+
+def _profile_has_required_fields(profile: Profile) -> bool:
+    return bool(profile.full_name and profile.full_name.strip())
 
 
 def resolve_current_actor(db: Session, verified_token: VerifiedToken) -> CurrentActor:
@@ -492,8 +533,8 @@ def resolve_current_actor(db: Session, verified_token: VerifiedToken) -> Current
         .filter(Profile.id == verified_token.auth_user_id)
         .first()
     )
-    if profile is None:
-        raise AuthError(403, "profile_incomplete")
+    if profile is None or not _profile_has_required_fields(profile):
+        raise AuthorizationError(AuthDetailCode.PROFILE_INCOMPLETE)
 
     memberships = [
         MembershipSnapshot(
@@ -509,8 +550,8 @@ def resolve_current_actor(db: Session, verified_token: VerifiedToken) -> Current
     active_memberships = [membership for membership in memberships if membership.status == "active"]
     if not active_memberships:
         if memberships and all(membership.status == "suspended" for membership in memberships):
-            raise AuthError(403, "account_suspended")
-        raise AuthError(403, "membership_required")
+            raise AuthorizationError(AuthDetailCode.ACCOUNT_SUSPENDED)
+        raise AuthorizationError(AuthDetailCode.MEMBERSHIP_REQUIRED)
 
     return CurrentActor(
         auth_user_id=verified_token.auth_user_id,
@@ -530,16 +571,37 @@ def require_current_actor(
     return resolve_current_actor(db, get_verified_token(authorization))
 
 
-def require_teacher_actor(actor: CurrentActor = Depends(require_current_actor)) -> CurrentActor:
+# Protected route precedence:
+# verified_identity -> profile_state -> membership_state -> password_rotation -> role/context -> handler
+def ensure_password_rotation_cleared(actor: CurrentActor) -> CurrentActor:
+    if actor.must_rotate_password:
+        audit_event(
+            "session.access_denied",
+            outcome="denied",
+            auth_user_id=actor.auth_user_id,
+            http_status=403,
+            reason=AuthDetailCode.PASSWORD_ROTATION_REQUIRED,
+        )
+        raise AuthorizationError(AuthDetailCode.PASSWORD_ROTATION_REQUIRED)
+    return actor
+
+
+def require_current_actor_password_ready(
+    actor: CurrentActor = Depends(require_current_actor),
+) -> CurrentActor:
+    return ensure_password_rotation_cleared(actor)
+
+
+def require_teacher_actor(actor: CurrentActor = Depends(require_current_actor_password_ready)) -> CurrentActor:
     if not actor.has_active_role("teacher"):
         audit_event(
             "authoring.access_denied",
             outcome="denied",
             auth_user_id=actor.auth_user_id,
             http_status=403,
-            reason="authoring_forbidden",
+            reason=AuthDetailCode.AUTHORING_FORBIDDEN,
         )
-        raise AuthError(403, "authoring_forbidden")
+        raise AuthorizationError(AuthDetailCode.AUTHORING_FORBIDDEN)
     return actor
 
 
@@ -551,9 +613,9 @@ def ensure_legacy_teacher_bridge(db: Session, actor: CurrentActor) -> User:
             outcome="error",
             auth_user_id=actor.auth_user_id,
             http_status=500,
-            reason="legacy_bridge_missing",
+            reason=AuthDetailCode.LEGACY_BRIDGE_MISSING,
         )
-        raise AuthError(500, "legacy_bridge_missing")
+        raise AuthError(500, AuthDetailCode.LEGACY_BRIDGE_MISSING)
     return legacy_user
 
 
@@ -561,16 +623,16 @@ def resolve_invite_by_token(db: Session, invite_token: str) -> InviteResolution:
     token_hash = hash_invite_token(invite_token)
     invite = db.query(Invite).filter(Invite.token_hash == token_hash).first()
     if invite is None or not hmac.compare_digest(invite.token_hash, token_hash):
-        raise AuthError(404, "invite_invalid")
+        raise AuthError(404, AuthDetailCode.INVITE_INVALID)
     return InviteResolution(invite=invite, token_hash=token_hash)
 
 
 def validate_pending_invite(invite: Invite) -> None:
     effective_status = invite_effective_status(invite)
     if effective_status == "expired":
-        raise AuthError(410, "invite_expired")
+        raise AuthError(410, AuthDetailCode.INVITE_EXPIRED)
     if effective_status != "pending":
-        raise AuthError(404, "invite_invalid")
+        raise AuthError(404, AuthDetailCode.INVITE_INVALID)
 
 
 def consume_invite(db: Session, invite: Invite) -> bool:

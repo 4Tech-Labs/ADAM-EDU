@@ -272,6 +272,135 @@ def test_auth_me_account_suspended(client, auth_headers_factory, seed_identity) 
     assert response.json()["detail"] == "account_suspended"
 
 
+def test_auth_me_profile_incomplete_when_full_name_blank(client, auth_headers_factory, seed_identity) -> None:
+    user_id = str(uuid.uuid4())
+    email = "blank-profile@example.edu"
+    seed_identity(
+        user_id=user_id,
+        email=email,
+        role="teacher",
+        full_name="   ",
+    )
+    headers = auth_headers_factory(sub=user_id, email=email)
+
+    response = client.get("/api/auth/me", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "profile_incomplete"
+
+
+def test_auth_me_keeps_password_rotation_bootstrap_visible(client, auth_headers_factory, seed_identity) -> None:
+    user_id = str(uuid.uuid4())
+    email = "rotate-bootstrap@example.edu"
+    seed_identity(
+        user_id=user_id,
+        email=email,
+        role="university_admin",
+        create_legacy_user=False,
+        must_rotate_password=True,
+    )
+    headers = auth_headers_factory(sub=user_id, email=email)
+
+    response = client.get("/api/auth/me", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["must_rotate_password"] is True
+
+
+def test_admin_context_invalid_token_precedes_other_actor_state(
+    client,
+    auth_headers_factory,
+    seed_identity,
+) -> None:
+    user_id = str(uuid.uuid4())
+    email = "invalid-token-precedence@example.edu"
+    seed_identity(
+        user_id=user_id,
+        email=email,
+        role="university_admin",
+        create_legacy_user=False,
+        must_rotate_password=True,
+    )
+    headers = auth_headers_factory(sub=user_id, email=email, issuer="https://wrong.example.com/auth/v1")
+
+    response = client.get("/api/admin/dashboard/summary", headers=headers)
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_token"
+
+
+def test_admin_context_membership_required_does_not_collapse_into_profile_incomplete(
+    client,
+    auth_headers_factory,
+    db,
+) -> None:
+    user_id = str(uuid.uuid4())
+    email = "membership-only@example.edu"
+    db.add(Profile(id=user_id, full_name="Membership Only"))
+    db.commit()
+    headers = auth_headers_factory(sub=user_id, email=email)
+
+    response = client.get("/api/admin/dashboard/summary", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "membership_required"
+
+
+def test_admin_context_password_rotation_required_precedes_role_checks(
+    client,
+    auth_headers_factory,
+    seed_identity,
+) -> None:
+    user_id = str(uuid.uuid4())
+    email = "rotate-before-role@example.edu"
+    seed_identity(
+        user_id=user_id,
+        email=email,
+        role="teacher",
+        must_rotate_password=True,
+    )
+    headers = auth_headers_factory(sub=user_id, email=email)
+
+    with patch("shared.auth.audit_event") as mock_audit:
+        response = client.get("/api/admin/dashboard/summary", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "password_rotation_required"
+    assert mock_audit.call_args.kwargs["reason"] == "password_rotation_required"
+
+
+def test_teacher_context_password_rotation_required_precedes_context_checks(
+    client,
+    auth_headers_factory,
+    seed_identity,
+) -> None:
+    user_id = str(uuid.uuid4())
+    email = "rotate-before-context@example.edu"
+    seed_identity(
+        user_id=user_id,
+        email=email,
+        role="teacher",
+        university_id="10000000-0000-0000-0000-000000000071",
+        full_name="Teacher Rotate",
+        must_rotate_password=True,
+    )
+    seed_identity(
+        user_id=user_id,
+        email=email,
+        role="teacher",
+        university_id="10000000-0000-0000-0000-000000000072",
+        full_name="Teacher Rotate",
+        create_legacy_user=False,
+        must_rotate_password=True,
+    )
+    headers = auth_headers_factory(sub=user_id, email=email)
+
+    response = client.get("/api/teacher/courses", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "password_rotation_required"
+
+
 def test_auth_me_returns_memberships_and_primary_role(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "multirole@example.edu"
@@ -722,6 +851,43 @@ def test_redeem_success_and_repeat_is_idempotent(
     refreshed_invite = db.get(type(invite), invite.id)
     assert refreshed_invite is not None
     assert refreshed_invite.status == "consumed"
+
+
+def test_redeem_membership_required_audit_reason_matches_response_detail(
+    client,
+    auth_headers_factory,
+    seed_course,
+    seed_identity,
+    seed_invite,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "redeem-audit-teacher@example.edu"
+    teacher_seed = seed_identity(
+        user_id=teacher_id,
+        email=teacher_email,
+        role="teacher",
+        university_id="10000000-0000-0000-0000-000000000066",
+    )
+    course = seed_course(
+        university_id=teacher_seed["tenant"].id,
+        teacher_membership_id=teacher_seed["membership"].id,
+        title="Redeem Audit Course",
+    )
+    _, token = seed_invite(
+        email=teacher_email,
+        university_id=teacher_seed["tenant"].id,
+        role="student",
+        course_id=course.id,
+    )
+    headers = auth_headers_factory(sub=teacher_id, email=teacher_email)
+
+    with patch("shared.app.audit_log") as mock_audit:
+        response = client.post("/api/invites/redeem", json={"invite_token": token}, headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "membership_required"
+    assert mock_audit.call_args.args[:2] == ("invite.redeem", "denied")
+    assert mock_audit.call_args.kwargs["reason"] == "membership_required"
 
 
 @pytest.mark.shared_db_commit_visibility
