@@ -38,8 +38,10 @@ import type {
     InviteResolveResponse,
     SuggestRequest,
     SuggestResponse,
+    TeacherCourseDetailResponse,
     TeacherCasesResponse,
     TeacherCoursesResponse,
+    TeacherSyllabusSaveRequest,
 } from "@/shared/adam-types";
 
 /**
@@ -1015,8 +1017,24 @@ export const api = {
         async getCourses(): Promise<TeacherCoursesResponse> {
             return parseJsonResponse<TeacherCoursesResponse>("/teacher/courses");
         },
+        async getCourseDetail(courseId: string): Promise<TeacherCourseDetailResponse> {
+            return parseJsonResponse<TeacherCourseDetailResponse>(`/teacher/courses/${courseId}`);
+        },
         async getCases(): Promise<TeacherCasesResponse> {
             return parseJsonResponse<TeacherCasesResponse>("/teacher/cases");
+        },
+        async saveCourseSyllabus(
+            courseId: string,
+            req: TeacherSyllabusSaveRequest,
+        ): Promise<TeacherCourseDetailResponse> {
+            return parseJsonResponse<TeacherCourseDetailResponse>(
+                `/teacher/courses/${courseId}/syllabus`,
+                {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(req),
+                },
+            );
         },
     },
 };

@@ -14,9 +14,9 @@ vi.mock("@/features/teacher-auth/TeacherLoginPage", () => ({
 vi.mock("@/features/teacher-dashboard/TeacherDashboardPage", () => ({
     TeacherDashboardPage: () => <div data-testid="teacher-dashboard-page">Teacher dashboard</div>,
 }));
-vi.mock("@/features/teacher-dashboard/TeacherCoursePlaceholderPage", () => ({
-    TeacherCoursePlaceholderPage: () => (
-        <div data-testid="teacher-course-placeholder-page">Teacher course placeholder</div>
+vi.mock("@/features/teacher-course/TeacherCoursePage", () => ({
+    TeacherCoursePage: () => (
+        <div data-testid="teacher-course-page">Teacher course page</div>
     ),
 }));
 vi.mock("@/features/admin-dashboard/AdminDashboardPage", () => ({
@@ -193,7 +193,7 @@ describe("App admin shell layout", () => {
         expect(screen.queryByTestId("site-header")).toBeNull();
     });
 
-    it("resolves the teacher course placeholder route before the authoring catch-all", async () => {
+    it("resolves the teacher course route before the authoring catch-all", async () => {
         vi.mocked(useAuth).mockReturnValue({
             ...baseContext,
             session: { access_token: "jwt" } as never,
@@ -204,8 +204,23 @@ describe("App admin shell layout", () => {
             initialEntries: ["/teacher/courses/course-1"],
         });
 
-        expect(await screen.findByTestId("teacher-course-placeholder-page")).toBeTruthy();
+        expect(await screen.findByTestId("teacher-course-page")).toBeTruthy();
         expect(screen.queryByTestId("teacher-authoring-page")).toBeNull();
+    });
+
+    it("does not render the global SiteHeader on /teacher/courses/:courseId", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: teacherActor,
+        });
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/teacher/courses/course-1"],
+        });
+
+        expect(await screen.findByTestId("teacher-course-page")).toBeTruthy();
+        expect(screen.queryByTestId("site-header")).toBeNull();
     });
 
     it("redirects a non-teacher actor away from /teacher/dashboard", async () => {
