@@ -16,6 +16,7 @@ from shared.database import settings
 ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 PRE_ISSUE90_REVISION = "c2f8a58d6d1e"
 ISSUE90_REVISION = "d4f4c2f9c1aa"
+ISSUE151_REVISION = "f2a3b4c5d6e7"
 
 
 def _make_temp_database_urls() -> tuple[str, URL, URL]:
@@ -92,5 +93,40 @@ def test_issue90_alembic_upgrade_and_downgrade() -> None:
         assert "deadline" not in downgraded_columns
         downgraded_indexes = {index["name"] for index in downgraded_inspector.get_indexes("assignments")}
         assert "ix_assignments_teacher_id_deadline" not in downgraded_indexes
+
+        engine.dispose()
+
+
+@pytest.mark.ddl_isolation
+def test_issue151_alembic_upgrade_and_downgrade() -> None:
+    with temporary_database() as db_url:
+        config = _alembic_config(db_url)
+
+        # Bring DB to the revision just before issue-151 (HEAD of issue-139).
+        command.upgrade(config, ISSUE90_REVISION)
+        engine = create_engine(db_url)
+        inspector = inspect(engine)
+        pre_columns = {column["name"] for column in inspector.get_columns("assignments")}
+        assert "available_from" not in pre_columns
+        pre_indexes = {index["name"] for index in inspector.get_indexes("assignments")}
+        assert "ix_assignments_teacher_status_deadline" not in pre_indexes
+
+        # Apply the issue-151 migration.
+        command.upgrade(config, ISSUE151_REVISION)
+
+        upgraded_inspector = inspect(engine)
+        upgraded_columns = {column["name"] for column in upgraded_inspector.get_columns("assignments")}
+        assert "available_from" in upgraded_columns
+        upgraded_indexes = {index["name"] for index in upgraded_inspector.get_indexes("assignments")}
+        assert "ix_assignments_teacher_status_deadline" in upgraded_indexes
+
+        # Roll back and verify both additions are gone.
+        command.downgrade(config, ISSUE90_REVISION)
+
+        downgraded_inspector = inspect(engine)
+        downgraded_columns = {column["name"] for column in downgraded_inspector.get_columns("assignments")}
+        assert "available_from" not in downgraded_columns
+        downgraded_indexes = {index["name"] for index in downgraded_inspector.get_indexes("assignments")}
+        assert "ix_assignments_teacher_status_deadline" not in downgraded_indexes
 
         engine.dispose()
