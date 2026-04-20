@@ -240,6 +240,33 @@ describe("TeacherCoursePage", () => {
         expect(screen.getByTestId("location-search")).toHaveTextContent("?tab=configuracion");
     });
 
+    it("wires tab semantics correctly for deep-linked tabs", async () => {
+        vi.mocked(api.teacher.getCourseDetail).mockResolvedValueOnce(
+            createCourseDetailResponse(),
+        );
+
+        renderTeacherCoursePage("/teacher/courses/course-1?tab=configuracion");
+
+        const tablist = await screen.findByRole("tablist", { name: "Secciones del curso" });
+        const syllabusTab = screen.getByRole("tab", { name: "Syllabus" });
+        const configurationTab = screen.getByRole("tab", { name: "Configuración" });
+        const configurationPanel = screen.getByRole("tabpanel");
+
+        expect(tablist).toBeTruthy();
+        expect(syllabusTab).toHaveAttribute("id", "teacher-course-tab-syllabus");
+        expect(syllabusTab).toHaveAttribute("aria-controls", "teacher-course-syllabus-panel");
+        expect(syllabusTab).toHaveAttribute("tabindex", "-1");
+        expect(configurationTab).toHaveAttribute("id", "teacher-course-tab-configuracion");
+        expect(configurationTab).toHaveAttribute("aria-controls", "teacher-course-config-panel");
+        expect(configurationTab).toHaveAttribute("aria-selected", "true");
+        expect(configurationTab).toHaveAttribute("tabindex", "0");
+        expect(configurationPanel).toHaveAttribute("id", "teacher-course-config-panel");
+        expect(configurationPanel).toHaveAttribute(
+            "aria-labelledby",
+            "teacher-course-tab-configuracion",
+        );
+    });
+
     it("saves the syllabus with expected_revision and updates the visible revision metadata", async () => {
         const baseDetail = createCourseDetailResponse();
 

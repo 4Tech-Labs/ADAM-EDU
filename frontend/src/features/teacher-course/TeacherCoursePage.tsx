@@ -12,6 +12,8 @@ import {
     Trash2,
 } from "lucide-react";
 
+import "./teacherCoursePage.css";
+
 import { TeacherLayout } from "@/features/teacher-layout/TeacherLayout";
 import type {
     TeacherCourseDraft,
@@ -37,157 +39,8 @@ import {
 } from "@/features/teacher-course/teacherCourseModel";
 import type { ShowToast } from "@/shared/Toast";
 
-const TEACHER_COURSE_PAGE_STYLES = `
-.teacher-course-page .course-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-radius: 12px;
-  border: 1.5px solid transparent;
-  color: #475569;
-  font-size: 15px;
-  font-weight: 600;
-  transition: all 0.18s ease;
-}
-.teacher-course-page .course-nav-item:hover {
-  background: #f8fafc;
-  color: #1e293b;
-}
-.teacher-course-page .course-nav-item.active {
-  background: #0144a0;
-  border-color: #00337a;
-  color: #fff;
-  box-shadow: 0 8px 24px -16px rgba(1, 68, 160, 0.55);
-}
-.teacher-course-page .course-nav-item.active svg {
-  color: #fff;
-}
-.teacher-course-page .course-nav-item svg {
-  color: #94a3b8;
-}
-.teacher-course-page .section-divider {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-bottom: 24px;
-  padding-bottom: 14px;
-}
-.teacher-course-page .section-divider::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
-  border-radius: 2px;
-  background: linear-gradient(to right, #0144a0 0%, #93c5fd 55%, transparent 100%);
-}
-.teacher-course-page .step-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
-  background: #0144a0;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 800;
-  box-shadow: 0 2px 8px rgba(1, 68, 160, 0.28);
-}
-.teacher-course-page .section-title {
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #0144a0;
-}
-.teacher-course-page .form-label {
-  display: block;
-  margin-bottom: 7px;
-  color: #334155;
-  font-size: 14px;
-  font-weight: 700;
-}
-.teacher-course-page .form-hint {
-  margin-top: 5px;
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.45;
-}
-.teacher-course-page .form-input {
-  width: 100%;
-  border: 1.5px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 12px 14px;
-  background: #fff;
-  color: #0f172a;
-  font-size: 15px;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
-  outline: none;
-}
-.teacher-course-page .form-input:hover:not(:focus):not(:disabled):not([readonly]) {
-  border-color: #94a3b8;
-}
-.teacher-course-page .form-input:focus {
-  border-color: #0144a0;
-  box-shadow: 0 0 0 3px rgba(1, 68, 160, 0.12);
-}
-.teacher-course-page .form-input:disabled,
-.teacher-course-page .form-input[readonly] {
-  background: #f8fafc;
-  color: #64748b;
-}
-.teacher-course-page .alert-strip {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  border-radius: 12px;
-  padding: 14px 16px;
-  font-size: 14px;
-  line-height: 1.5;
-}
-.teacher-course-page .alert-info {
-  background: #e8f0fe;
-  color: #0144a0;
-  border: 1px solid #bfdbfe;
-}
-.teacher-course-page .alert-warn {
-  background: #fffbeb;
-  color: #92400e;
-  border: 1px solid #fde68a;
-}
-.teacher-course-page .badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: 999px;
-  padding: 3px 9px;
-  font-size: 11px;
-  font-weight: 800;
-}
-.teacher-course-page .badge-blue {
-  color: #0144a0;
-  background: #e8f0fe;
-}
-.teacher-course-page .footer-divider {
-  border: none;
-  height: 2px;
-  border-radius: 999px;
-  background: linear-gradient(to right, transparent 0%, #bfdbfe 25%, #0144a0 50%, #bfdbfe 75%, transparent 100%);
-}
-.teacher-course-page .module-shell[open] summary .module-chevron {
-  transform: rotate(90deg);
-}
-.teacher-course-page .module-shell summary::-webkit-details-marker {
-  display: none;
-}
-.teacher-course-page .module-chevron {
-  transition: transform 0.18s ease;
-}
-`;
+const SYLLABUS_TAB_ID = "teacher-course-tab-syllabus";
+const CONFIG_TAB_ID = "teacher-course-tab-configuracion";
 
 interface TeacherCoursePageProps {
     showToast: ShowToast;
@@ -531,7 +384,6 @@ export function TeacherCoursePage({ showToast }: TeacherCoursePageProps) {
                 testId="teacher-course-page"
                 contentClassName="mx-auto max-w-[1440px] px-6 py-8"
             >
-                <style>{TEACHER_COURSE_PAGE_STYLES}</style>
                 <section
                     className="rounded-[24px] border border-red-200 bg-white p-8 shadow-sm"
                     data-testid="global-page-error"
@@ -577,7 +429,6 @@ export function TeacherCoursePage({ showToast }: TeacherCoursePageProps) {
             testId="teacher-course-page"
             contentClassName="mx-auto max-w-[1440px] px-6 py-8"
         >
-            <style>{TEACHER_COURSE_PAGE_STYLES}</style>
             <div className="teacher-course-page grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
                 <aside className="h-fit rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm lg:sticky lg:top-[104px]">
                     <div className="rounded-[18px] border border-[#00337a] bg-[#0144a0] p-4 shadow-md">
@@ -615,12 +466,19 @@ export function TeacherCoursePage({ showToast }: TeacherCoursePageProps) {
                         </div>
                     </div>
 
-                    <nav className="mt-4 flex flex-col gap-2" aria-label="Secciones del curso">
+                    <nav
+                        className="mt-4 flex flex-col gap-2"
+                        role="tablist"
+                        aria-label="Secciones del curso"
+                        aria-orientation="vertical"
+                    >
                         <button
+                            id={SYLLABUS_TAB_ID}
                             type="button"
                             role="tab"
                             aria-selected={activeTab === "syllabus"}
                             aria-controls="teacher-course-syllabus-panel"
+                            tabIndex={activeTab === "syllabus" ? 0 : -1}
                             className={`course-nav-item ${activeTab === "syllabus" ? "active" : ""}`}
                             onClick={() => setTab("syllabus")}
                         >
@@ -631,10 +489,12 @@ export function TeacherCoursePage({ showToast }: TeacherCoursePageProps) {
                             </span>
                         </button>
                         <button
+                            id={CONFIG_TAB_ID}
                             type="button"
                             role="tab"
                             aria-selected={activeTab === "configuracion"}
                             aria-controls="teacher-course-config-panel"
+                            tabIndex={activeTab === "configuracion" ? 0 : -1}
                             className={`course-nav-item ${activeTab === "configuracion" ? "active" : ""}`}
                             onClick={() => setTab("configuracion")}
                         >
@@ -649,7 +509,7 @@ export function TeacherCoursePage({ showToast }: TeacherCoursePageProps) {
                         <div
                             id="teacher-course-syllabus-panel"
                             role="tabpanel"
-                            aria-labelledby="syllabus"
+                            aria-labelledby={SYLLABUS_TAB_ID}
                             className="space-y-6"
                         >
                             <section className="rounded-[24px] border border-slate-200 bg-white p-6 shadow-sm md:p-8">
@@ -1417,7 +1277,7 @@ export function TeacherCoursePage({ showToast }: TeacherCoursePageProps) {
                         <div
                             id="teacher-course-config-panel"
                             role="tabpanel"
-                            aria-labelledby="configuracion"
+                            aria-labelledby={CONFIG_TAB_ID}
                             className="space-y-6"
                         >
                             <section className="rounded-[24px] border border-slate-200 bg-white p-6 shadow-sm md:p-8">
