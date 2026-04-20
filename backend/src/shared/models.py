@@ -202,6 +202,7 @@ class Course(Base):
     invites: Mapped[list["Invite"]] = relationship(back_populates="course", foreign_keys="Invite.course_id")
     access_links: Mapped[list["CourseAccessLink"]] = relationship(back_populates="course")
     course_memberships: Mapped[list["CourseMembership"]] = relationship(back_populates="course")
+    syllabus: Mapped["Syllabus | None"] = relationship(back_populates="course", uselist=False)
 
 
 class Invite(Base):
@@ -345,6 +346,70 @@ class Assignment(Base):
     teacher: Mapped["User"] = relationship(back_populates="assignments")
     authoring_jobs: Mapped[list["AuthoringJob"]] = relationship(back_populates="assignment")
     artifacts: Mapped[list["ArtifactManifest"]] = relationship(back_populates="assignment")
+
+
+class Syllabus(Base):
+    """
+    Current pedagogical syllabus state for a course.
+
+    Course 1:1 Syllabus
+          |
+          +--> SyllabusRevision (append-only snapshots)
+    """
+
+    __tablename__ = "syllabuses"
+    __table_args__ = (
+        UniqueConstraint("course_id", name="uix_syllabuses_course_id"),
+        CheckConstraint("revision > 0", name="ck_syllabuses_revision_positive"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    course_id: Mapped[str] = mapped_column(Text, ForeignKey("courses.id"), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    department: Mapped[str] = mapped_column(Text, nullable=False)
+    knowledge_area: Mapped[str] = mapped_column(Text, nullable=False)
+    nbc: Mapped[str] = mapped_column(Text, nullable=False)
+    version_label: Mapped[str] = mapped_column(Text, nullable=False)
+    academic_load: Mapped[str] = mapped_column(Text, nullable=False)
+    course_description: Mapped[str] = mapped_column(Text, nullable=False)
+    general_objective: Mapped[str] = mapped_column(Text, nullable=False)
+    specific_objectives: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    modules: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    evaluation_strategy: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    didactic_strategy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    integrative_project: Mapped[str] = mapped_column(Text, nullable=False)
+    bibliography: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    teacher_notes: Mapped[str] = mapped_column(Text, nullable=False)
+    ai_grounding_context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    saved_by_membership_id: Mapped[str] = mapped_column(Text, ForeignKey("memberships.id"), nullable=False)
+
+    course: Mapped["Course"] = relationship(back_populates="syllabus")
+    revisions: Mapped[list["SyllabusRevision"]] = relationship(back_populates="syllabus")
+
+
+class SyllabusRevision(Base):
+    """Append-only snapshot ledger for syllabus saves."""
+
+    __tablename__ = "syllabus_revisions"
+    __table_args__ = (
+        CheckConstraint("revision > 0", name="ck_syllabus_revisions_revision_positive"),
+        Index(
+            "ix_syllabus_revisions_syllabus_revision",
+            "syllabus_id",
+            "revision",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    syllabus_id: Mapped[str] = mapped_column(Text, ForeignKey("syllabuses.id"), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    saved_by_membership_id: Mapped[str] = mapped_column(Text, ForeignKey("memberships.id"), nullable=False)
+
+    syllabus: Mapped["Syllabus"] = relationship(back_populates="revisions")
 
 
 AUTHORING_JOB_STATUS_PENDING = "pending"
