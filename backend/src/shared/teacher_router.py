@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import math
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from shared.auth import CurrentActor, require_current_actor_password_ready
 from shared.database import get_db
+from shared.models import Assignment
 from shared.syllabus_schema import TeacherCourseDetailResponse, TeacherSyllabusSaveRequest
 from shared.teacher_context import TeacherContext, require_teacher_context
 from shared.teacher_reads import TeacherCoursesResponse, get_teacher_course_detail, list_teacher_active_cases, list_teacher_courses
@@ -30,6 +32,21 @@ class TeacherCaseItemResponse(BaseModel):
 class TeacherCasesResponse(BaseModel):
     cases: list[TeacherCaseItemResponse]
     total: int
+
+
+class TeacherCaseDetailResponse(BaseModel):
+    id: str
+    title: str
+    status: str
+    available_from: datetime | None
+    deadline: datetime | None
+    course_id: str | None
+    canonical_output: dict[str, Any] | None
+
+
+class DeadlineUpdateRequest(BaseModel):
+    available_from: str | None = None
+    deadline: str | None = None
 
 
 def _days_remaining(deadline: datetime | None, now: datetime) -> int | None:
@@ -91,3 +108,125 @@ def get_teacher_cases(
         for item in cases
     ]
     return TeacherCasesResponse(cases=items, total=len(items))
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers — not endpoints
+# ---------------------------------------------------------------------------
+
+def _to_case_detail(assignment: Assignment) -> TeacherCaseDetailResponse:
+    """Build a TeacherCaseDetailResponse from an Assignment ORM instance."""
+    return TeacherCaseDetailResponse(
+        id=assignment.id,
+        title=assignment.title,
+        status=assignment.status,
+        available_from=assignment.available_from,
+        deadline=assignment.deadline,
+        course_id=assignment.course_id,
+        canonical_output=assignment.canonical_output,
+    )
+
+
+def _get_owned_assignment_or_404(
+    db: Session,
+    assignment_id: str,
+    actor: CurrentActor,
+) -> Assignment:
+    """Return the assignment owned by this actor or raise 404."""
+    stmt = select(Assignment).where(
+        Assignment.id == assignment_id,
+        Assignment.teacher_id == actor.auth_user_id,
+    )
+    assignment = db.scalar(stmt)
+    if assignment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assignment not found",
+        )
+    return assignment
+
+
+def parse_datetime_or_422(value: str | None) -> datetime | None:
+    """Parse an ISO 8601 string to an aware datetime, or raise 422.
+
+    None is returned unchanged (caller interprets as "field not provided").
+    Timezone-naive strings are explicitly rejected — ambiguous offset is worse
+    than a clear error.
+    """
+    if value is None:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="invalid_datetime_format",
+        )
+    if dt.tzinfo is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="invalid_datetime_format",
+        )
+    return dt
+
+
+# ---------------------------------------------------------------------------
+# Case detail, publish, and deadline endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/cases/{assignment_id}", response_model=TeacherCaseDetailResponse)
+def get_teacher_case_detail(
+    assignment_id: str,
+    _: Annotated[TeacherContext, Depends(require_teacher_context)],
+    actor: CurrentActor = Depends(require_current_actor_password_ready),
+    db: Session = Depends(get_db),
+) -> TeacherCaseDetailResponse:
+    assignment = _get_owned_assignment_or_404(db, assignment_id, actor)
+    return _to_case_detail(assignment)
+
+
+@router.patch("/cases/{assignment_id}/publish", response_model=TeacherCaseDetailResponse)
+def patch_teacher_case_publish(
+    assignment_id: str,
+    _: Annotated[TeacherContext, Depends(require_teacher_context)],
+    actor: CurrentActor = Depends(require_current_actor_password_ready),
+    db: Session = Depends(get_db),
+) -> TeacherCaseDetailResponse:
+    assignment = _get_owned_assignment_or_404(db, assignment_id, actor)
+    if assignment.status == "published":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="already_published",
+        )
+    assignment.status = "published"
+    assignment.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(assignment)
+    return _to_case_detail(assignment)
+
+
+@router.patch("/cases/{assignment_id}/deadline", response_model=TeacherCaseDetailResponse)
+def patch_teacher_case_deadline(
+    assignment_id: str,
+    request: DeadlineUpdateRequest,
+    _: Annotated[TeacherContext, Depends(require_teacher_context)],
+    actor: CurrentActor = Depends(require_current_actor_password_ready),
+    db: Session = Depends(get_db),
+) -> TeacherCaseDetailResponse:
+    assignment = _get_owned_assignment_or_404(db, assignment_id, actor)
+    new_available_from = parse_datetime_or_422(request.available_from)
+    new_deadline = parse_datetime_or_422(request.deadline)
+    if new_available_from is not None and new_deadline is not None:
+        if new_deadline <= new_available_from:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="deadline_before_available_from",
+            )
+    if new_available_from is not None:
+        assignment.available_from = new_available_from
+    if new_deadline is not None:
+        assignment.deadline = new_deadline
+    db.commit()
+    db.refresh(assignment)
+    return _to_case_detail(assignment)
+
