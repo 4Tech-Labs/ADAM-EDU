@@ -192,4 +192,28 @@ describe("TeacherAuthoringPage", () => {
             expect(retryJob).toHaveBeenCalledTimes(1);
         });
     });
+
+    it("clears the form sessionStorage key when the job completes successfully", async () => {
+        sessionStorage.setItem("adam_authoring_form_state", JSON.stringify({ subject: "course-1" }));
+
+        vi.mocked(useAuthoringJobProgress).mockReturnValue({
+            jobId: "job-success",
+            status: "completed",
+            errorTrace: null,
+            result: {} as never,
+            activeAgent: undefined,
+            submitJob: vi.fn(),
+            retryJob: vi.fn(),
+            reset: vi.fn(),
+            isStreaming: false,
+            progressScope: null,
+            bootstrapState: undefined,
+        });
+
+        render(<TeacherAuthoringPage />);
+
+        await waitFor(() => {
+            expect(sessionStorage.getItem("adam_authoring_form_state")).toBeNull();
+        });
+    });
 });

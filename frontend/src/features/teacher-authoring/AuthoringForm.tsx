@@ -13,7 +13,8 @@ import { queryKeys } from "@/shared/queryKeys";
 import {
     INDUSTRIAS_OPTIONS,
     STUDENT_PROFILES,
-    FORM_STYLES
+    FORM_STYLES,
+    FORM_STATE_SESSION_KEY,
 } from "./authoringFormConfig";
 import { GroupsCombobox } from "./GroupsCombobox";
 
@@ -25,30 +26,32 @@ interface Props {
 }
 
 export function AuthoringForm({
+    initialData,
     onSubmit,
     showCancelEdit,
     onCancelEdit,
 }: Props) {
     // ── Form state ──
-    const [subject, setSubject] = useState("");
-    const [syllabusModule, setSyllabusModule] = useState("");
-    const [topicUnit, setTopicUnit] = useState("");
-    const [targetGroups, setTargetGroups] = useState<string[]>([]);
-    const [studentProfile, setStudentProfile] = useState<StudentProfile>("business");
+    const [subject, setSubject] = useState(initialData?.courseId ?? "");
+    const [syllabusModule, setSyllabusModule] = useState(initialData?.syllabusModule ?? "");
+    const [topicUnit, setTopicUnit] = useState(initialData?.topicUnit ?? "");
+    const [targetGroups, setTargetGroups] = useState<string[]>(initialData?.targetGroups ?? []);
+    const [studentProfile, setStudentProfile] = useState<StudentProfile>(initialData?.studentProfile ?? "business");
 
-    const [industry, setIndustry] = useState("fintech");
-    const [caseType, setCaseType] = useState<CaseType>("harvard_only");
-    const [edaDepth, setEdaDepth] = useState<EDADepth | undefined>(undefined);
-    const [includePythonCode, setIncludePythonCode] = useState(false);
-    const [notebookToggle, setNotebookToggle] = useState(false);
+    const initialIndustry = INDUSTRIAS_OPTIONS.find((o) => o.label === initialData?.industry)?.value ?? "fintech";
+    const [industry, setIndustry] = useState(initialIndustry);
+    const [caseType, setCaseType] = useState<CaseType>(initialData?.caseType ?? "harvard_only");
+    const [edaDepth, setEdaDepth] = useState<EDADepth | undefined>(initialData?.edaDepth);
+    const [includePythonCode, setIncludePythonCode] = useState(initialData?.includePythonCode ?? false);
+    const [notebookToggle, setNotebookToggle] = useState(initialData?.edaDepth === "charts_plus_code");
 
-    const [scenarioDescription, setScenarioDescription] = useState("");
-    const [guidingQuestion, setGuidingQuestion] = useState("");
-    const [suggestedTechniques, setSuggestedTechniques] = useState<string[]>([]);
+    const [scenarioDescription, setScenarioDescription] = useState(initialData?.scenarioDescription ?? "");
+    const [guidingQuestion, setGuidingQuestion] = useState(initialData?.guidingQuestion ?? "");
+    const [suggestedTechniques, setSuggestedTechniques] = useState<string[]>(initialData?.suggestedTechniques ?? []);
     const [algoInput, setAlgoInput] = useState("");
 
-    const [availableFrom, setAvailableFrom] = useState("");
-    const [dueAt, setDueAt] = useState("");
+    const [availableFrom, setAvailableFrom] = useState(initialData?.availableFrom ?? "");
+    const [dueAt, setDueAt] = useState(initialData?.dueAt ?? "");
 
     // ── Estados IA ──
     const [formAlertError, setFormAlertError] = useState<string | null>(null);
@@ -56,6 +59,34 @@ export function AuthoringForm({
 
     // ── Validation ──
     const [errors, setErrors] = useState<Record<string, boolean>>({});
+
+    // ── SessionStorage persistence ref ──
+    const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // ── Restore form state from sessionStorage on mount ──
+    useEffect(() => {
+        const raw = sessionStorage.getItem(FORM_STATE_SESSION_KEY);
+        if (!raw) return;
+        try {
+            const saved = JSON.parse(raw) as Record<string, unknown>;
+            if (typeof saved.subject === "string") setSubject(saved.subject);
+            if (typeof saved.syllabusModule === "string") setSyllabusModule(saved.syllabusModule);
+            if (typeof saved.topicUnit === "string") setTopicUnit(saved.topicUnit);
+            if (Array.isArray(saved.targetGroups)) setTargetGroups(saved.targetGroups as string[]);
+            if (saved.studentProfile === "business" || saved.studentProfile === "ml_ds") setStudentProfile(saved.studentProfile);
+            if (typeof saved.industry === "string") setIndustry(saved.industry);
+            if (saved.caseType === "harvard_only" || saved.caseType === "harvard_with_eda") setCaseType(saved.caseType as CaseType);
+            if (typeof saved.notebookToggle === "boolean") setNotebookToggle(saved.notebookToggle);
+            if (typeof saved.scenarioDescription === "string") setScenarioDescription(saved.scenarioDescription);
+            if (typeof saved.guidingQuestion === "string") setGuidingQuestion(saved.guidingQuestion);
+            if (Array.isArray(saved.suggestedTechniques)) setSuggestedTechniques(saved.suggestedTechniques as string[]);
+            if (typeof saved.algoInput === "string") setAlgoInput(saved.algoInput);
+            if (typeof saved.availableFrom === "string") setAvailableFrom(saved.availableFrom);
+            if (typeof saved.dueAt === "string") setDueAt(saved.dueAt);
+        } catch {
+            sessionStorage.removeItem(FORM_STATE_SESSION_KEY);
+        }
+    }, []);
 
     const teacherCoursesQuery = useQuery({
         queryKey: queryKeys.teacher.courses(),
@@ -78,6 +109,9 @@ export function AuthoringForm({
     const units = selectedModule?.units ?? [];
     const selectedUnit = units.find((unit) => unit.unit_id === topicUnit);
     const selectedIndustry = INDUSTRIAS_OPTIONS.find((option) => option.value === industry);
+    const availableProfiles = caseType === "harvard_only"
+        ? STUDENT_PROFILES.filter((p) => p.value !== "ml_ds")
+        : STUDENT_PROFILES;
     const suggestionGenerationRef = useRef({ scenario: 0, techniques: 0 });
     const hasPersistedSyllabus = !!selectedCourseDetailQuery.data?.syllabus;
 
@@ -102,6 +136,28 @@ export function AuthoringForm({
         }
     }, [caseType, studentProfile, notebookToggle]);
 
+    // ── Debounced sessionStorage persist ──
+    useEffect(() => {
+        if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = setTimeout(() => {
+            try {
+                sessionStorage.setItem(FORM_STATE_SESSION_KEY, JSON.stringify({
+                    subject, syllabusModule, topicUnit, targetGroups, studentProfile,
+                    industry, caseType, notebookToggle,
+                    scenarioDescription, guidingQuestion, suggestedTechniques, algoInput,
+                    availableFrom, dueAt,
+                }));
+            } catch {
+                // sessionStorage quota exceeded or unavailable — fail silently
+            }
+        }, 300);
+        return () => {
+            if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+        };
+    }, [subject, syllabusModule, topicUnit, targetGroups, studentProfile, industry, caseType,
+        notebookToggle, scenarioDescription, guidingQuestion, suggestedTechniques, algoInput,
+        availableFrom, dueAt]);
+
     const markStale = useCallback(() => {
         if (suggestedTechniques.length > 0) {
             setAreTechniquesStale(true);
@@ -119,6 +175,21 @@ export function AuthoringForm({
         targetGroups.length > 0 &&
         !!syllabusModule &&
         !!industry;
+
+    // ── Validation CanSubmit ──
+    const isAlgorithmsRequired = caseType === "harvard_with_eda" || studentProfile === "ml_ds";
+    const hasValidTopicUnit = units.length === 0 || !!topicUnit;
+    const canSubmit =
+        !!subject &&
+        !!syllabusModule &&
+        hasValidTopicUnit &&
+        targetGroups.length > 0 &&
+        !!industry &&
+        !!scenarioDescription.trim() &&
+        !!guidingQuestion.trim() &&
+        !!availableFrom &&
+        !!dueAt &&
+        (!isAlgorithmsRequired || suggestedTechniques.length > 0);
 
     const buildSuggestPayload = useCallback((): SuggestRequest => {
         const moduleName = selectedModule?.module_title ?? "";
@@ -230,18 +301,20 @@ export function AuthoringForm({
         setSyllabusModule("");
         setTopicUnit("");
         setTargetGroups([]);
-        setErrors((prev) => ({ ...prev, asignatura: false }));
+        setErrors((prev) => ({ ...prev, asignatura: false, modulo: false, topicUnit: false }));
     };
 
     const handleSyllabusModuleChange = (id: string) => {
         invalidateSuggestionResponses();
         setSyllabusModule(id);
         setTopicUnit("");
+        setErrors((prev) => ({ ...prev, modulo: false, topicUnit: false }));
     };
 
     const handleTopicUnitChange = (id: string) => {
         invalidateSuggestionResponses();
         setTopicUnit(id);
+        setErrors((prev) => ({ ...prev, topicUnit: false }));
     };
 
     const addTargetGroup = useCallback((value: string) => {
@@ -308,16 +381,21 @@ export function AuthoringForm({
     };
     const onCaseTypeChange = (val: CaseType) => {
         invalidateSuggestionResponses();
+        if (val === "harvard_only" && studentProfile === "ml_ds") {
+            setStudentProfile("business");
+        }
         setCaseType(val);
         markStale();
     };
     const onChangeAvailableFrom = (val: string) => {
         setAvailableFrom(val);
         setFormAlertError(null);
+        if (val) setErrors((prev) => ({ ...prev, availableFrom: false, dateOrder: false }));
     };
     const onChangeDueAt = (val: string) => {
         setDueAt(val);
         setFormAlertError(null);
+        if (val) setErrors((prev) => ({ ...prev, dueAt: false, dateOrder: false }));
     };
     // ── Submit ──
     const handleSubmit = (e: FormEvent) => {
@@ -326,13 +404,17 @@ export function AuthoringForm({
             const newErrors: Record<string, boolean> = {};
             if (!subject) newErrors.asignatura = true;
             if (!syllabusModule) newErrors.modulo = true;
+            if (units.length > 0 && !topicUnit) newErrors.topicUnit = true;
             if (targetGroups.length === 0) newErrors.targetGroups = true;
             if (!industry) newErrors.industria = true;
             if (!scenarioDescription.trim()) newErrors.scenario = true;
             if (!guidingQuestion.trim()) newErrors.guidingQuestion = true;
+            if (!availableFrom) newErrors.availableFrom = true;
+            if (!dueAt) newErrors.dueAt = true;
+            if (isAlgorithmsRequired && suggestedTechniques.length === 0) newErrors.suggestedTechniques = true;
             // edaDepth is calculated automatically — no user validation needed
 
-            // Validate dates implicitly relying on logical flow, highlight if reversed
+            // Validate date order after presence checks
             if (availableFrom && dueAt && new Date(dueAt) < new Date(availableFrom)) {
                 newErrors.dateOrder = true;
                 setFormAlertError("La Fecha de Cierre no puede ser anterior a la Disponibilidad.");
@@ -340,10 +422,12 @@ export function AuthoringForm({
 
             if (Object.keys(newErrors).length > 0) {
                 setErrors(newErrors);
-                // Scroll simple check if date error
+                // Scroll to top unless the only error is date ordering
                 const firstId = Object.keys(newErrors)[0];
                 if (firstId === "dateOrder") {
                     window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                } else {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
                 }
                 return;
             }
@@ -374,6 +458,7 @@ export function AuthoringForm({
 
     // ── Clear ──
     const clearForm = () => {
+        sessionStorage.removeItem(FORM_STATE_SESSION_KEY);
         invalidateSuggestionResponses();
         setSubject("");
         setSyllabusModule("");
@@ -532,18 +617,18 @@ export function AuthoringForm({
 
                                         <div>
                                             <label htmlFor="field-unidad" className="block text-sm font-semibold text-slate-700 mb-1.5">
-                                                Unidad Temática <span className="text-xs font-normal text-slate-400 ml-1">(Opcional, mayor precisión)</span>
+                                                Unidad Temática <span className="text-red-500" aria-hidden="true">*</span>
                                             </label>
                                             <Select
-                                                disabled={!syllabusModule}
+                                                disabled={!syllabusModule || units.length === 0}
                                                 value={topicUnit}
                                                 onValueChange={handleTopicUnitChange}
                                             >
                                                 <SelectTrigger
                                                     id="field-unidad"
-                                                    className="input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 disabled:bg-slate-50 disabled:text-slate-400"
+                                                    className={`input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 disabled:bg-slate-50 disabled:text-slate-400 ${errors.topicUnit ? "input-error" : ""}`}
                                                 >
-                                                    <SelectValue placeholder={syllabusModule ? "Todas las unidades (General)" : "Seleccione módulo primero..."} />
+                                                    <SelectValue placeholder={!syllabusModule ? "Seleccione módulo primero..." : units.length === 0 ? "Este módulo no define unidades" : "Seleccione una unidad..."} />
                                                 </SelectTrigger>
                                                 <SelectContent>
                                                     <SelectGroup>
@@ -553,6 +638,7 @@ export function AuthoringForm({
                                                     </SelectGroup>
                                                 </SelectContent>
                                             </Select>
+                                            <ErrorMsg show={!!errors.topicUnit} />
                                         </div>
                                     </div>
 
@@ -632,7 +718,7 @@ export function AuthoringForm({
                                                 </SelectTrigger>
                                                 <SelectContent>
                                                     <SelectGroup>
-                                                        {STUDENT_PROFILES.map((opt) => (
+                                                        {availableProfiles.map((opt) => (
                                                             <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
                                                         ))}
                                                     </SelectGroup>
@@ -753,7 +839,7 @@ export function AuthoringForm({
                                             <div className="flex items-center justify-between mb-2.5">
                                                 <div>
                                                     <label className="text-sm font-semibold text-slate-700 block" htmlFor="algo-input">
-                                                        Algoritmos / Técnicas Sugeridas
+                                                        Algoritmos / Técnicas Sugeridas <span className="text-red-500" aria-hidden="true">*</span>
                                                         <button
                                                             type="button"
                                                             onClick={handleSuggestTechniques}
@@ -769,8 +855,8 @@ export function AuthoringForm({
                                                     </label>
                                                     <span className="text-xs text-slate-400 font-normal">
                                                         {caseType === "harvard_only"
-                                                            ? "Opcional — sin datos adjuntos en este modo. Sirven como contexto pedagógico del perfil ML/DS."
-                                                            : "Si las dejas vacías, ADAM sugerirá las técnicas más adecuadas según el contexto del caso. Máx. 5"}
+                                                            ? "Sirven como contexto pedagógico del perfil ML/DS. Máx. 5."
+                                                            : "Al menos una técnica requerida. ADAM las usará para el dataset sintético del caso. Máx. 5."}
                                                     </span>
                                                 </div>
 
@@ -813,6 +899,7 @@ export function AuthoringForm({
                                                     ⚠️ Las técnicas sugeridas podrían estar desactualizadas de acuerdo al último contexto académico configurado.
                                                 </div>
                                             )}
+                                            <ErrorMsg show={!!errors.suggestedTechniques} />
                                             <p className="field-hint mt-1.5">ADAM optimizará estas variables sobre el Dataset ficticio si logras predefinirlas.</p>
                                         </div>
                                     )}
@@ -835,8 +922,9 @@ export function AuthoringForm({
                                             id="field-fecha-inicio"
                                             value={availableFrom}
                                             onChange={(e) => onChangeAvailableFrom(e.target.value)}
-                                            className="input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 cursor-pointer"
+                                            className={`input-base w-full rounded-lg border bg-white px-3.5 py-2.5 text-sm text-slate-800 cursor-pointer ${errors.availableFrom ? "border-red-400 input-error" : "border-slate-200"}`}
                                         />
+                                        <ErrorMsg show={!!errors.availableFrom} />
                                     </div>
                                     <div className="date-arrow" aria-hidden="true">
                                         <svg className="w-5 h-5 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -852,8 +940,9 @@ export function AuthoringForm({
                                             id="field-fecha-cierre"
                                             value={dueAt}
                                             onChange={(e) => onChangeDueAt(e.target.value)}
-                                            className="input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 cursor-pointer"
+                                            className={`input-base w-full rounded-lg border bg-white px-3.5 py-2.5 text-sm text-slate-800 cursor-pointer ${errors.dueAt ? "border-red-400 input-error" : "border-slate-200"}`}
                                         />
+                                        <ErrorMsg show={!!errors.dueAt} />
                                     </div>
                                 </div>
                                 {errors.dateOrder && (
@@ -890,7 +979,8 @@ export function AuthoringForm({
 
                                     <button
                                         type="submit"
-                                        className="flex items-center gap-2 rounded-xl bg-[#0144a0] px-7 py-2.5 text-sm font-bold text-white shadow-md transition-all hover:bg-[#00337a] hover:shadow-lg active:scale-[0.98]"
+                                        disabled={!canSubmit}
+                                        className={`flex items-center gap-2 rounded-xl bg-[#0144a0] px-7 py-2.5 text-sm font-bold text-white shadow-md transition-all ${canSubmit ? "hover:bg-[#00337a] hover:shadow-lg active:scale-[0.98]" : "opacity-50 cursor-not-allowed"}`}
                                     >
                                         {caseType === "harvard_with_eda" ? "Generar Caso + EDA" : "Generar Caso Harvard"}
                                     </button>

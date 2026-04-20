@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { http, HttpResponse } from "msw";
@@ -7,6 +7,7 @@ import { renderWithProviders } from "@/shared/test-utils";
 import { server } from "@/shared/testing/msw/server";
 
 import { AuthoringForm } from "./AuthoringForm";
+import { FORM_STATE_SESSION_KEY } from "./authoringFormConfig";
 
 type DeferredHttpResponse =
     | ReturnType<typeof HttpResponse.json>
@@ -477,5 +478,360 @@ describe("GroupsCombobox (within AuthoringForm)", () => {
         await user.click(chip);
 
         expect(screen.queryByText("Gerencia de Operaciones (GO-101)")).not.toBeInTheDocument();
+    });
+});
+
+// ─── Shared MSW setup helpers for the new describe blocks ───────────────────
+
+const baseCoursesHandler = http.get("/api/teacher/courses", () =>
+    HttpResponse.json({
+        courses: [{
+            id: "course-1", title: "Gerencia de Operaciones", code: "GO-101",
+            semester: "2025-1", academic_level: "MBA", status: "active",
+            students_count: 32, active_cases_count: 1,
+        }],
+        total: 1,
+    }),
+);
+
+const baseCourseDetailHandler = http.get("/api/teacher/courses/:courseId", () =>
+    HttpResponse.json({
+        course: {
+            id: "course-1", title: "Gerencia de Operaciones", code: "GO-101",
+            semester: "2025-1", academic_level: "MBA", status: "active",
+            max_students: 35, students_count: 32, active_cases_count: 1,
+        },
+        syllabus: {
+            department: "Administracion", knowledge_area: "Operaciones",
+            nbc: "Administracion", version_label: "v1", academic_load: "48 horas",
+            course_description: "Curso", general_objective: "Obj",
+            specific_objectives: [], evaluation_strategy: [],
+            didactic_strategy: { methodological_perspective: "Aplicada", pedagogical_modality: "Presencial" },
+            integrative_project: "", bibliography: [], teacher_notes: "",
+            ai_grounding_context: {
+                course_identity: {
+                    course_id: "course-1", course_title: "Gerencia de Operaciones",
+                    academic_level: "MBA", department: "Administracion",
+                    knowledge_area: "Operaciones", nbc: "Administracion",
+                },
+                pedagogical_intent: { general_objective: "Obj", specific_objectives: [] },
+                curriculum_scope: { coverage_signal: "focused" },
+            },
+            modules: [{
+                module_id: "module-1",
+                module_title: "Fundamentos de Operaciones",
+                weeks: "1-4",
+                module_summary: "Base conceptual",
+                learning_outcomes: [],
+                units: [{ unit_id: "unit-1", title: "Pronosticos", topics: "Series de tiempo" }],
+                cross_course_connections: "",
+            }],
+        },
+    }),
+);
+
+// ─── Task 1 — Required fields & disabled submit button ───────────────────────
+
+describe("Task 1 — Required fields and disabled submit button", () => {
+    beforeAll(() => {
+        Element.prototype.hasPointerCapture ??= () => false;
+        Element.prototype.releasePointerCapture ??= () => {};
+        Element.prototype.setPointerCapture ??= () => {};
+        Element.prototype.scrollIntoView ??= () => {};
+    });
+
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        server.use(baseCoursesHandler, baseCourseDetailHandler);
+    });
+
+    it("submit button is disabled on initial render", () => {
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+        expect(screen.getByRole("button", { name: /generar caso harvard/i })).toBeDisabled();
+    });
+
+    it("submit button is enabled after all required fields are filled", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        await enableSuggestions(user);
+        await selectOption(user, /unidad tem/i, /pronosticos/i);
+        fireEvent.change(screen.getByRole("textbox", { name: /descripci[oó]n/i }), { target: { value: "Escenario completo de prueba" } });
+        fireEvent.change(screen.getByLabelText(/pregunta gu[ií]a/i), { target: { value: "¿Qué decisión tomar?" } });
+        fireEvent.change(screen.getByLabelText(/disponibilidad/i), { target: { value: "2025-06-01T00:00" } });
+        fireEvent.change(screen.getByLabelText(/fecha de cierre/i), { target: { value: "2025-07-01T00:00" } });
+
+        await waitFor(() => {
+            expect(screen.getByRole("button", { name: /generar caso harvard/i })).not.toBeDisabled();
+        });
+    }, 15_000);
+
+    it("handleSubmit shows topicUnit error when module has units and no unit is selected", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        await enableSuggestions(user);
+        // Do NOT select a topicUnit — bypass disabled button via fireEvent.submit
+        fireEvent.submit(document.querySelector("form")!);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
+        });
+    });
+
+    it("handleSubmit shows availableFrom error when date is not set", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        await enableSuggestions(user);
+        await selectOption(user, /unidad tem/i, /pronosticos/i);
+        await user.type(screen.getByRole("textbox", { name: /descripci[oó]n/i }), "Escenario");
+        await user.type(screen.getByLabelText(/pregunta gu[ií]a/i), "Pregunta");
+        fireEvent.change(screen.getByLabelText(/fecha de cierre/i), { target: { value: "2025-07-01T00:00" } });
+        // availableFrom intentionally left empty
+        fireEvent.submit(document.querySelector("form")!);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
+        });
+    });
+
+    it("handleSubmit shows dueAt error when date is not set", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        await enableSuggestions(user);
+        await selectOption(user, /unidad tem/i, /pronosticos/i);
+        await user.type(screen.getByRole("textbox", { name: /descripci[oó]n/i }), "Escenario");
+        await user.type(screen.getByLabelText(/pregunta gu[ií]a/i), "Pregunta");
+        fireEvent.change(screen.getByLabelText(/disponibilidad/i), { target: { value: "2025-06-01T00:00" } });
+        // dueAt intentionally left empty
+        fireEvent.submit(document.querySelector("form")!);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
+        });
+    });
+
+    it("handleSubmit shows suggestedTechniques error in EDA mode when no techniques added", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        await enableSuggestions(user);
+        await selectOption(user, /unidad tem/i, /pronosticos/i);
+        await showTechniquesSection(user); // switch to harvard_with_eda
+        await user.type(screen.getByRole("textbox", { name: /descripci[oó]n/i }), "Escenario completo");
+        await user.type(screen.getByLabelText(/pregunta gu[ií]a/i), "Pregunta guía");
+        fireEvent.change(screen.getByLabelText(/disponibilidad/i), { target: { value: "2025-06-01T00:00" } });
+        fireEvent.change(screen.getByLabelText(/fecha de cierre/i), { target: { value: "2025-07-01T00:00" } });
+        // No techniques added — bypass disabled button
+        fireEvent.submit(document.querySelector("form")!);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
+        });
+    });
+
+    it("topicUnit is not required when the selected module has no units", async () => {
+        // Override course detail to return a module with no units
+        server.use(
+            http.get("/api/teacher/courses/:courseId", () =>
+                HttpResponse.json({
+                    course: {
+                        id: "course-1", title: "Gerencia de Operaciones", code: "GO-101",
+                        semester: "2025-1", academic_level: "MBA", status: "active",
+                        max_students: 35, students_count: 32, active_cases_count: 1,
+                    },
+                    syllabus: {
+                        department: "Administracion", knowledge_area: "Operaciones",
+                        nbc: "Administracion", version_label: "v1", academic_load: "48 horas",
+                        course_description: "Curso", general_objective: "Obj",
+                        specific_objectives: [], evaluation_strategy: [],
+                        didactic_strategy: { methodological_perspective: "Aplicada", pedagogical_modality: "Presencial" },
+                        integrative_project: "", bibliography: [], teacher_notes: "",
+                        ai_grounding_context: {
+                            course_identity: {
+                                course_id: "course-1", course_title: "Gerencia de Operaciones",
+                                academic_level: "MBA", department: "Administracion",
+                                knowledge_area: "Operaciones", nbc: "Administracion",
+                            },
+                            pedagogical_intent: { general_objective: "Obj", specific_objectives: [] },
+                            curriculum_scope: { coverage_signal: "focused" },
+                        },
+                        modules: [{
+                            module_id: "module-1",
+                            module_title: "Fundamentos de Operaciones",
+                            weeks: "1-4",
+                            module_summary: "Base",
+                            learning_outcomes: [],
+                            units: [], // No units
+                            cross_course_connections: "",
+                        }],
+                    },
+                }),
+            ),
+        );
+
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        await enableSuggestions(user);
+        // No topicUnit selected — unit Select is disabled (no units)
+        await user.type(screen.getByRole("textbox", { name: /descripci[oó]n/i }), "Escenario completo");
+        await user.type(screen.getByLabelText(/pregunta gu[ií]a/i), "Pregunta guía");
+        fireEvent.change(screen.getByLabelText(/disponibilidad/i), { target: { value: "2025-06-01T00:00" } });
+        fireEvent.change(screen.getByLabelText(/fecha de cierre/i), { target: { value: "2025-07-01T00:00" } });
+
+        // Button should be enabled even without topicUnit (units.length === 0 → not required)
+        await waitFor(() => {
+            expect(screen.getByRole("button", { name: /generar caso harvard/i })).not.toBeDisabled();
+        });
+    });
+});
+
+// ─── Task 2 — Profile restriction for harvard_only ───────────────────────────
+
+describe("Task 2 — Profile restriction for harvard_only", () => {
+    beforeAll(() => {
+        Element.prototype.hasPointerCapture ??= () => false;
+        Element.prototype.releasePointerCapture ??= () => {};
+        Element.prototype.setPointerCapture ??= () => {};
+        Element.prototype.scrollIntoView ??= () => {};
+    });
+
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        server.use(
+            http.get("/api/teacher/courses", () =>
+                HttpResponse.json({ courses: [], total: 0 }),
+            ),
+        );
+    });
+
+    it("ml_ds option is not shown in the profile dropdown when caseType is harvard_only (default)", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        await user.click(screen.getByLabelText(/perfil del curso/i));
+        const options = await screen.findAllByRole("option");
+        const labels = options.map((o) => o.textContent ?? "");
+
+        expect(labels.some((l) => /machine learning/i.test(l))).toBe(false);
+        expect(labels.some((l) => /negocios/i.test(l))).toBe(true);
+    });
+
+    it("switching to harvard_only auto-resets studentProfile from ml_ds to business", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        // Switch to harvard_with_eda to unlock ml_ds option
+        await user.click(screen.getByRole("radio", { name: /caso .*an[aá]lisis de datos/i }));
+
+        // Select ml_ds profile
+        await user.click(screen.getByLabelText(/perfil del curso/i));
+        await user.click(await screen.findByRole("option", { name: /machine learning/i }));
+
+        expect(screen.getByLabelText(/perfil del curso/i)).toHaveTextContent(/machine learning/i);
+
+        // Switch back to harvard_only — should auto-reset profile
+        await user.click(screen.getByRole("radio", { name: /solo caso harvard/i }));
+
+        await waitFor(() => {
+            expect(screen.getByLabelText(/perfil del curso/i)).toHaveTextContent(/negocios/i);
+        });
+    });
+
+    it("ml_ds option reappears when switching to harvard_with_eda", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        // Confirm ml_ds is absent by default
+        await user.click(screen.getByLabelText(/perfil del curso/i));
+        const optsBefore = await screen.findAllByRole("option");
+        expect(optsBefore.some((o) => /machine learning/i.test(o.textContent ?? ""))).toBe(false);
+
+        // Close dropdown
+        await user.keyboard("{Escape}");
+
+        // Switch to harvard_with_eda
+        await user.click(screen.getByRole("radio", { name: /caso .*an[aá]lisis de datos/i }));
+
+        // ml_ds should now be present
+        await user.click(screen.getByLabelText(/perfil del curso/i));
+        const optsAfter = await screen.findAllByRole("option");
+        expect(optsAfter.some((o) => /machine learning/i.test(o.textContent ?? ""))).toBe(true);
+    });
+});
+
+// ─── Task 3 — sessionStorage persistence ─────────────────────────────────────
+
+describe("Task 3 — sessionStorage persistence", () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        sessionStorage.clear();
+        server.use(
+            http.get("/api/teacher/courses", () =>
+                HttpResponse.json({ courses: [], total: 0 }),
+            ),
+        );
+    });
+
+    afterEach(() => {
+        sessionStorage.clear();
+    });
+
+    it("restores form fields from valid sessionStorage data on mount", async () => {
+        sessionStorage.setItem(
+            FORM_STATE_SESSION_KEY,
+            JSON.stringify({
+                scenarioDescription: "Escenario restaurado desde storage",
+                guidingQuestion: "Pregunta restaurada desde storage",
+                subject: "",
+                syllabusModule: "",
+                topicUnit: "",
+                targetGroups: [],
+                studentProfile: "business",
+                industry: "fintech",
+                caseType: "harvard_only",
+                notebookToggle: false,
+                suggestedTechniques: [],
+                algoInput: "",
+                availableFrom: "",
+                dueAt: "",
+            }),
+        );
+
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        expect(await screen.findByDisplayValue("Escenario restaurado desde storage")).toBeInTheDocument();
+        expect(screen.getByDisplayValue("Pregunta restaurada desde storage")).toBeInTheDocument();
+    });
+
+    it("writes form state to sessionStorage within 1 second of a field change", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        const textarea = screen.getByRole("textbox", { name: /descripci[oó]n/i });
+        await user.type(textarea, "Texto guardado en storage");
+
+        await waitFor(
+            () => {
+                const raw = sessionStorage.getItem(FORM_STATE_SESSION_KEY);
+                expect(raw).not.toBeNull();
+                const parsed = JSON.parse(raw!);
+                expect(parsed.scenarioDescription).toContain("Texto guardado en storage");
+            },
+            { timeout: 1500 },
+        );
+    });
+
+    it("removes a corrupted sessionStorage key silently on mount without throwing", () => {
+        sessionStorage.setItem(FORM_STATE_SESSION_KEY, "{invalid-json-payload}");
+
+        expect(() => {
+            renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+        }).not.toThrow();
+
+        expect(sessionStorage.getItem(FORM_STATE_SESSION_KEY)).toBeNull();
     });
 });

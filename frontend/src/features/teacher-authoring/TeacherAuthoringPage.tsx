@@ -9,6 +9,7 @@ import { AuthoringErrorState } from "./AuthoringErrorState";
 import { AuthoringForm } from "./AuthoringForm";
 import { AuthoringProgressTimeline } from "./AuthoringProgressTimeline";
 import { useAuthoringJobProgress } from "./useAuthoringJobProgress";
+import { FORM_STATE_SESSION_KEY } from "./authoringFormConfig";
 
 type AppState = "idle" | "generating" | "editing" | "error" | "success" | "paused";
 
@@ -75,6 +76,13 @@ export function TeacherAuthoringPage() {
     },
     [submitJob],
   );
+
+  // ── Clear form sessionStorage when the job completes successfully ──
+  useEffect(() => {
+    if (appState === "success") {
+      sessionStorage.removeItem(FORM_STATE_SESSION_KEY);
+    }
+  }, [appState]);
 
   const handleResumeEDA = useCallback(() => {
     // Placeholder para un futuro flujo HITL.
