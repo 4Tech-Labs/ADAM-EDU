@@ -56,6 +56,8 @@ export const STUDENT_PROFILES = [
     { value: "ml_ds", label: "Machine Learning / Data Science" },
 ];
 
+export const FORM_STATE_SESSION_KEY = "adam_authoring_form_state";
+
 export const FORM_STYLES = `
 .teacher-form .input-base {
   transition: border-color 0.18s, box-shadow 0.18s;
