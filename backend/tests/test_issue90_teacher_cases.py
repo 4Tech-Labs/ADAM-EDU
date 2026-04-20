@@ -184,10 +184,12 @@ def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["total"] == 2
-    assert [item["title"] for item in body["cases"]] == ["Sooner", "Later"]
+    # After fix: null-deadline published assignment is now visible (sorts LAST with PG ASC NULLS LAST)
+    assert body["total"] == 3
+    assert [item["title"] for item in body["cases"]] == ["Sooner", "Later", "No Deadline"]
     assert body["cases"][0]["days_remaining"] == 0
     assert body["cases"][1]["days_remaining"] == 2
+    assert body["cases"][2]["days_remaining"] is None
     assert body["cases"][0]["course_codes"] == []
 
 
@@ -318,3 +320,80 @@ def test_issue90_teacher_cases_requires_legacy_bridge_for_teacher_reads(
 
     assert response.status_code == 500
     assert response.json()["detail"] == "legacy_bridge_missing"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for issue #150 — null deadline filter bug
+# ---------------------------------------------------------------------------
+
+
+def test_cases_published_null_deadline_visible(
+    client,
+    db,
+    seed_identity,
+    auth_headers_factory,
+) -> None:
+    """A published assignment with deadline=None must appear in GET /api/teacher/cases.
+
+    Before fix: Assignment.deadline.is_not(None) and Assignment.deadline >= now both
+    silently excluded NULLs (SQL NULL comparisons evaluate to NULL, which is falsy).
+    After fix: or_(deadline.is_(None), deadline >= now) explicitly includes them.
+    """
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-null-visible@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+
+    assignment = Assignment(
+        teacher_id=teacher_id,
+        title="Evergreen Case",
+        status="published",
+        deadline=None,
+    )
+    db.add(assignment)
+    db.commit()
+
+    response = client.get(
+        "/api/teacher/cases",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert body["cases"][0]["title"] == "Evergreen Case"
+    assert body["cases"][0]["days_remaining"] is None
+
+
+def test_cases_draft_null_deadline_not_visible(
+    client,
+    db,
+    seed_identity,
+    auth_headers_factory,
+) -> None:
+    """A draft assignment with deadline=None must NOT appear in GET /api/teacher/cases.
+
+    The status filter (status == 'published') still applies; null-deadline fix only
+    affects the deadline predicate, not the status gate.
+    """
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-draft-null@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+
+    assignment = Assignment(
+        teacher_id=teacher_id,
+        title="Draft No Deadline",
+        status="draft",
+        deadline=None,
+    )
+    db.add(assignment)
+    db.commit()
+
+    response = client.get(
+        "/api/teacher/cases",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 0
+    assert body["cases"] == []

@@ -185,6 +185,18 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
+## TODO-012: Recuperación de casos en estado borrador (Draft Case Recovery)
+
+**What:** Agregar una sección "Borradores" en el dashboard del docente que liste los `Assignment` con `status='draft'` que tienen `canonical_output` generado pero no han sido publicados. Requiere un endpoint `GET /api/teacher/cases?status=draft` y una UI separada de "Casos Activos".
+
+**Why:** Si un docente cierra el navegador después de que el caso fue generado pero antes de presionar "Enviar Caso", el borrador queda huérfano en la base de datos. La recuperación por `sessionStorage` solo funciona en la misma sesión. El usuario no tiene forma de encontrar el caso generado desde el dashboard.
+
+**Context:** Identificado en la revisión de eng-review de Issue #149. La implementación de "Enviar Caso" (Issue #156) y el dashboard de casos activos (Issue #157) filtran explícitamente `status='published'`, lo que significa que los borradores quedan ocultos por diseño. La solución mínima viable es un endpoint filtrado por `status='draft'` + `canonical_output IS NOT NULL` y una tabla colapsable "Borradores" en el dashboard.
+
+**Depends on / blocked by:** Issue #149 (Case Management foundation). Los endpoints y la lógica de ownership helper (`get_owned_assignment_or_404`) definidos en Issue #151 son el punto de partida natural para el endpoint de borradores.
+
+---
+
 ## TODO-012: Utilidad de reconciliación de artefactos huérfanos legacy
 
 **What:** Crear una utilidad operativa para reconciliar artefactos huérfanos históricos (manifest en DB vs blob en storage) y aplicar remediación controlada (marcar, limpiar o re-vincular según reglas).
@@ -340,3 +352,19 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Context:** Aceptado como follow-up durante la refinacion tecnica de Issue #130. La decision explicita fue no mezclar el guardrail de CI con la issue de aislamiento de Plotly para mantener #130 enfocada en el critical path y no convertirla en una iniciativa general de performance governance.
 
 **Depends on / blocked by:** Bloqueado por la implementacion de Issue #130 y por una corrida de build post-fix que deje una baseline confiable para `index` y el chunk `vendor-plotly`. Tambien depende de decidir si el guardrail vivira en GitHub Actions, otro pipeline de CI, o una verificacion local reutilizable por ambos.
+
+---
+
+## TODO-021: Poblar `active_cases_count` en listado de cursos del docente
+
+**What:** Implementar el conteo de casos activos por curso en `list_teacher_courses` (`backend/src/shared/teacher_reads.py`). Actualmente `active_cases_count` se hardcodea a `0` en `TeacherCourseItemResponse` y en `get_teacher_course_detail`.
+
+**Why:** El dashboard del docente muestra el número de casos activos por curso. Con el valor siempre en `0`, el profesor no puede saber cuántos casos activos tiene en cada materia sin entrar a cada curso individualmente.
+
+**Pros:** Completa la información visible en el listado de cursos; habilita UX de resumen en el dashboard sin round-trips adicionales.
+
+**Cons:** Requiere que `Assignment` tenga una FK a `Course` (`course_id`) para que el join sea posible. Sin esa FK, cualquier implementación sería un proxy no confiable (p.ej. join por `teacher_id` + `course_id` en payload de metadata). Introducir la FK es un cambio de schema que requiere migración Alembic.
+
+**Context:** El `TODO(#90)` en el código fue registrado explícitamente durante Issue #90 con la nota: `# TODO(#90): populate once Assignment gains course_id FK`. El campo existe en el contrato API (`TeacherCourseItemResponse.active_cases_count`) pero siempre retorna `0`. El fix de Issue #150 (null deadline) dejó expuesto que `Assignment` ya soporta `deadline=None`; el siguiente gap visible es este conteo. No bloquea ningún flujo actual.
+
+**Depends on / blocked by:** Bloqueado por la adición de una FK `Assignment.course_id` + migración Alembic correspondiente. Ese cambio de schema debe coordinarse con el authoring job intake (`/api/authoring/jobs`) para que el `course_id` del payload se persista en la fila de `Assignment`.
