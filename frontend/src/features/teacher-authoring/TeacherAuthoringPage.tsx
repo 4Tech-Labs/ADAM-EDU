@@ -112,8 +112,13 @@ export function TeacherAuthoringPage() {
     setAppState("idle");
   }, [jobStatus, resetJob, retryJob]);
 
+  const isPreviewActive = appState === "success" || appState === "paused";
+
   return (
-    <TeacherLayout testId="teacher-authoring-page" contentClassName="mx-auto w-full max-w-6xl">
+    <TeacherLayout
+      testId="teacher-authoring-page"
+      contentClassName={isPreviewActive ? "w-full p-0" : "mx-auto w-full max-w-6xl"}
+    >
       {(appState === "idle" || appState === "editing") && (
         <AuthoringForm
           initialData={formData}
