@@ -403,6 +403,104 @@ def test_teacher_context_password_rotation_required_precedes_context_checks(
     assert response.json()["detail"] == "password_rotation_required"
 
 
+def test_teacher_course_detail_password_rotation_required_precedes_lookup(
+    client,
+    auth_headers_factory,
+    seed_identity,
+    seed_course,
+) -> None:
+    user_id = str(uuid.uuid4())
+    email = "rotate-course-detail@example.edu"
+    teacher = seed_identity(
+        user_id=user_id,
+        email=email,
+        role="teacher",
+        university_id="10000000-0000-0000-0000-000000000073",
+        full_name="Teacher Rotate Detail",
+        must_rotate_password=True,
+    )
+    course = seed_course(
+        university_id="10000000-0000-0000-0000-000000000073",
+        teacher_membership_id=teacher["membership"].id,
+    )
+    headers = auth_headers_factory(sub=user_id, email=email)
+
+    response = client.get(f"/api/teacher/courses/{course.id}", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "password_rotation_required"
+
+
+def test_teacher_course_syllabus_save_password_rotation_required_precedes_write(
+    client,
+    auth_headers_factory,
+    seed_identity,
+    seed_course,
+) -> None:
+    user_id = str(uuid.uuid4())
+    email = "rotate-course-save@example.edu"
+    teacher = seed_identity(
+        user_id=user_id,
+        email=email,
+        role="teacher",
+        university_id="10000000-0000-0000-0000-000000000074",
+        full_name="Teacher Rotate Save",
+        must_rotate_password=True,
+    )
+    course = seed_course(
+        university_id="10000000-0000-0000-0000-000000000074",
+        teacher_membership_id=teacher["membership"].id,
+    )
+    headers = auth_headers_factory(sub=user_id, email=email)
+
+    response = client.put(
+        f"/api/teacher/courses/{course.id}/syllabus",
+        json={
+            "expected_revision": 0,
+            "syllabus": {
+                "department": "Gestion",
+                "knowledge_area": "Administracion",
+                "nbc": "Administracion",
+                "version_label": "2026.1",
+                "academic_load": "32 horas",
+                "course_description": "Curso de prueba.",
+                "general_objective": "Objetivo general.",
+                "specific_objectives": ["Objetivo especifico"],
+                "modules": [
+                    {
+                        "module_id": "m1",
+                        "module_title": "Modulo 1",
+                        "weeks": "1-2",
+                        "module_summary": "Resumen.",
+                        "learning_outcomes": ["Outcome 1"],
+                        "units": [{"unit_id": "u1", "title": "Unidad 1", "topics": "Tema 1"}],
+                        "cross_course_connections": "Conexion 1",
+                    }
+                ],
+                "evaluation_strategy": [
+                    {
+                        "activity": "Actividad 1",
+                        "weight": 50,
+                        "linked_objectives": ["O1"],
+                        "expected_outcome": "Resultado esperado",
+                    }
+                ],
+                "didactic_strategy": {
+                    "methodological_perspective": "Metodo 1",
+                    "pedagogical_modality": "Modalidad 1",
+                },
+                "integrative_project": "Proyecto integrador.",
+                "bibliography": ["Referencia 1"],
+                "teacher_notes": "Notas.",
+            },
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "password_rotation_required"
+
+
 def test_auth_me_returns_memberships_and_primary_role(client, auth_headers_factory, seed_identity) -> None:
     user_id = str(uuid.uuid4())
     email = "multirole@example.edu"

@@ -4,12 +4,20 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
+from fastapi import HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, load_only
 
 from shared.auth import CurrentActor, ensure_legacy_teacher_bridge
-from shared.models import Assignment, Course, CourseMembership, Membership
+from shared.models import Assignment, Course, CourseAccessLink, CourseMembership, Membership, Syllabus
+from shared.syllabus_schema import (
+    TeacherCourseConfigurationResponse,
+    TeacherCourseDetailResponse,
+    TeacherCourseInstitutionalResponse,
+    TeacherSyllabusResponse,
+    TeacherSyllabusRevisionMetadataResponse,
+)
 from shared.teacher_context import TeacherContext
 
 
@@ -38,9 +46,8 @@ class TeacherCaseItem:
     course_codes: list[str]
 
 
-def list_teacher_courses(db: Session, context: TeacherContext) -> TeacherCoursesResponse:
-    """Return the teacher-scoped course directory for the authenticated membership."""
-    student_counts = (
+def _build_student_counts_subquery(context: TeacherContext):
+    return (
         select(
             CourseMembership.course_id.label("course_id"),
             func.count().label("students_count"),
@@ -58,6 +65,36 @@ def list_teacher_courses(db: Session, context: TeacherContext) -> TeacherCourses
         .group_by(CourseMembership.course_id)
         .subquery()
     )
+
+
+def _serialize_syllabus_response(syllabus: Syllabus | None) -> TeacherSyllabusResponse | None:
+    if syllabus is None:
+        return None
+
+    return TeacherSyllabusResponse.model_validate(
+        {
+            "department": syllabus.department,
+            "knowledge_area": syllabus.knowledge_area,
+            "nbc": syllabus.nbc,
+            "version_label": syllabus.version_label,
+            "academic_load": syllabus.academic_load,
+            "course_description": syllabus.course_description,
+            "general_objective": syllabus.general_objective,
+            "specific_objectives": syllabus.specific_objectives,
+            "modules": syllabus.modules,
+            "evaluation_strategy": syllabus.evaluation_strategy,
+            "didactic_strategy": syllabus.didactic_strategy,
+            "integrative_project": syllabus.integrative_project,
+            "bibliography": syllabus.bibliography,
+            "teacher_notes": syllabus.teacher_notes,
+            "ai_grounding_context": syllabus.ai_grounding_context,
+        }
+    )
+
+
+def list_teacher_courses(db: Session, context: TeacherContext) -> TeacherCoursesResponse:
+    """Return the teacher-scoped course directory for the authenticated membership."""
+    student_counts = _build_student_counts_subquery(context)
 
     rows = (
         db.execute(
@@ -97,6 +134,83 @@ def list_teacher_courses(db: Session, context: TeacherContext) -> TeacherCourses
     ]
 
     return TeacherCoursesResponse(courses=courses, total=len(courses))
+
+
+def get_teacher_course_detail(
+    db: Session,
+    context: TeacherContext,
+    course_id: str,
+) -> TeacherCourseDetailResponse:
+    """Return the teacher-owned composed course detail payload."""
+    student_counts = _build_student_counts_subquery(context)
+
+    row = (
+        db.execute(
+            select(
+                Course.id.label("id"),
+                Course.title.label("title"),
+                Course.code.label("code"),
+                Course.semester.label("semester"),
+                Course.academic_level.label("academic_level"),
+                Course.status.label("status"),
+                Course.max_students.label("max_students"),
+                func.coalesce(student_counts.c.students_count, 0).label("students_count"),
+                CourseAccessLink.id.label("access_link_id"),
+                CourseAccessLink.status.label("access_link_status"),
+                CourseAccessLink.created_at.label("access_link_created_at"),
+            )
+            .select_from(Course)
+            .outerjoin(student_counts, student_counts.c.course_id == Course.id)
+            .outerjoin(
+                CourseAccessLink,
+                and_(
+                    CourseAccessLink.course_id == Course.id,
+                    CourseAccessLink.status == "active",
+                ),
+            )
+            .where(
+                Course.id == course_id,
+                Course.university_id == context.university_id,
+                Course.teacher_membership_id == context.teacher_membership_id,
+            )
+            .limit(1)
+        )
+        .mappings()
+        .first()
+    )
+
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="course_not_found")
+
+    syllabus = db.scalar(select(Syllabus).where(Syllabus.course_id == course_id))
+    current_revision = syllabus.revision if syllabus is not None else 0
+    saved_at = syllabus.saved_at if syllabus is not None else None
+    saved_by_membership_id = syllabus.saved_by_membership_id if syllabus is not None else None
+
+    return TeacherCourseDetailResponse(
+        course=TeacherCourseInstitutionalResponse(
+            id=row["id"],
+            title=row["title"],
+            code=row["code"],
+            semester=row["semester"],
+            academic_level=row["academic_level"],
+            status=row["status"],
+            max_students=int(row["max_students"]),
+            students_count=int(row["students_count"]),
+            active_cases_count=0,
+        ),
+        syllabus=_serialize_syllabus_response(syllabus),
+        revision_metadata=TeacherSyllabusRevisionMetadataResponse(
+            current_revision=current_revision,
+            saved_at=saved_at,
+            saved_by_membership_id=saved_by_membership_id,
+        ),
+        configuration=TeacherCourseConfigurationResponse(
+            access_link_status="active" if row["access_link_status"] == "active" else "missing",
+            access_link_id=row["access_link_id"],
+            access_link_created_at=row["access_link_created_at"],
+        ),
+    )
 
 
 def list_teacher_active_cases(

@@ -1,29 +1,45 @@
 ﻿## Summary
-- fixes the frontend race where ultra-fast authoring jobs could finish before the realtime subscription settled, leaving the progress UI stuck until refresh
-- adds realtime watchdogs for subscribe timeout, silent channels, and `CLOSED` transport degradation in the authoring progress client
-- propagates `bootstrap_state` consistently from durable snapshots and realtime events so the bootstrap timeline remains visible during startup
-- makes `useAuthoringJobProgress` self-heal once via `bootstrapResumedJob` when the transport degrades instead of failing closed immediately
-- adds a Plotly compatibility shim in the app entrypoint to prevent `ReferenceError: global is not defined` in browser bundles
-- records follow-up backend debt separately via issues #126, #127, and #128
+- adds the backend syllabus domain as a course-separated 1:1 persistence model with append-only revision snapshots
+- exposes `GET /api/teacher/courses/{course_id}` as a composed teacher detail endpoint with institutional data, syllabus state, revision metadata, and access-link configuration status
+- exposes `PUT /api/teacher/courses/{course_id}/syllabus` with strict teacher ownership, tenant isolation, optimistic concurrency, and immutable revision creation on save
+- persists `ai_grounding_context` as a validated server-derived JSON contract instead of trusting client-provided grounding
+- extends backend coverage for teacher detail/save happy paths, auth perimeter, tenant isolation, stale writes, and grounding shape validation
+- records deferred follow-ups in `TODOS.md` for `Assignment.course_id` integration and teacher self-service access-link management
 
-## Pre-Landing Review
-Pre-Landing Review: 2 issues (0 critical, 2 informational)
+## Executive Summary
+This PR delivers the backend production base for issue #137 without expanding into frontend or authoring integration work that belongs to #139. `Course` remains the institutional source of truth, `Syllabus` owns editable pedagogical content, and every successful teacher save appends an immutable revision snapshot while updating the live syllabus row.
 
-**AUTO-FIXED:**
-- [TODOS.md:156] Duplicate TODO identifiers after adding new LangGraph follow-ups → renumbered downstream TODOs to keep IDs unique and monotonic
-- [pr_body.txt:1] Stale PR body content from an unrelated bootstrap observability change → replaced with the actual PR #125 summary, review notes, and test plan
+## Architecture Decisions
+- Keep `courses` authoritative for `title`, `code`, `semester`, and `academic_level`
+- Store editable pedagogical content in a separate `syllabuses` table with a unique `course_id`
+- Store revision history in append-only `syllabus_revisions` snapshots with a unique `(syllabus_id, revision)` index
+- Keep teacher detail fail-closed for access links by returning status/config metadata only, not raw tokens
+- Reject client-authored `ai_grounding_context` and derive it server-side on every successful syllabus save
+- Require `expected_revision` on save and return `409 stale_syllabus_revision` for stale writes
 
-## Eval Results
-No prompt-related files changed — evals skipped.
+## Main Files Changed
+- `backend/src/shared/models.py`
+- `backend/src/shared/syllabus_schema.py`
+- `backend/src/shared/teacher_reads.py`
+- `backend/src/shared/teacher_writes.py`
+- `backend/src/shared/teacher_router.py`
+- `backend/alembic/versions/e1b3c4d5f6a7_issue137_teacher_syllabuses.py`
+- `backend/tests/test_issue88_teacher_courses.py`
+- `backend/tests/test_issue30_auth_perimeter.py`
+- `TODOS.md`
 
-## Test Plan
-- [x] `uv run --directory backend pytest -q` (240 passed, 12 skipped)
-- [x] `npm --prefix frontend run test` (231 passed, 34 files)
-- [x] Targeted authoring hot path remained green during backend baseline audit
+## Validation Evidence
+- [x] `uv run --directory backend pytest -q tests/test_issue88_teacher_courses.py tests/test_issue30_auth_perimeter.py` (77 passed)
+- [x] `uv run --directory backend pytest -q` (277 passed, 12 skipped)
+- [x] `uv run --directory backend mypy src` (no issues found)
 
-## Backend Baseline Debt
-- #126 Normalize backend auth error contracts that leak `profile_incomplete` into unrelated flows
-- #127 Fix full-suite instability in authoring resilience and status backend tests
-- #128 Stabilize backend pytest isolation across full-suite runs
+## Residual Risks
+- `Assignment.course_id` and syllabus-aware authoring enforcement are still deferred to #139 by design
+- teacher detail currently exposes access-link status/config only; raw link management needs a follow-up product/security path
+- grounding generation hints are persisted with a stable contract now, but downstream authoring exploitation remains a separate step
+
+## References
+- Closes #137
+- Parent issue: #140
 
 🤖 Generated with GitHub Copilot
