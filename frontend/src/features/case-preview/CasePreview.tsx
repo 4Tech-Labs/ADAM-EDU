@@ -599,6 +599,14 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
         paperRef.current?.scrollTo({ top: 0, behavior: "instant" });
     }, [activeModule]);
 
+    // Lock body scroll while preview is mounted so the browser never shows a
+    // document-level scrollbar that would let the sticky ADAM header overlap content.
+    useEffect(() => {
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => { document.body.style.overflow = prev; };
+    }, []);
+
     // ── Download HTML ────────────────────────────────────────────────────────
     const handleDownloadHTML = useCallback(() => {
         const moduleLabel = visibleModules.find(m => m.id === activeModule)?.name ?? activeModule;
@@ -670,7 +678,7 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
     return (
         <>
             <style>{PREVIEW_STYLES}</style>
-            <div className="case-preview flex h-[calc(100vh-64px)] overflow-hidden font-sans">
+            <div className="case-preview flex h-[calc(100vh-80px)] overflow-hidden font-sans">
 
                 {/* ══ COL 1: SIDEBAR IZQUIERDO ══════════════════════════════ */}
                 <aside className="flex flex-col flex-shrink-0 bg-[#0f172a] text-slate-400" style={{ width: 280 }}>
@@ -803,6 +811,18 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
                                 </svg>
                                 PDF
                             </button>
+
+                            {/* Enviar Caso */}
+                            <button
+                                type="button"
+                                aria-label="Enviar caso al estudiante"
+                                onClick={() => {}}
+                                className="flex items-center gap-1.5 px-3 py-2 bg-[#0144a0] hover:bg-[#00337a] hover:shadow-md active:scale-95 text-white text-xs font-semibold rounded-lg transition-all duration-150 ease-out">
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                </svg>
+                                Enviar Caso
+                            </button>
                         </div>
                     </header>
 
@@ -811,8 +831,8 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
 
                         {/* COL 2: Scrollable paper */}
                         <div ref={paperRef}
-                            className="flex-1 overflow-y-auto custom-scroll px-6 py-8 bg-[#F0F4F8]">
-                            <div className="max-w-[960px] mx-auto">
+                            className="flex-1 overflow-y-auto overscroll-contain custom-scroll px-6 py-8 bg-[#F0F4F8]">
+                            <div className="w-full">
 
                                 {/* La hoja de papel */}
                                 <div className="paper-shadow bg-white rounded-xl overflow-hidden mb-8">
