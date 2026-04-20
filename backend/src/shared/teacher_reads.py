@@ -256,11 +256,14 @@ def resolve_syllabus_selection_titles(
     *,
     module_id: str,
     unit_id: str,
+    strict: bool = False,
 ) -> tuple[str, str]:
     module_title = ""
     unit_title = ""
 
     if not module_id:
+        if strict:
+            raise ValueError("invalid_syllabus_selection")
         return module_title, unit_title
 
     selected_module = next(
@@ -268,6 +271,8 @@ def resolve_syllabus_selection_titles(
         None,
     )
     if selected_module is None:
+        if strict:
+            raise ValueError("invalid_syllabus_selection")
         return module_title, unit_title
 
     module_title = str(selected_module.get("module_title", ""))
@@ -283,6 +288,8 @@ def resolve_syllabus_selection_titles(
         None,
     )
     if selected_unit is None:
+        if strict:
+            raise ValueError("invalid_syllabus_selection")
         return module_title, unit_title
 
     return module_title, str(selected_unit.get("title", ""))

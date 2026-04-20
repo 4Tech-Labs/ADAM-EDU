@@ -596,11 +596,18 @@ def create_authoring_job(
         owned_course = get_teacher_owned_course_with_syllabus(db, context, req.course_id, lock=True)
         SyllabusGroundingContext.model_validate(owned_course.syllabus.ai_grounding_context)
         deadline, normalized_due_at = _normalize_deadline_input(req.due_at)
-        module_title, unit_title = resolve_syllabus_selection_titles(
-            owned_course.syllabus.modules,
-            module_id=req.syllabus_module,
-            unit_id=req.topic_unit,
-        )
+        try:
+            module_title, unit_title = resolve_syllabus_selection_titles(
+                owned_course.syllabus.modules,
+                module_id=req.syllabus_module,
+                unit_id=req.topic_unit,
+                strict=True,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Seleccion invalida de modulo o unidad del syllabus",
+            ) from exc
 
         assignment = Assignment(
             teacher_id=teacher.id,

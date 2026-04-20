@@ -236,11 +236,17 @@ def _resolve_job_grounding_snapshot(
         )
 
     grounding = SyllabusGroundingContext.model_validate(raw_grounding)
-    module_title, unit_title = resolve_syllabus_selection_titles(
-        list(snapshot.get("modules", [])),
-        module_id=module_id,
-        unit_id=unit_id,
-    )
+    try:
+        module_title, unit_title = resolve_syllabus_selection_titles(
+            list(snapshot.get("modules", [])),
+            module_id=module_id,
+            unit_id=unit_id,
+            strict=True,
+        )
+    except ValueError as exc:
+        raise GroundingContextResolutionError(
+            "El snapshot persistido del syllabus no contiene el modulo o la unidad seleccionados para este trabajo de authoring."
+        ) from exc
     preferred_techniques = list(grounding.generation_hints.preferred_techniques)
     return grounding.model_dump(mode="json"), module_title, unit_title, preferred_techniques
 
