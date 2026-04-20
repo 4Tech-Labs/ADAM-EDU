@@ -32,8 +32,8 @@ async function selectOption(
 
 async function enableSuggestions(user: ReturnType<typeof userEvent.setup>) {
     await selectOption(user, /asignatura/i, /gerencia/i);
-    await user.type(screen.getByLabelText(/grupo destino/i), "Grupo 01");
-    await user.keyboard("{Enter}");
+    await user.click(screen.getByLabelText(/grupos destino/i));
+    await user.click(await screen.findByRole("button", { name: "Gerencia de Operaciones (GO-101)" }));
     await selectOption(user, /m[oó]dulo del syllabus/i, /fundamentos/i);
 }
 
@@ -382,4 +382,100 @@ describe("AuthoringForm", () => {
             expect(screen.queryByDisplayValue("No debe aplicar")).not.toBeInTheDocument();
         });
     }, 20_000);
+});
+
+describe("GroupsCombobox (within AuthoringForm)", () => {
+    beforeAll(() => {
+        Element.prototype.hasPointerCapture ??= () => false;
+        Element.prototype.releasePointerCapture ??= () => {};
+        Element.prototype.setPointerCapture ??= () => {};
+        Element.prototype.scrollIntoView ??= () => {};
+    });
+
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        server.use(
+            http.get("/api/teacher/courses", () => HttpResponse.json({
+                courses: [
+                    {
+                        id: "course-1",
+                        title: "Gerencia de Operaciones",
+                        code: "GO-101",
+                        semester: "2025-1",
+                        academic_level: "MBA",
+                        status: "active",
+                        students_count: 32,
+                        active_cases_count: 1,
+                    },
+                ],
+                total: 1,
+            })),
+        );
+    });
+
+    it("opens the popover and lists available courses", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        await user.click(screen.getByLabelText(/grupos destino/i));
+
+        expect(await screen.findByRole("button", { name: "Gerencia de Operaciones (GO-101)" })).toBeInTheDocument();
+    });
+
+    it("shows empty state when teacher has no courses", async () => {
+        server.use(
+            http.get("/api/teacher/courses", () => HttpResponse.json({ courses: [], total: 0 })),
+        );
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        await user.click(screen.getByLabelText(/grupos destino/i));
+
+        expect(await screen.findByText(/no tienes cursos disponibles/i)).toBeInTheDocument();
+    });
+
+    it("clicking a course option adds a chip and does NOT submit the form", async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        renderWithProviders(<AuthoringForm onSubmit={onSubmit} />);
+
+        await user.click(screen.getByLabelText(/grupos destino/i));
+        await user.click(await screen.findByRole("button", { name: "Gerencia de Operaciones (GO-101)" }));
+
+        expect(screen.getByText("Gerencia de Operaciones (GO-101)")).toBeInTheDocument();
+        expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("selected course no longer appears as an available option", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        await user.click(screen.getByLabelText(/grupos destino/i));
+        await user.click(await screen.findByRole("button", { name: "Gerencia de Operaciones (GO-101)" }));
+
+        // Trigger reflects the selection
+        expect(screen.getByText(/1 grupo seleccionado/i)).toBeInTheDocument();
+
+        // Re-open: the course now appears in the selected section only, not as an addable option
+        await user.click(screen.getByLabelText(/grupos destino/i));
+        // Available section is empty; selected section shows the course with checkmark
+        const allMatchingButtons = screen.getAllByRole("button", { name: "Gerencia de Operaciones (GO-101)" });
+        // One inside popover (selected item, removable), one chip below
+        expect(allMatchingButtons).toHaveLength(2);
+    });
+
+    it("clicking the chip removes the selection", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+
+        // Add the course
+        await user.click(screen.getByLabelText(/grupos destino/i));
+        await user.click(await screen.findByRole("button", { name: "Gerencia de Operaciones (GO-101)" }));
+
+        // Chip should now be visible (popover closed after selection)
+        const chip = screen.getByRole("button", { name: "Gerencia de Operaciones (GO-101)" });
+        await user.click(chip);
+
+        expect(screen.queryByText("Gerencia de Operaciones (GO-101)")).not.toBeInTheDocument();
+    });
 });

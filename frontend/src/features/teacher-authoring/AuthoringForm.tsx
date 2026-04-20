@@ -15,6 +15,7 @@ import {
     STUDENT_PROFILES,
     FORM_STYLES
 } from "./authoringFormConfig";
+import { GroupsCombobox } from "./GroupsCombobox";
 
 interface Props {
     initialData?: CaseFormData;
@@ -45,7 +46,6 @@ export function AuthoringForm({
     const [guidingQuestion, setGuidingQuestion] = useState("");
     const [suggestedTechniques, setSuggestedTechniques] = useState<string[]>([]);
     const [algoInput, setAlgoInput] = useState("");
-    const [targetGroupInput, setTargetGroupInput] = useState("");
 
     const [availableFrom, setAvailableFrom] = useState("");
     const [dueAt, setDueAt] = useState("");
@@ -250,7 +250,6 @@ export function AuthoringForm({
         if (targetGroups.some((group) => group.toLowerCase() === trimmed.toLowerCase())) return;
         invalidateSuggestionResponses();
         setTargetGroups((prev) => [...prev, trimmed]);
-        setTargetGroupInput("");
         setErrors((prev) => ({ ...prev, targetGroups: false }));
     }, [invalidateSuggestionResponses, targetGroups]);
 
@@ -258,13 +257,6 @@ export function AuthoringForm({
         invalidateSuggestionResponses();
         setTargetGroups((prev) => prev.filter((value) => value !== group));
     }, [invalidateSuggestionResponses]);
-
-    const handleTargetGroupKeyDown = useCallback((e: KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === "Enter" || e.key === ",") {
-            e.preventDefault();
-            addTargetGroup(targetGroupInput);
-        }
-    }, [addTargetGroup, targetGroupInput]);
 
     // ── Chips Orchestration ──
     const addChip = useCallback(
@@ -393,7 +385,6 @@ export function AuthoringForm({
         setGuidingQuestion("");
         setSuggestedTechniques([]);
         setAlgoInput("");
-        setTargetGroupInput("");
         setErrors({});
         scenarioMutation.reset();
         techniquesMutation.reset();
@@ -494,44 +485,18 @@ export function AuthoringForm({
 
                                     {/* Grupos */}
                                     <div>
-                                        <label className="block text-sm font-semibold text-slate-700 mb-2">
+                                        <label htmlFor="field-grupos" className="block text-sm font-semibold text-slate-700 mb-2">
                                             Grupos Destino <span className="text-red-500" aria-hidden="true">*</span>
                                         </label>
-                                        <div className="space-y-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
-                                            <div className="flex flex-col gap-3 md:flex-row">
-                                                <input
-                                                    type="text"
-                                                    value={targetGroupInput}
-                                                    onChange={(e) => setTargetGroupInput(e.target.value)}
-                                                    onKeyDown={handleTargetGroupKeyDown}
-                                                    placeholder="Escriba un grupo o seccion y presione Enter"
-                                                    className="input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800"
-                                                    aria-label="Grupo destino"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => addTargetGroup(targetGroupInput)}
-                                                    className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-[#0144a0] hover:text-[#0144a0]"
-                                                >
-                                                    Agregar grupo
-                                                </button>
-                                            </div>
-                                            <div className="flex flex-wrap gap-2">
-                                                {targetGroups.map((group) => (
-                                                    <button
-                                                        key={group}
-                                                        type="button"
-                                                        onClick={() => removeTargetGroup(group)}
-                                                        className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-[#0144a0] hover:text-[#0144a0]"
-                                                    >
-                                                        <span>{group}</span>
-                                                        <span aria-hidden="true">x</span>
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </div>
+                                        <GroupsCombobox
+                                            courses={teacherCourses}
+                                            value={targetGroups}
+                                            onAdd={addTargetGroup}
+                                            onRemove={removeTargetGroup}
+                                            hasError={!!errors.targetGroups}
+                                        />
                                         {errors.targetGroups && <ErrorMsg show={true} />}
-                                        <p className="field-hint">Registre manualmente los grupos o secciones que recibiran este caso.</p>
+                                        <p className="field-hint">Seleccione los grupos o secciones que recibirán este caso.</p>
                                     </div>
 
                                     {/* Módulo + Unidad */}
@@ -591,29 +556,6 @@ export function AuthoringForm({
                                         </div>
                                     </div>
 
-                                    {/* Perfil de Estudiante */}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 pt-2">
-                                        <div>
-                                            <label htmlFor="field-studentProfile" className="block text-sm font-semibold text-slate-700 mb-1.5">
-                                                Perfil del curso <span className="text-red-500" aria-hidden="true">*</span>
-                                            </label>
-                                            <Select value={studentProfile} onValueChange={onStudentProfileChange}>
-                                                <SelectTrigger
-                                                    id="field-studentProfile"
-                                                    className="input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800"
-                                                >
-                                                    <SelectValue placeholder="Selecciona un perfil..." />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectGroup>
-                                                        {STUDENT_PROFILES.map((opt) => (
-                                                            <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                                                        ))}
-                                                    </SelectGroup>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                    </div>
                                 </div>
                             </fieldset>
 
@@ -672,6 +614,30 @@ export function AuthoringForm({
                                                     </div>
                                                 </div>
                                             </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Perfil de Estudiante */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 pt-2">
+                                        <div>
+                                            <label htmlFor="field-studentProfile" className="block text-sm font-semibold text-slate-700 mb-1.5">
+                                                Perfil del curso <span className="text-red-500" aria-hidden="true">*</span>
+                                            </label>
+                                            <Select value={studentProfile} onValueChange={onStudentProfileChange}>
+                                                <SelectTrigger
+                                                    id="field-studentProfile"
+                                                    className="input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800"
+                                                >
+                                                    <SelectValue placeholder="Selecciona un perfil..." />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectGroup>
+                                                        {STUDENT_PROFILES.map((opt) => (
+                                                            <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                                                        ))}
+                                                    </SelectGroup>
+                                                </SelectContent>
+                                            </Select>
                                         </div>
                                     </div>
 
