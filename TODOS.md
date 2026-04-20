@@ -265,6 +265,38 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
+## TODO-019: Vincular `Assignment.course_id` y authoring al dominio de syllabus
+
+**What:** Agregar `course_id` real a `assignments`, propagarlo por el intake de authoring y reemplazar el placeholder `active_cases_count=0` de teacher courses por conteos reales por curso.
+
+**Why:** La base backend de syllabuses y revisiones puede vivir sola en Issue #137, pero el authoring y los indicadores de casos siguen desacoplados del curso hasta que exista ese puente explícito.
+
+**Pros:** Elimina una costura conocida entre gestión docente y generación de casos, permite grounding y guardrails por curso en el flujo de authoring, y cierra el TODO ya existente en `backend/src/shared/teacher_reads.py`.
+
+**Cons:** Amplía el scope hacia el dominio de authoring, requiere migración adicional sobre `assignments`, ajustes de contratos y tests cruzados con el pipeline de generación.
+
+**Context:** Durante la revisión de Issue #137 se decidió mantener el backend de syllabus aislado y deferir la integración completa con authoring a la issue hermana #139 para no mezclar persistencia pedagógica con orquestación/generation guardrails en la misma PR.
+
+**Depends on / blocked by:** Issue #139 y la definición final del contrato `course_id` en authoring intake, pipeline y queries de progreso/resultado.
+
+---
+
+## TODO-020: Endpoint docente para gestionar access link del curso
+
+**What:** Crear un endpoint docente dedicado para visualizar o regenerar el access link vigente del curso, con auditoría y reglas explícitas de exposición del raw token.
+
+**Why:** En Issue #137 el detalle docente devuelve solo metadata y `access_link_status`, porque el modelo actual persiste hashes y no puede reconstruir un link bruto existente de forma segura.
+
+**Pros:** Hace accionable la pestaña Configuración sin degradar el modelo de secretos del endpoint de detalle; separa claramente lectura de estado y emisión/regeneración de links.
+
+**Cons:** Añade una nueva superficie de escritura sensible, implica definir ownership docente, UX de one-time display y política de rotación para no filtrar tokens sin control.
+
+**Context:** La revisión de arquitectura de Issue #137 eligió fail-closed en el detalle compuesto: no exponer raw links en `GET /api/teacher/courses/{course_id}` y dejar la gestión activa del link como follow-up deliberado.
+
+**Depends on / blocked by:** Alineación de producto para self-service docente en la pestaña Configuración y decisión explícita sobre si la acción debe regenerar el token o solo mostrar un token recién emitido.
+
+---
+
 ## TODO-017: Stress harness post-fix para contencion de checkpoints y churn de event loops
 
 **What:** Evaluar un stress harness diferido que repita secuencias de bootstrap, retry, teardown y cambio de event loop para el path de checkpoints de LangGraph mas alla de `test_authoring_progress_resilience.py` y `test_phase3_status_api.py`.
