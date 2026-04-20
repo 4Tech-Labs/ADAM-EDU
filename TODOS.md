@@ -259,6 +259,38 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Cons:** Añade trabajo de documentacion fuera del fix principal y exige mantener sincronizado el texto cuando cambie el contrato de cleanup.
 
+---
+
+## TODO-017: Consolidar tokens visuales y adapters de formularios docentes
+
+**What:** Extraer y consolidar los tokens visuales, helpers de listas dinámicas y adapters explícitos de payload usados en la pantalla de gestión de curso docente y el authoring, una vez que ambos flujos queden respaldados por contratos reales estables.
+
+**Why:** Issue #138 introduce una página docente nueva con estilos y adapters locales por minimal diff, mientras el authoring todavía mantiene su propio bundle visual y mocks históricos. Si #139 también aterriza sobre contratos reales, quedará una deuda clara de convergencia.
+
+**Pros:** Reduce duplicación, baja el costo de mantenimiento de cambios visuales o contractuales y deja un lenguaje docente más consistente sin depender de mocks legados.
+
+**Cons:** Hacerlo antes de cerrar #139 sería prematuro: aumenta el scope, fuerza abstracciones antes de tiempo y puede cristalizar un API compartido incorrecto.
+
+**Context:** En la revisión de ingeniería de Issue #138 se decidió explícitamente mantener los estilos y adapters locales al feature para preservar minimal diff, evitar acoplar la nueva pantalla al authoring actual y no mezclar la deuda de `professorDB` con la integración fiel del contrato backend #137.
+
+**Depends on / blocked by:** Esperar a que Issue #139 estabilice el consumo real de `course_id` y `syllabus -> modules -> units` en authoring. No bloquea el release de #138.
+
+---
+
+## TODO-018: Habilitar acciones docentes reales sobre access links cuando exista soporte backend
+
+**What:** Agregar acciones reales en la vista docente para copiar o regenerar el access link del curso únicamente cuando exista un endpoint backend canónico que exponga ese contrato de forma segura.
+
+**Why:** Issue #138 solo puede mostrar metadata (`access_link_status`, `access_link_id`, `access_link_created_at`, `join_path`). Cualquier UX que pretenda reconstruir o reutilizar un raw link a partir de esos campos sería falsa y riesgosa.
+
+**Pros:** Cuando el backend exista, desbloqueará una UX docente completa y honesta para la gestión de acceso estudiantil desde la misma pantalla del curso.
+
+**Cons:** Requiere trabajo coordinado de backend, permisos y UX; meterlo antes introduciría fake UX o drift contractual.
+
+**Context:** Durante la revisión de Issue #138 se decidió explícitamente renderizar solo metadata real en la tab `Configuración` y agregar tests negativos para impedir botones de copy/regenerate sin soporte backend. Este TODO captura la necesidad futura con el contexto correcto para retomarla sin ambigüedad.
+
+**Depends on / blocked by:** Nuevo alcance de producto y endpoint backend dedicado para exponer y/o regenerar access links de forma autorizada. No bloquea #138.
+
 **Context:** Aceptado durante la revision de rediseño de Issue #127. El objetivo es que la solucion de clean-room sea invisible para quien escriba nuevos tests, pero explicita para quien mantenga el runtime. La documentacion debe referenciar el contrato centralizado una vez exista como superficie canonica.
 
 **Depends on / blocked by:** Depende de cerrar primero la implementacion de Issue #127 y de fijar cuales helpers quedan como API operativa estable para clean-room y diagnostico.

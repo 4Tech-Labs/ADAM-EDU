@@ -66,6 +66,8 @@ export const queryKeys = {
         all: () => ["teacher"] as const,
         /** ["teacher", "courses"] — cursos del docente autenticado */
         courses: () => ["teacher", "courses"] as const,
+        /** ["teacher", "course", courseId] — detalle compuesto de un curso docente */
+        course: (courseId: string) => ["teacher", "course", courseId] as const,
         /** ["teacher", "cases"] — casos activos del docente autenticado */
         cases: () => ["teacher", "cases"] as const,
     },

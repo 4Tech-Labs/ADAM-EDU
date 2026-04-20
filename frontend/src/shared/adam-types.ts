@@ -529,6 +529,137 @@ export interface TeacherCoursesResponse {
     total: number;
 }
 
+export interface TeacherSyllabusUnit {
+    unit_id: string;
+    title: string;
+    topics: string;
+}
+
+export interface TeacherSyllabusModule {
+    module_id: string;
+    module_title: string;
+    weeks: string;
+    module_summary: string;
+    learning_outcomes: string[];
+    units: TeacherSyllabusUnit[];
+    cross_course_connections: string;
+}
+
+export interface TeacherEvaluationStrategyItem {
+    activity: string;
+    weight: number;
+    linked_objectives: string[];
+    expected_outcome: string;
+}
+
+export interface TeacherDidacticStrategy {
+    methodological_perspective: string;
+    pedagogical_modality: string;
+}
+
+export interface TeacherSyllabusPayload {
+    department: string;
+    knowledge_area: string;
+    nbc: string;
+    version_label: string;
+    academic_load: string;
+    course_description: string;
+    general_objective: string;
+    specific_objectives: string[];
+    modules: TeacherSyllabusModule[];
+    evaluation_strategy: TeacherEvaluationStrategyItem[];
+    didactic_strategy: TeacherDidacticStrategy;
+    integrative_project: string;
+    bibliography: string[];
+    teacher_notes: string;
+}
+
+export interface TeacherSyllabusGroundingCourseIdentity {
+    course_id: string;
+    course_title: string;
+    academic_level: string;
+    department: string;
+    knowledge_area: string;
+    nbc: string;
+}
+
+export interface TeacherSyllabusGroundingPedagogicalIntent {
+    course_description: string;
+    general_objective: string;
+    specific_objectives: string[];
+}
+
+export interface TeacherSyllabusGroundingInstructionalScope {
+    modules: TeacherSyllabusModule[];
+    evaluation_strategy: TeacherEvaluationStrategyItem[];
+    didactic_strategy: TeacherDidacticStrategy;
+}
+
+export interface TeacherSyllabusGroundingGenerationHints {
+    target_student_profile: string;
+    scenario_constraints: string[];
+    preferred_techniques: string[];
+    difficulty_signal: string;
+    forbidden_mismatches: string[];
+}
+
+export interface TeacherSyllabusGroundingMetadata {
+    syllabus_revision: number;
+    saved_at: string;
+    saved_by_membership_id: string;
+}
+
+export interface TeacherSyllabusGroundingContext {
+    course_identity: TeacherSyllabusGroundingCourseIdentity;
+    pedagogical_intent: TeacherSyllabusGroundingPedagogicalIntent;
+    instructional_scope: TeacherSyllabusGroundingInstructionalScope;
+    generation_hints: TeacherSyllabusGroundingGenerationHints;
+    metadata: TeacherSyllabusGroundingMetadata;
+}
+
+export interface TeacherSyllabusResponse extends TeacherSyllabusPayload {
+    ai_grounding_context: TeacherSyllabusGroundingContext;
+}
+
+export interface TeacherSyllabusRevisionMetadata {
+    current_revision: number;
+    saved_at: string | null;
+    saved_by_membership_id: string | null;
+}
+
+export type TeacherCourseAccessLinkStatus = "active" | "missing";
+
+export interface TeacherCourseInstitutionalDetail {
+    id: string;
+    title: string;
+    code: string;
+    semester: string;
+    academic_level: string;
+    status: TeacherCourseStatus;
+    max_students: number;
+    students_count: number;
+    active_cases_count: number;
+}
+
+export interface TeacherCourseConfiguration {
+    access_link_status: TeacherCourseAccessLinkStatus;
+    access_link_id: string | null;
+    access_link_created_at: string | null;
+    join_path: string;
+}
+
+export interface TeacherCourseDetailResponse {
+    course: TeacherCourseInstitutionalDetail;
+    syllabus: TeacherSyllabusResponse | null;
+    revision_metadata: TeacherSyllabusRevisionMetadata;
+    configuration: TeacherCourseConfiguration;
+}
+
+export interface TeacherSyllabusSaveRequest {
+    expected_revision: number;
+    syllabus: TeacherSyllabusPayload;
+}
+
 export interface TeacherCaseItem {
     id: string;
     title: string;
