@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",
-    "@tailwindcss/vite": "^4.1.5",
+    "@tailwindcss/vite": "^4.2.2",
     "@tanstack/react-query": "^5.97.0",
     "@tanstack/react-query-devtools": "^5.97.0",
     "clsx": "^2.1.1",
