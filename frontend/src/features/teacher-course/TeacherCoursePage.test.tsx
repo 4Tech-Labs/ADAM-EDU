@@ -222,8 +222,8 @@ describe("TeacherCoursePage", () => {
         expect(api.teacher.getCourseDetail).toHaveBeenCalledWith("course-1");
         expect(screen.getByDisplayValue("GTD-GEME-01-2026")).toBeTruthy();
         expect(
-            screen.getByDisplayValue("Gestión de las Organizaciones"),
-        ).toBeTruthy();
+            screen.getByLabelText(/Departamento que la ofrece/i),
+        ).toHaveValue("Gestión de las Organizaciones");
     });
 
     it("persists the active tab in the URL", async () => {

@@ -21,8 +21,8 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from sqlalchemy import select, update
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.orm import Session
@@ -93,6 +93,9 @@ from shared.models import (
     User,
 )
 from shared.internal_tasks import process_authoring_job_task
+from shared.syllabus_schema import SyllabusGroundingContext
+from shared.teacher_context import resolve_teacher_context
+from shared.teacher_reads import get_teacher_owned_course_with_syllabus, resolve_syllabus_selection_titles
 
 load_dotenv()
 
@@ -254,12 +257,24 @@ def get_legacy_teacher_or_500(db: Session, actor: CurrentActor) -> User:
 
 
 def get_owned_job_or_404(db: Session, job_id: str, actor: CurrentActor) -> AuthoringJob:
+    context = resolve_teacher_context(actor)
     stmt = (
         select(AuthoringJob)
         .join(Assignment, AuthoringJob.assignment_id == Assignment.id)
+        .outerjoin(Course, Assignment.course_id == Course.id)
         .where(
             AuthoringJob.id == job_id,
-            Assignment.teacher_id == actor.auth_user_id,
+            or_(
+                and_(
+                    Assignment.course_id.is_(None),
+                    Assignment.teacher_id == actor.auth_user_id,
+                ),
+                and_(
+                    Assignment.course_id.is_not(None),
+                    Course.university_id == context.university_id,
+                    Course.teacher_membership_id == context.teacher_membership_id,
+                ),
+            ),
         )
     )
     job = db.scalar(stmt)
@@ -529,7 +544,10 @@ async def health_check() -> dict[str, str]:
 
 
 class IntakeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     assignment_title: str
+    course_id: str
     subject: str = ""
     academic_level: str = "Pregrado"
     industry: str = "General"
@@ -573,11 +591,20 @@ def create_authoring_job(
 ) -> JobCreatedResponse:
     started = time.monotonic()
     try:
+        context = resolve_teacher_context(actor)
         teacher = get_legacy_teacher_or_500(db, actor)
+        owned_course = get_teacher_owned_course_with_syllabus(db, context, req.course_id, lock=True)
+        SyllabusGroundingContext.model_validate(owned_course.syllabus.ai_grounding_context)
         deadline, normalized_due_at = _normalize_deadline_input(req.due_at)
+        module_title, unit_title = resolve_syllabus_selection_titles(
+            owned_course.syllabus.modules,
+            module_id=req.syllabus_module,
+            unit_id=req.topic_unit,
+        )
 
         assignment = Assignment(
             teacher_id=teacher.id,
+            course_id=owned_course.course.id,
             title=req.assignment_title,
             status="draft",
             deadline=deadline,
@@ -593,15 +620,19 @@ def create_authoring_job(
             status=AUTHORING_JOB_STATUS_PENDING,
             task_payload={
                 "step": "authoring",
-                "asignatura": req.subject or req.assignment_title,
-                "nivel": req.academic_level,
+                "course_id": owned_course.course.id,
+                "syllabus_revision": owned_course.syllabus.revision,
+                "syllabus_module_id": req.syllabus_module,
+                "topic_unit_id": req.topic_unit,
+                "asignatura": owned_course.course.title,
+                "nivel": owned_course.course.academic_level,
                 "industria": req.industry,
                 "studentProfile": req.student_profile,
                 "caseType": req.case_type,
-                "modulo": req.syllabus_module,
+                "modulo": module_title,
                 "escenario": req.scenario_description,
                 "pregunta_guia": req.guiding_question,
-                "topicUnit": req.topic_unit,
+                "topicUnit": unit_title,
                 "targetGroups": req.target_groups,
                 "edaDepth": req.eda_depth,
                 "includePythonCode": req.include_python_code,

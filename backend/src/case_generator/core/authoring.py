@@ -15,7 +15,7 @@ from case_generator.core.storage import get_storage_provider
 from case_generator.graph import DurableCheckpointUnavailableError, RESUME_CACHE_STATE_KEY, get_graph
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
 from langchain_core.runnables import RunnableConfig
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.exc import TimeoutError as SATimeoutError
 from shared.blueprint_schema import (
@@ -46,8 +46,12 @@ from shared.models import (
     AUTHORING_JOB_STATUS_PROCESSING,
     Assignment,
     AuthoringJob,
+    Syllabus,
+    SyllabusRevision,
 )
 from shared.sanitization import sanitize_untrusted_text
+from shared.syllabus_schema import SyllabusGroundingContext
+from shared.teacher_reads import resolve_syllabus_selection_titles
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +141,10 @@ _BOOTSTRAP_STATE_KEYS = (
 class GraphBootstrapTimeoutError(RuntimeError):
     """Raised when the graph bootstrap exceeds the configured timeout."""
 
+
+class GroundingContextResolutionError(RuntimeError):
+    """Raised when a persisted syllabus-grounding snapshot cannot be resolved for a job."""
+
 _TRANSIENT_TIMEOUT_MARKERS = (
     "timed out",
     "read timeout",
@@ -175,6 +183,66 @@ def _classify_failure_status(error_code: str | None) -> str:
     if error_code in _RESUMABLE_FAILURE_CODES:
         return AUTHORING_JOB_STATUS_FAILED_RESUMABLE
     return AUTHORING_JOB_STATUS_FAILED
+
+
+def _resolve_job_grounding_snapshot(
+    db: Any,
+    *,
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str, str, list[str]]:
+    raw_selected_techniques = payload.get(
+        "algoritmos",
+        payload.get("suggested_techniques", payload.get("suggestedTechniques", [])),
+    )
+    selected_techniques = list(raw_selected_techniques) if isinstance(raw_selected_techniques, list | tuple) else []
+    course_id = payload.get("course_id")
+    syllabus_revision = payload.get("syllabus_revision")
+    module_id = str(payload.get("syllabus_module_id", ""))
+    unit_id = str(payload.get("topic_unit_id", ""))
+
+    if not isinstance(course_id, str) or not course_id.strip():
+        return (
+            None,
+            str(payload.get("modulo", payload.get("syllabusModule", ""))),
+            str(payload.get("topicUnit", "")),
+            selected_techniques,
+        )
+
+    if not isinstance(syllabus_revision, int) or syllabus_revision <= 0:
+        raise GroundingContextResolutionError(
+            "No se pudo resolver la revision del syllabus asociada a este trabajo de authoring."
+        )
+
+    row = db.execute(
+        select(SyllabusRevision.snapshot)
+        .select_from(SyllabusRevision)
+        .join(Syllabus, SyllabusRevision.syllabus_id == Syllabus.id)
+        .where(
+            Syllabus.course_id == course_id,
+            SyllabusRevision.revision == syllabus_revision,
+        )
+        .limit(1)
+    ).first()
+    if row is None:
+        raise GroundingContextResolutionError(
+            "No se encontro el snapshot persistido del syllabus asociado a este trabajo de authoring."
+        )
+
+    snapshot = dict(row[0] or {})
+    raw_grounding = snapshot.get("ai_grounding_context")
+    if not isinstance(raw_grounding, dict):
+        raise GroundingContextResolutionError(
+            "El snapshot persistido del syllabus no contiene un grounding valido para authoring."
+        )
+
+    grounding = SyllabusGroundingContext.model_validate(raw_grounding)
+    module_title, unit_title = resolve_syllabus_selection_titles(
+        list(snapshot.get("modules", [])),
+        module_id=module_id,
+        unit_id=unit_id,
+    )
+    preferred_techniques = list(grounding.generation_hints.preferred_techniques)
+    return grounding.model_dump(mode="json"), module_title, unit_title, preferred_techniques
 
 
 def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
@@ -611,6 +679,10 @@ class AuthoringService:
         storage_provider = get_storage_provider()
         resume_cached_nodes: dict[str, dict[str, str]] = {}
         is_resume_retry = False
+        grounding_context: dict[str, Any] | None = None
+        grounded_module_title = ""
+        grounded_unit_title = ""
+        preferred_techniques: list[str] = []
 
         # --- DB MICRO-SESSION 1: transition the job into processing ---
         # Winner-takes-lock CAS: only one concurrent retry may move status to processing.
@@ -694,7 +766,28 @@ class AuthoringService:
                 return
 
             owner_id = assignment.teacher_id
+            grounding_context, grounded_module_title, grounded_unit_title, preferred_techniques = _resolve_job_grounding_snapshot(
+                db,
+                payload=payload,
+            )
             db.commit()
+        except GroundingContextResolutionError as exc:
+            logger.error("AuthoringService: Failure locking job %s: %s", job_id, exc)
+            payload_with_error = _next_progress_payload(
+                payload,
+                status=AUTHORING_JOB_STATUS_FAILED,
+                current_step="failed",
+                error_code="syllabus_grounding_unavailable",
+                error_trace=str(exc),
+            )
+            db.rollback()
+            db.execute(
+                update(AuthoringJob)
+                .where(AuthoringJob.id == job_id)
+                .values(status=AUTHORING_JOB_STATUS_FAILED, task_payload=payload_with_error)
+            )
+            db.commit()
+            return
         except Exception as exc:
             logger.error("AuthoringService: Failure locking job %s: %s", job_id, exc)
             db.rollback()
@@ -763,24 +856,32 @@ class AuthoringService:
             output_depth = _derive_output_depth(payload)
             scenario_description = payload.get("escenario", payload.get("scenarioDescription", ""))
             target_groups = payload.get("targetGroups", [])
+            raw_selected_techniques = payload.get(
+                "algoritmos",
+                payload.get("suggested_techniques", payload.get("suggestedTechniques", [])),
+            )
+            selected_techniques = list(raw_selected_techniques) if isinstance(raw_selected_techniques, list | tuple) else []
+            for technique in preferred_techniques:
+                if technique not in selected_techniques:
+                    selected_techniques.append(technique)
 
             state_input: dict[str, Any] = {
                 "asignatura": payload.get("asignatura", "Default Subject"),
                 "nivel": payload.get("nivel", "pregrado"),
                 "industria": payload.get("industria", "General"),
                 "studentProfile": payload.get("studentProfile", "business"),
-                "algoritmos": payload.get("algoritmos", []),
+                "algoritmos": selected_techniques,
                 "edaDepth": payload.get("edaDepth"),
                 "includePythonCode": payload.get("includePythonCode", False),
-                "topicUnit": payload.get("topicUnit", ""),
+                "topicUnit": grounded_unit_title or payload.get("topicUnit", ""),
                 "targetGroups": target_groups,
                 "caseType": payload.get("caseType", "harvard_only"),
                 "guidingQuestion": payload.get("pregunta_guia", payload.get("guidingQuestion", "")),
                 "scenarioDescription": scenario_description,
-                "syllabusModule": payload.get("modulo", payload.get("syllabusModule", "")),
+                "syllabusModule": grounded_module_title or payload.get("modulo", payload.get("syllabusModule", "")),
                 "output_depth": output_depth,
                 # Legacy-compatible aliases still consumed by graph.py prompt builders.
-                "modulos": target_groups,
+                "modulos": [grounded_module_title] if grounded_module_title else [],
                 "horas": payload.get("horas", 4),
                 "descripcion": scenario_description,
                 "scope": "technical" if output_depth else "narrative",
@@ -795,6 +896,8 @@ class AuthoringService:
                 "industry_cagr_range": "5-8%",
                 RESUME_CACHE_STATE_KEY: resume_cached_nodes,
             }
+            if grounding_context is not None:
+                state_input["ai_grounding_context"] = grounding_context
 
             # Inject hydrated artifacts into initial graph state so downstream nodes
             # keep context even when upstream generation is skipped.
@@ -909,6 +1012,14 @@ class AuthoringService:
                 "Nuestros servidores de IA estan a maxima capacidad y el tiempo de espera se agoto. "
                 "Por favor, reintenta en unos minutos."
             )
+        except GroundingContextResolutionError as exc:
+            logger.error(
+                "AuthoringService: Persisted syllabus grounding unavailable for Job %s",
+                job_id,
+                exc_info=True,
+            )
+            error_code = "syllabus_grounding_unavailable"
+            error_msg = str(exc)
         except Exception as exc:
             if _is_durable_checkpoint_runtime_failure(exc):
                 logger.error(

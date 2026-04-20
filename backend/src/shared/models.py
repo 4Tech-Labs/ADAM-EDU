@@ -203,6 +203,7 @@ class Course(Base):
     access_links: Mapped[list["CourseAccessLink"]] = relationship(back_populates="course")
     course_memberships: Mapped[list["CourseMembership"]] = relationship(back_populates="course")
     syllabus: Mapped["Syllabus | None"] = relationship(back_populates="course", uselist=False)
+    assignments: Mapped[list["Assignment"]] = relationship(back_populates="course")
 
 
 class Invite(Base):
@@ -323,6 +324,7 @@ class Assignment(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     teacher_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    course_id: Mapped[str | None] = mapped_column(Text, ForeignKey("courses.id"), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
 
     # Internal blueprint contract retained for compatibility and future continuity.
@@ -344,6 +346,7 @@ class Assignment(Base):
     )
 
     teacher: Mapped["User"] = relationship(back_populates="assignments")
+    course: Mapped["Course | None"] = relationship(back_populates="assignments")
     authoring_jobs: Mapped[list["AuthoringJob"]] = relationship(back_populates="assignment")
     artifacts: Mapped[list["ArtifactManifest"]] = relationship(back_populates="assignment")
 

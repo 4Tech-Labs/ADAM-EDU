@@ -72,6 +72,7 @@ describe("api auth + stream glue", () => {
 
         await api.authoring.submitJob({
             assignment_title: "Case",
+            course_id: "course-1",
             subject: "Case",
             academic_level: "MBA",
             industry: "FinTech",

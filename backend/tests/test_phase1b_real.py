@@ -7,14 +7,23 @@ from shared.models import AuthoringJob, Assignment
 
 pytestmark = pytest.mark.live_llm
 
-def test_real_success_and_idempotency(client, auth_headers_factory, seed_identity):
+def test_real_success_and_idempotency(client, auth_headers_factory, seed_identity, seed_course_with_syllabus):
     print("\n--- Testing Real Success ---")
     teacher_id = str(uuid.uuid4())
     teacher_email = f"{teacher_id}@example.edu"
-    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    teacher = seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    course = seed_course_with_syllabus(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Real LLM Test Case",
+    )
     headers = auth_headers_factory(sub=teacher_id, email=teacher_email)
     payload = {
-        "assignment_title": "Real LLM Test Case"
+        "assignment_title": "Real LLM Test Case",
+        "course_id": course.id,
+        "syllabus_module": "m1",
+        "topic_unit": "u1",
+        "target_groups": ["Grupo 01"],
     }
 
     # Execute Intake
@@ -60,14 +69,23 @@ def test_real_success_and_idempotency(client, auth_headers_factory, seed_identit
         db.close()
 
 
-def test_real_failure_handling(client, auth_headers_factory, seed_identity):
+def test_real_failure_handling(client, auth_headers_factory, seed_identity, seed_course_with_syllabus):
     print("\n--- Testing Real Failure (Invalid API Key) ---")
     teacher_id = str(uuid.uuid4())
     teacher_email = f"{teacher_id}@example.edu"
-    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    teacher = seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    course = seed_course_with_syllabus(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Real Error LLM Test Case",
+    )
     headers = auth_headers_factory(sub=teacher_id, email=teacher_email)
     payload = {
-        "assignment_title": "Real Error LLM Test Case"
+        "assignment_title": "Real Error LLM Test Case",
+        "course_id": course.id,
+        "syllabus_module": "m1",
+        "topic_unit": "u1",
+        "target_groups": ["Grupo 01"],
     }
 
     # Patch the environment variable to an invalid key during the run

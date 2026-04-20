@@ -18,15 +18,24 @@ def test_database_connection() -> None:
         db.close()
 
 
-def test_intake_and_idempotency_workflow(client, db, auth_headers_factory, seed_identity) -> None:
+def test_intake_and_idempotency_workflow(client, db, auth_headers_factory, seed_identity, seed_course_with_syllabus) -> None:
     teacher_id = "00000000-0000-0000-0000-000000000101"
     teacher_email = "teacher101@example.edu"
-    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    teacher = seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    course = seed_course_with_syllabus(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Post-Hardening Smoke Test Verification",
+    )
     db.commit()
     headers = auth_headers_factory(sub=teacher_id, email=teacher_email)
 
     payload = {
         "assignment_title": "Post-Hardening Smoke Test Verification",
+        "course_id": course.id,
+        "syllabus_module": "m1",
+        "topic_unit": "u1",
+        "target_groups": ["Grupo 01"],
     }
     with patch("fastapi.BackgroundTasks.add_task"):
         response = client.post("/api/authoring/jobs", json=payload, headers=headers)
@@ -132,7 +141,7 @@ def test_intake_and_idempotency_workflow(client, db, auth_headers_factory, seed_
 
 
 def test_intake_requires_bearer_auth(client) -> None:
-    payload = {"assignment_title": f"Case {uuid.uuid4()}"}
+    payload = {"assignment_title": f"Case {uuid.uuid4()}", "course_id": str(uuid.uuid4())}
     response = client.post("/api/authoring/jobs", json=payload)
     assert response.status_code == 401
     assert response.json()["detail"] == "invalid_token"

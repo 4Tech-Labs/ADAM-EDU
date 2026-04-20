@@ -16,17 +16,27 @@ def test_issue90_authoring_job_persists_deadline_and_normalizes_due_at(
     db,
     seed_identity,
     auth_headers_factory,
+    seed_course_with_syllabus,
 ) -> None:
     teacher_id = str(uuid.uuid4())
     teacher_email = "teacher-deadline@example.edu"
-    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    teacher = seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    course = seed_course_with_syllabus(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Deadline Case",
+    )
 
     with patch("fastapi.BackgroundTasks.add_task"):
         response = client.post(
             "/api/authoring/jobs",
             json={
                 "assignment_title": "Deadline Case",
+                "course_id": course.id,
                 "subject": "Deadline Case",
+                "syllabus_module": "m1",
+                "topic_unit": "u1",
+                "target_groups": ["Grupo 01"],
                 "due_at": "2026-04-15T09:30",
             },
             headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
@@ -43,16 +53,26 @@ def test_issue90_authoring_job_preserves_string_payload_shape_and_allows_null_de
     db,
     seed_identity,
     auth_headers_factory,
+    seed_course_with_syllabus,
 ) -> None:
     teacher_id = str(uuid.uuid4())
     teacher_email = "teacher-null-deadline@example.edu"
-    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    teacher = seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    course = seed_course_with_syllabus(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Null Deadline Case",
+    )
 
     with patch("fastapi.BackgroundTasks.add_task"):
         response = client.post(
             "/api/authoring/jobs",
             json={
                 "assignment_title": "Null Deadline Case",
+                "course_id": course.id,
+                "syllabus_module": "m1",
+                "topic_unit": "u1",
+                "target_groups": ["Grupo 01"],
                 "due_at": None,
             },
             headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
@@ -69,16 +89,26 @@ def test_issue90_authoring_job_rejects_invalid_due_at(
     client,
     seed_identity,
     auth_headers_factory,
+    seed_course_with_syllabus,
 ) -> None:
     teacher_id = str(uuid.uuid4())
     teacher_email = "teacher-invalid-deadline@example.edu"
-    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    teacher = seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    course = seed_course_with_syllabus(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Invalid Deadline Case",
+    )
 
     with patch("fastapi.BackgroundTasks.add_task"):
         response = client.post(
             "/api/authoring/jobs",
             json={
                 "assignment_title": "Invalid Deadline Case",
+                "course_id": course.id,
+                "syllabus_module": "m1",
+                "topic_unit": "u1",
+                "target_groups": ["Grupo 01"],
                 "due_at": "not-a-date",
             },
             headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),

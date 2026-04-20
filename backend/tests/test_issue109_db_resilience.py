@@ -59,7 +59,7 @@ def test_intake_maps_connection_saturation_to_503(client, auth_headers_factory, 
         response = client.post(
             "/api/authoring/jobs",
             headers=headers,
-            json={"assignment_title": "Load test case"},
+            json={"assignment_title": "Load test case", "course_id": str(uuid.uuid4())},
         )
 
     assert response.status_code == 503

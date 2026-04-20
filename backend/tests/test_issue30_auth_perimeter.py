@@ -543,7 +543,11 @@ def test_authoring_denies_student(client, auth_headers_factory, seed_identity) -
     seed_identity(user_id=user_id, email=email, role="student")
     headers = auth_headers_factory(sub=user_id, email=email)
 
-    response = client.post("/api/authoring/jobs", json={"assignment_title": "Nope"}, headers=headers)
+    response = client.post(
+        "/api/authoring/jobs",
+        json={"assignment_title": "Nope", "course_id": str(uuid.uuid4())},
+        headers=headers,
+    )
     assert response.status_code == 403
     assert response.json()["detail"] == "authoring_forbidden"
 
@@ -554,7 +558,11 @@ def test_authoring_requires_legacy_bridge(client, auth_headers_factory, seed_ide
     seed_identity(user_id=user_id, email=email, role="teacher", create_legacy_user=False)
     headers = auth_headers_factory(sub=user_id, email=email)
 
-    response = client.post("/api/authoring/jobs", json={"assignment_title": "No bridge"}, headers=headers)
+    response = client.post(
+        "/api/authoring/jobs",
+        json={"assignment_title": "No bridge", "course_id": str(uuid.uuid4())},
+        headers=headers,
+    )
     assert response.status_code == 500
     assert response.json()["detail"] == "legacy_bridge_missing"
 
