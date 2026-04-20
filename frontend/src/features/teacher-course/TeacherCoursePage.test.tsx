@@ -248,7 +248,7 @@ describe("TeacherCoursePage", () => {
         renderTeacherCoursePage("/teacher/courses/course-1?tab=configuracion");
 
         const tablist = await screen.findByRole("tablist", { name: "Secciones del curso" });
-        const syllabusTab = screen.getByRole("tab", { name: "Syllabus" });
+        const syllabusTab = screen.getByRole("tab", { name: /Syllabus/i });
         const configurationTab = screen.getByRole("tab", { name: "Configuración" });
         const configurationPanel = screen.getByRole("tabpanel");
 
