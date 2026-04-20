@@ -2,15 +2,15 @@
 
 
 import { useState, useCallback, useEffect, useRef, type KeyboardEvent, type FormEvent } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type { CaseFormData, CaseType, EDADepth, StudentProfile, SuggestRequest } from "@/shared/adam-types";
 import {
     Select, SelectContent, SelectGroup,
     SelectItem, SelectTrigger, SelectValue,
 } from "@/shared/ui/select";
 import { api } from "@/shared/api";
+import { queryKeys } from "@/shared/queryKeys";
 import {
-    professorDB,
     INDUSTRIAS_OPTIONS,
     STUDENT_PROFILES,
     FORM_STYLES
@@ -45,6 +45,7 @@ export function AuthoringForm({
     const [guidingQuestion, setGuidingQuestion] = useState("");
     const [suggestedTechniques, setSuggestedTechniques] = useState<string[]>([]);
     const [algoInput, setAlgoInput] = useState("");
+    const [targetGroupInput, setTargetGroupInput] = useState("");
 
     const [availableFrom, setAvailableFrom] = useState("");
     const [dueAt, setDueAt] = useState("");
@@ -56,15 +57,29 @@ export function AuthoringForm({
     // ── Validation ──
     const [errors, setErrors] = useState<Record<string, boolean>>({});
 
+    const teacherCoursesQuery = useQuery({
+        queryKey: queryKeys.teacher.courses(),
+        queryFn: () => api.teacher.getCourses(),
+    });
+
+    const selectedCourseId = subject;
+    const selectedCourseDetailQuery = useQuery({
+        queryKey: queryKeys.teacher.course(selectedCourseId),
+        queryFn: () => api.teacher.getCourseDetail(selectedCourseId),
+        enabled: !!selectedCourseId,
+    });
+
     // ── Derived data ──
-    const selectedCourse = professorDB.courses.find((c) => c.id === subject);
-    const academicLevel = selectedCourse?.level ?? "";
-    const modules = selectedCourse?.syllabus ?? [];
-    const selectedModule = modules.find((m) => m.id === syllabusModule);
+    const teacherCourses = teacherCoursesQuery.data?.courses ?? [];
+    const selectedCourse = teacherCourses.find((course) => course.id === selectedCourseId);
+    const academicLevel = selectedCourse?.academic_level ?? "";
+    const modules = selectedCourseDetailQuery.data?.syllabus?.modules ?? [];
+    const selectedModule = modules.find((module) => module.module_id === syllabusModule);
     const units = selectedModule?.units ?? [];
-    const selectedUnit = units.find((u) => u.id === topicUnit);
+    const selectedUnit = units.find((unit) => unit.unit_id === topicUnit);
     const selectedIndustry = INDUSTRIAS_OPTIONS.find((option) => option.value === industry);
     const suggestionGenerationRef = useRef({ scenario: 0, techniques: 0 });
+    const hasPersistedSyllabus = !!selectedCourseDetailQuery.data?.syllabus;
 
     // ── EDA depth + notebook toggle logic ──
     // business + harvard_with_eda → edaDepth="charts_plus_explanation", no UI
@@ -106,15 +121,13 @@ export function AuthoringForm({
         !!industry;
 
     const buildSuggestPayload = useCallback((): SuggestRequest => {
-        const selectedCourseForAI = professorDB.courses.find((course) => course.id === subject);
-        const modulesForAI = selectedCourseForAI?.syllabus ?? [];
-        const moduleName = modulesForAI.find((module) => module.id === syllabusModule)?.name ?? "";
-        const unitName = selectedUnit?.name ?? "";
+        const moduleName = selectedModule?.module_title ?? "";
+        const unitName = selectedUnit?.title ?? "";
         const industryLabel = selectedIndustry?.label ?? industry;
 
         return {
-            subject: selectedCourseForAI?.name ?? "",
-            academicLevel: selectedCourseForAI?.level ?? "",
+            subject: selectedCourse?.title ?? "",
+            academicLevel: selectedCourse?.academic_level ?? "",
             targetGroups,
             syllabusModule: moduleName,
             topicUnit: unitName,
@@ -134,10 +147,10 @@ export function AuthoringForm({
         industry,
         scenarioDescription,
         selectedIndustry,
+        selectedCourse,
+        selectedModule,
         selectedUnit,
         studentProfile,
-        subject,
-        syllabusModule,
         targetGroups,
     ]);
 
@@ -231,15 +244,27 @@ export function AuthoringForm({
         setTopicUnit(id);
     };
 
-    // ── Group toggle ──
-    const toggleGroup = (group: string) => {
+    const addTargetGroup = useCallback((value: string) => {
+        const trimmed = value.trim();
+        if (!trimmed) return;
+        if (targetGroups.some((group) => group.toLowerCase() === trimmed.toLowerCase())) return;
         invalidateSuggestionResponses();
-        setTargetGroups((prev) => {
-            return prev.includes(group)
-                ? prev.filter((g) => g !== group)
-                : [...prev, group];
-        });
-    };
+        setTargetGroups((prev) => [...prev, trimmed]);
+        setTargetGroupInput("");
+        setErrors((prev) => ({ ...prev, targetGroups: false }));
+    }, [invalidateSuggestionResponses, targetGroups]);
+
+    const removeTargetGroup = useCallback((group: string) => {
+        invalidateSuggestionResponses();
+        setTargetGroups((prev) => prev.filter((value) => value !== group));
+    }, [invalidateSuggestionResponses]);
+
+    const handleTargetGroupKeyDown = useCallback((e: KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            addTargetGroup(targetGroupInput);
+        }
+    }, [addTargetGroup, targetGroupInput]);
 
     // ── Chips Orchestration ──
     const addChip = useCallback(
@@ -334,11 +359,12 @@ export function AuthoringForm({
             setErrors({});
 
             const formData: CaseFormData = {
-                subject: selectedCourse?.name ?? "",
+                courseId: selectedCourseId,
+                subject: selectedCourse?.title ?? "",
                 academicLevel,
                 targetGroups,
-                syllabusModule: selectedModule?.name ?? "",
-                topicUnit: selectedUnit?.name ?? "",
+                syllabusModule,
+                topicUnit,
                 industry: selectedIndustry?.label ?? industry,
                 studentProfile,
                 caseType,
@@ -367,6 +393,7 @@ export function AuthoringForm({
         setGuidingQuestion("");
         setSuggestedTechniques([]);
         setAlgoInput("");
+        setTargetGroupInput("");
         setErrors({});
         scenarioMutation.reset();
         techniquesMutation.reset();
@@ -438,13 +465,16 @@ export function AuthoringForm({
                                                 </SelectTrigger>
                                                 <SelectContent>
                                                     <SelectGroup>
-                                                        {professorDB.courses.map((c) => (
-                                                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                                                        {teacherCourses.map((course) => (
+                                                            <SelectItem key={course.id} value={course.id}>{course.title}</SelectItem>
                                                         ))}
                                                     </SelectGroup>
                                                 </SelectContent>
                                             </Select>
                                             <ErrorMsg show={!!errors.asignatura} />
+                                            {teacherCoursesQuery.error instanceof Error ? (
+                                                <p className="field-hint text-red-500">{teacherCoursesQuery.error.message}</p>
+                                            ) : null}
                                         </div>
 
                                         <div>
@@ -467,26 +497,41 @@ export function AuthoringForm({
                                         <label className="block text-sm font-semibold text-slate-700 mb-2">
                                             Grupos Destino <span className="text-red-500" aria-hidden="true">*</span>
                                         </label>
-                                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
-                                            {selectedCourse ? (
-                                                selectedCourse.activeGroups.map((grp) => (
-                                                    <label key={grp} className="flex items-center gap-2 cursor-pointer bg-white border border-slate-200 rounded px-3 py-2 hover:border-blue-300 transition-colors">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={targetGroups.includes(grp)}
-                                                            onChange={() => toggleGroup(grp)}
-                                                            className="w-4 h-4 text-[#0144a0] border-slate-300 rounded focus:ring-[#0144a0]"
-                                                        />
-                                                        <span className="text-sm text-slate-700 font-medium">{grp}</span>
-                                                    </label>
-                                                ))
-                                            ) : (
-                                                <span className="text-sm text-slate-400 col-span-full py-1">
-                                                </span>
-                                            )}
+                                        <div className="space-y-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                                            <div className="flex flex-col gap-3 md:flex-row">
+                                                <input
+                                                    type="text"
+                                                    value={targetGroupInput}
+                                                    onChange={(e) => setTargetGroupInput(e.target.value)}
+                                                    onKeyDown={handleTargetGroupKeyDown}
+                                                    placeholder="Escriba un grupo o seccion y presione Enter"
+                                                    className="input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800"
+                                                    aria-label="Grupo destino"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => addTargetGroup(targetGroupInput)}
+                                                    className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-[#0144a0] hover:text-[#0144a0]"
+                                                >
+                                                    Agregar grupo
+                                                </button>
+                                            </div>
+                                            <div className="flex flex-wrap gap-2">
+                                                {targetGroups.map((group) => (
+                                                    <button
+                                                        key={group}
+                                                        type="button"
+                                                        onClick={() => removeTargetGroup(group)}
+                                                        className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-[#0144a0] hover:text-[#0144a0]"
+                                                    >
+                                                        <span>{group}</span>
+                                                        <span aria-hidden="true">x</span>
+                                                    </button>
+                                                ))}
+                                            </div>
                                         </div>
                                         {errors.targetGroups && <ErrorMsg show={true} />}
-                                        <p className="field-hint">Seleccione uno o más grupos para asignar este caso simultáneamente.</p>
+                                        <p className="field-hint">Registre manualmente los grupos o secciones que recibiran este caso.</p>
                                     </div>
 
                                     {/* Módulo + Unidad */}
@@ -509,12 +554,15 @@ export function AuthoringForm({
                                                 <SelectContent>
                                                     <SelectGroup>
                                                         {modules.map((m) => (
-                                                            <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
+                                                            <SelectItem key={m.module_id} value={m.module_id}>{m.module_title}</SelectItem>
                                                         ))}
                                                     </SelectGroup>
                                                 </SelectContent>
                                             </Select>
                                             <ErrorMsg show={!!errors.modulo} />
+                                            {subject && !hasPersistedSyllabus ? (
+                                                <p className="field-hint text-amber-700">Este curso aun no tiene un syllabus guardado.</p>
+                                            ) : null}
                                         </div>
 
                                         <div>
@@ -535,7 +583,7 @@ export function AuthoringForm({
                                                 <SelectContent>
                                                     <SelectGroup>
                                                         {units.map((u) => (
-                                                            <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                                                            <SelectItem key={u.unit_id} value={u.unit_id}>{u.title}</SelectItem>
                                                         ))}
                                                     </SelectGroup>
                                                 </SelectContent>

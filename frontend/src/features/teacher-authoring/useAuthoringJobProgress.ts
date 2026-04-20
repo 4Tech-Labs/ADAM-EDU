@@ -126,6 +126,7 @@ function toCanonicalCaseOutput(response: AuthoringJobResultResponse): CanonicalC
 export function buildAuthoringJobCreateRequest(formData: CaseFormData): AuthoringJobCreateRequest {
     return {
         assignment_title: formData.subject || "Untitled Case",
+        course_id: formData.courseId,
         subject: formData.subject,
         academic_level: formData.academicLevel,
         industry: formData.industry,

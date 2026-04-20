@@ -29,7 +29,8 @@ from shared.database import (
     reset_session_factory_override,
     settings,
 )
-from shared.models import Base, Course, CourseAccessLink, CourseMembership, Invite, Membership, Profile, Tenant, User
+from shared.models import Base, Course, CourseAccessLink, CourseMembership, Invite, Membership, Profile, Syllabus, SyllabusRevision, Tenant, User
+from shared.syllabus_schema import TeacherSyllabusPayload, derive_syllabus_grounding_context
 
 
 _CHECKPOINT_TABLES = (
@@ -546,6 +547,124 @@ def seed_course_membership(db):
         db.flush()
         db.refresh(course_membership)
         return course_membership
+
+    return _factory
+
+
+@pytest.fixture
+def seed_course_with_syllabus(db, seed_course):
+    def _factory(
+        *,
+        university_id: str,
+        teacher_membership_id: str,
+        title: str = "Test Course",
+        academic_level: str = "Pregrado",
+        revision: int = 1,
+    ) -> Course:
+        course = seed_course(
+            university_id=university_id,
+            teacher_membership_id=teacher_membership_id,
+            title=title,
+            academic_level=academic_level,
+        )
+        payload = TeacherSyllabusPayload.model_validate(
+            {
+                "department": "Gestion",
+                "knowledge_area": "Administracion",
+                "nbc": "Administracion",
+                "version_label": "2026.1",
+                "academic_load": "48 horas",
+                "course_description": "Curso de prueba para authoring.",
+                "general_objective": "Aplicar analisis estructurado en contextos empresariales.",
+                "specific_objectives": [
+                    "Diagnosticar situaciones con evidencia.",
+                    "Sustentar decisiones con tecnicas analiticas.",
+                ],
+                "modules": [
+                    {
+                        "module_id": "m1",
+                        "module_title": "Fundamentos",
+                        "weeks": "1-4",
+                        "module_summary": "Base conceptual del curso.",
+                        "learning_outcomes": ["Comprender el contexto del problema."],
+                        "units": [
+                            {
+                                "unit_id": "u1",
+                                "title": "Unidad Inicial",
+                                "topics": "Conceptos y diagnostico.",
+                            }
+                        ],
+                        "cross_course_connections": "Integra finanzas y estrategia.",
+                    }
+                ],
+                "evaluation_strategy": [
+                    {
+                        "activity": "Caso escrito",
+                        "weight": 40,
+                        "linked_objectives": ["obj-1"],
+                        "expected_outcome": "Analisis defendible.",
+                    }
+                ],
+                "didactic_strategy": {
+                    "methodological_perspective": "Aprendizaje basado en casos.",
+                    "pedagogical_modality": "Presencial",
+                },
+                "integrative_project": "Proyecto integrador final.",
+                "bibliography": ["Referencia 1"],
+                "teacher_notes": "Usar contexto empresarial realista.",
+            }
+        )
+        saved_at = datetime.now(timezone.utc)
+        grounding = derive_syllabus_grounding_context(
+            course_id=course.id,
+            course_title=course.title,
+            academic_level=course.academic_level,
+            syllabus=payload,
+            revision=revision,
+            saved_at=saved_at,
+            saved_by_membership_id=teacher_membership_id,
+        ).model_dump(mode="json")
+        syllabus = Syllabus(
+            course_id=course.id,
+            revision=revision,
+            department=payload.department,
+            knowledge_area=payload.knowledge_area,
+            nbc=payload.nbc,
+            version_label=payload.version_label,
+            academic_load=payload.academic_load,
+            course_description=payload.course_description,
+            general_objective=payload.general_objective,
+            specific_objectives=list(payload.specific_objectives),
+            modules=[module.model_dump(mode="json") for module in payload.modules],
+            evaluation_strategy=[item.model_dump(mode="json") for item in payload.evaluation_strategy],
+            didactic_strategy=payload.didactic_strategy.model_dump(mode="json"),
+            integrative_project=payload.integrative_project,
+            bibliography=list(payload.bibliography),
+            teacher_notes=payload.teacher_notes,
+            ai_grounding_context=grounding,
+            saved_at=saved_at,
+            saved_by_membership_id=teacher_membership_id,
+        )
+        db.add(syllabus)
+        db.flush()
+        db.add(
+            SyllabusRevision(
+                syllabus_id=syllabus.id,
+                revision=revision,
+                snapshot={
+                    **payload.model_dump(mode="json"),
+                    "ai_grounding_context": grounding,
+                    "revision": revision,
+                    "saved_at": saved_at.isoformat(),
+                    "saved_by_membership_id": teacher_membership_id,
+                },
+                saved_at=saved_at,
+                saved_by_membership_id=teacher_membership_id,
+            )
+        )
+        db.flush()
+        db.refresh(course)
+        return course
 
     return _factory
 

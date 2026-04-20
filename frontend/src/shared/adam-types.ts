@@ -63,6 +63,7 @@ export type IntentType = "scenario" | "techniques" | "both";
 export type StudentProfile = "business" | "ml_ds";
 export type ModuleId = "m1" | "m2" | "m3" | "m4" | "m5" | "m6";
 export interface CaseFormData {
+    courseId: string;
     subject: string;
     academicLevel: string;
     targetGroups: string[];
@@ -137,6 +138,7 @@ export interface CanonicalCaseOutput {
 
 export interface AuthoringJobCreateRequest {
     assignment_title: string;
+    course_id: string;
     subject: string;
     academic_level: string;
     industry: string;
@@ -675,6 +677,7 @@ export interface TeacherCasesResponse {
 }
 
 export const EMPTY_FORM: CaseFormData = {
+    courseId: "",
     subject: "",
     academicLevel: "Pregrado",
     targetGroups: [],

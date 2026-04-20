@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
@@ -44,6 +44,12 @@ class TeacherCaseItem:
     deadline: datetime | None
     status: str
     course_codes: list[str]
+
+
+@dataclass(slots=True)
+class TeacherOwnedCourseSyllabus:
+    course: Course
+    syllabus: Syllabus
 
 
 def _build_student_counts_subquery(context: TeacherContext):
@@ -211,6 +217,82 @@ def get_teacher_course_detail(
             access_link_created_at=row["access_link_created_at"],
         ),
     )
+
+
+def get_teacher_owned_course_with_syllabus(
+    db: Session,
+    context: TeacherContext,
+    course_id: str,
+    *,
+    lock: bool = False,
+) -> TeacherOwnedCourseSyllabus:
+    course_stmt = select(Course).where(
+        Course.id == course_id,
+        Course.university_id == context.university_id,
+        Course.teacher_membership_id == context.teacher_membership_id,
+    )
+    syllabus_stmt = select(Syllabus).where(Syllabus.course_id == course_id)
+
+    if lock:
+        course_stmt = course_stmt.with_for_update()
+        syllabus_stmt = syllabus_stmt.with_for_update()
+
+    course = db.scalar(course_stmt)
+    if course is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="course_not_found")
+
+    syllabus = db.scalar(syllabus_stmt)
+    if syllabus is None:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail="Syllabus no configurado para este curso",
+        )
+
+    return TeacherOwnedCourseSyllabus(course=course, syllabus=syllabus)
+
+
+def resolve_syllabus_selection_titles(
+    modules: list[dict[str, Any]],
+    *,
+    module_id: str,
+    unit_id: str,
+    strict: bool = False,
+) -> tuple[str, str]:
+    module_title = ""
+    unit_title = ""
+
+    if not module_id:
+        if strict:
+            raise ValueError("invalid_syllabus_selection")
+        return module_title, unit_title
+
+    selected_module = next(
+        (candidate for candidate in modules if str(candidate.get("module_id", "")) == module_id),
+        None,
+    )
+    if selected_module is None:
+        if strict:
+            raise ValueError("invalid_syllabus_selection")
+        return module_title, unit_title
+
+    module_title = str(selected_module.get("module_title", ""))
+    if not unit_id:
+        return module_title, unit_title
+
+    selected_unit = next(
+        (
+            candidate
+            for candidate in selected_module.get("units", [])
+            if str(candidate.get("unit_id", "")) == unit_id
+        ),
+        None,
+    )
+    if selected_unit is None:
+        if strict:
+            raise ValueError("invalid_syllabus_selection")
+        return module_title, unit_title
+
+    return module_title, str(selected_unit.get("title", ""))
 
 
 def list_teacher_active_cases(

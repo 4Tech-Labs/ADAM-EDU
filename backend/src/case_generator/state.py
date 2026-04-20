@@ -166,4 +166,5 @@ class ADAMState(CanonicalInputState):
     dataset_retry_count: NotRequired[int]      # Contador de retries del data_serializer
     dataset_errors: NotRequired[list[str]]     # Errores de validación
     dataset_metadata: NotRequired[dict]        # Metadata del dataset (rows, columns, target_variable…)
+    ai_grounding_context: NotRequired[dict[str, Any]]
 

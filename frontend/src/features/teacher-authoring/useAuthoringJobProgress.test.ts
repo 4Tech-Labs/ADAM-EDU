@@ -8,6 +8,7 @@ describe("buildAuthoringJobCreateRequest", () => {
     it("does not serialize teacher_id and preserves the body-only contract", () => {
         const request = buildAuthoringJobCreateRequest({
             ...EMPTY_FORM,
+            courseId: "course-1",
             subject: "Decision Analysis",
             academicLevel: "MBA",
             industry: "Retail",
@@ -24,6 +25,7 @@ describe("buildAuthoringJobCreateRequest", () => {
         expect("teacher_id" in request).toBe(false);
         expect(request).toEqual({
             assignment_title: "Decision Analysis",
+            course_id: "course-1",
             subject: "Decision Analysis",
             academic_level: "MBA",
             industry: "Retail",

@@ -295,24 +295,6 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Depends on / blocked by:** Depende de cerrar primero la implementacion de Issue #127 y de fijar cuales helpers quedan como API operativa estable para clean-room y diagnostico.
 
----
-
-## TODO-019: Vincular `Assignment.course_id` y authoring al dominio de syllabus
-
-**What:** Agregar `course_id` real a `assignments`, propagarlo por el intake de authoring y reemplazar el placeholder `active_cases_count=0` de teacher courses por conteos reales por curso.
-
-**Why:** La base backend de syllabuses y revisiones puede vivir sola en Issue #137, pero el authoring y los indicadores de casos siguen desacoplados del curso hasta que exista ese puente explícito.
-
-**Pros:** Elimina una costura conocida entre gestión docente y generación de casos, permite grounding y guardrails por curso en el flujo de authoring, y cierra el TODO ya existente en `backend/src/shared/teacher_reads.py`.
-
-**Cons:** Amplía el scope hacia el dominio de authoring, requiere migración adicional sobre `assignments`, ajustes de contratos y tests cruzados con el pipeline de generación.
-
-**Context:** Durante la revisión de Issue #137 se decidió mantener el backend de syllabus aislado y deferir la integración completa con authoring a la issue hermana #139 para no mezclar persistencia pedagógica con orquestación/generation guardrails en la misma PR.
-
-**Depends on / blocked by:** Issue #139 y la definición final del contrato `course_id` en authoring intake, pipeline y queries de progreso/resultado.
-
----
-
 ## TODO-020: Endpoint docente para gestionar access link del curso
 
 **What:** Crear un endpoint docente dedicado para visualizar o regenerar el access link vigente del curso, con auditoría y reglas explícitas de exposición del raw token.

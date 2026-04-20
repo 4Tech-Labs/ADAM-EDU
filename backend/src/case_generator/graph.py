@@ -669,6 +669,22 @@ def _build_base_context(state: ADAMState) -> dict:
     else:
         impl_time = "el próximo semestre"
 
+    grounding = state.get("ai_grounding_context", {})
+    grounding_generation_hints: dict[str, Any] = {}
+    grounding_instructional_scope: dict[str, Any] = {}
+    grounding_pedagogical_intent: dict[str, Any] = {}
+    grounding_course_identity: dict[str, Any] = {}
+    if isinstance(grounding, dict):
+        grounding_generation_hints = cast(dict[str, Any], grounding.get("generation_hints", {}))
+        grounding_instructional_scope = cast(dict[str, Any], grounding.get("instructional_scope", {}))
+        grounding_pedagogical_intent = cast(dict[str, Any], grounding.get("pedagogical_intent", {}))
+        grounding_course_identity = cast(dict[str, Any], grounding.get("course_identity", {}))
+
+    algoritmos = list(state.get("algoritmos", []))
+    for preferred in grounding_generation_hints.get("preferred_techniques", []):
+        if isinstance(preferred, str) and preferred and preferred not in algoritmos:
+            algoritmos.append(preferred)
+
     return {
         "student_profile": profile,
         "output_language": state.get("output_language", "es"),
@@ -687,8 +703,15 @@ def _build_base_context(state: ADAMState) -> dict:
         "nombre_empresa": nombre_empresa,
         "dilema_hypotheses": dilema_hypotheses,
         "output_depth": state.get("output_depth", ""),
-        "algoritmos": json.dumps(state.get("algoritmos", [])),
+        "algoritmos": json.dumps(algoritmos, ensure_ascii=False),
         "titulo": state.get("titulo", ""),
+        "grounding_modules": json.dumps(grounding_instructional_scope.get("modules", []), ensure_ascii=False),
+        "grounding_objectives": json.dumps(
+            grounding_pedagogical_intent.get("specific_objectives", []),
+            ensure_ascii=False,
+        ),
+        "grounding_generation_hints": json.dumps(grounding_generation_hints, ensure_ascii=False),
+        "grounding_course_identity": json.dumps(grounding_course_identity, ensure_ascii=False),
     }
 
 
@@ -711,6 +734,10 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             "industria": state.get("industria", ""),
             "descripcion_escenario": state.get("descripcion", ""),
             "pregunta_guia_directiva": state.get("guidingQuestion", ""),
+            "grounding_course_identity": context.get("grounding_course_identity", ""),
+            "grounding_modules": context.get("grounding_modules", ""),
+            "grounding_objectives": context.get("grounding_objectives", ""),
+            "grounding_generation_hints": context.get("grounding_generation_hints", ""),
         }, per_field_limit=800, total_limit=2500),
     })
 

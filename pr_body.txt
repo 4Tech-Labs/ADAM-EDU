@@ -1,45 +1,52 @@
 ﻿## Summary
-- adds the backend syllabus domain as a course-separated 1:1 persistence model with append-only revision snapshots
-- exposes `GET /api/teacher/courses/{course_id}` as a composed teacher detail endpoint with institutional data, syllabus state, revision metadata, and access-link configuration status
-- exposes `PUT /api/teacher/courses/{course_id}/syllabus` with strict teacher ownership, tenant isolation, optimistic concurrency, and immutable revision creation on save
-- persists `ai_grounding_context` as a validated server-derived JSON contract instead of trusting client-provided grounding
-- extends backend coverage for teacher detail/save happy paths, auth perimeter, tenant isolation, stale writes, and grounding shape validation
-- records deferred follow-ups in `TODOS.md` for `Assignment.course_id` integration and teacher self-service access-link management
+- requires `course_id` on authoring intake, persists `assignments.course_id`, and keeps legacy job ownership paths readable
+- resolves syllabus grounding only from persisted server snapshots during authoring execution and fails explicitly when that snapshot is unavailable
+- injects canonical syllabus context and preferred techniques into the LangGraph runtime instead of trusting frontend-authored grounding
+- rewires teacher authoring UI to real teacher course/detail APIs and removes mock course-module authority from the form
+- adds migration, reusable test fixtures, and regression coverage across backend auth/intake/runtime plus frontend authoring flows
+- removes the resolved Issue #139 follow-up from `TODOS.md`
 
 ## Executive Summary
-This PR delivers the backend production base for issue #137 without expanding into frontend or authoring integration work that belongs to #139. `Course` remains the institutional source of truth, `Syllabus` owns editable pedagogical content, and every successful teacher save appends an immutable revision snapshot while updating the live syllabus row.
+This PR closes the production gap between teacher authoring and the syllabus domain. The backend is now the sole source of truth for course-linked grounding: the intake only accepts a real teacher-owned `course_id`, the runtime resolves the immutable syllabus snapshot captured at job creation, and the frontend only selects canonical course/module/unit identifiers without inventing grounding state client-side.
 
 ## Architecture Decisions
-- Keep `courses` authoritative for `title`, `code`, `semester`, and `academic_level`
-- Store editable pedagogical content in a separate `syllabuses` table with a unique `course_id`
-- Store revision history in append-only `syllabus_revisions` snapshots with a unique `(syllabus_id, revision)` index
-- Keep teacher detail fail-closed for access links by returning status/config metadata only, not raw tokens
-- Reject client-authored `ai_grounding_context` and derive it server-side on every successful syllabus save
-- Require `expected_revision` on save and return `409 stale_syllabus_revision` for stale writes
+- Keep `Course` authoritative for teacher-owned course identity and persist that link on `Assignment`
+- Validate ownership and syllabus presence at intake time with an explicit `412` guard for courses without syllabus
+- Persist only canonical syllabus identifiers in the job payload and resolve human-readable titles plus grounding from `SyllabusRevision.snapshot`
+- Keep old jobs without `course_id` readable through the legacy ownership branch while new jobs authorize by teacher membership + university scope
+- Feed LangGraph with server-resolved `ai_grounding_context` and merged preferred techniques instead of client strings
+- Replace authoring mock course data with `GET /teacher/courses` and `GET /teacher/courses/{course_id}`; keep target groups as teacher-entered data rather than fake backend-derived options
 
 ## Main Files Changed
+- `backend/src/shared/app.py`
 - `backend/src/shared/models.py`
-- `backend/src/shared/syllabus_schema.py`
 - `backend/src/shared/teacher_reads.py`
-- `backend/src/shared/teacher_writes.py`
-- `backend/src/shared/teacher_router.py`
-- `backend/alembic/versions/e1b3c4d5f6a7_issue137_teacher_syllabuses.py`
-- `backend/tests/test_issue88_teacher_courses.py`
-- `backend/tests/test_issue30_auth_perimeter.py`
-- `TODOS.md`
+- `backend/src/case_generator/core/authoring.py`
+- `backend/src/case_generator/graph.py`
+- `backend/src/case_generator/state.py`
+- `backend/alembic/versions/9f3e2a1b7c4d_issue139_authoring_course_grounding.py`
+- `frontend/src/features/teacher-authoring/AuthoringForm.tsx`
+- `frontend/src/features/teacher-authoring/useAuthoringJobProgress.ts`
+- `frontend/src/shared/adam-types.ts`
+- `backend/tests/conftest.py`
+- `backend/tests/test_issue90_teacher_cases.py`
+- `backend/tests/test_phase1a_smoke.py`
+- `backend/tests/test_phase1b_integration.py`
+- `frontend/src/features/teacher-authoring/AuthoringForm.test.tsx`
 
 ## Validation Evidence
-- [x] `uv run --directory backend pytest -q tests/test_issue88_teacher_courses.py tests/test_issue30_auth_perimeter.py` (77 passed)
-- [x] `uv run --directory backend pytest -q` (277 passed, 12 skipped)
-- [x] `uv run --directory backend mypy src` (no issues found)
+- [x] `uv run --directory backend pytest -q` (`277 passed, 12 skipped`)
+- [x] `uv run --directory backend mypy src`
+- [x] `npm --prefix frontend run lint`
+- [x] `npm --prefix frontend run test`
+- [x] `npm --prefix frontend run build`
 
 ## Residual Risks
-- `Assignment.course_id` and syllabus-aware authoring enforcement are still deferred to #139 by design
-- teacher detail currently exposes access-link status/config only; raw link management needs a follow-up product/security path
-- grounding generation hints are persisted with a stable contract now, but downstream authoring exploitation remains a separate step
+- Existing legacy jobs remain supported, but only new course-linked jobs get strict syllabus grounding enforcement
+- Target groups remain freeform teacher input because there is still no canonical backend source for section/group options
+- The frontend build still emits the pre-existing Vite chunk-size warning; this PR does not change bundling strategy
 
 ## References
-- Closes #137
-- Parent issue: #140
+- Closes #139
 
 🤖 Generated with GitHub Copilot

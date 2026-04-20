@@ -32,7 +32,8 @@ async function selectOption(
 
 async function enableSuggestions(user: ReturnType<typeof userEvent.setup>) {
     await selectOption(user, /asignatura/i, /gerencia/i);
-    await user.click(screen.getByLabelText(/grupo 01/i));
+    await user.type(screen.getByLabelText(/grupo destino/i), "Grupo 01");
+    await user.keyboard("{Enter}");
     await selectOption(user, /m[oó]dulo del syllabus/i, /fundamentos/i);
 }
 
@@ -50,6 +51,139 @@ describe("AuthoringForm", () => {
 
     beforeEach(() => {
         vi.restoreAllMocks();
+        server.use(
+            http.get("/api/teacher/courses", () => HttpResponse.json({
+                courses: [
+                    {
+                        id: "course-1",
+                        title: "Gerencia de Operaciones",
+                        code: "GO-101",
+                        semester: "2025-1",
+                        academic_level: "MBA",
+                        status: "active",
+                        students_count: 32,
+                        active_cases_count: 1,
+                    },
+                ],
+                total: 1,
+            })),
+            http.get("/api/teacher/courses/:courseId", ({ params }) => {
+                if (params.courseId !== "course-1") {
+                    return HttpResponse.text("Not found", { status: 404 });
+                }
+
+                return HttpResponse.json({
+                    course: {
+                        id: "course-1",
+                        title: "Gerencia de Operaciones",
+                        code: "GO-101",
+                        semester: "2025-1",
+                        academic_level: "MBA",
+                        status: "active",
+                        max_students: 35,
+                        students_count: 32,
+                        active_cases_count: 1,
+                    },
+                    syllabus: {
+                        department: "Administracion",
+                        knowledge_area: "Operaciones",
+                        nbc: "Administracion",
+                        version_label: "v1",
+                        academic_load: "48 horas",
+                        course_description: "Curso de operaciones",
+                        general_objective: "Tomar decisiones operativas",
+                        specific_objectives: ["Analizar capacidad"],
+                        modules: [
+                            {
+                                module_id: "module-1",
+                                module_title: "Fundamentos de Operaciones",
+                                weeks: "1-4",
+                                module_summary: "Base conceptual",
+                                learning_outcomes: ["Diagnosticar procesos"],
+                                units: [
+                                    {
+                                        unit_id: "unit-1",
+                                        title: "Pronosticos",
+                                        topics: "Series de tiempo",
+                                    },
+                                ],
+                                cross_course_connections: "Finanzas",
+                            },
+                        ],
+                        evaluation_strategy: [],
+                        didactic_strategy: {
+                            methodological_perspective: "Aplicada",
+                            pedagogical_modality: "Presencial",
+                        },
+                        integrative_project: "Proyecto final",
+                        bibliography: ["Libro 1"],
+                        teacher_notes: "",
+                        ai_grounding_context: {
+                            course_identity: {
+                                course_id: "course-1",
+                                course_title: "Gerencia de Operaciones",
+                                academic_level: "MBA",
+                                department: "Administracion",
+                                knowledge_area: "Operaciones",
+                                nbc: "Administracion",
+                            },
+                            pedagogical_intent: {
+                                course_description: "Curso de operaciones",
+                                general_objective: "Tomar decisiones operativas",
+                                specific_objectives: ["Analizar capacidad"],
+                            },
+                            instructional_scope: {
+                                modules: [
+                                    {
+                                        module_id: "module-1",
+                                        module_title: "Fundamentos de Operaciones",
+                                        weeks: "1-4",
+                                        module_summary: "Base conceptual",
+                                        learning_outcomes: ["Diagnosticar procesos"],
+                                        units: [
+                                            {
+                                                unit_id: "unit-1",
+                                                title: "Pronosticos",
+                                                topics: "Series de tiempo",
+                                            },
+                                        ],
+                                        cross_course_connections: "Finanzas",
+                                    },
+                                ],
+                                evaluation_strategy: [],
+                                didactic_strategy: {
+                                    methodological_perspective: "Aplicada",
+                                    pedagogical_modality: "Presencial",
+                                },
+                            },
+                            generation_hints: {
+                                target_student_profile: "business",
+                                scenario_constraints: ["Use datos reales"],
+                                preferred_techniques: ["Arbol de decision"],
+                                difficulty_signal: "intermediate",
+                                forbidden_mismatches: [],
+                            },
+                            metadata: {
+                                syllabus_revision: 3,
+                                saved_at: "2025-02-01T00:00:00Z",
+                                saved_by_membership_id: "membership-1",
+                            },
+                        },
+                    },
+                    revision_metadata: {
+                        current_revision: 3,
+                        saved_at: "2025-02-01T00:00:00Z",
+                        saved_by_membership_id: "membership-1",
+                    },
+                    configuration: {
+                        access_link_status: "active",
+                        access_link_id: "link-1",
+                        access_link_created_at: "2025-02-01T00:00:00Z",
+                        join_path: "/c/course-1/join",
+                    },
+                });
+            }),
+        );
     });
 
     it("fills scenario fields from the scenario mutation and shows loading state", async () => {

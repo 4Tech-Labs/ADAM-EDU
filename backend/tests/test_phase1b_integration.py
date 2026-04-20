@@ -35,13 +35,22 @@ class _StubGraph:
         return self._stream_impl(*args, **kwargs)
 
 
-def test_phase1b_intake_and_authoring_stubbed(client, db, auth_headers_factory, seed_identity) -> None:
+def test_phase1b_intake_and_authoring_stubbed(client, db, auth_headers_factory, seed_identity, seed_course_with_syllabus) -> None:
     teacher_email = "teacher102@example.edu"
-    seed_identity(user_id=TEACHER_ID, email=teacher_email, role="teacher")
+    teacher = seed_identity(user_id=TEACHER_ID, email=teacher_email, role="teacher")
+    course = seed_course_with_syllabus(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Phase 1B Integration Test Title",
+    )
     db.commit()
     headers = auth_headers_factory(sub=TEACHER_ID, email=teacher_email)
     payload = {
         "assignment_title": "Phase 1B Integration Test Title",
+        "course_id": course.id,
+        "syllabus_module": "m1",
+        "topic_unit": "u1",
+        "target_groups": ["Grupo 01"],
     }
 
     graph_getter = AsyncMock(return_value=_StubGraph(_successful_astream))
@@ -74,13 +83,22 @@ def test_phase1b_intake_and_authoring_stubbed(client, db, auth_headers_factory, 
         db.close()
 
 
-def test_phase1b_authoring_service_failure(client, db, auth_headers_factory, seed_identity) -> None:
+def test_phase1b_authoring_service_failure(client, db, auth_headers_factory, seed_identity, seed_course_with_syllabus) -> None:
     teacher_email = "teacher103@example.edu"
-    seed_identity(user_id=ERROR_TEACHER_ID, email=teacher_email, role="teacher")
+    teacher = seed_identity(user_id=ERROR_TEACHER_ID, email=teacher_email, role="teacher")
+    course = seed_course_with_syllabus(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Phase 1B Error Test Title",
+    )
     db.commit()
     headers = auth_headers_factory(sub=ERROR_TEACHER_ID, email=teacher_email)
     payload = {
         "assignment_title": "Phase 1B Error Test Title",
+        "course_id": course.id,
+        "syllabus_module": "m1",
+        "topic_unit": "u1",
+        "target_groups": ["Grupo 01"],
     }
 
     graph_getter = AsyncMock(return_value=_StubGraph(_failing_astream))
