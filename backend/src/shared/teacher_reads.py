@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, load_only
 
 from shared.auth import CurrentActor, ensure_legacy_teacher_bridge
@@ -328,8 +328,7 @@ def list_teacher_active_cases(
         .where(
             Assignment.teacher_id == legacy_user.id,
             Assignment.status == "published",
-            Assignment.deadline.is_not(None),
-            Assignment.deadline >= now,
+            or_(Assignment.deadline.is_(None), Assignment.deadline >= now),
         )
         .order_by(Assignment.deadline.asc(), Assignment.id.asc())
     ).all()
