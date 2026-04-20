@@ -8,104 +8,149 @@
 - Sub-issue authoring/IA: #139
 - Repo: `4Tech-Labs/ADAM-EDU`
 
-Esta iniciativa convierte la ruta docente `/teacher/courses/:courseId` en una pantalla real de gestión académica. La regla central es simple: el syllabus ya no es un mock de UI, es una entidad persistida y versionada que además alimenta el grounding de ADAM. La generación de casos no puede continuar si el syllabus del curso no existe o no está guardado.
+Esta iniciativa convierte la ruta docente `/teacher/courses/:courseId` en una pantalla real de gestión académica. La regla central sigue igual: el syllabus ya no es un mock de UI, es una entidad persistida y versionada que además alimenta el grounding de ADAM. La generación de casos no puede continuar si el syllabus del curso no existe o no está guardado.
 
-## Objetivo técnico
+## Estado actual después de #137
 
-Implementar la pantalla fiel al mockup de `Pantalla_Curso_Profesor_mvp.html`, reutilizando el header docente existente, con persistencia en backend, versionado por snapshots, integración con el authoring flow vía `course_id`, y un `ai_grounding_context` derivado server-side.
+La base backend ya quedó implementada y validada en la sub-issue #137. Este handoff ya no debe tratar esa parte como trabajo pendiente.
 
-## Principios que no se deben romper
+### Lo que ya existe
+
+1. Dominio `syllabuses` 1:1 con `courses`.
+2. Historial append-only en `syllabus_revisions`.
+3. Contrato canónico backend en [backend/src/shared/syllabus_schema.py](backend/src/shared/syllabus_schema.py).
+4. Endpoint compuesto de detalle:
+   - `GET /api/teacher/courses/{course_id}`
+5. Endpoint de guardado:
+   - `PUT /api/teacher/courses/{course_id}/syllabus`
+6. Optimistic locking con `expected_revision` y conflicto explícito `409 stale_syllabus_revision`.
+7. Derivación server-side de `ai_grounding_context` en el save del syllabus.
+8. Ownership y tenant isolation filtrando por `teacher_membership_id` y `university_id`.
+
+### Archivos backend ya resueltos en #137
+
+- [backend/src/shared/models.py](backend/src/shared/models.py)
+- [backend/src/shared/syllabus_schema.py](backend/src/shared/syllabus_schema.py)
+- [backend/src/shared/teacher_reads.py](backend/src/shared/teacher_reads.py)
+- [backend/src/shared/teacher_writes.py](backend/src/shared/teacher_writes.py)
+- [backend/src/shared/teacher_router.py](backend/src/shared/teacher_router.py)
+- [backend/alembic/versions/e1b3c4d5f6a7_issue137_teacher_syllabuses.py](backend/alembic/versions/e1b3c4d5f6a7_issue137_teacher_syllabuses.py)
+- [backend/tests/test_issue88_teacher_courses.py](backend/tests/test_issue88_teacher_courses.py)
+- [backend/tests/test_issue30_auth_perimeter.py](backend/tests/test_issue30_auth_perimeter.py)
+
+### Restricciones reales que dejó #137
 
 1. `courses` sigue siendo la fuente institucional para `title`, `code`, `semester`, `academic_level`.
 2. `syllabuses` es un dominio separado 1:1 con `courses`.
 3. El frontend no es autoridad de grounding. El backend deriva el contexto ADAM desde el syllabus persistido.
-4. No portar el JavaScript demo del mockup a React.
-5. Usar el patrón actual del repo: API explícita + TanStack Query + tipos manuales de contrato.
-6. Unificar un solo shape frontend para `syllabus -> modules -> units` y retirarlo de mocks funcionales.
+4. El save del syllabus no acepta campos institucionales. Si el cliente intenta mandar `title`, `code`, `semester` u otros campos fuera del contrato, la request debe fallar por validación.
+5. El detalle docente devuelve configuración del access link, pero no expone un raw link reutilizable.
+6. El runtime de authoring/generación es LangGraph-based. No introducir una capa paralela o un framing incorrecto de “LangChain graph” para la integración pendiente.
+
+## Objetivo técnico remanente
+
+Con #137 cerrado, el trabajo de #140 queda partido en dos frentes coordinados:
+
+1. #138: consumir el contrato real del backend en la página docente `/teacher/courses/:courseId`.
+2. #139: conectar el authoring flow con `course_id`, exigir syllabus persistido y reusar el `ai_grounding_context` canónico ya guardado.
+
+## Principios que no se deben romper
+
+1. No reabrir la separación de autoridades entre `Course` e `Syllabus`.
+2. No portar el JavaScript demo del mockup a React.
+3. Usar el patrón actual del repo: API explícita + TanStack Query + tipos manuales de contrato.
+4. Unificar un solo shape frontend para `syllabus -> modules -> units` y retirarlo de mocks funcionales.
+5. No inventar un contrato alterno de grounding dentro del authoring pipeline.
+6. No introducir una solución frontend-only para copiar o regenerar access links sin soporte backend dedicado.
+
+## Contrato backend vigente
+
+### `GET /api/teacher/courses/{course_id}`
+
+Devuelve un payload compuesto con cuatro bloques:
+
+1. `course`
+   - institucional, read-only
+2. `syllabus`
+   - editable por docente
+3. `revision_metadata`
+   - incluye revisión actual y último guardado
+4. `configuration`
+   - estado/configuración del access link
+
+### `PUT /api/teacher/courses/{course_id}/syllabus`
+
+Payload esperado:
+
+```json
+{
+  "expected_revision": 1,
+  "syllabus": {
+    "department": "...",
+    "knowledge_area": "...",
+    "nbc": "...",
+    "version_label": "...",
+    "academic_load": "...",
+    "course_description": "...",
+    "general_objective": "...",
+    "specific_objectives": ["..."],
+    "modules": [],
+    "evaluation_strategy": [],
+    "didactic_strategy": {
+      "methodological_perspective": "...",
+      "pedagogical_modality": "..."
+    },
+    "integrative_project": "...",
+    "bibliography": ["..."],
+    "teacher_notes": "..."
+  }
+}
+```
+
+### Consecuencias para consumidores
+
+1. El cliente debe leer `revision_metadata.current_revision` y reenviarlo como `expected_revision` al guardar.
+2. Si el backend responde `409 stale_syllabus_revision`, el cliente no debe reintentar a ciegas ni sobrescribir silenciosamente.
+3. La configuración actual no permite reconstruir ni copiar un raw invite link existente. Solo hay metadata en el bloque `configuration`.
+
+## Estado de las fases del plan
 
 ## Fase 1: Modelos y migraciones backend
 
-### Objetivo
+### Estado
 
-Crear el dominio `syllabuses`, el historial de revisiones y la relación explícita `Assignment.course_id`.
+Completada en #137, excepto la integración `Assignment.course_id`, que fue diferida de forma explícita a #139.
 
-### Archivos a modificar
+### Hecho en #137
 
-- [backend/src/shared/models.py](backend/src/shared/models.py)
-- [backend/alembic/versions](backend/alembic/versions)
+1. `Syllabus` 1:1 con `Course`.
+2. `SyllabusRevision` append-only.
+3. Persistencia de `ai_grounding_context` como JSONB derivado server-side.
+4. Migración Alembic conectada al head correcto.
 
-### Trabajo esperado
+### Pendiente para #139
 
-1. Agregar modelo `Syllabus` 1:1 con `Course`.
-2. Agregar modelo o tabla de snapshots de revisión, por ejemplo `syllabus_revisions`.
-3. Agregar `course_id` a `Assignment` como FK real.
-4. Agregar relaciones ORM necesarias:
-   - `Course.syllabus`
-   - `Syllabus.course`
-   - `Syllabus.revisions`
-   - `Assignment.course`
-5. Mantener el syllabus completo persistido en una estructura clara.
-6. Persistir también `ai_grounding_context` como JSON profundo y compacto derivado del syllabus.
-
-### Estructura mínima sugerida para `Syllabus`
-
-- `id`
-- `course_id`
-- `revision`
-- `department`
-- `knowledge_area`
-- `nbc`
-- `version_label`
-- `academic_load`
-- `course_description`
-- `general_objective`
-- `specific_objectives`
-- `modules`
-- `evaluation_strategy`
-- `didactic_strategy`
-- `integrative_project`
-- `bibliography`
-- `teacher_notes`
-- `ai_grounding_context`
-- `saved_at`
-- `saved_by_membership_id`
-
-### Definition of done
-
-- Alembic migrates cleanly.
-- ORM maps all new entities.
-- `Assignment.course_id` is present and queryable.
-- Revision snapshot table is append-only.
+1. Agregar `Assignment.course_id` como FK real.
+2. Propagar `course_id` por el intake y el pipeline de authoring.
 
 ## Fase 2: Contratos y rutas teacher backend
 
-### Objetivo
+### Estado
 
-Exponer el detalle compuesto del curso y el guardado del syllabus con ownership y tenant isolation.
+Completada en #137.
 
-### Archivos a modificar
+### Hecho en #137
 
-- [backend/src/shared/teacher_reads.py](backend/src/shared/teacher_reads.py)
-- [backend/src/shared/app.py](backend/src/shared/app.py) o un módulo teacher dedicado coherente con la arquitectura actual
-- [backend/src/shared/models.py](backend/src/shared/models.py)
+1. `TeacherCourseDetailResponse`.
+2. `GET /api/teacher/courses/{course_id}`.
+3. `PUT /api/teacher/courses/{course_id}/syllabus`.
+4. Ownership y tenant isolation.
+5. Snapshot de revisión por save exitoso.
 
-### Trabajo esperado
+### Qué no reabrir
 
-1. Crear contrato `TeacherCourseDetailResponse`.
-2. Exponer `GET /api/teacher/courses/{course_id}` con payload compuesto:
-   - bloque institucional read-only
-   - syllabus persistido
-   - metadata de revisión
-   - link de invitación / configuración
-3. Exponer `PUT` o `PATCH /api/teacher/courses/{course_id}/syllabus`.
-4. Validar ownership con `teacher_membership_id`.
-5. Validar tenant isolation.
-6. Crear snapshot de revisión en cada guardado exitoso.
-
-### Qué no hacer
-
-- No mezclar escritura de campos institucionales por la ruta docente.
-- No devolver varias lecturas separadas si una respuesta compuesta cubre toda la pantalla.
+1. No mezclar escritura de campos institucionales por la ruta docente.
+2. No fragmentar el detalle en múltiples llamadas si el endpoint compuesto ya cubre la pantalla.
 
 ## Fase 3: Contratos frontend y TanStack Query
 
@@ -128,8 +173,9 @@ Preparar el consumo frontend sin inventar formas paralelas de datos.
    - payload de save del syllabus
 2. Agregar `api.teacher.getCourseDetail(courseId)`.
 3. Agregar `api.teacher.saveCourseSyllabus(courseId, payload)`.
-4. Agregar query key específica por `courseId`, por ejemplo `teacher.course(courseId)`.
+4. Agregar query key específica por `courseId`, idealmente algo como `queryKeys.teacher.course(courseId)`.
 5. Mantener invalidación dirigida y evitar invalidar todo `teacher.*` si no hace falta.
+6. Modelar explícitamente el conflicto `409 stale_syllabus_revision`.
 
 ## Fase 4: Página real de gestión de curso
 
@@ -158,11 +204,15 @@ Reemplazar el placeholder y renderizar la pantalla real fiel al mockup.
    - botón de guardado y metadata de último guardado
 5. Traducir el mockup a JSX semántico y componentes del sistema actual.
 
+### Restricción importante para #138
+
+La tab `Configuración` no puede prometer copy/regeneration de un raw access link con el contrato actual. Debe renderizar estado/configuración real y no una UX ficticia basada en `access_link_id`.
+
 ### Qué excluir del mockup
 
-- modal de respuestas de estudiantes
-- dataset de estudiantes demo
-- lógica vanilla JS no relacionada con la pantalla real
+1. modal de respuestas de estudiantes
+2. dataset de estudiantes demo
+3. lógica vanilla JS no relacionada con la pantalla real
 
 ## Fase 5: Unificación con el authoring flow
 
@@ -188,7 +238,7 @@ Eliminar la duplicación entre la pantalla de syllabus y el authoring form.
 
 ### Objetivo
 
-Hacer que la generación de casos dependa del syllabus guardado y que el contexto ADAM se derive en backend.
+Hacer que la generación de casos dependa del syllabus guardado y que el contexto ADAM se resuelva desde el grounding persistido.
 
 ### Archivos a modificar
 
@@ -196,83 +246,35 @@ Hacer que la generación de casos dependa del syllabus guardado y que el context
 - [backend/src/case_generator/orchestration/frontend_adapter.py](backend/src/case_generator/orchestration/frontend_adapter.py)
 - [backend/src/case_generator/core/authoring.py](backend/src/case_generator/core/authoring.py)
 - [backend/src/shared/models.py](backend/src/shared/models.py)
+- [backend/alembic/versions](backend/alembic/versions)
 
 ### Trabajo esperado
 
 1. Extender intake request con `course_id`.
-2. Rechazar el create job si el curso no tiene syllabus guardado.
-3. Resolver `ai_grounding_context` desde el syllabus persistido.
-4. Inyectar el grounding derivado en el pipeline antes de ejecutar el grafo.
-5. Ignorar cualquier intento del cliente de mandar grounding autoritativo duplicado.
+2. Agregar `Assignment.course_id` como FK real.
+3. Rechazar el create job si el curso seleccionado y owned no tiene syllabus guardado.
+4. Resolver `ai_grounding_context` desde el row persistido en `syllabuses`.
+5. Inyectar ese grounding persistido en el pipeline antes de ejecutar el grafo.
+6. Ignorar o rechazar cualquier intento del cliente de mandar grounding autoritativo duplicado.
 
-### Esquema de referencia para `ai_grounding_context`
+### Contrato de referencia para grounding
 
-```json
-{
-  "course_identity": {
-    "course_id": "uuid-or-text-id",
-    "course_title": "Gerencia Estratégica y Modelos de Negocio en Ecosistemas Digitales",
-    "academic_level": "Especialización",
-    "department": "Gestión de las Organizaciones",
-    "knowledge_area": "Economía, Administración, Contaduría y afines",
-    "nbc": "Administración"
-  },
-  "pedagogical_intent": {
-    "course_description": "texto compacto derivado del syllabus",
-    "general_objective": "objetivo general",
-    "specific_objectives": ["objetivo 1", "objetivo 2"]
-  },
-  "instructional_scope": {
-    "modules": [
-      {
-        "module_id": "m1",
-        "module_title": "Fundamentos de estrategia en la era de la IA",
-        "weeks": "1-3",
-        "module_summary": "resumen compacto",
-        "learning_outcomes": ["resultado 1"],
-        "units": [
-          {
-            "unit_id": "1.1",
-            "title": "Evolución estratégica digital",
-            "topics": "tema compacto"
-          }
-        ],
-        "cross_course_connections": "texto compacto"
-      }
-    ],
-    "evaluation_strategy": [
-      {
-        "activity": "Primer parcial",
-        "weight": 20,
-        "linked_objectives": ["O1"],
-        "expected_outcome": "texto compacto"
-      }
-    ],
-    "didactic_strategy": {
-      "methodological_perspective": "texto compacto",
-      "pedagogical_modality": "texto compacto"
-    }
-  },
-  "generation_hints": {
-    "target_student_profile": "business",
-    "scenario_constraints": ["constraint 1"],
-    "preferred_techniques": ["SWOT"],
-    "difficulty_signal": "advanced",
-    "forbidden_mismatches": [
-      "No generar un caso que ignore el módulo seleccionado"
-    ]
-  },
-  "metadata": {
-    "syllabus_revision": 1,
-    "saved_at": "ISO-8601 timestamp",
-    "saved_by_membership_id": "teacher-membership-id"
-  }
-}
-```
+El contrato canónico ya implementado vive en [backend/src/shared/syllabus_schema.py](backend/src/shared/syllabus_schema.py):
+
+1. `SyllabusGroundingContext`
+2. `derive_syllabus_grounding_context(...)`
+
+La integración de #139 debe tratar ese contrato como la fuente de verdad. Si se necesitan más `generation_hints`, se evoluciona ese contrato canónico y sus tests; no se crea un segundo esquema implícito dentro del pipeline.
 
 ### Regla práctica
 
-Guardar el syllabus completo. Derivar un grounding compacto. No mandar el syllabus entero al prompt si el objeto compacto ya cubre la personalización requerida.
+Guardar el syllabus completo. Reusar el grounding compacto ya persistido. No mandar el syllabus entero al prompt si el objeto compacto ya cubre la personalización requerida.
+
+### Qué no hacer en #139
+
+1. No implementar el guard como SQL ad hoc estilo `SELECT count(*) ...` disperso por el codebase.
+2. No reconstruir el grounding desde form fields del cliente si ya existe persistido.
+3. No introducir un contrato paralelo “frontend-owned” para personalizar ADAM.
 
 ## Fase 7: Testing
 
@@ -281,18 +283,15 @@ Guardar el syllabus completo. Derivar un grounding compacto. No mandar el syllab
 Archivos base:
 
 - [backend/tests/test_issue88_teacher_courses.py](backend/tests/test_issue88_teacher_courses.py)
-- nuevos tests adyacentes para syllabus detail/save/guard
+- tests nuevos o adyacentes para authoring intake, `course_id`, guard y grounding
 
-Cobertura mínima:
+Cobertura mínima remanente:
 
-1. Teacher detail happy path.
-2. Teacher detail forbidden for student/admin/non-owner.
-3. Tenant isolation.
-4. Save syllabus happy path.
-5. Revision snapshot creation.
-6. Guard de generación sin syllabus guardado.
-7. Derivación determinista de `ai_grounding_context`.
-8. Resistencia a payload cliente stale o conflictivo.
+1. Guard de generación sin syllabus guardado.
+2. Persistencia real de `Assignment.course_id`.
+3. Traza de `course_id` en `authoring_jobs.task_payload`.
+4. Selección del grounding persistido por `course_id`.
+5. Resistencia a payload cliente stale o conflictivo de grounding.
 
 ### Frontend
 
@@ -301,24 +300,23 @@ Archivos base:
 - tests nuevos de la route/page docente
 - [frontend/src/features/teacher-authoring/useAuthoringJobProgress.test.ts](frontend/src/features/teacher-authoring/useAuthoringJobProgress.test.ts)
 
-Cobertura mínima:
+Cobertura mínima remanente:
 
 1. La ruta carga el detalle.
 2. El tab en URL persiste correctamente.
 3. Save success.
-4. Save failure.
-5. Copy invitation link.
+4. Save validation failure.
+5. Save conflict `409 stale_syllabus_revision`.
 6. `course_id` se serializa en el create request.
 
-## Secuencia recomendada
+## Secuencia recomendada desde hoy
 
-1. Fase 1 backend modelado/migraciones.
-2. Fase 2 backend endpoints teacher.
-3. Fase 3 contratos frontend/API.
-4. Fase 4 página de curso real.
-5. Fase 5 unificación con authoring form.
-6. Fase 6 guard + grounding.
-7. Fase 7 tests y validación final.
+1. #138: contratos frontend/API + query keys + página real.
+2. #138: tests e integración visual/funcional de la ruta docente.
+3. #139: `course_id` en authoring intake + migración `Assignment.course_id`.
+4. #139: guard de syllabus persistido + grounding persistido en LangGraph.
+5. #139: tests backend/frontend remanentes.
+6. Validación final completa.
 
 ## Validación final
 
@@ -347,7 +345,8 @@ uv run --directory backend pytest -m live_llm -q
 ## Riesgos que deben revisarse en code review
 
 1. Drift entre syllabus guardado y payload cliente.
-2. `course_id` faltante o parcial entre assignment, job y detalle docente.
+2. `course_id` faltante o parcial entre assignment, job y authoring intake.
 3. Invalidación demasiado amplia o demasiado estrecha en TanStack Query.
 4. Payload de grounding demasiado grande y costoso para prompts.
-5. Fuga de datos si teacher detail/save no filtra por ownership real.
+5. Fuga de datos si teacher detail/save o el authoring intake no filtran por ownership real.
+6. UX falsa en frontend si se intenta “copiar link” sin raw token real del backend.
