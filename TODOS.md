@@ -368,3 +368,20 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Context:** El `TODO(#90)` en el código fue registrado explícitamente durante Issue #90 con la nota: `# TODO(#90): populate once Assignment gains course_id FK`. El campo existe en el contrato API (`TeacherCourseItemResponse.active_cases_count`) pero siempre retorna `0`. El fix de Issue #150 (null deadline) dejó expuesto que `Assignment` ya soporta `deadline=None`; el siguiente gap visible es este conteo. No bloquea ningún flujo actual.
 
 **Depends on / blocked by:** Bloqueado por la adición de una FK `Assignment.course_id` + migración Alembic correspondiente. Ese cambio de schema debe coordinarse con el authoring job intake (`/api/authoring/jobs`) para que el `course_id` del payload se persista en la fila de `Assignment`.
+
+---
+
+## TODO-022: Guard en PATCH publish contra `canonical_output = null`
+
+**What:** Antes de transicionar `status → "published"` en `PATCH /api/teacher/cases/{id}/publish`, verificar que `assignment.canonical_output is not None`. Si es `None`, lanzar 422 con `detail="cannot_publish_without_output"`.
+
+**Why:** Un docente que presione publicar sobre un caso con generación fallida (`status="failed"`, `canonical_output=null`) obtendrá un estado `published` con contenido vacío. El preview mostrará una página en blanco sin ningún mensaje de error — fallo silencioso desde la perspectiva del usuario.
+
+**Pros:** Previene el estado incoherente `published + canonical_output=null`. La guardia es 2 líneas y no agrega dependencias.
+
+**Cons:** Añade una restricción de negocio en el endpoint de publicación que podría querer relajarse si en el futuro se admiten publicaciones parciales (e.g., preview con módulos incompletos).
+
+**Context:** Identificado en la revisión de ingeniería de Issue #152. El spec de ese issue solo exige chequear `status == "published"` para el 409; el caso `canonical_output=null` quedó fuera de scope por minimal diff. El path `PATCH /publish` en `teacher_router.py` (función `patch_teacher_case_publish`) es el lugar exacto donde añadir el guard.
+
+**Depends on / blocked by:** No bloquea nada. Puede incluirse en la PR de tests del Issue #159 o en un PR de hardening independiente.
+
