@@ -278,3 +278,19 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Context:** Aceptado como follow-up durante la revision de la nueva especificacion de Issue #127. La evidencia actual apunta a dos modulos pesados concretos; el stress harness seria una fase posterior una vez el clean-room de Authoring quede estable y reusable.
 
 **Depends on / blocked by:** Bloqueado por la implementacion y validacion completa de Issue #127, incluyendo el contrato de clean-room, la reproduccion determinista del path de locks y tres corridas full-suite consecutivas en verde.
+
+---
+
+## TODO-018: Guardrail de bundle budget en CI para frontend post-Issue #130
+
+**What:** Agregar un guardrail automatizado en CI que compare el tamano de los artefactos principales del build de frontend contra una baseline post-optimización de Issue #130 y falle o alerte cuando el bundle inicial o el chunk aislado de Plotly regresen por encima del presupuesto acordado.
+
+**Why:** Issue #130 apunta a adelgazar el critical path del preview y aislar Plotly en un chunk dedicado. Sin un control automatizado despues del fix, futuras PRs pueden reintroducir bytes en el entry bundle o volver a acercar dependencias de case preview a rutas como login sin que nadie lo note hasta que reaparezca el warning de Vite o la degradacion en dispositivos lentos.
+
+**Pros:** Convierte la mejora de #130 en un guardrail durable, detecta regresiones temprano en PR/CI y da una señal objetiva cuando cambie el tamano del bundle inicial o del chunk `vendor-plotly`.
+
+**Cons:** Requiere fijar primero una baseline estable despues de implementar #130, decidir si el control debe bloquear o solo alertar, y mantener el presupuesto alineado cuando haya cambios legitimos de producto en el preview.
+
+**Context:** Aceptado como follow-up durante la refinacion tecnica de Issue #130. La decision explicita fue no mezclar el guardrail de CI con la issue de aislamiento de Plotly para mantener #130 enfocada en el critical path y no convertirla en una iniciativa general de performance governance.
+
+**Depends on / blocked by:** Bloqueado por la implementacion de Issue #130 y por una corrida de build post-fix que deje una baseline confiable para `index` y el chunk `vendor-plotly`. Tambien depende de decidir si el guardrail vivira en GitHub Actions, otro pipeline de CI, o una verificacion local reutilizable por ambos.
