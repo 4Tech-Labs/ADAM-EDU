@@ -335,6 +335,7 @@ class Assignment(Base):
 
     status: Mapped[str] = mapped_column(String(50), default="draft")
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    available_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
