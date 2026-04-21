@@ -467,3 +467,19 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Depends on / blocked by:** Issue #158 mergeado. Alineación con el tipo `TeacherCaseItem` en `adam-types.ts` (campo ya agregado como opcional en #158).
 
+---
+
+## TODO-026: Manejo explícito de error de `db.commit()` en PATCH /cases/{id}/deadline y PATCH /cases/{id}/publish
+
+**What:** Envolver los `db.commit()` en `patch_teacher_case_deadline` y `patch_teacher_case_publish` (en `backend/src/shared/teacher_router.py`) en un bloque `try/except` que eleve un 500 explícito cuando el commit falla.
+
+**Why:** Si `db.commit()` lanza una excepción (por ejemplo, tras un reset de conexión bajo Supavisor transaction mode), el endpoint actualmente puede devolver 200 con datos pre-mutación porque el `db.refresh()` lee desde el rollback. El resultado es un 200 silencioso con stale data — el llamante cree que la mutación fue exitosa.
+
+**Pros:** Convierte un fallo silencioso en un error observable. El frontend puede distinguir entre éxito real y fallo de persistencia y mostrar un mensaje claro al docente.
+
+**Cons:** SQLAlchemy típicamente lanza en `commit()` antes de que el control regrese al handler, por lo que en la práctica este escenario es raro. El wrapping añade boilerplate al handler.
+
+**Context:** Identificado como critical gap en la revisión de failure modes de Issue #159. El test harness (SAVEPOINT + outer transaction) oculta este escenario en pruebas. Afecta a ambos endpoints de mutación en `teacher_router.py`. Sin el wrap, la cobertura de fallo es: sin test, sin handler, fallo silencioso.
+
+**Depends on / blocked by:** Nada. Puede implementarse en cualquier PR de hardening de los endpoints de caso docente.
+
