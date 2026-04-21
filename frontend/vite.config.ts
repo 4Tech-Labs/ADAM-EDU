@@ -22,6 +22,18 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+    // Use forked processes instead of worker_threads so each worker gets an
+    // isolated V8 heap and event loop. Without this, jsdom timer pressure from
+    // heavy test files (AuthoringForm, TeacherCoursePage) causes timeouts in the
+    // full-suite run. maxForks caps parallelism; on CI (2 vCPUs) Vitest clamps
+    // automatically to min(maxForks, cpuCount).
+    pool: "forks",
+    // @ts-expect-error -- vitest 4.1.2 InlineConfig type omits poolOptions; valid at runtime
+    poolOptions: {
+      forks: { maxForks: 3 },
+    },
+    // Slow async-UI tests (MSW + jsdom) can legitimately take >5s under load.
+    testTimeout: 10_000,
   },
   server: {
     proxy: {
