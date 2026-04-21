@@ -38,9 +38,11 @@ import type {
     InviteResolveResponse,
     SuggestRequest,
     SuggestResponse,
+    TeacherCaseDetailResponse,
     TeacherCourseDetailResponse,
     TeacherCasesResponse,
     TeacherCoursesResponse,
+    DeadlineUpdateRequest,
     TeacherSyllabusSaveRequest,
 } from "@/shared/adam-types";
 
@@ -1033,6 +1035,30 @@ export const api = {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(req),
+                },
+            );
+        },
+        async getCaseDetail(assignmentId: string): Promise<TeacherCaseDetailResponse> {
+            return parseJsonResponse<TeacherCaseDetailResponse>(
+                `/teacher/cases/${assignmentId}`,
+            );
+        },
+        async publishCase(assignmentId: string): Promise<TeacherCaseDetailResponse> {
+            return parseJsonResponse<TeacherCaseDetailResponse>(
+                `/teacher/cases/${assignmentId}/publish`,
+                { method: "PATCH" },
+            );
+        },
+        async updateDeadline(
+            assignmentId: string,
+            body: DeadlineUpdateRequest,
+        ): Promise<TeacherCaseDetailResponse> {
+            return parseJsonResponse<TeacherCaseDetailResponse>(
+                `/teacher/cases/${assignmentId}/deadline`,
+                {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body),
                 },
             );
         },

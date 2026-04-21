@@ -676,6 +676,21 @@ export interface TeacherCasesResponse {
     total: number;
 }
 
+export interface TeacherCaseDetailResponse {
+    id: string;
+    title: string;
+    status: string;
+    available_from: string | null;
+    deadline: string | null;
+    course_id: string | null;
+    canonical_output: Record<string, unknown> | null;
+}
+
+export interface DeadlineUpdateRequest {
+    available_from?: string | null;
+    deadline?: string | null;
+}
+
 export const EMPTY_FORM: CaseFormData = {
     courseId: "",
     subject: "",
