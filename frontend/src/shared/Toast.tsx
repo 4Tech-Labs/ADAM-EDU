@@ -17,17 +17,16 @@ interface ToastItem {
     type: ToastType;
 }
 
-interface ToastContextValue {
+export interface ToastContextValue {
     showToast: (message: string, type?: ToastType) => void;
 }
-
-let nextId = 0;
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
     const [toasts, setToasts] = useState<ToastItem[]>([]);
     const timeoutIdsRef = useRef<number[]>([]);
+    const nextIdRef = useRef(0);
 
     useEffect(() => {
         return () => {
@@ -39,7 +38,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const showToast = useCallback((message: string, type: ToastType = "info") => {
-        const id = nextId++;
+        const id = nextIdRef.current++;
         setToasts((prev) => [...prev, { id, message, type }]);
 
         const timeoutId = window.setTimeout(() => {

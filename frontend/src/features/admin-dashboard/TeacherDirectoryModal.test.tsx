@@ -172,11 +172,9 @@ describe("TeacherDirectoryModal", () => {
 
         fireEvent.click(screen.getAllByText("Reenviar y copiar")[0]);
 
-        await waitFor(async () => {
-            expect(await screen.findByRole("status")).toHaveTextContent(
-                "La invitacion ya fue utilizada y no puede reenviarse ni revocarse.",
-            );
-        });
+        expect(await screen.findByRole("status")).toHaveTextContent(
+            "La invitacion ya fue utilizada y no puede reenviarse ni revocarse.",
+        );
     });
 
     it("removes a teacher with confirmation and clears related caches", async () => {
@@ -210,11 +208,9 @@ describe("TeacherDirectoryModal", () => {
         fireEvent.click(screen.getByText("Eliminar"));
         fireEvent.click(screen.getByRole("button", { name: "Eliminar docente" }));
 
-        await waitFor(async () => {
-            expect(await screen.findByRole("status")).toHaveTextContent(
-                "No se puede eliminar este docente porque tiene casos con authoring activo.",
-            );
-        });
+        expect(await screen.findByRole("status")).toHaveTextContent(
+            "No se puede eliminar este docente porque tiene casos con authoring activo.",
+        );
         expect(await screen.findByText("Juan Garcia")).toBeTruthy();
     });
 
@@ -245,9 +241,7 @@ describe("TeacherDirectoryModal", () => {
         fireEvent.click(screen.getAllByText("Revocar")[0]);
         fireEvent.click(screen.getByRole("button", { name: "Revocar invitacion" }));
 
-        await waitFor(async () => {
-            expect(await screen.findByRole("status")).toHaveTextContent("network");
-        });
+        expect(await screen.findByRole("status")).toHaveTextContent("network");
         expect(await screen.findByText("Ana Torres")).toBeTruthy();
     });
 });
