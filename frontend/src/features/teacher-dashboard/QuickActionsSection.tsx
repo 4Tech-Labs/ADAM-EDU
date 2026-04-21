@@ -1,11 +1,7 @@
 import { useNavigate } from "react-router-dom";
 
-import type { ShowToast } from "@/shared/Toast";
+import { useToast } from "@/shared/Toast";
 import { DashboardActionCard } from "@/shared/ui/DashboardActionCard";
-
-interface QuickActionsSectionProps {
-    showToast: ShowToast;
-}
 
 function SparklesIcon() {
     return (
@@ -69,8 +65,9 @@ function ChartIcon() {
     );
 }
 
-export function QuickActionsSection({ showToast }: QuickActionsSectionProps) {
+export function QuickActionsSection() {
     const navigate = useNavigate();
+    const { showToast } = useToast();
 
     const scrollToCases = () => {
         document.getElementById("cases-section")?.scrollIntoView({ behavior: "smooth" });
@@ -109,7 +106,7 @@ export function QuickActionsSection({ showToast }: QuickActionsSectionProps) {
                     onClick={() =>
                         showToast(
                             "Reportes Globales - Próximamente en nuevas versiones...",
-                            "default",
+                            "info",
                         )
                     }
                     icon={<ChartIcon />}

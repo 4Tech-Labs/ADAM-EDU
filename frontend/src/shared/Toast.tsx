@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
+import type { ReactNode } from "react";
 
-export type ToastType = "success" | "error" | "default";
-export type ShowToast = (message: string, type?: ToastType) => void;
+export type ToastType = "success" | "error" | "info";
 
 interface ToastItem {
     id: number;
@@ -9,11 +17,16 @@ interface ToastItem {
     type: ToastType;
 }
 
-let nextId = 0;
+export interface ToastContextValue {
+    showToast: (message: string, type?: ToastType) => void;
+}
 
-export function useToast() {
+const ToastContext = createContext<ToastContextValue | null>(null);
+
+export function ToastProvider({ children }: { children: ReactNode }) {
     const [toasts, setToasts] = useState<ToastItem[]>([]);
     const timeoutIdsRef = useRef<number[]>([]);
+    const nextIdRef = useRef(0);
 
     useEffect(() => {
         return () => {
@@ -24,8 +37,8 @@ export function useToast() {
         };
     }, []);
 
-    const showToast = useCallback<ShowToast>((message, type = "default") => {
-        const id = nextId++;
+    const showToast = useCallback((message: string, type: ToastType = "info") => {
+        const id = nextIdRef.current++;
         setToasts((prev) => [...prev, { id, message, type }]);
 
         const timeoutId = window.setTimeout(() => {
@@ -33,13 +46,16 @@ export function useToast() {
             timeoutIdsRef.current = timeoutIdsRef.current.filter(
                 (activeTimeoutId) => activeTimeoutId !== timeoutId,
             );
-        }, 2800);
+        }, 4000);
 
         timeoutIdsRef.current.push(timeoutId);
     }, []);
 
-    const ToastContainer = useCallback(
-        () => (
+    const value = useMemo(() => ({ showToast }), [showToast]);
+
+    return (
+        <ToastContext.Provider value={value}>
+            {children}
             <div className="fixed bottom-4 right-4 z-[300] flex flex-col gap-2">
                 {toasts.map((toast) => (
                     <div
@@ -58,9 +74,14 @@ export function useToast() {
                     </div>
                 ))}
             </div>
-        ),
-        [toasts],
+        </ToastContext.Provider>
     );
+}
 
-    return { showToast, ToastContainer } as const;
+export function useToast(): ToastContextValue {
+    const ctx = useContext(ToastContext);
+    if (!ctx) {
+        throw new Error("useToast must be used inside ToastProvider");
+    }
+    return ctx;
 }

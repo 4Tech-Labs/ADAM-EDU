@@ -44,7 +44,7 @@ import type {
 } from "@/shared/adam-types";
 import { ApiError, api } from "@/shared/api";
 import { queryKeys, type CourseFilters } from "@/shared/queryKeys";
-import type { ShowToast } from "@/shared/Toast";
+import { useToast } from "@/shared/Toast";
 import {
     Select,
     SelectContent,
@@ -89,16 +89,13 @@ interface InviteSuccessState {
     activationLink: string;
 }
 
-interface Props {
-    showToast: ShowToast;
-}
-
 const ALL_FILTER_VALUE = "all";
 const UI_UNSET_SELECT_VALUE = "__unset_select_value__";
 const UI_UNASSIGNED_TEACHER_VALUE = "__unassigned_teacher_value__";
 
-export function AdminDashboardPage({ showToast }: Props) {
+export function AdminDashboardPage() {
     const { actor, signOut } = useAuth();
+    const { showToast } = useToast();
     const queryClient = useQueryClient();
 
     const [transientAccessLinks, setTransientAccessLinks] = useState<Record<string, string>>({});
@@ -550,7 +547,7 @@ export function AdminDashboardPage({ showToast }: Props) {
                         <section className="mb-7 grid grid-cols-1 gap-4 md:grid-cols-3">
                             <ActionCard title="Crear Nuevo Curso" subtitle="Asigna un docente y genera link" onClick={openCreateModal} variant="primary" icon={<Plus className="h-5 w-5 text-white" strokeWidth={2.4} />} />
                             <ActionCard title="Gestion de Docentes" subtitle="Directorio e invitaciones" onClick={() => setIsTeacherDirectoryOpen(true)} variant="primary" icon={<Users className="h-5 w-5 text-white" strokeWidth={2.4} />} />
-                            <ActionCard title="Reportes Globales" subtitle="Proximamente disponible" onClick={() => showToast("Modulo de reportes proximamente disponible.", "default")} variant="placeholder" icon={<ExternalLink className="h-5 w-5 text-slate-400" />} />
+                            <ActionCard title="Reportes Globales" subtitle="Proximamente disponible" onClick={() => showToast("Modulo de reportes proximamente disponible.", "info")} variant="placeholder" icon={<ExternalLink className="h-5 w-5 text-slate-400" />} />
                         </section>
 
                         <section className="mb-5 flex flex-wrap items-center gap-3">
@@ -723,7 +720,6 @@ export function AdminDashboardPage({ showToast }: Props) {
             <TeacherDirectoryModal
                 isOpen={isTeacherDirectoryOpen}
                 onClose={() => setIsTeacherDirectoryOpen(false)}
-                showToast={showToast}
             />
         </div>
     );

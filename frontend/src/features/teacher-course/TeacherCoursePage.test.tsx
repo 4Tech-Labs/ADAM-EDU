@@ -25,8 +25,6 @@ vi.mock("@/shared/api", async () => {
     };
 });
 
-const showToast = vi.fn();
-
 const teacherAuthValue: AuthContextValue = {
     session: { access_token: "jwt" } as never,
     actor: {
@@ -192,7 +190,7 @@ function renderTeacherCoursePage(initialEntry = "/teacher/courses/course-1") {
             <Routes>
                 <Route
                     path="/teacher/courses/:courseId"
-                    element={<TeacherCoursePage showToast={showToast} />}
+                    element={<TeacherCoursePage />}
                 />
             </Routes>
             <LocationSearchProbe />
@@ -307,9 +305,8 @@ describe("TeacherCoursePage", () => {
             );
         });
 
-        expect(showToast).toHaveBeenCalledWith(
+        expect(await screen.findByRole("status")).toHaveTextContent(
             "Syllabus guardado. ADAM usará la versión actualizada en próximas generaciones.",
-            "success",
         );
         expect(screen.getAllByText("R2").length).toBeGreaterThan(0);
     });
@@ -369,9 +366,8 @@ describe("TeacherCoursePage", () => {
         await waitFor(() => {
             expect(api.teacher.getCourseDetail).toHaveBeenCalledTimes(2);
         });
-        expect(showToast).toHaveBeenCalledWith(
+        expect(await screen.findByRole("status")).toHaveTextContent(
             "El syllabus cambió desde tu última carga. Recargamos la versión más reciente para evitar sobrescrituras.",
-            "error",
         );
         expect(screen.getByDisplayValue("1.3 — 19/04/2026")).toBeTruthy();
     });

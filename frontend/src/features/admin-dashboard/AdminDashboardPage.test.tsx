@@ -40,7 +40,6 @@ import { useAuth } from "@/app/auth/useAuth";
 import { api } from "@/shared/api";
 import { renderWithProviders } from "@/shared/test-utils";
 
-const showToast = vi.fn();
 const signOut = vi.fn();
 const nativeFireEventChange = fireEvent.change.bind(fireEvent);
 
@@ -134,7 +133,7 @@ const adminActor: AuthMeActor = {
 };
 
 function renderPage() {
-    return renderWithProviders(<AdminDashboardPage showToast={showToast} />);
+    return renderWithProviders(<AdminDashboardPage />);
 }
 
 function getElementLabel(element: Element): string {
@@ -349,7 +348,7 @@ describe("AdminDashboardPage", () => {
     });
 
     it("loads dashboard data correctly inside StrictMode", async () => {
-        renderWithProviders(<AdminDashboardPage showToast={showToast} />, {
+        renderWithProviders(<AdminDashboardPage />, {
             strictMode: true,
         });
 
@@ -566,7 +565,7 @@ describe("AdminDashboardPage", () => {
         fireEvent.click(screen.getByText("Gestion de Docentes"));
         fireEvent.click(screen.getByText("Reportes Globales"));
 
-        expect(showToast).toHaveBeenCalledWith("Modulo de reportes proximamente disponible.", "default");
+        expect(await screen.findByText("Modulo de reportes proximamente disponible.")).toBeTruthy();
         expect(api.admin.getTeacherDirectory).toHaveBeenCalledTimes(1);
         expect(api.admin.createTeacherInvite).not.toHaveBeenCalled();
     });
@@ -674,7 +673,7 @@ describe("AdminDashboardPage", () => {
         await waitFor(() => {
             expect(api.admin.listCourses).toHaveBeenCalledTimes(2);
         });
-        expect(showToast).toHaveBeenCalledWith("Curso archivado correctamente.", "success");
+        expect(await screen.findByText("Curso archivado correctamente.")).toBeTruthy();
     });
 
     it("filters by semester using only the created-course options from the select", async () => {
@@ -1008,7 +1007,7 @@ describe("AdminDashboardPage", () => {
         await waitFor(() => {
             expect(api.admin.createCourse).toHaveBeenCalledTimes(1);
         });
-        expect(showToast).toHaveBeenCalledWith("Curso creado correctamente.", "success");
+        expect(await screen.findByText("Curso creado correctamente.")).toBeTruthy();
         expect(screen.queryByTestId("create-course-modal")).toBeNull();
         expect(screen.queryByText("No se pudo crear el curso.")).toBeNull();
     }, 20_000);
@@ -1058,12 +1057,8 @@ describe("AdminDashboardPage", () => {
         fireEvent.click(screen.getByLabelText("Editar Finanzas Corporativas"));
         fireEvent.click(screen.getByText("Regenerar enlace"));
 
-        expect(await screen.findByText("No se pudo cargar el selector de docentes porque falta el correo de un docente activo.")).toBeTruthy();
+        expect((await screen.findAllByText("No se pudo cargar el selector de docentes porque falta el correo de un docente activo.")).length).toBeGreaterThan(0);
         expect(screen.getAllByText("/app/join#course_access_token=rotated-token").length).toBeGreaterThan(0);
-        expect(showToast).toHaveBeenCalledWith(
-            "No se pudo cargar el selector de docentes porque falta el correo de un docente activo.",
-            "error",
-        );
     }, 20_000);
 
     it("does not show the inline regenerate CTA for missing or inactive links", async () => {

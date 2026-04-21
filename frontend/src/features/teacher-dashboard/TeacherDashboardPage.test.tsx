@@ -20,7 +20,7 @@ vi.mock("@/features/teacher-layout/TeacherLayout", () => ({
 const quickActionsSectionSpy = vi.fn();
 
 vi.mock("./QuickActionsSection", () => ({
-    QuickActionsSection: (props: { showToast: (message: string, type?: string) => void }) => {
+    QuickActionsSection: (props: Record<string, unknown>) => {
         quickActionsSectionSpy(props);
         return <div data-testid="quick-actions-section">Quick actions</div>;
     },
@@ -33,7 +33,7 @@ vi.mock("./CursosActivosSection", () => ({
 const casosActivosSectionSpy = vi.fn();
 
 vi.mock("./CasosActivosSection", () => ({
-    CasosActivosSection: (props: { showToast: (message: string, type?: string) => void }) => {
+    CasosActivosSection: (props: Record<string, unknown>) => {
         casosActivosSectionSpy(props);
         return (
             <section id="cases-section" data-testid="casos-activos-section">
@@ -47,9 +47,7 @@ import { TeacherDashboardPage } from "./TeacherDashboardPage";
 
 describe("TeacherDashboardPage", () => {
     it("composes layout, quick actions, courses section, and cases anchor", () => {
-        const showToast = vi.fn();
-
-        renderWithProviders(<TeacherDashboardPage showToast={showToast} />);
+        renderWithProviders(<TeacherDashboardPage />);
 
         expect(screen.getByTestId("teacher-dashboard-page")).toBeTruthy();
         expect(screen.getByTestId("quick-actions-section")).toBeTruthy();
@@ -63,10 +61,10 @@ describe("TeacherDashboardPage", () => {
             }),
         );
         expect(quickActionsSectionSpy).toHaveBeenCalledWith(
-            expect.objectContaining({ showToast }),
+            expect.not.objectContaining({ showToast: expect.anything() }),
         );
         expect(casosActivosSectionSpy).toHaveBeenCalledWith(
-            expect.objectContaining({ showToast }),
+            expect.not.objectContaining({ showToast: expect.anything() }),
         );
     });
 });

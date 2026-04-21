@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import type { TeacherCaseItem } from "@/shared/adam-types";
-import type { ShowToast } from "@/shared/Toast";
+import { useToast } from "@/shared/Toast";
 
 import { useTeacherCases } from "./useTeacherDashboard";
 
@@ -48,23 +48,24 @@ function DeadlineBadge({ days }: { days: number | null }) {
 
 interface CasoRowProps {
     caso: TeacherCaseItem;
-    showToast: ShowToast;
 }
 
-function CasoRow({ caso, showToast }: CasoRowProps) {
+function CasoRow({ caso }: CasoRowProps) {
+    const { showToast } = useToast();
+
     const handleViewCase = (id: string) => {
         void id;
-        showToast(PLACEHOLDER_MSG, "default");
+        showToast(PLACEHOLDER_MSG, "info");
     };
 
     const handleDeliverables = (id: string) => {
         void id;
-        showToast(PLACEHOLDER_MSG, "default");
+        showToast(PLACEHOLDER_MSG, "info");
     };
 
     const handleEdit = (id: string) => {
         void id;
-        showToast(PLACEHOLDER_MSG, "default");
+        showToast(PLACEHOLDER_MSG, "info");
     };
 
     return (
@@ -127,11 +128,7 @@ function CasoRow({ caso, showToast }: CasoRowProps) {
     );
 }
 
-interface CasosActivosSectionProps {
-    showToast: ShowToast;
-}
-
-export function CasosActivosSection({ showToast }: CasosActivosSectionProps) {
+export function CasosActivosSection() {
     const navigate = useNavigate();
     const [page, setPage] = useState(0);
     const { data, isLoading, isError } = useTeacherCases();
@@ -271,7 +268,7 @@ export function CasosActivosSection({ showToast }: CasosActivosSectionProps) {
 
                             {!isLoading && !isError
                                 ? pageCases.map((caso) => (
-                                      <CasoRow key={caso.id} caso={caso} showToast={showToast} />
+                                      <CasoRow key={caso.id} caso={caso} />
                                   ))
                                 : null}
                         </tbody>

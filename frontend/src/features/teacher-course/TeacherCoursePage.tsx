@@ -37,14 +37,10 @@ import {
     useTeacherCourseDetail,
     validateTeacherCourseDraft,
 } from "@/features/teacher-course/teacherCourseModel";
-import type { ShowToast } from "@/shared/Toast";
+import { useToast } from "@/shared/Toast";
 
 const SYLLABUS_TAB_ID = "teacher-course-tab-syllabus";
 const CONFIG_TAB_ID = "teacher-course-tab-configuracion";
-
-interface TeacherCoursePageProps {
-    showToast: ShowToast;
-}
 
 interface SectionCardProps {
     step: number;
@@ -122,8 +118,9 @@ function TeacherCourseLoadingState() {
     );
 }
 
-export function TeacherCoursePage({ showToast }: TeacherCoursePageProps) {
+export function TeacherCoursePage() {
     const navigate = useNavigate();
+    const { showToast } = useToast();
     const { courseId = "" } = useParams<{ courseId: string }>();
     const [searchParams, setSearchParams] = useSearchParams();
     const activeTab = getTeacherCourseTab(searchParams.get("tab"));

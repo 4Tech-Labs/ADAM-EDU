@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import { AuthContext } from "@/app/auth/auth-context";
 import type { AuthContextValue } from "@/app/auth/auth-types";
+import { ToastProvider } from "@/shared/Toast";
 
 export function createTestQueryClient(): QueryClient {
     return new QueryClient({
@@ -44,11 +45,13 @@ export function createWrapper(options: WrapperOptions = {}) {
         );
 
         const content = (
+            <ToastProvider>
             <MemoryRouter initialEntries={initialEntries}>
                 <QueryClientProvider client={queryClient}>
                     {innerContent}
                 </QueryClientProvider>
             </MemoryRouter>
+            </ToastProvider>
         );
 
         return strictMode ? <StrictMode>{content}</StrictMode> : content;
