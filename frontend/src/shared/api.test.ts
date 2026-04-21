@@ -944,4 +944,136 @@ describe("api auth + stream glue", () => {
         expect(options.method).toBeUndefined();
         expect(new Headers(options.headers).get("Authorization")).toBe("Bearer teacher-token");
     });
+
+    it("fetches teacher case detail with bearer auth", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+        getSessionMock.mockResolvedValue({
+            data: { session: { access_token: "teacher-token" } },
+            error: null,
+        });
+
+        const detail = {
+            id: "case-1", title: "Test Case", status: "draft",
+            available_from: null, deadline: null, course_id: null, canonical_output: null,
+        };
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify(detail), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.teacher.getCaseDetail("case-1");
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/teacher/cases/case-1");
+        const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
+        expect(options.method).toBeUndefined();
+        expect(new Headers(options.headers).get("Authorization")).toBe("Bearer teacher-token");
+    });
+
+    it("publishes a teacher case with PATCH and bearer auth", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+        getSessionMock.mockResolvedValue({
+            data: { session: { access_token: "teacher-token" } },
+            error: null,
+        });
+
+        const detail = {
+            id: "case-1", title: "Test Case", status: "published",
+            available_from: null, deadline: null, course_id: null, canonical_output: null,
+        };
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify(detail), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.teacher.publishCase("case-1");
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/teacher/cases/case-1/publish");
+        const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
+        expect(options.method).toBe("PATCH");
+        expect(new Headers(options.headers).get("Authorization")).toBe("Bearer teacher-token");
+    });
+
+    it("updates deadline with PATCH, JSON body, and bearer auth", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+        getSessionMock.mockResolvedValue({
+            data: { session: { access_token: "teacher-token" } },
+            error: null,
+        });
+
+        const deadline = "2026-06-01T00:00:00Z";
+        const detail = {
+            id: "case-1", title: "Test Case", status: "draft",
+            available_from: null, deadline, course_id: null, canonical_output: null,
+        };
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify(detail), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.teacher.updateDeadline("case-1", { deadline });
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/teacher/cases/case-1/deadline");
+        const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
+        expect(options.method).toBe("PATCH");
+        expect(new Headers(options.headers).get("Content-Type")).toBe("application/json");
+        expect(new Headers(options.headers).get("Authorization")).toBe("Bearer teacher-token");
+        expect(options.body).toBe(JSON.stringify({ deadline }));
+    });
+
+    it("rejects publishCase with ApiError on 409 already_published", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+        getSessionMock.mockResolvedValue({
+            data: { session: { access_token: "teacher-token" } },
+            error: null,
+        });
+
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ detail: "already_published" }), {
+                status: 409,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await expect(api.teacher.publishCase("case-1")).rejects.toMatchObject({
+            status: 409,
+        });
+    });
+
+    it("rejects updateDeadline with ApiError on 422 deadline_before_available_from", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+        getSessionMock.mockResolvedValue({
+            data: { session: { access_token: "teacher-token" } },
+            error: null,
+        });
+
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ detail: "deadline_before_available_from" }), {
+                status: 422,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await expect(
+            api.teacher.updateDeadline("case-1", {
+                available_from: "2026-06-10T00:00:00Z",
+                deadline: "2026-06-01T00:00:00Z",
+            }),
+        ).rejects.toMatchObject({ status: 422 });
+    });
 });

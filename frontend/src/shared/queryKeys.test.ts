@@ -14,4 +14,8 @@ describe("queryKeys.teacher", () => {
     it("returns the teacher cases key", () => {
         expect(queryKeys.teacher.cases()).toEqual(["teacher", "cases"]);
     });
+
+    it("returns the teacher case key", () => {
+        expect(queryKeys.teacher.case("abc")).toEqual(["teacher", "case", "abc"]);
+    });
 });
