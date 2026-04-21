@@ -147,4 +147,11 @@ describe("CasePreview Enviar Caso button", () => {
         expect(screen.getByRole("button", { name: /enviar caso/i })).toBeTruthy();
         expect(screen.getByText(/Error al enviar el caso/)).toBeTruthy();
     });
+
+    it("[T7] isAlreadyPublished=true — hides the 'Enviar Caso' button entirely", () => {
+        renderWithProviders(<CasePreview caseData={caseDataWithId} isAlreadyPublished={true} />);
+        expect(screen.queryByRole("button", { name: /enviar caso/i })).toBeNull();
+        expect(screen.queryByText("¿Confirmar envío?")).toBeNull();
+        expect(screen.queryByText(/✓ Caso enviado/)).toBeNull();
+    });
 });

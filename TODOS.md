@@ -434,3 +434,20 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Context:** Identificado en PR fix/flaky-tests-vitest-pool-config como riesgo futuro si se revierten los par�metros de pool. El fix actual (pool forks, maxForks 3, testTimeout 10s) es suficiente para el estado actual del suite (38 archivos, 276 tests). Si el suite crece significativamente, puede necesitar ajuste.
 
 **Depends on / blocked by:** No bloquea nada. Mejora de observabilidad de CI independiente.
+
+---
+
+## TODO-024: Deadline-edit y re-publish UI en TeacherCaseViewPage
+
+**What:** Añadir controles de edición de deadline (`useUpdateDeadline`) y un CTA de re-publicación (`usePublishCase`) en `frontend/src/features/teacher-authoring/TeacherCaseViewPage.tsx`.
+
+**Why:** La página TeacherCaseViewPage (#155) es actualmente read-only. Los hooks `useUpdateDeadline` y `usePublishCase` ya existen en `useTeacherDashboard.ts` y los endpoints backend están implementados, pero la vista no expone estas acciones.
+
+**Pros:** Permite al docente gestionar el ciclo de vida del caso (publicar, ajustar deadline) directamente desde la vista de detalle, sin tener que volver al dashboard. El backend ya soporta las operaciones.
+
+**Cons:** Requiere diseñar la UX para deadline-edit (date picker inline vs. modal) y para re-publicación (¿permitir re-publicar un caso ya publicado?). Puede solaparse con flujos futuros del dashboard.
+
+**Context:** Issue #155 especificó explícitamente "read-only" para mantener el diff mínimo. Los hooks existen desde PR #166. La página actual pasa `isAlreadyPublished={data.status === "published"}` para suprimir el botón de envío en `CasePreview`, pero no expone ningún CTA de gestión propio. El punto de partida es `TeacherCaseViewPage.tsx` tras el merge de #155.
+
+**Depends on / blocked by:** Merge de Issue #155. Requiere decisión de producto sobre si el re-publish desde la vista de detalle está en scope.
+
