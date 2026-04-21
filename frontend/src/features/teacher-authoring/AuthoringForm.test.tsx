@@ -701,6 +701,7 @@ describe("Task 2 — Profile restriction for harvard_only", () => {
 
     beforeEach(() => {
         vi.restoreAllMocks();
+        sessionStorage.clear();
         server.use(
             http.get("/api/teacher/courses", () =>
                 HttpResponse.json({ courses: [], total: 0 }),
@@ -747,8 +748,10 @@ describe("Task 2 — Profile restriction for harvard_only", () => {
 
         // Confirm ml_ds is absent by default
         await user.click(screen.getByLabelText(/perfil del curso/i));
-        const optsBefore = await screen.findAllByRole("option");
-        expect(optsBefore.some((o) => /machine learning/i.test(o.textContent ?? ""))).toBe(false);
+        await waitFor(() => {
+            const optsBefore = screen.getAllByRole("option");
+            expect(optsBefore.some((o) => /machine learning/i.test(o.textContent ?? ""))).toBe(false);
+        });
 
         // Close dropdown
         await user.keyboard("{Escape}");
