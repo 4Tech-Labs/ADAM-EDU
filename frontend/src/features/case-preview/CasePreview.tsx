@@ -13,6 +13,8 @@
  */
 
 import { Suspense, lazy, useState, useRef, useCallback, useMemo, useEffect, type ReactNode } from "react";
+import { usePublishCase } from "@/features/teacher-dashboard/useTeacherDashboard"; // TODO: move usePublishCase to shared/ — cross-feature import accepted per #154
+import { useToast } from "@/shared/Toast";
 import { marked, type Tokens } from "marked";
 
 marked.setOptions({ gfm: true, breaks: false });
@@ -485,6 +487,34 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
 
     const [activeModule, setActiveModule] = useState<ModuleId>("m1");
     const [isResuming, setIsResuming] = useState(false);
+    const [sendState, setSendState] = useState<"idle" | "confirming" | "loading" | "sent">("idle");
+
+    const { showToast } = useToast();
+    // caseData.caseId === assignment row id — populated by authoring backend
+    const publishCase = usePublishCase();
+
+    const handleSendClick = useCallback(() => {
+        setSendState("confirming");
+    }, []);
+
+    const handleConfirmSend = useCallback(() => {
+        if (!caseData.caseId) return;
+        setSendState("loading");
+        // NOTE: TanStack Query v5 — call-site callbacks passed to mutate() are not guaranteed
+        // to fire if this component unmounts before the mutation resolves (e.g. user navigates
+        // away mid-flight). Cache invalidation in usePublishCase is safe regardless.
+        // Acceptable trade-off: unmount-during-flight is unlikely in this teacher preview flow.
+        publishCase.mutate(caseData.caseId, {
+            onSuccess: () => {
+                setSendState("sent");
+                showToast("Caso enviado exitosamente", "success");
+            },
+            onError: () => {
+                setSendState("idle");
+                showToast("Error al enviar el caso. Inténtalo de nuevo.", "error");
+            },
+        });
+    }, [caseData.caseId, publishCase, showToast]);
 
     // ── Markdown pre-renderizado (memoized por content) ──────────────────────
     // renderMarkdownWithIds: para secciones que necesitan anclas de heading (rail)
@@ -812,17 +842,52 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
                                 PDF
                             </button>
 
-                            {/* Enviar Caso */}
-                            <button
-                                type="button"
-                                aria-label="Enviar caso al estudiante"
-                                onClick={() => {}}
-                                className="flex items-center gap-1.5 px-3 py-2 bg-[#0144a0] hover:bg-[#00337a] hover:shadow-md active:scale-95 text-white text-xs font-semibold rounded-lg transition-all duration-150 ease-out">
-                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                                </svg>
-                                Enviar Caso
-                            </button>
+                            {/* Enviar Caso — 4-state machine: idle | confirming | loading | sent */}
+                            {sendState === "sent" ? (
+                                <span className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-700">
+                                    ✓ Caso enviado
+                                </span>
+                            ) : sendState === "confirming" ? (
+                                <span className="flex items-center gap-2">
+                                    <span className="text-xs font-semibold text-slate-700">¿Confirmar envío?</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setSendState("idle")}
+                                        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition-colors">
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleConfirmSend}
+                                        className="flex items-center gap-1.5 px-2.5 py-1.5 bg-[#0144a0] hover:bg-[#00337a] text-white text-xs font-semibold rounded-lg transition-colors">
+                                        Sí, enviar
+                                    </button>
+                                </span>
+                            ) : (
+                                <button
+                                    type="button"
+                                    aria-label="Enviar caso al estudiante"
+                                    disabled={!caseData.caseId || sendState === "loading"}
+                                    onClick={handleSendClick}
+                                    className="flex items-center gap-1.5 px-3 py-2 bg-[#0144a0] hover:bg-[#00337a] hover:shadow-md active:scale-95 text-white text-xs font-semibold rounded-lg transition-all duration-150 ease-out disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none">
+                                    {sendState === "loading" ? (
+                                        <>
+                                            <svg className="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24">
+                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                            </svg>
+                                            Enviando...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                            </svg>
+                                            Enviar Caso
+                                        </>
+                                    )}
+                                </button>
+                            )}
                         </div>
                     </header>
 
