@@ -109,6 +109,7 @@ def test_polling_happy_path(client, db, auth_headers_factory, seed_identity) -> 
         "validation_contract": {"passing_threshold_global": 0.6, "required_modules_passed": 1},
         "artifact_manifest": {"artifact_ids": ["artifact-status-stub"]},
     }
+    assignment.canonical_output = {"title": "Test Phase 3"}
     db.commit()
 
     completed_status_response = client.get(f"/api/authoring/jobs/{job.id}", headers=headers)
@@ -118,6 +119,8 @@ def test_polling_happy_path(client, db, auth_headers_factory, seed_identity) -> 
     completed_result_response = client.get(f"/api/authoring/jobs/{job.id}/result", headers=headers)
     assert completed_result_response.status_code == 200
     assert completed_result_response.json()["blueprint"]["version"] == "adam-v8.0"
+    # PATH B: caseId is injected at response-time even when not yet in DB
+    assert completed_result_response.json()["canonical_output"]["caseId"] == str(assignment.id)
 
 
 def test_job_not_found(client, auth_headers_factory, seed_identity) -> None:
@@ -396,3 +399,27 @@ def test_retry_authoring_job_rejects_non_retryable_status(
     assert response.status_code == 400
     assert response.json()["detail"] == "Job not retryable"
     assert response.headers["X-Job-Status"] == "completed"
+
+
+def test_caseid_persisted_in_canonical_output(client, db, auth_headers_factory, seed_identity) -> None:
+    """PATH A: caseId injected before db.commit() ends up persisted in JSONB."""
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-caseid@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+
+    assignment = Assignment(teacher_id=teacher_id, title="CaseId Persistence Test", status="draft")
+    db.add(assignment)
+    db.flush()
+
+    # Simulate what AuthoringService.run_job does at PATH A: inject caseId before commit.
+    canonical_dict: dict = {"title": "CaseId Persistence Test", "subject": "Finance"}
+    canonical_dict["caseId"] = assignment.id
+    assignment.canonical_output = canonical_dict
+    db.commit()
+
+    # Reload from DB to verify the field was truly persisted (not just in-memory).
+    db.expire(assignment)
+    reloaded = db.query(Assignment).filter(Assignment.id == assignment.id).first()
+    assert reloaded is not None
+    assert reloaded.canonical_output is not None
+    assert reloaded.canonical_output["caseId"] == assignment.id

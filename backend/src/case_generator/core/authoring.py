@@ -1169,7 +1169,9 @@ class AuthoringService:
             assignment.blueprint = blueprint.model_dump(exclude_none=True)
 
             canonical_result = adapter_legacy_to_canonical_output(graph_output)
-            assignment.canonical_output = canonical_result.get("canonical_output", {})
+            canonical_dict = dict(canonical_result.get("canonical_output", {}))
+            canonical_dict["caseId"] = assignment.id
+            assignment.canonical_output = canonical_dict
             assignment.status = "published"
             job.status = AUTHORING_JOB_STATUS_COMPLETED
             completed_payload = _next_progress_payload(
