@@ -4,6 +4,12 @@ import { fireEvent, screen } from "@testing-library/react";
 import type { CanonicalCaseOutput } from "@/shared/adam-types";
 import { renderWithProviders } from "@/shared/test-utils";
 
+// ── usePublishCase mock ──────────────────────────────────────────────────────
+const mockMutate = vi.fn();
+vi.mock("@/features/teacher-dashboard/useTeacherDashboard", () => ({
+    usePublishCase: () => ({ mutate: mockMutate }),
+}));
+
 vi.mock("./modules/M1StoryReader", () => ({
     M1StoryReader: () => <div data-testid="m1-module">M1 listo</div>,
 }));
@@ -63,5 +69,82 @@ describe("CasePreview lazy modules", () => {
         expect(screen.getByText("Cargando módulo...")).toBeTruthy();
         expect(await screen.findByTestId("m2-module")).toBeTruthy();
         expect(screen.queryByTestId("case-preview-module-loading")).toBeNull();
+    });
+});
+
+describe("CasePreview Enviar Caso button", () => {
+    beforeEach(() => {
+        Object.defineProperty(window.HTMLElement.prototype, "scrollTo", {
+            configurable: true,
+            value: vi.fn(),
+            writable: true,
+        });
+        mockMutate.mockReset();
+    });
+
+    const caseDataWithId: CanonicalCaseOutput = {
+        ...caseData,
+        caseId: "assignment-abc-123",
+    };
+
+    it("[T1] idle: button 'Enviar Caso' is disabled when caseId is undefined", () => {
+        const caseDataNoId = { ...caseData, caseId: undefined };
+        renderWithProviders(<CasePreview caseData={caseDataNoId} />);
+        const btn = screen.getByRole("button", { name: /enviar caso/i });
+        expect(btn).toBeTruthy();
+        expect((btn as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("[T2] idle: clicking button with caseId transitions to confirming state", () => {
+        renderWithProviders(<CasePreview caseData={caseDataWithId} />);
+        const btn = screen.getByRole("button", { name: /enviar caso/i });
+        expect((btn as HTMLButtonElement).disabled).toBe(false);
+        fireEvent.click(btn);
+        expect(screen.getByText("¿Confirmar envío?")).toBeTruthy();
+        expect(screen.getByRole("button", { name: /cancelar/i })).toBeTruthy();
+        expect(screen.getByRole("button", { name: /sí, enviar/i })).toBeTruthy();
+    });
+
+    it("[T3] confirming: clicking Cancelar returns to idle", () => {
+        renderWithProviders(<CasePreview caseData={caseDataWithId} />);
+        fireEvent.click(screen.getByRole("button", { name: /enviar caso/i }));
+        expect(screen.getByText("¿Confirmar envío?")).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: /cancelar/i }));
+        expect(screen.queryByText("¿Confirmar envío?")).toBeNull();
+        expect(screen.getByRole("button", { name: /enviar caso/i })).toBeTruthy();
+    });
+
+    it("[T4] confirming: clicking 'Sí, enviar' calls mutate with caseId", () => {
+        renderWithProviders(<CasePreview caseData={caseDataWithId} />);
+        fireEvent.click(screen.getByRole("button", { name: /enviar caso/i }));
+        fireEvent.click(screen.getByRole("button", { name: /sí, enviar/i }));
+        expect(mockMutate).toHaveBeenCalledWith(
+            "assignment-abc-123",
+            expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
+        );
+    });
+
+    it("[T5] onSuccess: shows '✓ Caso enviado' span and success toast", () => {
+        mockMutate.mockImplementation((_id: string, { onSuccess }: { onSuccess: () => void }) => {
+            onSuccess();
+        });
+        renderWithProviders(<CasePreview caseData={caseDataWithId} />);
+        fireEvent.click(screen.getByRole("button", { name: /enviar caso/i }));
+        fireEvent.click(screen.getByRole("button", { name: /sí, enviar/i }));
+        expect(screen.getByText(/✓ Caso enviado/)).toBeTruthy();
+        expect(screen.queryByRole("button", { name: /enviar caso/i })).toBeNull();
+        // Toast is rendered by ToastProvider (included via renderWithProviders)
+        expect(screen.getByText("Caso enviado exitosamente")).toBeTruthy();
+    });
+
+    it("[T6] onError: returns to idle and shows error toast", () => {
+        mockMutate.mockImplementation((_id: string, { onError }: { onError: () => void }) => {
+            onError();
+        });
+        renderWithProviders(<CasePreview caseData={caseDataWithId} />);
+        fireEvent.click(screen.getByRole("button", { name: /enviar caso/i }));
+        fireEvent.click(screen.getByRole("button", { name: /sí, enviar/i }));
+        expect(screen.getByRole("button", { name: /enviar caso/i })).toBeTruthy();
+        expect(screen.getByText(/Error al enviar el caso/)).toBeTruthy();
     });
 });
