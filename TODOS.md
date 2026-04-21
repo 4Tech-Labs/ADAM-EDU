@@ -385,3 +385,20 @@ Deuda tÃ©cnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Depends on / blocked by:** No bloquea nada. Puede incluirse en la PR de tests del Issue #159 o en un PR de hardening independiente.
 
+
+
+---
+
+## TODO-023: CI guard para aislar fallos de pool regression en frontend tests
+
+**What:** Agregar un step en .github/workflows/ci.yml que ejecute AuthoringForm.test.tsx y TeacherCoursePage.test.tsx en aislado (itest run src/features/teacher-authoring/AuthoringForm.test.tsx src/features/teacher-course/TeacherCoursePage.test.tsx) si el full-suite falla, para distinguir regresiones de pool config de bugs reales.
+
+**Why:** AuthoringForm.test.tsx y TeacherCoursePage.test.tsx son los tests más pesados (MSW + jsdom + timers extensivos). Pasaban 32/32 en isolated run pero fallaban con timeouts en el full-suite por resource contention. Con pool: "forks" + maxForks: 3 + testTimeout: 10000 el full-suite pasa, pero si alguien remueve maxForks o aumenta 	estTimeout en el futuro, la regresión volvería silenciosamente.
+
+**Pros:** Feedback rápido y preciso cuando la causa es contención de workers vs. bug real en el código. Evita falsos positivos que bloqueen el merge de PRs legítimas.
+
+**Cons:** Añade complejidad al workflow de CI. El step condicional requiere if: failure() en GitHub Actions, que tiene algunas limitaciones de contexto.
+
+**Context:** Identificado en PR fix/flaky-tests-vitest-pool-config como riesgo futuro si se revierten los parámetros de pool. El fix actual (pool forks, maxForks 3, testTimeout 10s) es suficiente para el estado actual del suite (38 archivos, 276 tests). Si el suite crece significativamente, puede necesitar ajuste.
+
+**Depends on / blocked by:** No bloquea nada. Mejora de observabilidad de CI independiente.
