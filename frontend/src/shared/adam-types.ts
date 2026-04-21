@@ -665,6 +665,7 @@ export interface TeacherSyllabusSaveRequest {
 export interface TeacherCaseItem {
     id: string;
     title: string;
+    available_from?: string | null;
     deadline: string | null;
     status: string;
     course_codes: string[];

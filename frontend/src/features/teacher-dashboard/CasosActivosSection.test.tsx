@@ -18,6 +18,7 @@ vi.mock("react-router-dom", async () => {
 
 vi.mock("./useTeacherDashboard", () => ({
     useTeacherCases: () => useTeacherCases(),
+    useUpdateDeadline: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 import { CasosActivosSection } from "./CasosActivosSection";
@@ -146,7 +147,7 @@ describe("CasosActivosSection", () => {
         expect(normal.className).toContain("bg-[#e8f0fe]");
     });
 
-    it("triggers placeholder toasts from row actions", async () => {
+    it("click 'Ver Caso' navigates to /teacher/cases/:id", () => {
         useTeacherCases.mockReturnValue({
             data: { cases: [createCase(1)], total: 1 },
             isLoading: false,
@@ -156,14 +157,41 @@ describe("CasosActivosSection", () => {
         renderWithProviders(<CasosActivosSection />);
 
         fireEvent.click(screen.getByRole("button", { name: "Ver Caso" }));
+
+        expect(navigate).toHaveBeenCalledWith("/teacher/cases/case-1");
+    });
+
+    it("click 'Entregas' navigates to /teacher/cases/:id/entregas", () => {
+        useTeacherCases.mockReturnValue({
+            data: { cases: [createCase(1)], total: 1 },
+            isLoading: false,
+            isError: false,
+        });
+
+        renderWithProviders(<CasosActivosSection />);
+
         fireEvent.click(screen.getByRole("button", { name: "Entregas" }));
+
+        expect(navigate).toHaveBeenCalledWith("/teacher/cases/case-1/entregas");
+    });
+
+    it("click 'Editar' renders DeadlineEditModal with correct props", () => {
+        useTeacherCases.mockReturnValue({
+            data: {
+                cases: [createCase(1, { available_from: "2026-06-01T10:00:00Z" })],
+                total: 1,
+            },
+            isLoading: false,
+            isError: false,
+        });
+
+        renderWithProviders(<CasosActivosSection />);
+
         fireEvent.click(screen.getByRole("button", { name: "Editar" }));
 
-        const toasts = await screen.findAllByRole("status");
-        const placeholderToasts = toasts.filter(
-            (el) => el.textContent === "Vista disponible próximamente",
-        );
-        expect(placeholderToasts).toHaveLength(3);
+        expect(screen.getByRole("heading", { name: "Editar fechas" })).toBeTruthy();
+        const availableFromInput = screen.getByLabelText("Disponible desde") as HTMLInputElement;
+        expect(availableFromInput.value).toBe("2026-06-01T10:00");
     });
 
     it("handles client-side pagination and button boundaries", () => {

@@ -3,12 +3,11 @@ import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import type { TeacherCaseItem } from "@/shared/adam-types";
-import { useToast } from "@/shared/Toast";
 
+import { DeadlineEditModal } from "./DeadlineEditModal";
 import { useTeacherCases } from "./useTeacherDashboard";
 
 const PAGE_SIZE = 10;
-const PLACEHOLDER_MSG = "Vista disponible próximamente";
 const CASES_LOAD_ERROR_MSG = "Error al cargar casos. Intenta refrescar la página.";
 const EMPTY_CASES: TeacherCaseItem[] = [];
 
@@ -18,6 +17,7 @@ function buildCasesSignature(cases: TeacherCaseItem[]): string {
             item.id,
             item.title,
             item.deadline,
+            item.available_from,
             item.status,
             item.days_remaining,
             item.course_codes,
@@ -48,25 +48,11 @@ function DeadlineBadge({ days }: { days: number | null }) {
 
 interface CasoRowProps {
     caso: TeacherCaseItem;
+    onEdit: (caso: TeacherCaseItem) => void;
 }
 
-function CasoRow({ caso }: CasoRowProps) {
-    const { showToast } = useToast();
-
-    const handleViewCase = (id: string) => {
-        void id;
-        showToast(PLACEHOLDER_MSG, "info");
-    };
-
-    const handleDeliverables = (id: string) => {
-        void id;
-        showToast(PLACEHOLDER_MSG, "info");
-    };
-
-    const handleEdit = (id: string) => {
-        void id;
-        showToast(PLACEHOLDER_MSG, "info");
-    };
+function CasoRow({ caso, onEdit }: CasoRowProps) {
+    const navigate = useNavigate();
 
     return (
         <tr className="group transition-colors hover:bg-slate-50">
@@ -97,27 +83,21 @@ function CasoRow({ caso }: CasoRowProps) {
                 <div className="flex items-center justify-end gap-2.5 opacity-90 transition-opacity group-hover:opacity-100">
                     <button
                         type="button"
-                        onClick={() => {
-                            handleViewCase(caso.id);
-                        }}
+                        onClick={() => { navigate(`/teacher/cases/${caso.id}`); }}
                         className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[9px] border border-indigo-100 bg-indigo-50 px-3.5 py-2 text-[13px] font-semibold text-indigo-600 transition-all hover:border-indigo-200 hover:bg-indigo-100 hover:shadow-sm"
                     >
                         Ver Caso
                     </button>
                     <button
                         type="button"
-                        onClick={() => {
-                            handleDeliverables(caso.id);
-                        }}
+                        onClick={() => { navigate(`/teacher/cases/${caso.id}/entregas`); }}
                         className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[9px] border-none bg-gradient-to-r from-blue-600 to-indigo-600 px-3.5 py-2 text-[13px] font-bold text-white shadow-md shadow-blue-500/20 transition-all hover:scale-[1.02] hover:shadow-lg hover:shadow-blue-500/30"
                     >
                         Entregas
                     </button>
                     <button
                         type="button"
-                        onClick={() => {
-                            handleEdit(caso.id);
-                        }}
+                        onClick={() => { onEdit(caso); }}
                         className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[9px] border border-amber-100 bg-amber-50 px-3.5 py-2 text-[13px] font-semibold text-amber-600 transition-all hover:border-amber-200 hover:bg-amber-100 hover:shadow-sm"
                     >
                         Editar
@@ -132,6 +112,7 @@ export function CasosActivosSection() {
     const navigate = useNavigate();
     const [page, setPage] = useState(0);
     const { data, isLoading, isError } = useTeacherCases();
+    const [editingCase, setEditingCase] = useState<TeacherCaseItem | null>(null);
 
     const allCases = data?.cases ?? EMPTY_CASES;
     const totalCases = allCases.length;
@@ -268,7 +249,7 @@ export function CasosActivosSection() {
 
                             {!isLoading && !isError
                                 ? pageCases.map((caso) => (
-                                      <CasoRow key={caso.id} caso={caso} />
+                                      <CasoRow key={caso.id} caso={caso} onEdit={setEditingCase} />
                                   ))
                                 : null}
                         </tbody>
@@ -307,6 +288,14 @@ export function CasosActivosSection() {
                     </div>
                 </div>
             </div>
+            {editingCase !== null && (
+                <DeadlineEditModal
+                    caseId={editingCase.id}
+                    currentAvailableFrom={editingCase.available_from ?? null}
+                    currentDeadline={editingCase.deadline ?? null}
+                    onClose={() => { setEditingCase(null); }}
+                />
+            )}
         </section>
     );
 }

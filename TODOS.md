@@ -451,3 +451,19 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Depends on / blocked by:** Merge de Issue #155. Requiere decisión de producto sobre si el re-publish desde la vista de detalle está en scope.
 
+---
+
+## TODO-025: Exponer `available_from` en el endpoint de lista de casos del docente
+
+**What:** Agregar el campo `available_from` a la respuesta del endpoint `GET /api/teacher/cases`, de forma que `TeacherCaseItem` lo incluya en el payload de lista.
+
+**Why:** `DeadlineEditModal` (Issue #158) pre-rellena el input "Disponible desde" con `caseItem.available_from`. Actualmente el endpoint de lista no devuelve ese campo — solo `TeacherCaseDetailResponse` lo incluye. Sin este campo en la lista, el modal siempre abre el input de disponibilidad vacío y el docente debe introducir la fecha manualmente aunque ya estuviera configurada.
+
+**Pros:** UX coherente: el modal muestra el valor actual en lugar de campo vacío. Alineación entre vista de lista y vista de detalle para el mismo campo. No requiere un fetch adicional del caso específico antes de abrir el modal.
+
+**Cons:** Cambio de backend en el serializador de la respuesta de lista. Requiere alinear el schema Pydantic de `TeacherCaseItem` en el backend con el tipo TypeScript del frontend. Necesita test de endpoint para verificar que `available_from` aparece en la lista.
+
+**Context:** Registrado en la eng review de Issue #158. La decisión explícita fue no tocar el backend en esa issue y aceptar el pre-fill vacío como comportamiento degradado aceptable. El campo ya existe en la tabla `assignments` y en `TeacherCaseDetailResponse`; solo falta exponerlo en la query/serializer de lista.
+
+**Depends on / blocked by:** Issue #158 mergeado. Alineación con el tipo `TeacherCaseItem` en `adam-types.ts` (campo ya agregado como opcional en #158).
+
