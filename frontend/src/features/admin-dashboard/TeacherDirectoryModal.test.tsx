@@ -5,6 +5,7 @@ import { TeacherDirectoryModal } from "./TeacherDirectoryModal";
 import { api, ApiError } from "@/shared/api";
 import { queryKeys } from "@/shared/queryKeys";
 import { createTestQueryClient } from "@/shared/test-utils";
+import { ToastProvider } from "@/shared/Toast";
 import { QueryClientProvider } from "@tanstack/react-query";
 
 vi.mock("@/shared/api", async () => {
@@ -22,8 +23,6 @@ vi.mock("@/shared/api", async () => {
         },
     };
 });
-
-const showToast = vi.fn();
 
 const directoryResponse = {
     active_teachers: [
@@ -81,9 +80,11 @@ function renderModal(isOpen = true) {
     return {
         queryClient,
         ...render(
-            <QueryClientProvider client={queryClient}>
-                <TeacherDirectoryModal isOpen={isOpen} onClose={vi.fn()} showToast={showToast} />
-            </QueryClientProvider>,
+            <ToastProvider>
+                <QueryClientProvider client={queryClient}>
+                    <TeacherDirectoryModal isOpen={isOpen} onClose={vi.fn()} />
+                </QueryClientProvider>
+            </ToastProvider>,
         ),
     };
 }
@@ -155,7 +156,7 @@ describe("TeacherDirectoryModal", () => {
                 "http://localhost:5173/app/teacher/activate#invite_token=fresh-token",
             );
         });
-        expect(showToast).toHaveBeenCalledWith("Enlace reenviado y copiado al portapapeles.", "success");
+        expect(await screen.findByRole("status")).toHaveTextContent("Enlace reenviado y copiado al portapapeles.");
         await waitFor(() => {
             expect(api.admin.getTeacherDirectory).toHaveBeenCalledTimes(2);
         });
@@ -171,10 +172,9 @@ describe("TeacherDirectoryModal", () => {
 
         fireEvent.click(screen.getAllByText("Reenviar y copiar")[0]);
 
-        await waitFor(() => {
-            expect(showToast).toHaveBeenCalledWith(
+        await waitFor(async () => {
+            expect(await screen.findByRole("status")).toHaveTextContent(
                 "La invitacion ya fue utilizada y no puede reenviarse ni revocarse.",
-                "error",
             );
         });
     });
@@ -191,7 +191,7 @@ describe("TeacherDirectoryModal", () => {
         await waitFor(() => {
             expect(api.admin.removeTeacher).toHaveBeenCalledWith("membership-1");
         });
-        expect(showToast).toHaveBeenCalledWith("Docente eliminado correctamente.", "success");
+        expect(await screen.findByRole("status")).toHaveTextContent("Docente eliminado correctamente.");
         await waitFor(() => {
             expect(queryClient.getQueryData(queryKeys.admin.teacherOptions())).toBeUndefined();
         });
@@ -210,10 +210,9 @@ describe("TeacherDirectoryModal", () => {
         fireEvent.click(screen.getByText("Eliminar"));
         fireEvent.click(screen.getByRole("button", { name: "Eliminar docente" }));
 
-        await waitFor(() => {
-            expect(showToast).toHaveBeenCalledWith(
+        await waitFor(async () => {
+            expect(await screen.findByRole("status")).toHaveTextContent(
                 "No se puede eliminar este docente porque tiene casos con authoring activo.",
-                "error",
             );
         });
         expect(await screen.findByText("Juan Garcia")).toBeTruthy();
@@ -230,7 +229,7 @@ describe("TeacherDirectoryModal", () => {
         await waitFor(() => {
             expect(api.admin.revokeInvite).toHaveBeenCalledWith("invite-1");
         });
-        expect(showToast).toHaveBeenCalledWith("Invitacion revocada.", "success");
+        expect(await screen.findByRole("status")).toHaveTextContent("Invitacion revocada.");
         await waitFor(() => {
             expect(queryClient.getQueryData(queryKeys.admin.teacherOptions())).toBeUndefined();
         });
@@ -246,8 +245,8 @@ describe("TeacherDirectoryModal", () => {
         fireEvent.click(screen.getAllByText("Revocar")[0]);
         fireEvent.click(screen.getByRole("button", { name: "Revocar invitacion" }));
 
-        await waitFor(() => {
-            expect(showToast).toHaveBeenCalledWith("network", "error");
+        await waitFor(async () => {
+            expect(await screen.findByRole("status")).toHaveTextContent("network");
         });
         expect(await screen.findByText("Ana Torres")).toBeTruthy();
     });

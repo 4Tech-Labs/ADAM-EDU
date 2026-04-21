@@ -50,7 +50,7 @@ describe("CasosActivosSection", () => {
             isError: false,
         });
 
-        renderWithProviders(<CasosActivosSection showToast={vi.fn()} />);
+        renderWithProviders(<CasosActivosSection />);
 
         expect(screen.getByRole("heading", { name: "Casos Activos", level: 2 })).toBeTruthy();
         expect(screen.getByRole("button", { name: /crear nuevo caso/i })).toBeTruthy();
@@ -74,7 +74,7 @@ describe("CasosActivosSection", () => {
             isError: false,
         });
 
-        renderWithProviders(<CasosActivosSection showToast={vi.fn()} />);
+        renderWithProviders(<CasosActivosSection />);
 
         fireEvent.click(screen.getByRole("button", { name: /crear nuevo caso/i }));
 
@@ -88,7 +88,7 @@ describe("CasosActivosSection", () => {
             isError: false,
         });
 
-        const { rerender } = renderWithProviders(<CasosActivosSection showToast={vi.fn()} />);
+        const { rerender } = renderWithProviders(<CasosActivosSection />);
 
         expect(screen.getByRole("status")).toBeTruthy();
         expect(screen.getByText("Cargando casos...")).toBeTruthy();
@@ -100,7 +100,7 @@ describe("CasosActivosSection", () => {
             isError: true,
         });
 
-        rerender(<CasosActivosSection showToast={vi.fn()} />);
+        rerender(<CasosActivosSection />);
 
         expect(screen.getByRole("alert")).toBeTruthy();
         expect(screen.getByText("Error al cargar casos. Intenta refrescar la página.")).toBeTruthy();
@@ -111,7 +111,7 @@ describe("CasosActivosSection", () => {
             isError: false,
         });
 
-        rerender(<CasosActivosSection showToast={vi.fn()} />);
+        rerender(<CasosActivosSection />);
 
         expect(screen.getByRole("status")).toBeTruthy();
         expect(screen.getByText("No hay casos activos con deadline vigente.")).toBeTruthy();
@@ -133,7 +133,7 @@ describe("CasosActivosSection", () => {
             isError: false,
         });
 
-        renderWithProviders(<CasosActivosSection showToast={vi.fn()} />);
+        renderWithProviders(<CasosActivosSection />);
 
         const noDate = screen.getByText("Sin fecha");
         const today = screen.getByText("Hoy");
@@ -146,25 +146,24 @@ describe("CasosActivosSection", () => {
         expect(normal.className).toContain("bg-[#e8f0fe]");
     });
 
-    it("triggers placeholder toasts from row actions", () => {
-        const showToast = vi.fn();
-
+    it("triggers placeholder toasts from row actions", async () => {
         useTeacherCases.mockReturnValue({
             data: { cases: [createCase(1)], total: 1 },
             isLoading: false,
             isError: false,
         });
 
-        renderWithProviders(<CasosActivosSection showToast={showToast} />);
+        renderWithProviders(<CasosActivosSection />);
 
         fireEvent.click(screen.getByRole("button", { name: "Ver Caso" }));
         fireEvent.click(screen.getByRole("button", { name: "Entregas" }));
         fireEvent.click(screen.getByRole("button", { name: "Editar" }));
 
-        expect(showToast).toHaveBeenCalledTimes(3);
-        expect(showToast).toHaveBeenNthCalledWith(1, "Vista disponible próximamente", "default");
-        expect(showToast).toHaveBeenNthCalledWith(2, "Vista disponible próximamente", "default");
-        expect(showToast).toHaveBeenNthCalledWith(3, "Vista disponible próximamente", "default");
+        const toasts = await screen.findAllByRole("status");
+        const placeholderToasts = toasts.filter(
+            (el) => el.textContent === "Vista disponible próximamente",
+        );
+        expect(placeholderToasts).toHaveLength(3);
     });
 
     it("handles client-side pagination and button boundaries", () => {
@@ -177,7 +176,7 @@ describe("CasosActivosSection", () => {
             isError: false,
         });
 
-        renderWithProviders(<CasosActivosSection showToast={vi.fn()} />);
+        renderWithProviders(<CasosActivosSection />);
 
         const prevButton = screen.getByRole("button", { name: "Página anterior" });
         const nextButton = screen.getByRole("button", { name: "Página siguiente" });
@@ -195,7 +194,6 @@ describe("CasosActivosSection", () => {
     });
 
     it("resets to page 0 only when dataset changes", () => {
-        const showToast = vi.fn();
         let currentCases = Array.from({ length: 12 }, (_, index) => createCase(index + 1));
 
         useTeacherCases.mockImplementation(() => ({
@@ -204,19 +202,19 @@ describe("CasosActivosSection", () => {
             isError: false,
         }));
 
-        const { rerender } = renderWithProviders(<CasosActivosSection showToast={showToast} />);
+        const { rerender } = renderWithProviders(<CasosActivosSection />);
 
         fireEvent.click(screen.getByRole("button", { name: "Página siguiente" }));
         expect(screen.getByText("Mostrando 2 de 12 casos activos")).toBeTruthy();
 
-        rerender(<CasosActivosSection showToast={showToast} />);
+        rerender(<CasosActivosSection />);
         expect(screen.getByText("Mostrando 2 de 12 casos activos")).toBeTruthy();
 
         currentCases = Array.from({ length: 15 }, (_, index) =>
             createCase(index + 1, { title: `Caso nuevo ${index + 1}` }),
         );
 
-        rerender(<CasosActivosSection showToast={showToast} />);
+        rerender(<CasosActivosSection />);
 
         expect(screen.getByText("Mostrando 10 de 15 casos activos")).toBeTruthy();
         expect(screen.getByRole("button", { name: "Página anterior" })).toBeDisabled();

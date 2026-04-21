@@ -23,7 +23,7 @@ describe("QuickActionsSection", () => {
     });
 
     it("renders the three quick action cards", () => {
-        renderWithProviders(<QuickActionsSection showToast={vi.fn()} />);
+        renderWithProviders(<QuickActionsSection />);
 
         expect(screen.getByRole("button", { name: /crear nuevo caso/i })).toBeTruthy();
         expect(screen.getByRole("button", { name: /gestión de casos/i })).toBeTruthy();
@@ -34,7 +34,7 @@ describe("QuickActionsSection", () => {
     });
 
     it("navigates to /teacher/case-designer from the create case card", () => {
-        renderWithProviders(<QuickActionsSection showToast={vi.fn()} />);
+        renderWithProviders(<QuickActionsSection />);
 
         fireEvent.click(screen.getByRole("button", { name: /crear nuevo caso/i }));
 
@@ -48,23 +48,20 @@ describe("QuickActionsSection", () => {
         anchor.scrollIntoView = scrollIntoView;
         document.body.appendChild(anchor);
 
-        renderWithProviders(<QuickActionsSection showToast={vi.fn()} />);
+        renderWithProviders(<QuickActionsSection />);
 
         fireEvent.click(screen.getByRole("button", { name: /gestión de casos/i }));
 
         expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth" });
     });
 
-    it("shows the placeholder toast for reports", () => {
-        const showToast = vi.fn();
-
-        renderWithProviders(<QuickActionsSection showToast={showToast} />);
+    it("shows the placeholder toast for reports", async () => {
+        renderWithProviders(<QuickActionsSection />);
 
         fireEvent.click(screen.getByRole("button", { name: /reportes globales/i }));
 
-        expect(showToast).toHaveBeenCalledWith(
+        expect(await screen.findByRole("status")).toHaveTextContent(
             "Reportes Globales - Próximamente en nuevas versiones...",
-            "default",
         );
     });
 });

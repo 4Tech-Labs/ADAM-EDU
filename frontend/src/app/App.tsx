@@ -1,7 +1,7 @@
 import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { SiteHeader } from "@/shared/SiteHeader";
-import { useToast } from "@/shared/Toast";
+import { ToastProvider } from "@/shared/Toast";
 
 import { GuestOnlyRoute } from "./auth/GuestOnlyRoute";
 import { RequirePasswordRotation } from "./auth/RequirePasswordRotation";
@@ -75,7 +75,6 @@ function RouteFallback() {
 }
 
 function App() {
-    const { ToastContainer, showToast } = useToast();
     const location = useLocation();
     const isAdminDashboardRoute = location.pathname.startsWith("/admin/dashboard");
     const isTeacherShellRoute =
@@ -85,6 +84,7 @@ function App() {
         location.pathname === "/teacher";
 
     return (
+        <ToastProvider>
         <div className="flex min-h-screen flex-col bg-bg-page font-sans type-body">
             {!isAdminDashboardRoute && !isTeacherShellRoute && <SiteHeader />}
 
@@ -106,7 +106,7 @@ function App() {
                             path="/teacher/dashboard"
                             element={
                                 <RequireRole role="teacher">
-                                    <TeacherDashboardPage showToast={showToast} />
+                                    <TeacherDashboardPage />
                                 </RequireRole>
                             }
                         />
@@ -114,7 +114,7 @@ function App() {
                             path="/teacher/courses/:courseId"
                             element={
                                 <RequireRole role="teacher">
-                                    <TeacherCoursePage showToast={showToast} />
+                                    <TeacherCoursePage />
                                 </RequireRole>
                             }
                         />
@@ -171,7 +171,7 @@ function App() {
                             path="/admin/dashboard"
                             element={
                                 <RequireRole role="university_admin">
-                                    <AdminDashboardPage showToast={showToast} />
+                                    <AdminDashboardPage />
                                 </RequireRole>
                             }
                         />
@@ -182,8 +182,8 @@ function App() {
                 </Suspense>
             </main>
 
-            <ToastContainer />
         </div>
+        </ToastProvider>
     );
 }
 

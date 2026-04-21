@@ -9,7 +9,7 @@ import type {
 } from "@/shared/adam-types";
 import { api } from "@/shared/api";
 import { queryKeys } from "@/shared/queryKeys";
-import type { ShowToast } from "@/shared/Toast";
+import { useToast } from "@/shared/Toast";
 
 import { ConfirmationModal } from "./AdminDashboardModals";
 import { copyToClipboard, getAdminErrorMessage, getInitials } from "./adminDashboardModel";
@@ -17,7 +17,6 @@ import { copyToClipboard, getAdminErrorMessage, getInitials } from "./adminDashb
 interface Props {
     isOpen: boolean;
     onClose: () => void;
-    showToast: ShowToast;
 }
 
 type ConfirmState =
@@ -31,8 +30,9 @@ type ConfirmState =
     }
     | null;
 
-export function TeacherDirectoryModal({ isOpen, onClose, showToast }: Props) {
+export function TeacherDirectoryModal({ isOpen, onClose }: Props) {
     const queryClient = useQueryClient();
+    const { showToast } = useToast();
     const [confirmState, setConfirmState] = useState<ConfirmState>(null);
 
     useEffect(() => {
