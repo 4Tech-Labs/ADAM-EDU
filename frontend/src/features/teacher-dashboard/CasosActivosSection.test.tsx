@@ -221,6 +221,25 @@ describe("CasosActivosSection", () => {
         expect(nextButton).toBeDisabled();
     });
 
+    it("DeadlineEditModal is removed from DOM after clicking Cancelar", () => {
+        useTeacherCases.mockReturnValue({
+            data: {
+                cases: [createCase(1, { available_from: "2026-06-01T10:00:00Z" })],
+                total: 1,
+            },
+            isLoading: false,
+            isError: false,
+        });
+
+        renderWithProviders(<CasosActivosSection />);
+
+        fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+        expect(screen.getByRole("heading", { name: "Editar fechas" })).toBeTruthy();
+
+        fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+        expect(screen.queryByRole("heading", { name: "Editar fechas" })).toBeNull();
+    });
+
     it("resets to page 0 only when dataset changes", () => {
         let currentCases = Array.from({ length: 12 }, (_, index) => createCase(index + 1));
 
