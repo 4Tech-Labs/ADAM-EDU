@@ -23,6 +23,11 @@ const TeacherCoursePage = lazy(() =>
         (module) => ({ default: module.TeacherCoursePage }),
     ),
 );
+const TeacherCaseViewPage = lazy(() =>
+    import("@/features/teacher-authoring/TeacherCaseViewPage").then(
+        (module) => ({ default: module.TeacherCaseViewPage }),
+    ),
+);
 const AuthCallbackPage = lazy(() =>
     import("@/features/auth-callback/AuthCallbackPage").then((module) => ({
         default: module.AuthCallbackPage,
@@ -80,6 +85,7 @@ function App() {
     const isTeacherShellRoute =
         location.pathname.startsWith("/teacher/dashboard") ||
         location.pathname.startsWith("/teacher/courses") ||
+        location.pathname.startsWith("/teacher/cases") ||
         location.pathname.startsWith("/teacher/case-designer") ||
         location.pathname === "/teacher";
 
@@ -115,6 +121,27 @@ function App() {
                             element={
                                 <RequireRole role="teacher">
                                     <TeacherCoursePage />
+                                </RequireRole>
+                            }
+                        />
+                        <Route
+                            path="/teacher/cases/:assignmentId"
+                            element={
+                                <RequireRole role="teacher">
+                                    <TeacherCaseViewPage />
+                                </RequireRole>
+                            }
+                        />
+                        <Route
+                            path="/teacher/cases/:assignmentId/entregas"
+                            element={
+                                <RequireRole role="teacher">
+                                    <div className="flex flex-col items-center justify-center gap-4 px-4 py-24 text-center">
+                                        <h1 className="text-xl font-semibold">Entregas del caso</h1>
+                                        <p className="max-w-xs text-sm text-muted-foreground">
+                                            El listado de entregas estará disponible en la próxima versión.
+                                        </p>
+                                    </div>
                                 </RequireRole>
                             }
                         />

@@ -683,7 +683,7 @@ export interface TeacherCaseDetailResponse {
     available_from: string | null;
     deadline: string | null;
     course_id: string | null;
-    canonical_output: Record<string, unknown> | null;
+    canonical_output: CanonicalCaseOutput | null;
 }
 
 export interface DeadlineUpdateRequest {
