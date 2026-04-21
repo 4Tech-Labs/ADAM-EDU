@@ -147,6 +147,37 @@ describe("usePublishCase", () => {
         expect(setQueryData).toHaveBeenCalledWith(queryKeys.teacher.case("case-abc"), { id: "case-abc" });
         expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.teacher.cases() });
     });
+
+    it("mutationFn calls api.teacher.publishCase with the given assignmentId", async () => {
+        vi.mocked(useQueryClient).mockReturnValue({ setQueryData: vi.fn(), invalidateQueries: vi.fn().mockResolvedValue(undefined) } as never);
+        vi.mocked(useMutation).mockReturnValue({} as never);
+        vi.mocked(api.teacher.publishCase).mockResolvedValue({ id: "case-abc" } as never);
+
+        usePublishCase();
+
+        // NOTE: onSuccess invalidates teacher.cases() only, NOT teacher.courses() —
+        // issue #160 spec included courses() invalidation but actual code does not.
+        // Testing real code behavior here.
+        const options = vi.mocked(useMutation).mock.calls[0]?.[0] as unknown as {
+            mutationFn: (assignmentId: string) => Promise<unknown>;
+        };
+        await options.mutationFn("case-abc");
+
+        expect(api.teacher.publishCase).toHaveBeenCalledWith("case-abc");
+    });
+
+    it("mutationFn propagates rejection to caller", async () => {
+        vi.mocked(useQueryClient).mockReturnValue({ setQueryData: vi.fn(), invalidateQueries: vi.fn().mockResolvedValue(undefined) } as never);
+        vi.mocked(useMutation).mockReturnValue({} as never);
+        vi.mocked(api.teacher.publishCase).mockRejectedValue(new Error("409 Conflict"));
+
+        usePublishCase();
+
+        const options = vi.mocked(useMutation).mock.calls[0]?.[0] as unknown as {
+            mutationFn: (assignmentId: string) => Promise<unknown>;
+        };
+        await expect(options.mutationFn("case-abc")).rejects.toThrow("409 Conflict");
+    });
 });
 
 describe("useUpdateDeadline", () => {
@@ -169,5 +200,36 @@ describe("useUpdateDeadline", () => {
 
         expect(setQueryData).toHaveBeenCalledWith(queryKeys.teacher.case("case-abc"), { id: "case-abc" });
         expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.teacher.cases() });
+    });
+
+    it("mutationFn calls api.teacher.updateDeadline with assignmentId and body", async () => {
+        vi.mocked(useQueryClient).mockReturnValue({ setQueryData: vi.fn(), invalidateQueries: vi.fn().mockResolvedValue(undefined) } as never);
+        vi.mocked(useMutation).mockReturnValue({} as never);
+        vi.mocked(api.teacher.updateDeadline).mockResolvedValue({ id: "case-abc" } as never);
+
+        useUpdateDeadline();
+
+        const options = vi.mocked(useMutation).mock.calls[0]?.[0] as unknown as {
+            mutationFn: (vars: { assignmentId: string; body: { available_from: string | null; deadline: string | null } }) => Promise<unknown>;
+        };
+        const body = { available_from: null, deadline: "2026-12-01T23:59" };
+        await options.mutationFn({ assignmentId: "case-abc", body });
+
+        expect(api.teacher.updateDeadline).toHaveBeenCalledWith("case-abc", body);
+    });
+
+    it("mutationFn propagates rejection to caller", async () => {
+        vi.mocked(useQueryClient).mockReturnValue({ setQueryData: vi.fn(), invalidateQueries: vi.fn().mockResolvedValue(undefined) } as never);
+        vi.mocked(useMutation).mockReturnValue({} as never);
+        vi.mocked(api.teacher.updateDeadline).mockRejectedValue(new Error("422 Unprocessable"));
+
+        useUpdateDeadline();
+
+        const options = vi.mocked(useMutation).mock.calls[0]?.[0] as unknown as {
+            mutationFn: (vars: { assignmentId: string; body: { available_from: string | null; deadline: string | null } }) => Promise<unknown>;
+        };
+        await expect(
+            options.mutationFn({ assignmentId: "case-abc", body: { available_from: null, deadline: "2026-12-01T23:59" } }),
+        ).rejects.toThrow("422 Unprocessable");
     });
 });

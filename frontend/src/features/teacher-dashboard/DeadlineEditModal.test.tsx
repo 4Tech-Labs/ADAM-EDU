@@ -137,4 +137,14 @@ describe("DeadlineEditModal", () => {
 
         expect(onClose).toHaveBeenCalledOnce();
     });
+
+    it("enables submit when deadline is after available_from and values have changed", () => {
+        renderWithProviders(<DeadlineEditModal {...BASE_PROPS} />);
+
+        const deadlineInput = screen.getByLabelText("Fecha l\u00edmite");
+        fireEvent.change(deadlineInput, { target: { value: "2027-01-15T12:00" } });
+
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(screen.getByRole("button", { name: "Guardar" })).not.toBeDisabled();
+    });
 });
