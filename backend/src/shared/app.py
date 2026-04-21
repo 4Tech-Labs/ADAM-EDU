@@ -790,11 +790,13 @@ def get_job_result(
             detail="Job completed but blueprint not yet available",
         )
 
+    canonical = dict(assignment.canonical_output or {})
+    canonical["caseId"] = str(assignment.id)
     return JobResultResponse(
         job_id=job.id,
         assignment_id=assignment.id,
         blueprint=assignment.blueprint,
-        canonical_output=assignment.canonical_output,
+        canonical_output=canonical,
     )
 
 
