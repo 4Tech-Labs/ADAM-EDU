@@ -500,6 +500,10 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
     const handleConfirmSend = useCallback(() => {
         if (!caseData.caseId) return;
         setSendState("loading");
+        // NOTE: TanStack Query v5 — call-site callbacks passed to mutate() are not guaranteed
+        // to fire if this component unmounts before the mutation resolves (e.g. user navigates
+        // away mid-flight). Cache invalidation in usePublishCase is safe regardless.
+        // Acceptable trade-off: unmount-during-flight is unlikely in this teacher preview flow.
         publishCase.mutate(caseData.caseId, {
             onSuccess: () => {
                 setSendState("sent");
