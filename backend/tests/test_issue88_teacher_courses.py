@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import uuid
 
 from sqlalchemy import select
 
-from shared.models import Membership
+from shared.models import Assignment, Membership
 from shared.models import Syllabus, SyllabusRevision
 from shared.syllabus_schema import TeacherSyllabusPayload, derive_syllabus_grounding_context
 
@@ -195,6 +195,100 @@ def test_issue88_teacher_courses_returns_assigned_courses_with_student_counts(
             },
         ],
         "total": 2,
+    }
+
+
+def test_issue88_teacher_courses_counts_only_active_published_assignments_per_course(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000981"
+    teacher_user_id = str(uuid.uuid4())
+    teacher_email = "teacher-course-counts@example.edu"
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email=teacher_email,
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Counts",
+    )
+    course_a = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Analitica Avanzada",
+        code="AA-101",
+    )
+    course_b = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Business Strategy",
+        code="BS-202",
+    )
+    reference_now = datetime.now(timezone.utc)
+    db.add_all(
+        [
+            Assignment(
+                teacher_id=teacher_user_id,
+                course_id=course_a.id,
+                title="Course A Active Future",
+                status="published",
+                deadline=reference_now + timedelta(days=3),
+            ),
+            Assignment(
+                teacher_id=teacher_user_id,
+                course_id=course_a.id,
+                title="Course A Active Null Deadline",
+                status="published",
+                deadline=None,
+            ),
+            Assignment(
+                teacher_id=teacher_user_id,
+                course_id=course_a.id,
+                title="Course A Draft",
+                status="draft",
+                deadline=reference_now + timedelta(days=5),
+            ),
+            Assignment(
+                teacher_id=teacher_user_id,
+                course_id=course_a.id,
+                title="Course A Expired",
+                status="published",
+                deadline=reference_now - timedelta(minutes=1),
+            ),
+            Assignment(
+                teacher_id=teacher_user_id,
+                course_id=course_b.id,
+                title="Course B Active Future",
+                status="published",
+                deadline=reference_now + timedelta(days=1),
+            ),
+            Assignment(
+                teacher_id=teacher_user_id,
+                course_id=None,
+                title="Unassigned Published",
+                status="published",
+                deadline=reference_now + timedelta(days=2),
+            ),
+        ]
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/teacher/courses",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_user_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    counts_by_course_id = {
+        course["id"]: course["active_cases_count"]
+        for course in response.json()["courses"]
+    }
+    assert counts_by_course_id == {
+        course_a.id: 2,
+        course_b.id: 1,
     }
 
 
@@ -509,6 +603,79 @@ def test_issue88_teacher_course_detail_returns_composed_payload(
     }
     assert payload["syllabus"]["ai_grounding_context"]["metadata"]["syllabus_revision"] == 1
     assert raw_token not in response.text
+
+
+def test_issue88_teacher_course_detail_returns_active_case_count_for_owned_course(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000990"
+    teacher_user_id = str(uuid.uuid4())
+    teacher_email = "teacher-detail-count@example.edu"
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email=teacher_email,
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Detail Count",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Decision Science",
+        code="DS-330",
+    )
+    _insert_syllabus(
+        db,
+        course=course,
+        membership_id=teacher["membership"].id,
+        payload=_syllabus_payload(),
+    )
+    reference_now = datetime.now(timezone.utc)
+    db.add_all(
+        [
+            Assignment(
+                teacher_id=teacher_user_id,
+                course_id=course.id,
+                title="Published Future",
+                status="published",
+                deadline=reference_now + timedelta(days=4),
+            ),
+            Assignment(
+                teacher_id=teacher_user_id,
+                course_id=course.id,
+                title="Published No Deadline",
+                status="published",
+                deadline=None,
+            ),
+            Assignment(
+                teacher_id=teacher_user_id,
+                course_id=course.id,
+                title="Draft Not Counted",
+                status="draft",
+                deadline=reference_now + timedelta(days=4),
+            ),
+            Assignment(
+                teacher_id=teacher_user_id,
+                course_id=course.id,
+                title="Expired Not Counted",
+                status="published",
+                deadline=reference_now - timedelta(minutes=1),
+            ),
+        ]
+    )
+    db.commit()
+
+    response = client.get(
+        f"/api/teacher/courses/{course.id}",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_user_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["course"]["active_cases_count"] == 2
 
 
 def test_issue88_teacher_course_detail_student_token_returns_403(
