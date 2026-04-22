@@ -82,7 +82,7 @@ describe("CasosActivosSection", () => {
         expect(
             screen.getAllByText((_, node) => {
                 const textContent = node?.textContent;
-                return textContent !== null && normalizeText(textContent) === expectedDeadline;
+                return typeof textContent === "string" && normalizeText(textContent) === expectedDeadline;
             }).length,
         ).toBeGreaterThan(0);
         expect(screen.getByText("Mostrando 3 de 3 casos activos")).toBeTruthy();
