@@ -13,6 +13,75 @@
  *   [6] Heading immediately adjacent to table (### Exhibit\n| col |)
  *   [7] Blank line(s) trapped between two table rows (premature </table> close)
  */
+const isTableRow = (line: string) => /^\s*\|.+\|/.test(line);
+
+// GFM separator: starts with |, each cell is (optional spaces, optional colon,
+// one or more dashes, optional colon, optional spaces), ends with |
+const isSeparator = (line: string) => /^\s*\|(\s*:?-+:?\s*\|)+\s*$/.test(line);
+
+const isHeading = (line: string) => /^\s*#{1,6}\s/.test(line);
+
+function expandInlineTable(line: string): string {
+    if (!line.trim() || isSeparator(line)) return line;
+
+    const separatorMatch = line.match(/\|(\s*:?-+:?\s*\|)+/);
+    if (!separatorMatch || separatorMatch.index == null) {
+        return line;
+    }
+
+    const separator = separatorMatch[0].trim();
+    const beforeSep = line.slice(0, separatorMatch.index);
+    const afterSep = line.slice(separatorMatch.index + separatorMatch[0].length);
+    const firstPipe = beforeSep.indexOf("|");
+
+    if (firstPipe === -1) {
+        return line;
+    }
+
+    const heading = beforeSep.slice(0, firstPipe).trim();
+    const headerRow = beforeSep.slice(firstPipe).trim();
+    if (!isTableRow(headerRow)) {
+        return line;
+    }
+
+    const columnCount = (separator.match(/\|/g) ?? []).length - 1;
+    if (columnCount <= 0) {
+        return line;
+    }
+
+    const rawCells = afterSep.split("|").slice(1);
+    if (!afterSep.trimEnd().endsWith("|") && rawCells.length > 0) {
+        rawCells.pop();
+    }
+
+    const dataRows: string[] = [];
+    let currentRow: string[] = [];
+
+    for (const rawCell of rawCells) {
+        const cell = rawCell.trim();
+
+        if (cell === "" && currentRow.length === 0) {
+            continue;
+        }
+
+        currentRow.push(cell);
+
+        if (currentRow.length === columnCount) {
+            dataRows.push(`| ${currentRow.join(" | ")} |`);
+            currentRow = [];
+        }
+    }
+
+    if (currentRow.length > 0) {
+        while (currentRow.length < columnCount) {
+            currentRow.push("");
+        }
+        dataRows.push(`| ${currentRow.join(" | ")} |`);
+    }
+
+    return [heading, headerRow, separator, ...dataRows].filter(Boolean).join("\n");
+}
+
 export function sanitizeExhibitMarkdown(raw: string): string {
     if (!raw || typeof raw !== "string") return "";
 
@@ -23,12 +92,9 @@ export function sanitizeExhibitMarkdown(raw: string): string {
     // [2] Normalize line endings to \n only
     text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-    // Helpers (hoisted so they are available to both the pre-pass and the main loop)
-    const isTableRow = (s: string) => /^\s*\|.+\|/.test(s);
-    // GFM separator: starts with |, each cell is (optional spaces, optional colon,
-    // one or more dashes, optional colon, optional spaces), ends with |
-    const isSeparator = (s: string) => /^\s*\|(\s*:?-+:?\s*\|)+\s*$/.test(s);
-    const isHeading = (s: string) => /^\s*#{1,6}\s/.test(s);
+    // [8] Inline table expansion: collapse a single-line GFM table into proper
+    // multiline rows before the remaining passes run.
+    text = text.split("\n").map(expandInlineTable).join("\n");
 
     // [7] Table-glue pre-pass: remove any blank lines that are sandwiched between
     //     two valid table rows. The LLM sometimes inserts blank lines before the

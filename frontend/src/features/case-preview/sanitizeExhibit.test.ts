@@ -16,6 +16,10 @@ function findLastMatchingIndex(lines: string[], predicate: (line: string) => boo
     return -1;
 }
 
+function compactExhibit(input: string) {
+    return input.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+}
+
 // ── [7] Table-glue pre-pass ────────────────────────────────────────────────────
 
 describe("[7] table-glue: blank lines trapped between table rows", () => {
@@ -89,6 +93,97 @@ describe("[7] table-glue: blank lines trapped between table rows", () => {
         ].join("\n");
 
         expect(isRenderableAsTable(sanitizeExhibitMarkdown(input))).toBe(true);
+    });
+});
+
+describe("[8] inline table expansion", () => {
+    it("expands a collapsed line with a ### Exhibit heading", () => {
+        const input = compactExhibit([
+            "### Exhibit 1 — Datos Financieros",
+            "| Métrica | Año N-1 | Año N (Estimado) |",
+            "|---|---|---|",
+            "| Ingresos Totales | $8,500,000 | $10,000,000 |",
+            "| EBITDA | $1,275,000 | $1,600,000 |",
+        ].join("\n"));
+
+        const result = sanitizeExhibitMarkdown(input);
+
+        expect(result).toContain("### Exhibit 1 — Datos Financieros\n\n| Métrica | Año N-1 | Año N (Estimado) |");
+        expect(tableLines(result)).toHaveLength(4);
+        expect(isRenderableAsTable(result)).toBe(true);
+    });
+
+    it("expands a collapsed line without a heading", () => {
+        const input = compactExhibit([
+            "| Métrica | Año N-1 | Año N (Actual) |",
+            "|---|---|---|",
+            "| Usuarios Activos | 45,000 | 52,000 |",
+            "| Tasa de Abandono (Churn) | 12.0% | 18.0% |",
+        ].join("\n"));
+
+        const result = sanitizeExhibitMarkdown(input);
+
+        expect(result).toBe([
+            "| Métrica | Año N-1 | Año N (Actual) |",
+            "|---|---|---|",
+            "| Usuarios Activos | 45,000 | 52,000 |",
+            "| Tasa de Abandono (Churn) | 12.0% | 18.0% |",
+        ].join("\n"));
+        expect(isRenderableAsTable(result)).toBe(true);
+    });
+
+    it("expands the exact three collapsed exhibits from the issue example", () => {
+        const input = [
+            "### Exhibit 1 — Datos Financieros | Métrica | Año N-1 | Año N (Estimado) | |---|---|---| | Ingresos Totales | $8,500,000 | $10,000,000 | | Costos Operativos | $7,225,000 | $8,400,000 | | EBITDA | $1,275,000 | $1,600,000 | | Margen EBITDA | 15.0% | 16.0% | | Caja Disponible | $900,000 | $1,100,000 | | Inversión Propuesta | $0 | $750,000 (7.5%) |",
+            "",
+            "### Exhibit 2 — Indicadores Operativos | Métrica | Año N-1 | Año N (Actual) | |---|---|---| | Usuarios Activos | 45,000 | 52,000 | | Tasa de Abandono (Churn) | 12.0% | 18.0% | ...",
+            "",
+            "### Exhibit 3 — Mapa de Stakeholders | Actor | Interés | Incentivo | Riesgo | Postura | |---|---|---|---|---| | Elena Rivas (CEO) | ... |",
+        ].join("\n");
+
+        const result = sanitizeExhibitMarkdown(input);
+        const exhibits = input.split("\n\n").map((rawExhibit) => sanitizeExhibitMarkdown(rawExhibit));
+
+        expect(result).toContain("### Exhibit 1 — Datos Financieros\n\n| Métrica | Año N-1 | Año N (Estimado) |");
+        expect(result).toContain("### Exhibit 2 — Indicadores Operativos\n\n| Métrica | Año N-1 | Año N (Actual) |");
+        expect(result).toContain("### Exhibit 3 — Mapa de Stakeholders\n\n| Actor | Interés | Incentivo | Riesgo | Postura |");
+        exhibits.forEach((exhibit) => {
+            expect(isRenderableAsTable(exhibit)).toBe(true);
+        });
+    });
+
+    it("is a no-op for an already well-formed multi-line table", () => {
+        const input = [
+            "### Exhibit 1 — Datos Financieros",
+            "",
+            "| Métrica | Año N-1 | Año N (Estimado) |",
+            "|---|---|---|",
+            "| Ingresos Totales | $8,500,000 | $10,000,000 |",
+            "| EBITDA | $1,275,000 | $1,600,000 |",
+        ].join("\n");
+
+        expect(sanitizeExhibitMarkdown(input)).toBe(input);
+    });
+
+    it("is a no-op for pure non-table text", () => {
+        const input = "No hay exhibit aquí, solo texto corrido con contexto narrativo.";
+
+        expect(sanitizeExhibitMarkdown(input)).toBe(input);
+    });
+
+    it("pads an incomplete final row instead of dropping it", () => {
+        const input = compactExhibit([
+            "### Exhibit 3 — Mapa de Stakeholders",
+            "| Actor | Interés | Incentivo | Riesgo | Postura |",
+            "|---|---|---|---|---|",
+            "| Elena Rivas (CEO) | Alta | Bonos | Baja |",
+        ].join("\n"));
+
+        const result = sanitizeExhibitMarkdown(input);
+
+        expect(result).toContain("| Elena Rivas (CEO) | Alta | Bonos | Baja |  |");
+        expect(tableLines(result)).toHaveLength(3);
+        expect(isRenderableAsTable(result)).toBe(true);
     });
 });
 
