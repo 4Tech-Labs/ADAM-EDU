@@ -6,7 +6,7 @@ import uuid
 
 from sqlalchemy import select
 
-from shared.models import Assignment, Membership
+from shared.models import Assignment, AssignmentCourse, Membership
 from shared.models import Syllabus, SyllabusRevision
 from shared.syllabus_schema import TeacherSyllabusPayload, derive_syllabus_grounding_context
 
@@ -289,6 +289,67 @@ def test_issue88_teacher_courses_counts_only_active_published_assignments_per_co
     assert counts_by_course_id == {
         course_a.id: 2,
         course_b.id: 1,
+    }
+
+
+def test_issue180_teacher_courses_counts_multi_course_targets(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000180"
+    teacher_user_id = str(uuid.uuid4())
+    teacher_email = "teacher-multi-target-counts@example.edu"
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email=teacher_email,
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Multi Target Counts",
+    )
+    anchor_course = seed_course(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Anchor Course",
+        code="ANCH-101",
+    )
+    secondary_course = seed_course(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Secondary Course",
+        code="SEC-202",
+    )
+
+    db.add(
+        Assignment(
+            teacher_id=teacher_user_id,
+            course_id=anchor_course.id,
+            title="Multi Target Published",
+            status="published",
+            deadline=datetime.now(timezone.utc) + timedelta(days=1),
+            assignment_courses=[
+                AssignmentCourse(course_id=anchor_course.id),
+                AssignmentCourse(course_id=secondary_course.id),
+            ],
+        )
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/teacher/courses",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_user_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    counts_by_course_id = {
+        course["id"]: course["active_cases_count"]
+        for course in response.json()["courses"]
+    }
+    assert counts_by_course_id == {
+        anchor_course.id: 1,
+        secondary_course.id: 1,
     }
 
 

@@ -127,6 +127,7 @@ export function buildAuthoringJobCreateRequest(formData: CaseFormData): Authorin
     return {
         assignment_title: formData.subject || "Untitled Case",
         course_id: formData.courseId,
+        target_course_ids: formData.targetCourseIds,
         subject: formData.subject,
         academic_level: formData.academicLevel,
         industry: formData.industry,

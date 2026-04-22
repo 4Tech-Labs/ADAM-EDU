@@ -3,7 +3,7 @@
 
 import { useState, useCallback, useEffect, useRef, type KeyboardEvent, type FormEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { CaseFormData, CaseType, EDADepth, StudentProfile, SuggestRequest } from "@/shared/adam-types";
+import type { CaseFormData, CaseType, EDADepth, StudentProfile, SuggestRequest, TeacherCourseItem } from "@/shared/adam-types";
 import {
     Select, SelectContent, SelectGroup,
     SelectItem, SelectTrigger, SelectValue,
@@ -25,6 +25,24 @@ interface Props {
     onCancelEdit?: () => void;
 }
 
+function formatCourseTargetGroupLabel(course: Pick<TeacherCourseItem, "title" | "code">): string {
+    return course.code ? `${course.title} (${course.code})` : course.title;
+}
+
+function resolveCourseIdsFromTargetGroupLabels(courses: TeacherCourseItem[], labels: string[]): string[] {
+    const normalizedLabels = new Set(
+        labels
+            .map((label) => label.trim().toLowerCase())
+            .filter((label) => label.length > 0),
+    );
+
+    return courses
+        .filter((course) => normalizedLabels.has(formatCourseTargetGroupLabel(course).trim().toLowerCase()))
+        .map((course) => course.id);
+}
+
+    const EMPTY_TEACHER_COURSES: TeacherCourseItem[] = [];
+
 export function AuthoringForm({
     initialData,
     onSubmit,
@@ -35,7 +53,10 @@ export function AuthoringForm({
     const [subject, setSubject] = useState(initialData?.courseId ?? "");
     const [syllabusModule, setSyllabusModule] = useState(initialData?.syllabusModule ?? "");
     const [topicUnit, setTopicUnit] = useState(initialData?.topicUnit ?? "");
-    const [targetGroups, setTargetGroups] = useState<string[]>(initialData?.targetGroups ?? []);
+    const restoredTargetGroupLabelsRef = useRef<string[]>(
+        initialData?.targetCourseIds?.length ? [] : (initialData?.targetGroups ?? []),
+    );
+    const [targetCourseIds, setTargetCourseIds] = useState<string[]>(initialData?.targetCourseIds ?? []);
     const [studentProfile, setStudentProfile] = useState<StudentProfile>(initialData?.studentProfile ?? "business");
 
     const initialIndustry = INDUSTRIAS_OPTIONS.find((o) => o.label === initialData?.industry)?.value ?? "fintech";
@@ -56,7 +77,6 @@ export function AuthoringForm({
     // ── Estados IA ──
     const [formAlertError, setFormAlertError] = useState<string | null>(null);
     const [areTechniquesStale, setAreTechniquesStale] = useState(false);
-
     // ── Validation ──
     const [errors, setErrors] = useState<Record<string, boolean>>({});
 
@@ -72,10 +92,13 @@ export function AuthoringForm({
             if (typeof saved.subject === "string") setSubject(saved.subject);
             if (typeof saved.syllabusModule === "string") setSyllabusModule(saved.syllabusModule);
             if (typeof saved.topicUnit === "string") setTopicUnit(saved.topicUnit);
-            if (Array.isArray(saved.targetGroups)) setTargetGroups(saved.targetGroups as string[]);
+            if (Array.isArray(saved.targetCourseIds)) {
+                setTargetCourseIds(saved.targetCourseIds.filter((value): value is string => typeof value === "string"));
+            } else if (Array.isArray(saved.targetGroups)) {
+                restoredTargetGroupLabelsRef.current = saved.targetGroups.filter((value): value is string => typeof value === "string");
+            }
             if (saved.studentProfile === "business" || saved.studentProfile === "ml_ds") setStudentProfile(saved.studentProfile);
             if (typeof saved.industry === "string") setIndustry(saved.industry);
-            if (saved.caseType === "harvard_only" || saved.caseType === "harvard_with_eda") setCaseType(saved.caseType as CaseType);
             if (typeof saved.notebookToggle === "boolean") setNotebookToggle(saved.notebookToggle);
             if (typeof saved.scenarioDescription === "string") setScenarioDescription(saved.scenarioDescription);
             if (typeof saved.guidingQuestion === "string") setGuidingQuestion(saved.guidingQuestion);
@@ -101,19 +124,39 @@ export function AuthoringForm({
     });
 
     // ── Derived data ──
-    const teacherCourses = teacherCoursesQuery.data?.courses ?? [];
+    const teacherCourses = teacherCoursesQuery.data?.courses ?? EMPTY_TEACHER_COURSES;
+    const teacherCoursesById = new Map(teacherCourses.map((course) => [course.id, course]));
     const selectedCourse = teacherCourses.find((course) => course.id === selectedCourseId);
     const academicLevel = selectedCourse?.academic_level ?? "";
     const modules = selectedCourseDetailQuery.data?.syllabus?.modules ?? [];
     const selectedModule = modules.find((module) => module.module_id === syllabusModule);
     const units = selectedModule?.units ?? [];
     const selectedUnit = units.find((unit) => unit.unit_id === topicUnit);
+    const targetGroups = targetCourseIds
+        .map((courseId) => teacherCoursesById.get(courseId))
+        .filter((course): course is TeacherCourseItem => Boolean(course))
+        .map((course) => formatCourseTargetGroupLabel(course));
     const selectedIndustry = INDUSTRIAS_OPTIONS.find((option) => option.value === industry);
     const availableProfiles = caseType === "harvard_only"
         ? STUDENT_PROFILES.filter((p) => p.value !== "ml_ds")
         : STUDENT_PROFILES;
     const suggestionGenerationRef = useRef({ scenario: 0, techniques: 0 });
     const hasPersistedSyllabus = !!selectedCourseDetailQuery.data?.syllabus;
+
+    useEffect(() => {
+        if (targetCourseIds.length > 0 || restoredTargetGroupLabelsRef.current.length === 0 || teacherCourses.length === 0) {
+            return;
+        }
+
+        const resolvedTargetCourseIds = resolveCourseIdsFromTargetGroupLabels(
+            teacherCourses,
+            restoredTargetGroupLabelsRef.current,
+        );
+        if (resolvedTargetCourseIds.length > 0) {
+            setTargetCourseIds(resolvedTargetCourseIds);
+        }
+        restoredTargetGroupLabelsRef.current = [];
+    }, [targetCourseIds.length, teacherCourses]);
 
     // ── EDA depth + notebook toggle logic ──
     // business + harvard_with_eda → edaDepth="charts_plus_explanation", no UI
@@ -142,7 +185,7 @@ export function AuthoringForm({
         persistTimerRef.current = setTimeout(() => {
             try {
                 sessionStorage.setItem(FORM_STATE_SESSION_KEY, JSON.stringify({
-                    subject, syllabusModule, topicUnit, targetGroups, studentProfile,
+                    subject, syllabusModule, topicUnit, targetGroups, targetCourseIds, studentProfile,
                     industry, caseType, notebookToggle,
                     scenarioDescription, guidingQuestion, suggestedTechniques, algoInput,
                     availableFrom, dueAt,
@@ -154,7 +197,7 @@ export function AuthoringForm({
         return () => {
             if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
         };
-    }, [subject, syllabusModule, topicUnit, targetGroups, studentProfile, industry, caseType,
+    }, [subject, syllabusModule, topicUnit, targetGroups, targetCourseIds, studentProfile, industry, caseType,
         notebookToggle, scenarioDescription, guidingQuestion, suggestedTechniques, algoInput,
         availableFrom, dueAt]);
 
@@ -172,6 +215,7 @@ export function AuthoringForm({
     // ── Validation CanSuggest ──
     const canSuggest =
         !!subject &&
+        targetCourseIds.length > 0 &&
         targetGroups.length > 0 &&
         !!syllabusModule &&
         !!industry;
@@ -183,7 +227,7 @@ export function AuthoringForm({
         !!subject &&
         !!syllabusModule &&
         hasValidTopicUnit &&
-        targetGroups.length > 0 &&
+        targetCourseIds.length > 0 &&
         !!industry &&
         !!scenarioDescription.trim() &&
         !!guidingQuestion.trim() &&
@@ -300,7 +344,7 @@ export function AuthoringForm({
         setSubject(id);
         setSyllabusModule("");
         setTopicUnit("");
-        setTargetGroups([]);
+        setTargetCourseIds([]);
         setErrors((prev) => ({ ...prev, asignatura: false, modulo: false, topicUnit: false }));
     };
 
@@ -318,17 +362,17 @@ export function AuthoringForm({
     };
 
     const addTargetGroup = useCallback((value: string) => {
-        const trimmed = value.trim();
-        if (!trimmed) return;
-        if (targetGroups.some((group) => group.toLowerCase() === trimmed.toLowerCase())) return;
+        const normalizedCourseId = value.trim();
+        if (!normalizedCourseId) return;
+        if (targetCourseIds.includes(normalizedCourseId)) return;
         invalidateSuggestionResponses();
-        setTargetGroups((prev) => [...prev, trimmed]);
+        setTargetCourseIds((prev) => [...prev, normalizedCourseId]);
         setErrors((prev) => ({ ...prev, targetGroups: false }));
-    }, [invalidateSuggestionResponses, targetGroups]);
+    }, [invalidateSuggestionResponses, targetCourseIds]);
 
     const removeTargetGroup = useCallback((group: string) => {
         invalidateSuggestionResponses();
-        setTargetGroups((prev) => prev.filter((value) => value !== group));
+        setTargetCourseIds((prev) => prev.filter((value) => value !== group));
     }, [invalidateSuggestionResponses]);
 
     // ── Chips Orchestration ──
@@ -405,7 +449,7 @@ export function AuthoringForm({
             if (!subject) newErrors.asignatura = true;
             if (!syllabusModule) newErrors.modulo = true;
             if (units.length > 0 && !topicUnit) newErrors.topicUnit = true;
-            if (targetGroups.length === 0) newErrors.targetGroups = true;
+            if (targetCourseIds.length === 0) newErrors.targetGroups = true;
             if (!industry) newErrors.industria = true;
             if (!scenarioDescription.trim()) newErrors.scenario = true;
             if (!guidingQuestion.trim()) newErrors.guidingQuestion = true;
@@ -439,6 +483,7 @@ export function AuthoringForm({
                 subject: selectedCourse?.title ?? "",
                 academicLevel,
                 targetGroups,
+                targetCourseIds,
                 syllabusModule,
                 topicUnit,
                 industry: selectedIndustry?.label ?? industry,
@@ -465,7 +510,7 @@ export function AuthoringForm({
         setTopicUnit("");
         setIndustry("fintech");
         setStudentProfile("business");
-        setTargetGroups([]);
+        setTargetCourseIds([]);
         setScenarioDescription("");
         setGuidingQuestion("");
         setSuggestedTechniques([]);
@@ -575,7 +620,7 @@ export function AuthoringForm({
                                         </label>
                                         <GroupsCombobox
                                             courses={teacherCourses}
-                                            value={targetGroups}
+                                            value={targetCourseIds}
                                             onAdd={addTargetGroup}
                                             onRemove={removeTargetGroup}
                                             hasError={!!errors.targetGroups}

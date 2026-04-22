@@ -7,11 +7,11 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, joinedload, load_only
 
 from shared.auth import CurrentActor, ensure_legacy_teacher_bridge
-from shared.models import Assignment, AuthoringJob, Course, CourseAccessLink, CourseMembership, Membership, Syllabus
+from shared.models import Assignment, AssignmentCourse, AuthoringJob, Course, CourseAccessLink, CourseMembership, Membership, Syllabus
 from shared.syllabus_schema import (
     TeacherCourseConfigurationResponse,
     TeacherCourseDetailResponse,
@@ -93,27 +93,64 @@ def _build_active_case_counts_subquery(
     *,
     now: datetime,
 ):
+    assignment_target_courses = _build_assignment_target_courses_subquery()
     return (
         select(
-            Assignment.course_id.label("course_id"),
-            func.count(Assignment.id).label("active_cases_count"),
+            assignment_target_courses.c.course_id.label("course_id"),
+            func.count(func.distinct(Assignment.id)).label("active_cases_count"),
         )
-        .select_from(Assignment)
+        .select_from(assignment_target_courses)
+        .join(Assignment, assignment_target_courses.c.assignment_id == Assignment.id)
         .join(
             Course,
             and_(
-                Assignment.course_id == Course.id,
+                assignment_target_courses.c.course_id == Course.id,
                 Course.university_id == context.university_id,
                 Course.teacher_membership_id == context.teacher_membership_id,
             ),
         )
         .where(
-            Assignment.course_id.is_not(None),
             _active_assignment_predicate(now=now),
         )
-        .group_by(Assignment.course_id)
+        .group_by(assignment_target_courses.c.course_id)
         .subquery()
     )
+
+
+def _build_assignment_target_courses_subquery():
+    persisted_targets = select(
+        AssignmentCourse.assignment_id.label("assignment_id"),
+        AssignmentCourse.course_id.label("course_id"),
+    )
+    legacy_targets = (
+        select(
+            Assignment.id.label("assignment_id"),
+            Assignment.course_id.label("course_id"),
+        )
+        .where(
+            Assignment.course_id.is_not(None),
+            ~exists(select(1).where(AssignmentCourse.assignment_id == Assignment.id)),
+        )
+    )
+    return persisted_targets.union_all(legacy_targets).subquery()
+
+
+def _assignment_course_codes(assignment: Assignment) -> list[str]:
+    if assignment.assignment_courses:
+        course_codes = sorted(
+            {
+                link.course.code
+                for link in assignment.assignment_courses
+                if link.course is not None and link.course.code
+            }
+        )
+        if course_codes:
+            return course_codes
+
+    if assignment.course is not None and assignment.course.code:
+        return [assignment.course.code]
+
+    return []
 
 
 def _serialize_syllabus_response(syllabus: Syllabus | None) -> TeacherSyllabusResponse | None:
@@ -444,6 +481,9 @@ def list_teacher_active_cases(
                     Assignment.status,
                 ),
                 joinedload(Assignment.course).load_only(Course.code),
+                joinedload(Assignment.assignment_courses)
+                .joinedload(AssignmentCourse.course)
+                .load_only(Course.code),
             )
             .where(
                 Assignment.teacher_id == legacy_user.id,
@@ -451,6 +491,7 @@ def list_teacher_active_cases(
             )
             .order_by(Assignment.deadline.asc(), Assignment.id.asc())
         )
+        .unique()
         .scalars()
         .all()
     )
@@ -483,7 +524,7 @@ def list_teacher_active_cases(
         canonical_output = assignment.canonical_output if isinstance(assignment.canonical_output, dict) else {}
         canonical_title = canonical_output.get("title")
         title = canonical_title if isinstance(canonical_title, str) and canonical_title.strip() else assignment.title
-        course_codes = [assignment.course.code] if assignment.course and assignment.course.code else []
+        course_codes = _assignment_course_codes(assignment)
         available_from, deadline = _resolve_schedule_values_from_payload(
             available_from=assignment.available_from,
             deadline=assignment.deadline,

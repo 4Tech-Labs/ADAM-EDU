@@ -19,6 +19,7 @@ describe("buildAuthoringJobCreateRequest", () => {
             guidingQuestion: "Question",
             topicUnit: "Unit",
             targetGroups: ["Grupo A"],
+                targetCourseIds: ["course-1"],
             suggestedTechniques: ["SWOT"],
         });
 
@@ -26,6 +27,7 @@ describe("buildAuthoringJobCreateRequest", () => {
         expect(request).toEqual({
             assignment_title: "Decision Analysis",
             course_id: "course-1",
+                target_course_ids: ["course-1"],
             subject: "Decision Analysis",
             academic_level: "MBA",
             industry: "Retail",

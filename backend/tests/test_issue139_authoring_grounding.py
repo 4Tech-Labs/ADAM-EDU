@@ -145,6 +145,57 @@ def test_issue139_authoring_intake_rejects_client_grounding_injection(
     assert any(item.get("loc") == ["body", "ai_grounding_context"] for item in detail)
 
 
+def test_issue180_authoring_intake_persists_real_target_courses(
+    client,
+    db,
+    seed_identity,
+    seed_course_with_syllabus,
+    auth_headers_factory,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-multi-course@example.edu"
+    teacher = seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    anchor_course = seed_course_with_syllabus(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Anchor Course",
+    )
+    secondary_course = seed_course_with_syllabus(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Secondary Course",
+    )
+    anchor_course.code = "ANCH-101"
+    secondary_course.code = "SEC-202"
+    db.flush()
+    db.commit()
+
+    payload = _build_authoring_payload(course_id=anchor_course.id)
+    payload["target_course_ids"] = [anchor_course.id, secondary_course.id]
+    payload["target_groups"] = ["Legacy Label"]
+
+    with patch("fastapi.BackgroundTasks.add_task"):
+        response = client.post(
+            "/api/authoring/jobs",
+            json=payload,
+            headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
+        )
+
+    assert response.status_code == 202, response.text
+    assignment = db.query(Assignment).order_by(Assignment.created_at.desc()).first()
+    assert assignment is not None
+    assert assignment.course_id == anchor_course.id
+    assert {link.course_id for link in assignment.assignment_courses} == {anchor_course.id, secondary_course.id}
+
+    task_payload = dict(assignment.authoring_jobs[0].task_payload or {})
+    assert task_payload["course_id"] == anchor_course.id
+    assert task_payload["targetCourseIds"] == [anchor_course.id, secondary_course.id]
+    assert task_payload["targetGroups"] == [
+        "Anchor Course (ANCH-101)",
+        "Secondary Course (SEC-202)",
+    ]
+
+
 def test_issue139_authoring_runtime_fails_closed_on_invalid_persisted_selection(
     db,
     seed_identity,

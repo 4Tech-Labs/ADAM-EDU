@@ -83,6 +83,7 @@ from shared.models import (
     AUTHORING_JOB_STATUS_PENDING,
     AUTHORING_JOB_STATUS_PROCESSING,
     Assignment,
+    AssignmentCourse,
     AuthoringJob,
     Course,
     CourseMembership,
@@ -265,6 +266,45 @@ def _normalize_available_from_input(raw_available_from: str | None) -> tuple[dat
         raw_available_from,
         invalid_detail="invalid_available_from",
     )
+
+
+def _dedupe_course_ids(course_ids: list[str]) -> list[str]:
+    deduped_course_ids: list[str] = []
+    seen_course_ids: set[str] = set()
+    for course_id in course_ids:
+        normalized_course_id = course_id.strip()
+        if not normalized_course_id or normalized_course_id in seen_course_ids:
+            continue
+        deduped_course_ids.append(normalized_course_id)
+        seen_course_ids.add(normalized_course_id)
+    return deduped_course_ids
+
+
+def _resolve_target_courses_or_404(db: Session, context, target_course_ids: list[str]) -> list[Course]:
+    deduped_course_ids = _dedupe_course_ids(target_course_ids)
+    if not deduped_course_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="target_courses_required",
+        )
+
+    target_courses = db.scalars(
+        select(Course).where(
+            Course.id.in_(deduped_course_ids),
+            Course.university_id == context.university_id,
+            Course.teacher_membership_id == context.teacher_membership_id,
+        )
+    ).all()
+    target_courses_by_id = {course.id: course for course in target_courses}
+    missing_course_ids = [course_id for course_id in deduped_course_ids if course_id not in target_courses_by_id]
+    if missing_course_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="course_not_found")
+
+    return [target_courses_by_id[course_id] for course_id in deduped_course_ids]
+
+
+def _course_target_group_label(course: Course) -> str:
+    return f"{course.title} ({course.code})" if course.code else course.title
 
 
 def get_legacy_teacher_or_500(db: Session, actor: CurrentActor) -> User:
@@ -573,6 +613,7 @@ class IntakeRequest(BaseModel):
     guiding_question: str = ""
     topic_unit: str = ""
     target_groups: list[str] = []
+    target_course_ids: list[str] = []
     eda_depth: str | None = None
     include_python_code: bool = False
     suggested_techniques: list[str] = []
@@ -609,6 +650,13 @@ def create_authoring_job(
         context = resolve_teacher_context(actor)
         teacher = get_legacy_teacher_or_500(db, actor)
         owned_course = get_teacher_owned_course_with_syllabus(db, context, req.course_id, lock=True)
+        target_course_ids = req.target_course_ids or [req.course_id]
+        target_courses = _resolve_target_courses_or_404(db, context, target_course_ids)
+        target_groups = (
+            [_course_target_group_label(course) for course in target_courses]
+            if req.target_course_ids
+            else list(req.target_groups)
+        )
         SyllabusGroundingContext.model_validate(owned_course.syllabus.ai_grounding_context)
         available_from, normalized_available_from = _normalize_available_from_input(req.available_from)
         deadline, normalized_due_at = _normalize_deadline_input(req.due_at)
@@ -632,6 +680,7 @@ def create_authoring_job(
             status="draft",
             available_from=available_from,
             deadline=deadline,
+            assignment_courses=[AssignmentCourse(course_id=course.id) for course in target_courses],
         )
         db.add(assignment)
         db.commit()
@@ -657,7 +706,8 @@ def create_authoring_job(
                 "escenario": req.scenario_description,
                 "pregunta_guia": req.guiding_question,
                 "topicUnit": unit_title,
-                "targetGroups": req.target_groups,
+                "targetCourseIds": [course.id for course in target_courses],
+                "targetGroups": target_groups,
                 "edaDepth": req.eda_depth,
                 "includePythonCode": req.include_python_code,
                 "algoritmos": req.suggested_techniques,

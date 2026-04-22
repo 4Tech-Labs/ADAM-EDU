@@ -7,13 +7,13 @@ import type { TeacherCourseItem } from "@/shared/adam-types";
 interface GroupsComboboxProps {
     courses: TeacherCourseItem[];
     value: string[];
-    onAdd: (label: string) => void;
-    onRemove: (label: string) => void;
+    onAdd: (courseId: string) => void;
+    onRemove: (courseId: string) => void;
     hasError?: boolean;
 }
 
 function courseLabel(course: TeacherCourseItem): string {
-    return `${course.title} (${course.code})`;
+    return course.code ? `${course.title} (${course.code})` : course.title;
 }
 
 export function GroupsCombobox({ courses, value, onAdd, onRemove, hasError }: GroupsComboboxProps) {
@@ -21,10 +21,10 @@ export function GroupsCombobox({ courses, value, onAdd, onRemove, hasError }: Gr
     const [filter, setFilter] = useState("");
 
     const filterLower = filter.toLowerCase();
-    const selected = courses.filter((c) => value.includes(courseLabel(c)));
+    const selected = courses.filter((c) => value.includes(c.id));
     const available = courses.filter(
         (c) =>
-            !value.includes(courseLabel(c)) &&
+            !value.includes(c.id) &&
             (!filter || courseLabel(c).toLowerCase().includes(filterLower)),
     );
 
@@ -86,7 +86,7 @@ export function GroupsCombobox({ courses, value, onAdd, onRemove, hasError }: Gr
                                         <button
                                             key={c.id}
                                             type="button"
-                                            onClick={() => onRemove(label)}
+                                            onClick={() => onRemove(c.id)}
                                             className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 text-left"
                                         >
                                             <span className="flex items-center gap-2">
@@ -109,7 +109,7 @@ export function GroupsCombobox({ courses, value, onAdd, onRemove, hasError }: Gr
                                             key={c.id}
                                             type="button"
                                             onClick={() => {
-                                                onAdd(label);
+                                                onAdd(c.id);
                                                 setOpen(false);
                                             }}
                                             className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-blue-50 text-left"
@@ -126,17 +126,21 @@ export function GroupsCombobox({ courses, value, onAdd, onRemove, hasError }: Gr
             </Popover>
             {value.length > 0 && (
                 <div className="flex flex-wrap gap-2 mt-2">
-                    {value.map((label) => (
+                    {value.map((courseId) => {
+                        const course = courses.find((item) => item.id === courseId);
+                        const label = course ? courseLabel(course) : courseId;
+                        return (
                         <button
-                            key={label}
+                            key={courseId}
                             type="button"
-                            onClick={() => onRemove(label)}
+                            onClick={() => onRemove(courseId)}
                             className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-[#0144a0] hover:text-[#0144a0]"
                         >
                             <span>{label}</span>
                             <span aria-hidden="true" className="text-base leading-none">×</span>
                         </button>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
         </div>

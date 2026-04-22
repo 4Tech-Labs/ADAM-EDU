@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 import uuid
 
-from shared.models import Assignment, AuthoringJob, Membership
+from shared.models import Assignment, AssignmentCourse, AuthoringJob, Membership
 
 
 def _auth_headers(auth_headers_factory, *, user_id: str, email: str) -> dict[str, str]:
@@ -272,6 +272,106 @@ def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
     assert body["cases"][0]["course_codes"] == ["OPS-101"]
     assert body["cases"][1]["course_codes"] == ["DS-202"]
     assert body["cases"][2]["course_codes"] == []
+
+
+def test_issue180_teacher_cases_returns_all_target_course_codes(
+    client,
+    db,
+    seed_identity,
+    auth_headers_factory,
+    seed_course,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-target-codes@example.edu"
+    teacher = seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    fixed_now = datetime(2026, 4, 22, 20, 30, tzinfo=timezone.utc)
+    anchor_course = seed_course(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Anchor Course",
+        code="ANCH-101",
+    )
+    secondary_course = seed_course(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Secondary Course",
+        code="SEC-202",
+    )
+
+    assignment = Assignment(
+        teacher_id=teacher_id,
+        course_id=anchor_course.id,
+        title="Multi-course Case",
+        status="published",
+        available_from=fixed_now + timedelta(hours=1),
+        deadline=fixed_now + timedelta(days=1),
+        assignment_courses=[
+            AssignmentCourse(course_id=anchor_course.id),
+            AssignmentCourse(course_id=secondary_course.id),
+        ],
+    )
+    db.add(assignment)
+    db.commit()
+
+    with patch("shared.teacher_router.datetime") as mock_datetime:
+        mock_datetime.now.return_value = fixed_now
+        response = client.get(
+            "/api/teacher/cases",
+            headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert body["cases"][0]["course_codes"] == ["ANCH-101", "SEC-202"]
+
+
+def test_issue180_teacher_case_detail_returns_all_target_courses(
+    client,
+    db,
+    seed_identity,
+    auth_headers_factory,
+    seed_course,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-case-detail-targets@example.edu"
+    teacher = seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    anchor_course = seed_course(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Anchor Course",
+        code="ANCH-101",
+    )
+    secondary_course = seed_course(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Secondary Course",
+        code="SEC-203",
+    )
+
+    assignment = Assignment(
+        teacher_id=teacher_id,
+        course_id=anchor_course.id,
+        title="Detailed Multi-course Case",
+        status="published",
+        assignment_courses=[
+            AssignmentCourse(course_id=anchor_course.id),
+            AssignmentCourse(course_id=secondary_course.id),
+        ],
+    )
+    db.add(assignment)
+    db.commit()
+
+    response = client.get(
+        f"/api/teacher/cases/{assignment.id}",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["course_id"] == anchor_course.id
+    assert body["target_course_ids"] == [anchor_course.id, secondary_course.id]
+    assert body["course_codes"] == ["ANCH-101", "SEC-203"]
 
 
 def test_issue90_teacher_cases_falls_back_to_assignment_title_when_canonical_title_missing(
