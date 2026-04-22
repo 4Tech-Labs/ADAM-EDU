@@ -21,8 +21,8 @@ const onClose = vi.fn();
 
 const BASE_PROPS = {
     caseId: "case-1",
-    currentAvailableFrom: "2026-06-01T10:00:00Z",
-    currentDeadline: "2026-12-01T23:59:00Z",
+    currentAvailableFrom: "2026-06-01T15:00:00Z",
+    currentDeadline: "2026-12-02T04:59:00Z",
     onClose,
 };
 
@@ -95,7 +95,10 @@ describe("DeadlineEditModal", () => {
         expect(mutateFn).toHaveBeenCalledWith(
             {
                 assignmentId: "case-1",
-                body: { available_from: "2026-06-01T10:00", deadline: "2027-01-15T12:00" },
+                body: {
+                    available_from: "2026-06-01T15:00:00Z",
+                    deadline: "2027-01-15T17:00:00Z",
+                },
             },
             expect.objectContaining({
                 onSuccess: expect.any(Function),

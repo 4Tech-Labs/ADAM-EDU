@@ -200,7 +200,12 @@ describe("CasosActivosSection", () => {
     it("click 'Editar' renders DeadlineEditModal with correct props", () => {
         useTeacherCases.mockReturnValue({
             data: {
-                cases: [createCase(1, { available_from: "2026-06-01T10:00:00Z" })],
+                cases: [
+                    createCase(1, {
+                        available_from: "2026-06-01T15:00:00Z",
+                        deadline: "2026-12-02T04:59:00Z",
+                    }),
+                ],
                 total: 1,
             },
             isLoading: false,
@@ -213,7 +218,9 @@ describe("CasosActivosSection", () => {
 
         expect(screen.getByRole("heading", { name: "Editar fechas" })).toBeTruthy();
         const availableFromInput = screen.getByLabelText("Disponible desde") as HTMLInputElement;
+        const deadlineInput = screen.getByLabelText("Fecha límite") as HTMLInputElement;
         expect(availableFromInput.value).toBe("2026-06-01T10:00");
+        expect(deadlineInput.value).toBe("2026-12-01T23:59");
     });
 
     it("handles client-side pagination and button boundaries", () => {

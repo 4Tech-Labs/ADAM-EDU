@@ -11,7 +11,7 @@ def _auth_headers(auth_headers_factory, *, user_id: str, email: str) -> dict[str
     return auth_headers_factory(sub=user_id, email=email)
 
 
-def test_issue90_authoring_job_persists_deadline_and_normalizes_due_at(
+def test_issue90_authoring_job_persists_assignment_dates_and_normalizes_intake_datetimes(
     client,
     db,
     seed_identity,
@@ -37,6 +37,7 @@ def test_issue90_authoring_job_persists_deadline_and_normalizes_due_at(
                 "syllabus_module": "m1",
                 "topic_unit": "u1",
                 "target_groups": ["Grupo 01"],
+                "available_from": "2026-04-14T08:15",
                 "due_at": "2026-04-15T09:30",
             },
             headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
@@ -45,7 +46,10 @@ def test_issue90_authoring_job_persists_deadline_and_normalizes_due_at(
     assert response.status_code == 202, response.text
     assignment = db.query(Assignment).order_by(Assignment.created_at.desc()).first()
     assert assignment is not None
+    assert assignment.available_from == datetime(2026, 4, 14, 13, 15, tzinfo=timezone.utc)
     assert assignment.deadline == datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
+    assert assignment.authoring_jobs[0].task_payload["availableFrom"] == "2026-04-14T13:15:00+00:00"
+    assert assignment.authoring_jobs[0].task_payload["dueAt"] == "2026-04-15T14:30:00+00:00"
 
 
 def test_issue90_authoring_job_preserves_string_payload_shape_and_allows_null_deadline(

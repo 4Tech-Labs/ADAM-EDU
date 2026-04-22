@@ -227,29 +227,44 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _normalize_deadline_input(raw_due_at: str | None) -> tuple[datetime | None, str | None]:
-    if raw_due_at is None:
+def _normalize_optional_assignment_datetime(
+    raw_value: str | None,
+    *,
+    invalid_detail: str,
+) -> tuple[datetime | None, str | None]:
+    if raw_value is None:
         return None, None
 
-    stripped_due_at = raw_due_at.strip()
-    if not stripped_due_at:
+    stripped_value = raw_value.strip()
+    if not stripped_value:
         return None, None
 
     try:
-        parsed_due_at = datetime.fromisoformat(stripped_due_at)
+        parsed_value = datetime.fromisoformat(stripped_value)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="invalid_due_at",
+            detail=invalid_detail,
         ) from exc
 
-    localized_due_at = (
-        parsed_due_at.replace(tzinfo=_BOGOTA_TZ)
-        if parsed_due_at.tzinfo is None
-        else parsed_due_at
+    localized_value = (
+        parsed_value.replace(tzinfo=_BOGOTA_TZ)
+        if parsed_value.tzinfo is None
+        else parsed_value
     )
-    deadline_utc = localized_due_at.astimezone(timezone.utc)
-    return deadline_utc, deadline_utc.isoformat()
+    value_utc = localized_value.astimezone(timezone.utc)
+    return value_utc, value_utc.isoformat()
+
+
+def _normalize_deadline_input(raw_due_at: str | None) -> tuple[datetime | None, str | None]:
+    return _normalize_optional_assignment_datetime(raw_due_at, invalid_detail="invalid_due_at")
+
+
+def _normalize_available_from_input(raw_available_from: str | None) -> tuple[datetime | None, str | None]:
+    return _normalize_optional_assignment_datetime(
+        raw_available_from,
+        invalid_detail="invalid_available_from",
+    )
 
 
 def get_legacy_teacher_or_500(db: Session, actor: CurrentActor) -> User:
@@ -595,6 +610,7 @@ def create_authoring_job(
         teacher = get_legacy_teacher_or_500(db, actor)
         owned_course = get_teacher_owned_course_with_syllabus(db, context, req.course_id, lock=True)
         SyllabusGroundingContext.model_validate(owned_course.syllabus.ai_grounding_context)
+        available_from, normalized_available_from = _normalize_available_from_input(req.available_from)
         deadline, normalized_due_at = _normalize_deadline_input(req.due_at)
         try:
             module_title, unit_title = resolve_syllabus_selection_titles(
@@ -614,6 +630,7 @@ def create_authoring_job(
             course_id=owned_course.course.id,
             title=req.assignment_title,
             status="draft",
+            available_from=available_from,
             deadline=deadline,
         )
         db.add(assignment)
@@ -644,7 +661,7 @@ def create_authoring_job(
                 "edaDepth": req.eda_depth,
                 "includePythonCode": req.include_python_code,
                 "algoritmos": req.suggested_techniques,
-                "availableFrom": req.available_from,
+                "availableFrom": normalized_available_from,
                 "dueAt": normalized_due_at,
             },
         )
