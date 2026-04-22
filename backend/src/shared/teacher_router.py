@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import math
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -18,6 +19,7 @@ from shared.teacher_reads import TeacherCoursesResponse, get_teacher_course_deta
 from shared.teacher_writes import save_teacher_course_syllabus
 
 router = APIRouter(prefix="/api/teacher", tags=["teacher"])
+_BOGOTA_TZ = ZoneInfo("America/Bogota")
 
 
 class TeacherCaseItemResponse(BaseModel):
@@ -54,12 +56,16 @@ def _days_remaining(deadline: datetime | None, now: datetime) -> int | None:
     if deadline is None:
         return None
 
-    remaining_seconds = (deadline - now).total_seconds()
-    if remaining_seconds <= 0:
+    if deadline <= now:
         return 0
-    if remaining_seconds < 86400:
+
+    deadline_local = deadline.astimezone(_BOGOTA_TZ)
+    now_local = now.astimezone(_BOGOTA_TZ)
+    remaining_days = (deadline_local.date() - now_local.date()).days
+
+    if remaining_days <= 0:
         return 0
-    return math.ceil(remaining_seconds / 86400)
+    return remaining_days
 
 
 @router.get("/courses", response_model=TeacherCoursesResponse)

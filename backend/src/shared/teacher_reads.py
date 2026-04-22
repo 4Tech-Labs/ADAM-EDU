@@ -7,7 +7,7 @@ from typing import Any, Literal
 from fastapi import HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session, load_only
+from sqlalchemy.orm import Session, joinedload, load_only
 
 from shared.auth import CurrentActor, ensure_legacy_teacher_bridge
 from shared.models import Assignment, Course, CourseAccessLink, CourseMembership, Membership, Syllabus
@@ -321,12 +321,14 @@ def list_teacher_active_cases(
         .options(
             load_only(
                 Assignment.id,
+                Assignment.course_id,
                 Assignment.title,
                 Assignment.canonical_output,
                 Assignment.available_from,
                 Assignment.deadline,
                 Assignment.status,
-            )
+            ),
+            joinedload(Assignment.course).load_only(Course.code),
         )
         .where(
             Assignment.teacher_id == legacy_user.id,
@@ -341,6 +343,7 @@ def list_teacher_active_cases(
         canonical_output = assignment.canonical_output if isinstance(assignment.canonical_output, dict) else {}
         canonical_title = canonical_output.get("title")
         title = canonical_title if isinstance(canonical_title, str) and canonical_title.strip() else assignment.title
+        course_codes = [assignment.course.code] if assignment.course and assignment.course.code else []
         items.append(
             TeacherCaseItem(
                 id=assignment.id,
@@ -348,7 +351,7 @@ def list_teacher_active_cases(
                 available_from=assignment.available_from,
                 deadline=assignment.deadline,
                 status=assignment.status,
-                course_codes=[],
+                course_codes=course_codes,
             )
         )
 

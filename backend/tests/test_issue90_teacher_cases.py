@@ -123,49 +123,64 @@ def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
     db,
     seed_identity,
     auth_headers_factory,
+    seed_course,
 ) -> None:
     teacher_id = str(uuid.uuid4())
     teacher_email = "teacher-cases@example.edu"
-    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
-    now = datetime.now(timezone.utc)
-    sooner_available_from = now + timedelta(hours=1)
-    later_available_from = now + timedelta(hours=2)
+    teacher = seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    fixed_now = datetime(2026, 4, 22, 20, 30, tzinfo=timezone.utc)
+    sooner_available_from = fixed_now + timedelta(hours=1)
+    later_available_from = fixed_now + timedelta(hours=2)
     sooner_available_from_response = sooner_available_from.isoformat().replace("+00:00", "Z")
     later_available_from_response = later_available_from.isoformat().replace("+00:00", "Z")
+    sooner_course = seed_course(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Sooner Course",
+        code="OPS-101",
+    )
+    later_course = seed_course(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Later Course",
+        code="DS-202",
+    )
 
     later_assignment = Assignment(
         teacher_id=teacher_id,
+        course_id=later_course.id,
         title="Later",
         status="published",
         available_from=later_available_from,
-        deadline=now + timedelta(hours=25),
+        deadline=fixed_now + timedelta(hours=50),
         canonical_output={"title": "Canonical Later"},
     )
     sooner_assignment = Assignment(
         teacher_id=teacher_id,
+        course_id=sooner_course.id,
         title="Sooner",
         status="published",
         available_from=sooner_available_from,
-        deadline=now + timedelta(hours=3),
+        deadline=fixed_now + timedelta(hours=18),
         canonical_output={"title": "Canonical Sooner"},
     )
     draft_assignment = Assignment(
         teacher_id=teacher_id,
         title="Draft",
         status="draft",
-        deadline=now + timedelta(days=2),
+        deadline=fixed_now + timedelta(days=2),
     )
     failed_assignment = Assignment(
         teacher_id=teacher_id,
         title="Failed",
         status="failed",
-        deadline=now + timedelta(days=3),
+        deadline=fixed_now + timedelta(days=3),
     )
     expired_assignment = Assignment(
         teacher_id=teacher_id,
         title="Expired",
         status="published",
-        deadline=now - timedelta(seconds=1),
+        deadline=fixed_now - timedelta(seconds=1),
     )
     null_deadline_assignment = Assignment(
         teacher_id=teacher_id,
@@ -186,10 +201,12 @@ def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
     )
     db.commit()
 
-    response = client.get(
-        "/api/teacher/cases",
-        headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
-    )
+    with patch("shared.teacher_router.datetime") as mock_datetime:
+        mock_datetime.now.return_value = fixed_now
+        response = client.get(
+            "/api/teacher/cases",
+            headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
+        )
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -200,13 +217,15 @@ def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
         "Canonical Later",
         "Canonical No Deadline",
     ]
-    assert body["cases"][0]["days_remaining"] == 0
+    assert body["cases"][0]["days_remaining"] == 1
     assert body["cases"][1]["days_remaining"] == 2
     assert body["cases"][2]["days_remaining"] is None
     assert body["cases"][0]["available_from"] == sooner_available_from_response
     assert body["cases"][1]["available_from"] == later_available_from_response
     assert body["cases"][2]["available_from"] is None
-    assert body["cases"][0]["course_codes"] == []
+    assert body["cases"][0]["course_codes"] == ["OPS-101"]
+    assert body["cases"][1]["course_codes"] == ["DS-202"]
+    assert body["cases"][2]["course_codes"] == []
 
 
 def test_issue90_teacher_cases_falls_back_to_assignment_title_when_canonical_title_missing(

@@ -23,6 +23,12 @@ vi.mock("./useTeacherDashboard", () => ({
 
 import { CasosActivosSection } from "./CasosActivosSection";
 
+const SPANISH_DEADLINE_FORMATTER = new Intl.DateTimeFormat("es-CO", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "America/Bogota",
+});
+
 function createCase(index: number, overrides?: Partial<TeacherCaseItem>): TeacherCaseItem {
     return {
         id: `case-${index}`,
@@ -34,6 +40,14 @@ function createCase(index: number, overrides?: Partial<TeacherCaseItem>): Teache
         days_remaining: 12,
         ...overrides,
     };
+}
+
+function formatDeadline(deadline: string): string {
+    return SPANISH_DEADLINE_FORMATTER.format(new Date(deadline));
+}
+
+function normalizeText(value: string): string {
+    return value.replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 describe("CasosActivosSection", () => {
@@ -64,6 +78,13 @@ describe("CasosActivosSection", () => {
             "scope",
             "col",
         );
+        const expectedDeadline = normalizeText(formatDeadline("2026-12-01T00:00:00Z"));
+        expect(
+            screen.getAllByText((_, node) => {
+                const textContent = node?.textContent;
+                return textContent !== null && normalizeText(textContent) === expectedDeadline;
+            }).length,
+        ).toBeGreaterThan(0);
         expect(screen.getByText("Mostrando 3 de 3 casos activos")).toBeTruthy();
         expect(screen.getByText("—")).toBeTruthy();
         expect(document.getElementById("cases-section")).toBeTruthy();
@@ -126,7 +147,7 @@ describe("CasosActivosSection", () => {
                 cases: [
                     createCase(1, { days_remaining: null }),
                     createCase(2, { days_remaining: 0 }),
-                    createCase(3, { days_remaining: 4 }),
+                    createCase(3, { days_remaining: 1 }),
                     createCase(4, { days_remaining: 6 }),
                 ],
                 total: 4,
@@ -139,7 +160,7 @@ describe("CasosActivosSection", () => {
 
         const noDate = screen.getByText("Sin fecha");
         const today = screen.getByText("Hoy");
-        const urgent = screen.getByText("4 días");
+        const urgent = screen.getByText("1 día");
         const normal = screen.getByText("6 días");
 
         expect(noDate.className).toContain("text-slate-400");
