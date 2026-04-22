@@ -27,6 +27,7 @@ function createCase(index: number, overrides?: Partial<TeacherCaseItem>): Teache
     return {
         id: `case-${index}`,
         title: `Caso ${index}`,
+        available_from: null,
         deadline: "2026-12-01T00:00:00Z",
         status: "published",
         course_codes: ["GTD-GEME-01"],

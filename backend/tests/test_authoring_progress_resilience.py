@@ -1274,9 +1274,12 @@ async def test_run_job_same_thread_retry_preserves_checkpoint_lineage_and_rebuil
     db.expire_all()
     refreshed = db.get(AuthoringJob, job.id)
     assert refreshed is not None
+    assignment = db.get(Assignment, refreshed.assignment_id)
+    assert assignment is not None
 
     payload = dict(refreshed.task_payload or {})
     assert refreshed.status == "completed"
+    assert assignment.status == "draft"
     assert refreshed.retry_count == 2
     assert payload.get("current_step") == "completed"
     assert corrupt_graph.calls == 1

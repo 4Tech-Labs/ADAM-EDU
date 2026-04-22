@@ -41,6 +41,7 @@ class TeacherCoursesResponse(BaseModel):
 class TeacherCaseItem:
     id: str
     title: str
+    available_from: datetime | None
     deadline: datetime | None
     status: str
     course_codes: list[str]
@@ -321,6 +322,8 @@ def list_teacher_active_cases(
             load_only(
                 Assignment.id,
                 Assignment.title,
+                Assignment.canonical_output,
+                Assignment.available_from,
                 Assignment.deadline,
                 Assignment.status,
             )
@@ -333,13 +336,20 @@ def list_teacher_active_cases(
         .order_by(Assignment.deadline.asc(), Assignment.id.asc())
     ).all()
 
-    return [
-        TeacherCaseItem(
-            id=assignment.id,
-            title=assignment.title,
-            deadline=assignment.deadline,
-            status=assignment.status,
-            course_codes=[],
+    items: list[TeacherCaseItem] = []
+    for assignment in assignments:
+        canonical_output = assignment.canonical_output if isinstance(assignment.canonical_output, dict) else {}
+        canonical_title = canonical_output.get("title")
+        title = canonical_title if isinstance(canonical_title, str) and canonical_title.strip() else assignment.title
+        items.append(
+            TeacherCaseItem(
+                id=assignment.id,
+                title=title,
+                available_from=assignment.available_from,
+                deadline=assignment.deadline,
+                status=assignment.status,
+                course_codes=[],
+            )
         )
-        for assignment in assignments
-    ]
+
+    return items

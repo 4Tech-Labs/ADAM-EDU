@@ -43,7 +43,7 @@ def test_real_success_and_idempotency(client, auth_headers_factory, seed_identit
 
         assignment = db.query(Assignment).filter(Assignment.id == job.assignment_id).first()
         print(f"Assignment Status: {assignment.status}")
-        assert assignment.status == "published", f"Expected published, got {assignment.status}"
+        assert assignment.status == "draft", f"Expected draft, got {assignment.status}"
 
         blueprint = assignment.blueprint
         print(f"Blueprint version: {blueprint.get('version')}")

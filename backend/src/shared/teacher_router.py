@@ -23,6 +23,7 @@ router = APIRouter(prefix="/api/teacher", tags=["teacher"])
 class TeacherCaseItemResponse(BaseModel):
     id: str
     title: str
+    available_from: datetime | None
     deadline: datetime | None
     status: str
     course_codes: list[str]
@@ -100,6 +101,7 @@ def get_teacher_cases(
         TeacherCaseItemResponse(
             id=item.id,
             title=item.title,
+            available_from=item.available_from,
             deadline=item.deadline,
             status=item.status,
             course_codes=item.course_codes,

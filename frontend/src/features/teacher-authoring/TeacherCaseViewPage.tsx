@@ -49,8 +49,8 @@ function CaseViewSkeleton() {
 //   isLoading  → skeleton
 //   isError    → error section (404-aware: "Caso no encontrado" vs generic)
 //   !canonical_output → empty state (no crash)
-//   happy path → CasePreview read-only (no onEditParams)
-//               isAlreadyPublished passed when status === "published"
+//   happy path → CasePreview detail view (no onEditParams)
+//               publish CTA stays available unless status === "published"
 // ════════════════════════════════════════════════════════════════════════════
 export function TeacherCaseViewPage() {
     const { assignmentId = "" } = useParams<{ assignmentId: string }>();

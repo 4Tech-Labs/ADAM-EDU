@@ -128,18 +128,26 @@ def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
     teacher_email = "teacher-cases@example.edu"
     seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
     now = datetime.now(timezone.utc)
+    sooner_available_from = now + timedelta(hours=1)
+    later_available_from = now + timedelta(hours=2)
+    sooner_available_from_response = sooner_available_from.isoformat().replace("+00:00", "Z")
+    later_available_from_response = later_available_from.isoformat().replace("+00:00", "Z")
 
     later_assignment = Assignment(
         teacher_id=teacher_id,
         title="Later",
         status="published",
+        available_from=later_available_from,
         deadline=now + timedelta(hours=25),
+        canonical_output={"title": "Canonical Later"},
     )
     sooner_assignment = Assignment(
         teacher_id=teacher_id,
         title="Sooner",
         status="published",
+        available_from=sooner_available_from,
         deadline=now + timedelta(hours=3),
+        canonical_output={"title": "Canonical Sooner"},
     )
     draft_assignment = Assignment(
         teacher_id=teacher_id,
@@ -164,6 +172,7 @@ def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
         title="No Deadline",
         status="published",
         deadline=None,
+        canonical_output={"title": "Canonical No Deadline"},
     )
     db.add_all(
         [
@@ -186,11 +195,50 @@ def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
     body = response.json()
     # After fix: null-deadline published assignment is now visible (sorts LAST with PG ASC NULLS LAST)
     assert body["total"] == 3
-    assert [item["title"] for item in body["cases"]] == ["Sooner", "Later", "No Deadline"]
+    assert [item["title"] for item in body["cases"]] == [
+        "Canonical Sooner",
+        "Canonical Later",
+        "Canonical No Deadline",
+    ]
     assert body["cases"][0]["days_remaining"] == 0
     assert body["cases"][1]["days_remaining"] == 2
     assert body["cases"][2]["days_remaining"] is None
+    assert body["cases"][0]["available_from"] == sooner_available_from_response
+    assert body["cases"][1]["available_from"] == later_available_from_response
+    assert body["cases"][2]["available_from"] is None
     assert body["cases"][0]["course_codes"] == []
+
+
+def test_issue90_teacher_cases_falls_back_to_assignment_title_when_canonical_title_missing(
+    client,
+    db,
+    seed_identity,
+    auth_headers_factory,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-cases-title-fallback@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    now = datetime.now(timezone.utc)
+
+    fallback_assignment = Assignment(
+        teacher_id=teacher_id,
+        title="Assignment Title Fallback",
+        status="published",
+        deadline=now + timedelta(hours=6),
+        canonical_output={"summary": "missing title"},
+    )
+    db.add(fallback_assignment)
+    db.commit()
+
+    response = client.get(
+        "/api/teacher/cases",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert body["cases"][0]["title"] == "Assignment Title Fallback"
 
 
 def test_issue90_teacher_cases_returns_empty_when_teacher_has_no_active_cases(

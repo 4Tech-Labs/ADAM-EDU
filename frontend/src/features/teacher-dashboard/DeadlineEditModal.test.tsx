@@ -43,6 +43,23 @@ describe("DeadlineEditModal", () => {
         expect(deadlineInput.value).toBe("2026-12-01T23:59");
     });
 
+    it("keeps inputs empty when currentAvailableFrom and currentDeadline are null", () => {
+        renderWithProviders(
+            <DeadlineEditModal
+                caseId="case-2"
+                currentAvailableFrom={null}
+                currentDeadline={null}
+                onClose={onClose}
+            />,
+        );
+
+        const availableFromInput = screen.getByLabelText("Disponible desde") as HTMLInputElement;
+        const deadlineInput = screen.getByLabelText("Fecha límite") as HTMLInputElement;
+
+        expect(availableFromInput.value).toBe("");
+        expect(deadlineInput.value).toBe("");
+    });
+
     it("shows inline error and disables submit when deadline is not after available_from", () => {
         renderWithProviders(<DeadlineEditModal {...BASE_PROPS} />);
 
