@@ -321,6 +321,22 @@ def _normalize_schedule_value(raw_value: Any) -> datetime | None:
     return localized_value.astimezone(timezone.utc)
 
 
+def _resolve_schedule_values_from_payload(
+    *,
+    available_from: datetime | None,
+    deadline: datetime | None,
+    task_payload: dict[str, Any] | None,
+) -> tuple[datetime | None, datetime | None]:
+    normalized_payload = task_payload if isinstance(task_payload, dict) else {}
+
+    if available_from is None:
+        available_from = _normalize_schedule_value(normalized_payload.get("availableFrom"))
+    if deadline is None:
+        deadline = _normalize_schedule_value(normalized_payload.get("dueAt"))
+
+    return available_from, deadline
+
+
 def resolve_assignment_schedule_values(assignment: Assignment) -> tuple[datetime | None, datetime | None]:
     available_from = assignment.available_from
     deadline = assignment.deadline
@@ -333,13 +349,11 @@ def resolve_assignment_schedule_values(assignment: Assignment) -> tuple[datetime
 
     latest_job = max(assignment.authoring_jobs, key=lambda job: job.created_at)
     task_payload = latest_job.task_payload if isinstance(latest_job.task_payload, dict) else {}
-
-    if available_from is None:
-        available_from = _normalize_schedule_value(task_payload.get("availableFrom"))
-    if deadline is None:
-        deadline = _normalize_schedule_value(task_payload.get("dueAt"))
-
-    return available_from, deadline
+    return _resolve_schedule_values_from_payload(
+        available_from=available_from,
+        deadline=deadline,
+        task_payload=task_payload,
+    )
 
 
 def list_teacher_active_cases(
@@ -376,7 +390,6 @@ def list_teacher_active_cases(
                     Assignment.status,
                 ),
                 joinedload(Assignment.course).load_only(Course.code),
-                joinedload(Assignment.authoring_jobs).load_only(AuthoringJob.created_at, AuthoringJob.task_payload),
             )
             .where(
                 Assignment.teacher_id == legacy_user.id,
@@ -385,10 +398,32 @@ def list_teacher_active_cases(
             )
             .order_by(Assignment.deadline.asc(), Assignment.id.asc())
         )
-        .unique()
         .scalars()
         .all()
     )
+
+    legacy_assignment_ids = [
+        assignment.id
+        for assignment in assignments
+        if assignment.available_from is None or assignment.deadline is None
+    ]
+    legacy_schedule_payloads: dict[str, dict[str, Any]] = {}
+    if legacy_assignment_ids:
+        # Legacy-only bridge: records created before the #175 schedule persistence fix
+        # may still carry dates only inside authoring_jobs.task_payload. Remove this
+        # fallback in a future release once no assignments remain with null available_from.
+        legacy_schedule_rows = db.execute(
+            select(
+                AuthoringJob.assignment_id,
+                AuthoringJob.created_at,
+                AuthoringJob.task_payload,
+            )
+            .where(AuthoringJob.assignment_id.in_(legacy_assignment_ids))
+            .order_by(AuthoringJob.assignment_id.asc(), AuthoringJob.created_at.desc())
+        ).all()
+        for assignment_id, _created_at, task_payload in legacy_schedule_rows:
+            if assignment_id not in legacy_schedule_payloads and isinstance(task_payload, dict):
+                legacy_schedule_payloads[assignment_id] = task_payload
 
     items: list[TeacherCaseItem] = []
     for assignment in assignments:
@@ -396,7 +431,11 @@ def list_teacher_active_cases(
         canonical_title = canonical_output.get("title")
         title = canonical_title if isinstance(canonical_title, str) and canonical_title.strip() else assignment.title
         course_codes = [assignment.course.code] if assignment.course and assignment.course.code else []
-        available_from, deadline = resolve_assignment_schedule_values(assignment)
+        available_from, deadline = _resolve_schedule_values_from_payload(
+            available_from=assignment.available_from,
+            deadline=assignment.deadline,
+            task_payload=legacy_schedule_payloads.get(assignment.id),
+        )
         items.append(
             TeacherCaseItem(
                 id=assignment.id,
