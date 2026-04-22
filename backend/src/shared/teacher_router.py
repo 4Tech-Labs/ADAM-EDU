@@ -15,7 +15,13 @@ from shared.database import get_db
 from shared.models import Assignment
 from shared.syllabus_schema import TeacherCourseDetailResponse, TeacherSyllabusSaveRequest
 from shared.teacher_context import TeacherContext, require_teacher_context
-from shared.teacher_reads import TeacherCoursesResponse, get_teacher_course_detail, list_teacher_active_cases, list_teacher_courses
+from shared.teacher_reads import (
+    TeacherCoursesResponse,
+    get_teacher_course_detail,
+    list_teacher_active_cases,
+    list_teacher_courses,
+    resolve_assignment_schedule_values,
+)
 from shared.teacher_writes import save_teacher_course_syllabus
 
 router = APIRouter(prefix="/api/teacher", tags=["teacher"])
@@ -124,12 +130,13 @@ def get_teacher_cases(
 
 def _to_case_detail(assignment: Assignment) -> TeacherCaseDetailResponse:
     """Build a TeacherCaseDetailResponse from an Assignment ORM instance."""
+    available_from, deadline = resolve_assignment_schedule_values(assignment)
     return TeacherCaseDetailResponse(
         id=assignment.id,
         title=assignment.title,
         status=assignment.status,
-        available_from=assignment.available_from,
-        deadline=assignment.deadline,
+        available_from=available_from,
+        deadline=deadline,
         course_id=assignment.course_id,
         canonical_output=assignment.canonical_output,
     )

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 import uuid
 
-from shared.models import Assignment, Membership
+from shared.models import Assignment, AuthoringJob, Membership
 
 
 def _auth_headers(auth_headers_factory, *, user_id: str, email: str) -> dict[str, str]:
@@ -120,6 +120,48 @@ def test_issue90_authoring_job_rejects_invalid_due_at(
 
     assert response.status_code == 422
     assert response.json()["detail"] == "invalid_due_at"
+
+
+def test_issue90_teacher_cases_fall_back_to_authoring_payload_available_from(
+    client,
+    db,
+    seed_identity,
+    auth_headers_factory,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-fallback-available-from@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+
+    assignment = Assignment(
+        teacher_id=teacher_id,
+        title="Fallback Available From",
+        status="published",
+        available_from=None,
+        deadline=datetime(2026, 4, 30, 14, 30, tzinfo=timezone.utc),
+    )
+    db.add(assignment)
+    db.flush()
+    db.add(
+        AuthoringJob(
+            assignment_id=assignment.id,
+            idempotency_key=f"fallback-available-from-{assignment.id}",
+            status="completed",
+            task_payload={
+                "availableFrom": "2026-04-14T08:15",
+                "dueAt": "2026-04-30T14:30:00+00:00",
+            },
+        )
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/teacher/cases",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["cases"][0]["available_from"] == "2026-04-14T13:15:00Z"
 
 
 def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
