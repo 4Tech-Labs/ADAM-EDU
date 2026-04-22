@@ -131,7 +131,7 @@ describe("usePublishCase", () => {
         vi.clearAllMocks();
     });
 
-    it("onSuccess sets cache data and invalidates cases list", () => {
+    it("onSuccess sets cache data and invalidates cases and courses lists", () => {
         const setQueryData = vi.fn();
         const invalidateQueries = vi.fn().mockResolvedValue(undefined);
         vi.mocked(useQueryClient).mockReturnValue({ setQueryData, invalidateQueries } as never);
@@ -146,6 +146,7 @@ describe("usePublishCase", () => {
 
         expect(setQueryData).toHaveBeenCalledWith(queryKeys.teacher.case("case-abc"), { id: "case-abc" });
         expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.teacher.cases() });
+        expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.teacher.courses() });
     });
 
     it("mutationFn calls api.teacher.publishCase with the given assignmentId", async () => {
@@ -155,9 +156,6 @@ describe("usePublishCase", () => {
 
         usePublishCase();
 
-        // NOTE: onSuccess invalidates teacher.cases() only, NOT teacher.courses() —
-        // issue #160 spec included courses() invalidation but actual code does not.
-        // Testing real code behavior here.
         const options = vi.mocked(useMutation).mock.calls[0]?.[0] as unknown as {
             mutationFn: (assignmentId: string) => Promise<unknown>;
         };
@@ -185,7 +183,7 @@ describe("useUpdateDeadline", () => {
         vi.clearAllMocks();
     });
 
-    it("onSuccess sets cache data and invalidates cases list", () => {
+    it("onSuccess sets cache data and invalidates cases and courses lists", () => {
         const setQueryData = vi.fn();
         const invalidateQueries = vi.fn().mockResolvedValue(undefined);
         vi.mocked(useQueryClient).mockReturnValue({ setQueryData, invalidateQueries } as never);
@@ -200,6 +198,7 @@ describe("useUpdateDeadline", () => {
 
         expect(setQueryData).toHaveBeenCalledWith(queryKeys.teacher.case("case-abc"), { id: "case-abc" });
         expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.teacher.cases() });
+        expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.teacher.courses() });
     });
 
     it("mutationFn calls api.teacher.updateDeadline with assignmentId and body", async () => {

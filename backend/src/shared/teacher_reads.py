@@ -77,6 +77,45 @@ def _build_student_counts_subquery(context: TeacherContext):
     )
 
 
+def _resolve_reference_now(now: datetime | None = None) -> datetime:
+    return now if now is not None else datetime.now(timezone.utc)
+
+
+def _active_assignment_predicate(*, now: datetime):
+    return and_(
+        Assignment.status == "published",
+        or_(Assignment.deadline.is_(None), Assignment.deadline >= now),
+    )
+
+
+def _build_active_case_counts_subquery(
+    context: TeacherContext,
+    *,
+    now: datetime,
+):
+    return (
+        select(
+            Assignment.course_id.label("course_id"),
+            func.count(Assignment.id).label("active_cases_count"),
+        )
+        .select_from(Assignment)
+        .join(
+            Course,
+            and_(
+                Assignment.course_id == Course.id,
+                Course.university_id == context.university_id,
+                Course.teacher_membership_id == context.teacher_membership_id,
+            ),
+        )
+        .where(
+            Assignment.course_id.is_not(None),
+            _active_assignment_predicate(now=now),
+        )
+        .group_by(Assignment.course_id)
+        .subquery()
+    )
+
+
 def _serialize_syllabus_response(syllabus: Syllabus | None) -> TeacherSyllabusResponse | None:
     if syllabus is None:
         return None
@@ -102,9 +141,16 @@ def _serialize_syllabus_response(syllabus: Syllabus | None) -> TeacherSyllabusRe
     )
 
 
-def list_teacher_courses(db: Session, context: TeacherContext) -> TeacherCoursesResponse:
+def list_teacher_courses(
+    db: Session,
+    context: TeacherContext,
+    *,
+    now: datetime | None = None,
+) -> TeacherCoursesResponse:
     """Return the teacher-scoped course directory for the authenticated membership."""
+    reference_now = _resolve_reference_now(now)
     student_counts = _build_student_counts_subquery(context)
+    active_case_counts = _build_active_case_counts_subquery(context, now=reference_now)
 
     rows = (
         db.execute(
@@ -116,9 +162,11 @@ def list_teacher_courses(db: Session, context: TeacherContext) -> TeacherCourses
                 Course.academic_level.label("academic_level"),
                 Course.status.label("status"),
                 func.coalesce(student_counts.c.students_count, 0).label("students_count"),
+                func.coalesce(active_case_counts.c.active_cases_count, 0).label("active_cases_count"),
             )
             .select_from(Course)
             .outerjoin(student_counts, student_counts.c.course_id == Course.id)
+            .outerjoin(active_case_counts, active_case_counts.c.course_id == Course.id)
             .where(
                 Course.university_id == context.university_id,
                 Course.teacher_membership_id == context.teacher_membership_id,
@@ -138,7 +186,7 @@ def list_teacher_courses(db: Session, context: TeacherContext) -> TeacherCourses
             academic_level=row["academic_level"],
             status=row["status"],
             students_count=int(row["students_count"]),
-            active_cases_count=0,  # TODO(#90): populate once Assignment gains course_id FK
+            active_cases_count=int(row["active_cases_count"]),
         )
         for row in rows
     ]
@@ -150,9 +198,13 @@ def get_teacher_course_detail(
     db: Session,
     context: TeacherContext,
     course_id: str,
+    *,
+    now: datetime | None = None,
 ) -> TeacherCourseDetailResponse:
     """Return the teacher-owned composed course detail payload."""
+    reference_now = _resolve_reference_now(now)
     student_counts = _build_student_counts_subquery(context)
+    active_case_counts = _build_active_case_counts_subquery(context, now=reference_now)
 
     row = (
         db.execute(
@@ -165,12 +217,14 @@ def get_teacher_course_detail(
                 Course.status.label("status"),
                 Course.max_students.label("max_students"),
                 func.coalesce(student_counts.c.students_count, 0).label("students_count"),
+                func.coalesce(active_case_counts.c.active_cases_count, 0).label("active_cases_count"),
                 CourseAccessLink.id.label("access_link_id"),
                 CourseAccessLink.status.label("access_link_status"),
                 CourseAccessLink.created_at.label("access_link_created_at"),
             )
             .select_from(Course)
             .outerjoin(student_counts, student_counts.c.course_id == Course.id)
+            .outerjoin(active_case_counts, active_case_counts.c.course_id == Course.id)
             .outerjoin(
                 CourseAccessLink,
                 and_(
@@ -207,7 +261,7 @@ def get_teacher_course_detail(
             status=row["status"],
             max_students=int(row["max_students"]),
             students_count=int(row["students_count"]),
-            active_cases_count=0,
+            active_cases_count=int(row["active_cases_count"]),
         ),
         syllabus=_serialize_syllabus_response(syllabus),
         revision_metadata=TeacherSyllabusRevisionMetadataResponse(
@@ -393,8 +447,7 @@ def list_teacher_active_cases(
             )
             .where(
                 Assignment.teacher_id == legacy_user.id,
-                Assignment.status == "published",
-                or_(Assignment.deadline.is_(None), Assignment.deadline >= now),
+                _active_assignment_predicate(now=now),
             )
             .order_by(Assignment.deadline.asc(), Assignment.id.asc())
         )
