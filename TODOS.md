@@ -453,7 +453,9 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
-## TODO-025: Exponer `available_from` en el endpoint de lista de casos del docente
+## TODO-025: Exponer `available_from` en el endpoint de lista de casos del docente [RESUELTO por #175]
+
+**Status:** Cerrado por el fix de la Issue #175. `GET /api/teacher/cases` ya expone `available_from` en el contrato de lista, alineado con `TeacherCaseItem` en frontend y con el pre-fill de `DeadlineEditModal`.
 
 **What:** Agregar el campo `available_from` a la respuesta del endpoint `GET /api/teacher/cases`, de forma que `TeacherCaseItem` lo incluya en el payload de lista.
 

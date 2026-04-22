@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import math
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -14,15 +15,23 @@ from shared.database import get_db
 from shared.models import Assignment
 from shared.syllabus_schema import TeacherCourseDetailResponse, TeacherSyllabusSaveRequest
 from shared.teacher_context import TeacherContext, require_teacher_context
-from shared.teacher_reads import TeacherCoursesResponse, get_teacher_course_detail, list_teacher_active_cases, list_teacher_courses
+from shared.teacher_reads import (
+    TeacherCoursesResponse,
+    get_teacher_course_detail,
+    list_teacher_active_cases,
+    list_teacher_courses,
+    resolve_assignment_schedule_values,
+)
 from shared.teacher_writes import save_teacher_course_syllabus
 
 router = APIRouter(prefix="/api/teacher", tags=["teacher"])
+_BOGOTA_TZ = ZoneInfo("America/Bogota")
 
 
 class TeacherCaseItemResponse(BaseModel):
     id: str
     title: str
+    available_from: datetime | None
     deadline: datetime | None
     status: str
     course_codes: list[str]
@@ -53,12 +62,16 @@ def _days_remaining(deadline: datetime | None, now: datetime) -> int | None:
     if deadline is None:
         return None
 
-    remaining_seconds = (deadline - now).total_seconds()
-    if remaining_seconds <= 0:
+    if deadline <= now:
         return 0
-    if remaining_seconds < 86400:
+
+    deadline_local = deadline.astimezone(_BOGOTA_TZ)
+    now_local = now.astimezone(_BOGOTA_TZ)
+    remaining_days = (deadline_local.date() - now_local.date()).days
+
+    if remaining_days <= 0:
         return 0
-    return math.ceil(remaining_seconds / 86400)
+    return remaining_days
 
 
 @router.get("/courses", response_model=TeacherCoursesResponse)
@@ -100,6 +113,7 @@ def get_teacher_cases(
         TeacherCaseItemResponse(
             id=item.id,
             title=item.title,
+            available_from=item.available_from,
             deadline=item.deadline,
             status=item.status,
             course_codes=item.course_codes,
@@ -116,12 +130,13 @@ def get_teacher_cases(
 
 def _to_case_detail(assignment: Assignment) -> TeacherCaseDetailResponse:
     """Build a TeacherCaseDetailResponse from an Assignment ORM instance."""
+    available_from, deadline = resolve_assignment_schedule_values(assignment)
     return TeacherCaseDetailResponse(
         id=assignment.id,
         title=assignment.title,
         status=assignment.status,
-        available_from=assignment.available_from,
-        deadline=assignment.deadline,
+        available_from=available_from,
+        deadline=deadline,
         course_id=assignment.course_id,
         canonical_output=assignment.canonical_output,
     )

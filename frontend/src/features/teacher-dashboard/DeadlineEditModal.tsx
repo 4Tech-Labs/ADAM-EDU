@@ -5,6 +5,18 @@ import { useToast } from "@/shared/Toast";
 
 import { useUpdateDeadline } from "./useTeacherDashboard";
 
+const BOGOTA_TIME_ZONE = "America/Bogota";
+const BOGOTA_OFFSET = "-05:00";
+const BOGOTA_DATETIME_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+    timeZone: BOGOTA_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+});
+
 interface DeadlineEditModalProps {
     caseId: string;
     currentAvailableFrom: string | null;
@@ -12,9 +24,39 @@ interface DeadlineEditModalProps {
     onClose: () => void;
 }
 
+function extractPart(parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes): string {
+    return parts.find((part) => part.type === type)?.value ?? "";
+}
+
 function toDatetimeLocalValue(iso: string | null): string {
     if (!iso) return "";
-    return iso.slice(0, 16);
+
+    const parsed = new Date(iso);
+    if (Number.isNaN(parsed.getTime())) {
+        return "";
+    }
+
+    const parts = BOGOTA_DATETIME_FORMATTER.formatToParts(parsed);
+    const year = extractPart(parts, "year");
+    const month = extractPart(parts, "month");
+    const day = extractPart(parts, "day");
+    const hour = extractPart(parts, "hour");
+    const minute = extractPart(parts, "minute");
+
+    return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
+function toBogotaUtcIsoValue(value: string): string | null {
+    if (!value) {
+        return null;
+    }
+
+    const parsed = new Date(`${value}:00${BOGOTA_OFFSET}`);
+    if (Number.isNaN(parsed.getTime())) {
+        return null;
+    }
+
+    return parsed.toISOString().replace(".000Z", "Z");
 }
 
 export function DeadlineEditModal({
@@ -43,8 +85,8 @@ export function DeadlineEditModal({
             {
                 assignmentId: caseId,
                 body: {
-                    available_from: availableFrom || null,
-                    deadline: deadline || null,
+                    available_from: toBogotaUtcIsoValue(availableFrom),
+                    deadline: toBogotaUtcIsoValue(deadline),
                 },
             },
             {

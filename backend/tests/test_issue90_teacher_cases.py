@@ -4,14 +4,14 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 import uuid
 
-from shared.models import Assignment, Membership
+from shared.models import Assignment, AuthoringJob, Membership
 
 
 def _auth_headers(auth_headers_factory, *, user_id: str, email: str) -> dict[str, str]:
     return auth_headers_factory(sub=user_id, email=email)
 
 
-def test_issue90_authoring_job_persists_deadline_and_normalizes_due_at(
+def test_issue90_authoring_job_persists_assignment_dates_and_normalizes_intake_datetimes(
     client,
     db,
     seed_identity,
@@ -37,6 +37,7 @@ def test_issue90_authoring_job_persists_deadline_and_normalizes_due_at(
                 "syllabus_module": "m1",
                 "topic_unit": "u1",
                 "target_groups": ["Grupo 01"],
+                "available_from": "2026-04-14T08:15",
                 "due_at": "2026-04-15T09:30",
             },
             headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
@@ -45,7 +46,10 @@ def test_issue90_authoring_job_persists_deadline_and_normalizes_due_at(
     assert response.status_code == 202, response.text
     assignment = db.query(Assignment).order_by(Assignment.created_at.desc()).first()
     assert assignment is not None
+    assert assignment.available_from == datetime(2026, 4, 14, 13, 15, tzinfo=timezone.utc)
     assert assignment.deadline == datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
+    assert assignment.authoring_jobs[0].task_payload["availableFrom"] == "2026-04-14T13:15:00+00:00"
+    assert assignment.authoring_jobs[0].task_payload["dueAt"] == "2026-04-15T14:30:00+00:00"
 
 
 def test_issue90_authoring_job_preserves_string_payload_shape_and_allows_null_deadline(
@@ -118,52 +122,118 @@ def test_issue90_authoring_job_rejects_invalid_due_at(
     assert response.json()["detail"] == "invalid_due_at"
 
 
-def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
+def test_issue90_teacher_cases_fall_back_to_authoring_payload_available_from(
     client,
     db,
     seed_identity,
     auth_headers_factory,
 ) -> None:
     teacher_id = str(uuid.uuid4())
-    teacher_email = "teacher-cases@example.edu"
+    teacher_email = "teacher-fallback-available-from@example.edu"
     seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
-    now = datetime.now(timezone.utc)
+
+    assignment = Assignment(
+        teacher_id=teacher_id,
+        title="Fallback Available From",
+        status="published",
+        available_from=None,
+        deadline=datetime(2026, 4, 30, 14, 30, tzinfo=timezone.utc),
+    )
+    db.add(assignment)
+    db.flush()
+    db.add(
+        AuthoringJob(
+            assignment_id=assignment.id,
+            idempotency_key=f"fallback-available-from-{assignment.id}",
+            status="completed",
+            task_payload={
+                "availableFrom": "2026-04-14T08:15",
+                "dueAt": "2026-04-30T14:30:00+00:00",
+            },
+        )
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/teacher/cases",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["cases"][0]["available_from"] == "2026-04-14T13:15:00Z"
+
+
+def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
+    client,
+    db,
+    seed_identity,
+    auth_headers_factory,
+    seed_course,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-cases@example.edu"
+    teacher = seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    fixed_now = datetime(2026, 4, 22, 20, 30, tzinfo=timezone.utc)
+    sooner_available_from = fixed_now + timedelta(hours=1)
+    later_available_from = fixed_now + timedelta(hours=2)
+    sooner_available_from_response = sooner_available_from.isoformat().replace("+00:00", "Z")
+    later_available_from_response = later_available_from.isoformat().replace("+00:00", "Z")
+    sooner_course = seed_course(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Sooner Course",
+        code="OPS-101",
+    )
+    later_course = seed_course(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Later Course",
+        code="DS-202",
+    )
 
     later_assignment = Assignment(
         teacher_id=teacher_id,
+        course_id=later_course.id,
         title="Later",
         status="published",
-        deadline=now + timedelta(hours=25),
+        available_from=later_available_from,
+        deadline=fixed_now + timedelta(hours=50),
+        canonical_output={"title": "Canonical Later"},
     )
     sooner_assignment = Assignment(
         teacher_id=teacher_id,
+        course_id=sooner_course.id,
         title="Sooner",
         status="published",
-        deadline=now + timedelta(hours=3),
+        available_from=sooner_available_from,
+        deadline=fixed_now + timedelta(hours=18),
+        canonical_output={"title": "Canonical Sooner"},
     )
     draft_assignment = Assignment(
         teacher_id=teacher_id,
         title="Draft",
         status="draft",
-        deadline=now + timedelta(days=2),
+        deadline=fixed_now + timedelta(days=2),
     )
     failed_assignment = Assignment(
         teacher_id=teacher_id,
         title="Failed",
         status="failed",
-        deadline=now + timedelta(days=3),
+        deadline=fixed_now + timedelta(days=3),
     )
     expired_assignment = Assignment(
         teacher_id=teacher_id,
         title="Expired",
         status="published",
-        deadline=now - timedelta(seconds=1),
+        deadline=fixed_now - timedelta(seconds=1),
     )
     null_deadline_assignment = Assignment(
         teacher_id=teacher_id,
         title="No Deadline",
         status="published",
         deadline=None,
+        canonical_output={"title": "Canonical No Deadline"},
     )
     db.add_all(
         [
@@ -177,6 +247,54 @@ def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
     )
     db.commit()
 
+    with patch("shared.teacher_router.datetime") as mock_datetime:
+        mock_datetime.now.return_value = fixed_now
+        response = client.get(
+            "/api/teacher/cases",
+            headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # After fix: null-deadline published assignment is now visible (sorts LAST with PG ASC NULLS LAST)
+    assert body["total"] == 3
+    assert [item["title"] for item in body["cases"]] == [
+        "Canonical Sooner",
+        "Canonical Later",
+        "Canonical No Deadline",
+    ]
+    assert body["cases"][0]["days_remaining"] == 1
+    assert body["cases"][1]["days_remaining"] == 2
+    assert body["cases"][2]["days_remaining"] is None
+    assert body["cases"][0]["available_from"] == sooner_available_from_response
+    assert body["cases"][1]["available_from"] == later_available_from_response
+    assert body["cases"][2]["available_from"] is None
+    assert body["cases"][0]["course_codes"] == ["OPS-101"]
+    assert body["cases"][1]["course_codes"] == ["DS-202"]
+    assert body["cases"][2]["course_codes"] == []
+
+
+def test_issue90_teacher_cases_falls_back_to_assignment_title_when_canonical_title_missing(
+    client,
+    db,
+    seed_identity,
+    auth_headers_factory,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-cases-title-fallback@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    now = datetime.now(timezone.utc)
+
+    fallback_assignment = Assignment(
+        teacher_id=teacher_id,
+        title="Assignment Title Fallback",
+        status="published",
+        deadline=now + timedelta(hours=6),
+        canonical_output={"summary": "missing title"},
+    )
+    db.add(fallback_assignment)
+    db.commit()
+
     response = client.get(
         "/api/teacher/cases",
         headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
@@ -184,13 +302,8 @@ def test_issue90_teacher_cases_returns_only_future_published_assignments_sorted(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    # After fix: null-deadline published assignment is now visible (sorts LAST with PG ASC NULLS LAST)
-    assert body["total"] == 3
-    assert [item["title"] for item in body["cases"]] == ["Sooner", "Later", "No Deadline"]
-    assert body["cases"][0]["days_remaining"] == 0
-    assert body["cases"][1]["days_remaining"] == 2
-    assert body["cases"][2]["days_remaining"] is None
-    assert body["cases"][0]["course_codes"] == []
+    assert body["total"] == 1
+    assert body["cases"][0]["title"] == "Assignment Title Fallback"
 
 
 def test_issue90_teacher_cases_returns_empty_when_teacher_has_no_active_cases(

@@ -1,11 +1,39 @@
 import os
 import uuid
+import time
 
 import pytest
 from shared.database import SessionLocal
 from shared.models import AuthoringJob, Assignment
 
 pytestmark = pytest.mark.live_llm
+
+_TERMINAL_JOB_STATUSES = {"completed", "failed", "failed_resumable"}
+
+
+def _wait_for_terminal_job_status(
+    client,
+    job_id: str,
+    headers: dict[str, str],
+    *,
+    timeout_seconds: float = 240.0,
+    poll_interval_seconds: float = 1.0,
+) -> dict[str, str | None]:
+    deadline = time.monotonic() + timeout_seconds
+    last_status_payload: dict[str, str | None] | None = None
+
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/authoring/jobs/{job_id}", headers=headers)
+        assert response.status_code == 200, response.text
+        last_status_payload = response.json()
+        if last_status_payload.get("status") in _TERMINAL_JOB_STATUSES:
+            return last_status_payload
+        time.sleep(poll_interval_seconds)
+
+    pytest.fail(
+        "Timed out waiting for authoring job to reach a terminal state. "
+        f"Last status payload: {last_status_payload}"
+    )
 
 def test_real_success_and_idempotency(client, auth_headers_factory, seed_identity, seed_course_with_syllabus):
     print("\n--- Testing Real Success ---")
@@ -34,6 +62,8 @@ def test_real_success_and_idempotency(client, auth_headers_factory, seed_identit
 
     # Because we use TestClient, BackgroundTasks runs synchronously after the response is generated.
     # Therefore, by this point, the LangGraph execution has already completed.
+    status_payload = _wait_for_terminal_job_status(client, job_id, headers)
+    print(f"Job Status via API: {status_payload['status']}")
 
     db = SessionLocal()
     try:
@@ -43,7 +73,7 @@ def test_real_success_and_idempotency(client, auth_headers_factory, seed_identit
 
         assignment = db.query(Assignment).filter(Assignment.id == job.assignment_id).first()
         print(f"Assignment Status: {assignment.status}")
-        assert assignment.status == "published", f"Expected published, got {assignment.status}"
+        assert assignment.status == "draft", f"Expected draft, got {assignment.status}"
 
         blueprint = assignment.blueprint
         print(f"Blueprint version: {blueprint.get('version')}")
@@ -88,23 +118,15 @@ def test_real_failure_handling(client, auth_headers_factory, seed_identity, seed
         "target_groups": ["Grupo 01"],
     }
 
-    # Patch the environment variable to an invalid key during the run
-    original_key = os.getenv("GEMINI_API_KEY")
-    os.environ["GEMINI_API_KEY"] = "INVALID_KEY_12345"
+    monkeypatch.setenv("GEMINI_API_KEY", "INVALID_KEY_12345")
 
-    try:
-        resp = client.post("/api/authoring/jobs", json=payload, headers=headers)
-        assert resp.status_code == 202
-        job_id = resp.json().get("job_id")
-        print(f"Intake Response 202 OK. Job ID: {job_id}")
-    finally:
-        # Restore key
-        if original_key is not None:
-            os.environ["GEMINI_API_KEY"] = original_key
-        else:
-            del os.environ["GEMINI_API_KEY"]
-
+    resp = client.post("/api/authoring/jobs", json=payload, headers=headers)
+    assert resp.status_code == 202
+    job_id = resp.json().get("job_id")
+    print(f"Intake Response 202 OK. Job ID: {job_id}")
     db = SessionLocal()
+    status_payload = _wait_for_terminal_job_status(client, job_id, headers)
+    print(f"Job Status via API (Expected Failed): {status_payload['status']}")
     try:
         job = db.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
         print(f"Job Status in DB (Expected Failed): {job.status}")

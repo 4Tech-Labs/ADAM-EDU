@@ -23,16 +23,31 @@ vi.mock("./useTeacherDashboard", () => ({
 
 import { CasosActivosSection } from "./CasosActivosSection";
 
+const SPANISH_DEADLINE_FORMATTER = new Intl.DateTimeFormat("es-CO", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "America/Bogota",
+});
+
 function createCase(index: number, overrides?: Partial<TeacherCaseItem>): TeacherCaseItem {
     return {
         id: `case-${index}`,
         title: `Caso ${index}`,
+        available_from: null,
         deadline: "2026-12-01T00:00:00Z",
         status: "published",
         course_codes: ["GTD-GEME-01"],
         days_remaining: 12,
         ...overrides,
     };
+}
+
+function formatDeadline(deadline: string): string {
+    return SPANISH_DEADLINE_FORMATTER.format(new Date(deadline));
+}
+
+function normalizeText(value: string): string {
+    return value.replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 describe("CasosActivosSection", () => {
@@ -63,6 +78,13 @@ describe("CasosActivosSection", () => {
             "scope",
             "col",
         );
+        const expectedDeadline = normalizeText(formatDeadline("2026-12-01T00:00:00Z"));
+        expect(
+            screen.getAllByText((_, node) => {
+                const textContent = node?.textContent;
+                return typeof textContent === "string" && normalizeText(textContent) === expectedDeadline;
+            }).length,
+        ).toBeGreaterThan(0);
         expect(screen.getByText("Mostrando 3 de 3 casos activos")).toBeTruthy();
         expect(screen.getByText("—")).toBeTruthy();
         expect(document.getElementById("cases-section")).toBeTruthy();
@@ -125,7 +147,7 @@ describe("CasosActivosSection", () => {
                 cases: [
                     createCase(1, { days_remaining: null }),
                     createCase(2, { days_remaining: 0 }),
-                    createCase(3, { days_remaining: 4 }),
+                    createCase(3, { days_remaining: 1 }),
                     createCase(4, { days_remaining: 6 }),
                 ],
                 total: 4,
@@ -138,7 +160,7 @@ describe("CasosActivosSection", () => {
 
         const noDate = screen.getByText("Sin fecha");
         const today = screen.getByText("Hoy");
-        const urgent = screen.getByText("4 días");
+        const urgent = screen.getByText("1 día");
         const normal = screen.getByText("6 días");
 
         expect(noDate.className).toContain("text-slate-400");
@@ -178,7 +200,12 @@ describe("CasosActivosSection", () => {
     it("click 'Editar' renders DeadlineEditModal with correct props", () => {
         useTeacherCases.mockReturnValue({
             data: {
-                cases: [createCase(1, { available_from: "2026-06-01T10:00:00Z" })],
+                cases: [
+                    createCase(1, {
+                        available_from: "2026-06-01T15:00:00Z",
+                        deadline: "2026-12-02T04:59:00Z",
+                    }),
+                ],
                 total: 1,
             },
             isLoading: false,
@@ -191,7 +218,9 @@ describe("CasosActivosSection", () => {
 
         expect(screen.getByRole("heading", { name: "Editar fechas" })).toBeTruthy();
         const availableFromInput = screen.getByLabelText("Disponible desde") as HTMLInputElement;
+        const deadlineInput = screen.getByLabelText("Fecha límite") as HTMLInputElement;
         expect(availableFromInput.value).toBe("2026-06-01T10:00");
+        expect(deadlineInput.value).toBe("2026-12-01T23:59");
     });
 
     it("handles client-side pagination and button boundaries", () => {

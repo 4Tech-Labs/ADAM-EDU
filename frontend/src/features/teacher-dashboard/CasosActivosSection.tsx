@@ -10,6 +10,11 @@ import { useTeacherCases } from "./useTeacherDashboard";
 const PAGE_SIZE = 10;
 const CASES_LOAD_ERROR_MSG = "Error al cargar casos. Intenta refrescar la página.";
 const EMPTY_CASES: TeacherCaseItem[] = [];
+const SPANISH_DEADLINE_FORMATTER = new Intl.DateTimeFormat("es-CO", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "America/Bogota",
+});
 
 function buildCasesSignature(cases: TeacherCaseItem[]): string {
     return JSON.stringify(
@@ -46,6 +51,19 @@ function DeadlineBadge({ days }: { days: number | null }) {
     );
 }
 
+function formatDeadline(deadline: string | null): string | null {
+    if (!deadline) {
+        return null;
+    }
+
+    const parsedDeadline = new Date(deadline);
+    if (Number.isNaN(parsedDeadline.getTime())) {
+        return deadline;
+    }
+
+    return SPANISH_DEADLINE_FORMATTER.format(parsedDeadline);
+}
+
 interface CasoRowProps {
     caso: TeacherCaseItem;
     onEdit: (caso: TeacherCaseItem) => void;
@@ -77,7 +95,16 @@ function CasoRow({ caso, onEdit }: CasoRowProps) {
                 )}
             </td>
             <td className="px-6 py-5 align-middle">
-                <DeadlineBadge days={caso.days_remaining} />
+                {caso.deadline ? (
+                    <div className="flex flex-col items-start gap-2">
+                        <span className="text-[13px] font-semibold text-slate-700">
+                            {formatDeadline(caso.deadline)}
+                        </span>
+                        <DeadlineBadge days={caso.days_remaining} />
+                    </div>
+                ) : (
+                    <DeadlineBadge days={caso.days_remaining} />
+                )}
             </td>
             <td className="px-6 py-5 align-middle">
                 <div className="flex items-center justify-end gap-2.5 opacity-90 transition-opacity group-hover:opacity-100">

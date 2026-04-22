@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session, load_only
+from sqlalchemy.orm import Session, joinedload, load_only
 
 from shared.auth import CurrentActor, ensure_legacy_teacher_bridge
-from shared.models import Assignment, Course, CourseAccessLink, CourseMembership, Membership, Syllabus
+from shared.models import Assignment, AuthoringJob, Course, CourseAccessLink, CourseMembership, Membership, Syllabus
 from shared.syllabus_schema import (
     TeacherCourseConfigurationResponse,
     TeacherCourseDetailResponse,
@@ -19,6 +20,8 @@ from shared.syllabus_schema import (
     TeacherSyllabusRevisionMetadataResponse,
 )
 from shared.teacher_context import TeacherContext
+
+_BOGOTA_TZ = ZoneInfo("America/Bogota")
 
 
 class TeacherCourseItemResponse(BaseModel):
@@ -41,6 +44,7 @@ class TeacherCoursesResponse(BaseModel):
 class TeacherCaseItem:
     id: str
     title: str
+    available_from: datetime | None
     deadline: datetime | None
     status: str
     course_codes: list[str]
@@ -295,6 +299,63 @@ def resolve_syllabus_selection_titles(
     return module_title, str(selected_unit.get("title", ""))
 
 
+def _normalize_schedule_value(raw_value: Any) -> datetime | None:
+    if not isinstance(raw_value, str):
+        return None
+
+    stripped_value = raw_value.strip()
+    if not stripped_value:
+        return None
+
+    normalized_value = stripped_value.replace("Z", "+00:00") if stripped_value.endswith("Z") else stripped_value
+    try:
+        parsed_value = datetime.fromisoformat(normalized_value)
+    except ValueError:
+        return None
+
+    localized_value = (
+        parsed_value.replace(tzinfo=_BOGOTA_TZ)
+        if parsed_value.tzinfo is None
+        else parsed_value
+    )
+    return localized_value.astimezone(timezone.utc)
+
+
+def _resolve_schedule_values_from_payload(
+    *,
+    available_from: datetime | None,
+    deadline: datetime | None,
+    task_payload: dict[str, Any] | None,
+) -> tuple[datetime | None, datetime | None]:
+    normalized_payload = task_payload if isinstance(task_payload, dict) else {}
+
+    if available_from is None:
+        available_from = _normalize_schedule_value(normalized_payload.get("availableFrom"))
+    if deadline is None:
+        deadline = _normalize_schedule_value(normalized_payload.get("dueAt"))
+
+    return available_from, deadline
+
+
+def resolve_assignment_schedule_values(assignment: Assignment) -> tuple[datetime | None, datetime | None]:
+    available_from = assignment.available_from
+    deadline = assignment.deadline
+
+    if available_from is not None and deadline is not None:
+        return available_from, deadline
+
+    if not assignment.authoring_jobs:
+        return available_from, deadline
+
+    latest_job = max(assignment.authoring_jobs, key=lambda job: job.created_at)
+    task_payload = latest_job.task_payload if isinstance(latest_job.task_payload, dict) else {}
+    return _resolve_schedule_values_from_payload(
+        available_from=available_from,
+        deadline=deadline,
+        task_payload=task_payload,
+    )
+
+
 def list_teacher_active_cases(
     db: Session,
     actor: CurrentActor,
@@ -315,31 +376,75 @@ def list_teacher_active_cases(
     """
     legacy_user = ensure_legacy_teacher_bridge(db, actor)
 
-    assignments = db.scalars(
-        select(Assignment)
-        .options(
-            load_only(
-                Assignment.id,
-                Assignment.title,
-                Assignment.deadline,
-                Assignment.status,
+    assignments = (
+        db.execute(
+            select(Assignment)
+            .options(
+                load_only(
+                    Assignment.id,
+                    Assignment.course_id,
+                    Assignment.title,
+                    Assignment.canonical_output,
+                    Assignment.available_from,
+                    Assignment.deadline,
+                    Assignment.status,
+                ),
+                joinedload(Assignment.course).load_only(Course.code),
+            )
+            .where(
+                Assignment.teacher_id == legacy_user.id,
+                Assignment.status == "published",
+                or_(Assignment.deadline.is_(None), Assignment.deadline >= now),
+            )
+            .order_by(Assignment.deadline.asc(), Assignment.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+
+    legacy_assignment_ids = [
+        assignment.id
+        for assignment in assignments
+        if assignment.available_from is None or assignment.deadline is None
+    ]
+    legacy_schedule_payloads: dict[str, dict[str, Any]] = {}
+    if legacy_assignment_ids:
+        # Legacy-only bridge: records created before the #175 schedule persistence fix
+        # may still carry dates only inside authoring_jobs.task_payload. Remove this
+        # fallback in a future release once no assignments remain with null available_from.
+        legacy_schedule_rows = db.execute(
+            select(
+                AuthoringJob.assignment_id,
+                AuthoringJob.created_at,
+                AuthoringJob.task_payload,
+            )
+            .where(AuthoringJob.assignment_id.in_(legacy_assignment_ids))
+            .order_by(AuthoringJob.assignment_id.asc(), AuthoringJob.created_at.desc())
+        ).all()
+        for assignment_id, _created_at, task_payload in legacy_schedule_rows:
+            if assignment_id not in legacy_schedule_payloads and isinstance(task_payload, dict):
+                legacy_schedule_payloads[assignment_id] = task_payload
+
+    items: list[TeacherCaseItem] = []
+    for assignment in assignments:
+        canonical_output = assignment.canonical_output if isinstance(assignment.canonical_output, dict) else {}
+        canonical_title = canonical_output.get("title")
+        title = canonical_title if isinstance(canonical_title, str) and canonical_title.strip() else assignment.title
+        course_codes = [assignment.course.code] if assignment.course and assignment.course.code else []
+        available_from, deadline = _resolve_schedule_values_from_payload(
+            available_from=assignment.available_from,
+            deadline=assignment.deadline,
+            task_payload=legacy_schedule_payloads.get(assignment.id),
+        )
+        items.append(
+            TeacherCaseItem(
+                id=assignment.id,
+                title=title,
+                available_from=available_from,
+                deadline=deadline,
+                status=assignment.status,
+                course_codes=course_codes,
             )
         )
-        .where(
-            Assignment.teacher_id == legacy_user.id,
-            Assignment.status == "published",
-            or_(Assignment.deadline.is_(None), Assignment.deadline >= now),
-        )
-        .order_by(Assignment.deadline.asc(), Assignment.id.asc())
-    ).all()
 
-    return [
-        TeacherCaseItem(
-            id=assignment.id,
-            title=assignment.title,
-            deadline=assignment.deadline,
-            status=assignment.status,
-            course_codes=[],
-        )
-        for assignment in assignments
-    ]
+    return items

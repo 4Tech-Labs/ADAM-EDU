@@ -1172,7 +1172,6 @@ class AuthoringService:
             canonical_dict = dict(canonical_result.get("canonical_output", {}))
             canonical_dict["caseId"] = assignment.id
             assignment.canonical_output = canonical_dict
-            assignment.status = "published"
             job.status = AUTHORING_JOB_STATUS_COMPLETED
             completed_payload = _next_progress_payload(
                 job.task_payload,

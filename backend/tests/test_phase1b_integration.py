@@ -69,7 +69,7 @@ def test_phase1b_intake_and_authoring_stubbed(client, db, auth_headers_factory, 
 
         assignment = db.query(Assignment).filter(Assignment.id == job.assignment_id).first()
         assert assignment is not None
-        assert assignment.status == "published"
+        assert assignment.status == "draft"
 
         blueprint = assignment.blueprint
         assert blueprint is not None
