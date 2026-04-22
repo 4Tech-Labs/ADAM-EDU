@@ -41,6 +41,7 @@ export function usePublishCase() {
         onSuccess: (detail) => {
             queryClient.setQueryData(queryKeys.teacher.case(detail.id), detail);
             void queryClient.invalidateQueries({ queryKey: queryKeys.teacher.cases() });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.teacher.courses() });
         },
     });
 }
@@ -53,6 +54,7 @@ export function useUpdateDeadline() {
         onSuccess: (detail) => {
             queryClient.setQueryData(queryKeys.teacher.case(detail.id), detail);
             void queryClient.invalidateQueries({ queryKey: queryKeys.teacher.cases() });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.teacher.courses() });
         },
     });
 }
