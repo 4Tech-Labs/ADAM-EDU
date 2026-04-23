@@ -1,8 +1,9 @@
-import { Bell } from "lucide-react";
+import { Bell, GraduationCap } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import { useAuth } from "@/app/auth/useAuth";
 
-const FACULTY_SUBTITLE = "Docente · Facultad de Administración";
+const FACULTY_SUBTITLE = "Portal Docente";
 
 function getTeacherInitials(fullName: string): string {
     const parts = fullName.trim().split(/\s+/).filter(Boolean);
@@ -23,22 +24,16 @@ export function TeacherUserHeader() {
         >
             <div className="mx-auto flex h-20 max-w-6xl items-center justify-between gap-4 px-6">
                 <div className="flex min-w-0 items-center gap-3.5">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/20">
-                        <svg
-                            className="h-6 w-6 text-white"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={2}
-                            aria-hidden
-                        >
-                            <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"
-                            />
-                        </svg>
-                    </div>
+                    <Link
+                        to="/teacher/dashboard"
+                        aria-label="Ir al dashboard docente"
+                        title="Ir al dashboard docente"
+                        className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/15 ring-1 ring-white/25 shadow-lg shadow-black/20 backdrop-blur-sm transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                    >
+                        {/* Glow sutil detrás */}
+                        <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-white/20 to-transparent" />
+                        <GraduationCap className="relative h-[28px] w-[28px] text-white drop-shadow-sm" strokeWidth={1.75} />
+                    </Link>
                     <div className="min-w-0">
                         <span className="block text-lg font-bold leading-none tracking-tight text-white">
                             ADAM

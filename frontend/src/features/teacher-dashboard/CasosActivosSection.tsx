@@ -111,7 +111,7 @@ function CasoRow({ caso, onEdit }: CasoRowProps) {
                     <button
                         type="button"
                         onClick={() => { navigate(`/teacher/cases/${caso.id}`); }}
-                        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[9px] border border-indigo-100 bg-indigo-50 px-3.5 py-2 text-[13px] font-semibold text-indigo-600 transition-all hover:border-indigo-200 hover:bg-indigo-100 hover:shadow-sm"
+                        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[9px] border border-indigo-100 bg-indigo-50 px-3.5 py-2 text-[13px] font-semibold text-indigo-600 whitespace-nowrap transition-all hover:border-indigo-200 hover:bg-indigo-100 hover:shadow-sm"
                     >
                         Ver Caso
                     </button>
