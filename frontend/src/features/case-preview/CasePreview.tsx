@@ -16,6 +16,7 @@ import { Suspense, lazy, useState, useRef, useCallback, useMemo, useEffect, type
 import { usePublishCase } from "@/features/teacher-dashboard/useTeacherDashboard"; // TODO: move usePublishCase to shared/ — cross-feature import accepted per #154
 import { useToast } from "@/shared/Toast";
 import { marked, type Tokens } from "marked";
+import { isMarkdownTableRow } from "./markdownTable";
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -118,11 +119,10 @@ const M1_EXHIBIT_SECTIONS: Array<{ key: M1DedicatedExhibitKey; heading: RegExp }
     { key: "stakeholdersExhibit", heading: /^\s*#{1,6}\s*Exhibit\s*3\b/i },
 ];
 
-const MARKDOWN_TABLE_ROW = /^\s*\|.+\|\s*$/;
 const INLINE_TABLE_SEPARATOR = /\|(\s*:?-+:?\s*\|)+/;
 
 function lineLooksLikeMarkdownTable(line: string): boolean {
-    return MARKDOWN_TABLE_ROW.test(line);
+    return isMarkdownTableRow(line);
 }
 
 function normalizeMarkdownAfterExhibitRemoval(markdown: string): string {

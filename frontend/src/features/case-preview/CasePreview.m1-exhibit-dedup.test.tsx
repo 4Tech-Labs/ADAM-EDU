@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 
 import type { CanonicalCaseOutput } from "@/shared/adam-types";
 import { renderWithProviders } from "@/shared/test-utils";
@@ -85,11 +85,16 @@ describe("CasePreview M1 exhibit dedupe", () => {
 
     it("renders duplicated inline exhibits only once when dedicated exhibit fields are present", () => {
         renderWithProviders(<CasePreview caseData={caseData} />);
+        const moduleContentPanel = document.getElementById("module-content-panel");
+
+        expect(moduleContentPanel).toBeTruthy();
+
+        const contentPanel = within(moduleContentPanel as HTMLElement);
 
         expect(screen.getByText("BioDigital enfrenta presión en el consejo mientras el churn sigue subiendo.")).toBeTruthy();
         expect(screen.getByText("La CEO debe decidir sin margen de error.")).toBeTruthy();
-        expect(screen.getAllByText("Exhibit 1 — Datos Financieros")).toHaveLength(1);
-        expect(screen.getAllByText("Exhibit 2 — Indicadores Operativos")).toHaveLength(1);
-        expect(screen.getAllByText("Exhibit 3 — Mapa de Stakeholders")).toHaveLength(1);
+        expect(contentPanel.getAllByText("Exhibit 1 — Datos Financieros")).toHaveLength(1);
+        expect(contentPanel.getAllByText("Exhibit 2 — Indicadores Operativos")).toHaveLength(1);
+        expect(contentPanel.getAllByText("Exhibit 3 — Mapa de Stakeholders")).toHaveLength(1);
     });
 });
