@@ -261,6 +261,22 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
+## TODO-027: Hardening del `CASE_WRITER_PROMPT` para prohibir exhibits completos en `doc1_narrativa`
+
+**What:** Ajustar `backend/src/case_generator/prompts.py` para que `CASE_WRITER_PROMPT` prohíba explícitamente reproducir tablas completas de `Exhibit 1`, `Exhibit 2` o `Exhibit 3` dentro de `doc1_narrativa`, limitando su uso a citas y referencias narrativas.
+
+**Why:** El fix frontend del issue de duplicación en M1 ya evita que el preview muestre exhibits repetidos, pero el payload todavía puede contaminarse si el LLM vuelve a incrustar anexos completos dentro de la narrativa. Endurecer el prompt reduce la probabilidad de reintroducir el problema aguas arriba.
+
+**Pros:** Refuerza el contrato semántico entre narrativa y exhibits, reduce ruido en payloads generados y baja la dependencia de guardrails correctivos en frontend.
+
+**Cons:** Toca una superficie sensible de `backend/src/case_generator/prompts.py`, puede requerir recalibrar ejemplos/instrucciones del writer y debería validarse con suites/evals antes de aterrizarlo.
+
+**Context:** Detectado durante el gap analysis del bug de duplicación visual de exhibits en M1 después del cambio de `sanitizeExhibitMarkdown` del issue #173. La investigación mostró que el frontend renderiza exhibits por un canal dedicado (`financialExhibit` / `operatingExhibit` / `stakeholdersExhibit`) y que la duplicación visible puede reaparecer si `doc1_narrativa` vuelve a incluir secciones `### Exhibit ...` completas. Se decidió mantener el fix actual frontend-only y registrar este hardening como follow-up separado.
+
+**Depends on / blocked by:** Mantener verde el baseline actual del preview M1. Requiere definir el alcance de validación de prompts/evals antes de tocar `CASE_WRITER_PROMPT`.
+
+---
+
 ## TODO-014: Lifecycle explícito para el singleton async de checkpoints
 
 **What:** Evaluar si el singleton async lazy de `AsyncConnectionPool` + `AsyncPostgresSaver` + grafo compilado debe migrarse a ownership explícito por `lifespan` en `shared.app` y `shared.worker_app`.

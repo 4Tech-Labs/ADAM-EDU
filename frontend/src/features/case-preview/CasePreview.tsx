@@ -16,6 +16,7 @@ import { Suspense, lazy, useState, useRef, useCallback, useMemo, useEffect, type
 import { usePublishCase } from "@/features/teacher-dashboard/useTeacherDashboard"; // TODO: move usePublishCase to shared/ — cross-feature import accepted per #154
 import { useToast } from "@/shared/Toast";
 import { marked, type Tokens } from "marked";
+import { isMarkdownTableRow } from "./markdownTable";
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -107,6 +108,110 @@ function renderMarkdownWithIds(markdown: string): string {
             return `<${tag} id="${id}" class="scroll-mt-24">${content}</${tag}>`;
         }
     );
+}
+
+type M1DedicatedExhibitKey = "financialExhibit" | "operatingExhibit" | "stakeholdersExhibit";
+type M1DedicatedExhibits = Pick<CanonicalCaseOutput["content"], M1DedicatedExhibitKey>;
+
+const M1_EXHIBIT_SECTIONS: Array<{ key: M1DedicatedExhibitKey; heading: RegExp }> = [
+    { key: "financialExhibit", heading: /^\s*#{1,6}\s*Exhibit\s*1\b/i },
+    { key: "operatingExhibit", heading: /^\s*#{1,6}\s*Exhibit\s*2\b/i },
+    { key: "stakeholdersExhibit", heading: /^\s*#{1,6}\s*Exhibit\s*3\b/i },
+];
+
+const INLINE_TABLE_SEPARATOR = /\|(\s*:?-+:?\s*\|)+/;
+
+function lineLooksLikeMarkdownTable(line: string): boolean {
+    return isMarkdownTableRow(line);
+}
+
+function normalizeMarkdownAfterExhibitRemoval(markdown: string): string {
+    const lines = markdown.split("\n");
+    const normalized: string[] = [];
+    let blankRun = 0;
+
+    for (const line of lines) {
+        if (line.trim() === "") {
+            blankRun += 1;
+            if (blankRun > 2) {
+                continue;
+            }
+        } else {
+            blankRun = 0;
+        }
+
+        normalized.push(line);
+    }
+
+    return normalized.join("\n").trim();
+}
+
+function stripDuplicatedM1ExhibitSections(
+    markdown: string | undefined,
+    dedicatedExhibits: M1DedicatedExhibits,
+): string | undefined {
+    if (!markdown?.trim()) {
+        return markdown;
+    }
+
+    const lines = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    const output: string[] = [];
+    let removedAnySection = false;
+
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const matchedSection = M1_EXHIBIT_SECTIONS.find(
+            ({ key, heading }) => dedicatedExhibits[key]?.trim() && heading.test(line),
+        );
+
+        if (!matchedSection) {
+            output.push(line);
+            continue;
+        }
+
+        if (INLINE_TABLE_SEPARATOR.test(line)) {
+            removedAnySection = true;
+            continue;
+        }
+
+        let cursor = index + 1;
+        while (cursor < lines.length && lines[cursor].trim() === "") {
+            cursor += 1;
+        }
+
+        if (cursor >= lines.length || !lineLooksLikeMarkdownTable(lines[cursor])) {
+            output.push(line);
+            continue;
+        }
+
+        removedAnySection = true;
+        index = cursor;
+
+        while (index + 1 < lines.length) {
+            const nextLine = lines[index + 1];
+
+            if (nextLine.trim() === "") {
+                const afterBlank = lines[index + 2];
+                if (afterBlank && lineLooksLikeMarkdownTable(afterBlank)) {
+                    index += 1;
+                    continue;
+                }
+
+                index += 1;
+                break;
+            }
+
+            if (!lineLooksLikeMarkdownTable(nextLine)) {
+                break;
+            }
+
+            index += 1;
+        }
+    }
+
+    return removedAnySection
+        ? normalizeMarkdownAfterExhibitRemoval(output.join("\n"))
+        : markdown;
 }
 
 // ── Helper: type guard para EDASocraticQuestion ──────────────────────────────
@@ -521,12 +626,17 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
     // renderMarkdownWithIds: para secciones que necesitan anclas de heading (rail)
     // marked simple: para secciones auxiliares (sin nav)
     const md = useMemo(() => {
+        const m1DedicatedExhibits: M1DedicatedExhibits = {
+            financialExhibit: content.financialExhibit,
+            operatingExhibit: content.operatingExhibit,
+            stakeholdersExhibit: content.stakeholdersExhibit,
+        };
         const rich = (s: string | undefined) => s?.trim() ? renderMarkdownWithIds(s) : null;
         const plain = (s: string | undefined) => s?.trim() ? marked(s) as string : null;
         return {
             // Rich: heading IDs inyectados para scroll-spy
-            instructions: rich(content.instructions),
-            narrative: rich(content.narrative),
+            instructions: rich(stripDuplicatedM1ExhibitSections(content.instructions, m1DedicatedExhibits)),
+            narrative: rich(stripDuplicatedM1ExhibitSections(content.narrative, m1DedicatedExhibits)),
             edaReport: rich(content.edaReport),
             m3Content: rich(content.m3Content),
             m4Content: rich(content.m4Content),

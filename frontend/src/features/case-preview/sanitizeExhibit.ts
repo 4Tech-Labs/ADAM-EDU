@@ -13,7 +13,7 @@
  *   [6] Heading immediately adjacent to table (### Exhibit\n| col |)
  *   [7] Blank line(s) trapped between two table rows (premature </table> close)
  */
-const isTableRow = (line: string) => /^\s*\|.+\|/.test(line);
+import { isMarkdownTableRow } from "./markdownTable";
 
 // GFM separator: starts with |, each cell is (optional spaces, optional colon,
 // one or more dashes, optional colon, optional spaces), ends with |
@@ -40,7 +40,7 @@ function expandInlineTable(line: string): string {
 
     const heading = beforeSep.slice(0, firstPipe).trim();
     const headerRow = beforeSep.slice(firstPipe).trim();
-    if (!isTableRow(headerRow)) {
+    if (!isMarkdownTableRow(headerRow)) {
         return line;
     }
 
@@ -115,7 +115,7 @@ export function sanitizeExhibitMarkdown(raw: string): string {
                 if (rawLines[f].trim() !== "") { next = rawLines[f]; break; }
             }
             // Drop the blank line if both neighbours are table rows
-            if (isTableRow(prev) && isTableRow(next)) continue;
+            if (isMarkdownTableRow(prev) && isMarkdownTableRow(next)) continue;
         }
         purged.push(rawLines[i]);
     }
@@ -129,7 +129,7 @@ export function sanitizeExhibitMarkdown(raw: string): string {
         const next = lines[i + 1] ?? "";
 
         // [6] Heading immediately followed by a table row — inject blank line between
-        if (isHeading(line) && isTableRow(next)) {
+        if (isHeading(line) && isMarkdownTableRow(next)) {
             out.push(line);
             out.push("");
             continue;
@@ -139,7 +139,7 @@ export function sanitizeExhibitMarkdown(raw: string): string {
         //     Guard !isTableRow(prev) ensures we only fire at the START of a table
         //     block, not for data rows that follow a separator or another data row
         //     (which would be adjacent after the table-glue pre-pass).
-        if (isTableRow(line) && !isSeparator(line) && prev.trim() !== "" && !isTableRow(prev)) {
+        if (isMarkdownTableRow(line) && !isSeparator(line) && prev.trim() !== "" && !isMarkdownTableRow(prev)) {
             out.push("");
         }
 
@@ -149,11 +149,11 @@ export function sanitizeExhibitMarkdown(raw: string): string {
         //     block; after the table-glue pass adjacent data rows must not trigger
         //     a spurious separator injection.
         if (
-            isTableRow(line) &&
+            isMarkdownTableRow(line) &&
             !isSeparator(line) &&
-            isTableRow(next) &&
+            isMarkdownTableRow(next) &&
             !isSeparator(next) &&
-            !isTableRow(prev)
+            !isMarkdownTableRow(prev)
         ) {
             out.push(line);
             const cols = (line.match(/\|/g) ?? []).length - 1;
@@ -163,7 +163,7 @@ export function sanitizeExhibitMarkdown(raw: string): string {
         }
 
         // [5] Last table row followed by non-table, non-blank content — append blank line
-        if (isTableRow(line) && !isTableRow(next) && next.trim() !== "") {
+        if (isMarkdownTableRow(line) && !isMarkdownTableRow(next) && next.trim() !== "") {
             out.push(line);
             out.push("");
             continue;
@@ -184,7 +184,7 @@ export function sanitizeExhibitMarkdown(raw: string): string {
  */
 export function isRenderableAsTable(text: string): boolean {
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-    const tableLike = lines.filter((l) => /^\|.+\|/.test(l));
+    const tableLike = lines.filter(isMarkdownTableRow);
     const hasSeparator = tableLike.some((l) => /^\|(\s*:?-+:?\s*\|)+$/.test(l));
     return tableLike.length >= 2 && hasSeparator;
 }
