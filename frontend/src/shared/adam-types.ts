@@ -67,6 +67,7 @@ export interface CaseFormData {
     subject: string;
     academicLevel: string;
     targetGroups: string[];
+    targetCourseIds: string[];
     syllabusModule: string;
     topicUnit: string;
     industry: string;
@@ -139,6 +140,7 @@ export interface CanonicalCaseOutput {
 export interface AuthoringJobCreateRequest {
     assignment_title: string;
     course_id: string;
+    target_course_ids: string[];
     subject: string;
     academic_level: string;
     industry: string;
@@ -684,6 +686,8 @@ export interface TeacherCaseDetailResponse {
     available_from: string | null;
     deadline: string | null;
     course_id: string | null;
+    target_course_ids?: string[];
+    course_codes?: string[];
     canonical_output: CanonicalCaseOutput | null;
 }
 
@@ -697,6 +701,7 @@ export const EMPTY_FORM: CaseFormData = {
     subject: "",
     academicLevel: "Pregrado",
     targetGroups: [],
+    targetCourseIds: [],
     syllabusModule: "",
     topicUnit: "",
     industry: "FinTech",

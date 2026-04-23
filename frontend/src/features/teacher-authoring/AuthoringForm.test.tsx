@@ -34,7 +34,7 @@ async function selectOption(
 async function enableSuggestions(user: ReturnType<typeof userEvent.setup>) {
     await selectOption(user, /asignatura/i, /gerencia/i);
     await user.click(screen.getByLabelText(/grupos destino/i));
-    await user.click(await screen.findByRole("button", { name: "Gerencia de Operaciones (GO-101)" }));
+    await user.click(await screen.findByRole("button", { name: "Agregar grupo Gerencia de Operaciones (GO-101)" }));
     await selectOption(user, /m[oó]dulo del syllabus/i, /fundamentos/i);
 }
 
@@ -420,7 +420,7 @@ describe("GroupsCombobox (within AuthoringForm)", () => {
 
         await user.click(screen.getByLabelText(/grupos destino/i));
 
-        expect(await screen.findByRole("button", { name: "Gerencia de Operaciones (GO-101)" })).toBeInTheDocument();
+        expect(await screen.findByRole("button", { name: "Agregar grupo Gerencia de Operaciones (GO-101)" })).toBeInTheDocument();
     });
 
     it("shows empty state when teacher has no courses", async () => {
@@ -441,7 +441,7 @@ describe("GroupsCombobox (within AuthoringForm)", () => {
         renderWithProviders(<AuthoringForm onSubmit={onSubmit} />);
 
         await user.click(screen.getByLabelText(/grupos destino/i));
-        await user.click(await screen.findByRole("button", { name: "Gerencia de Operaciones (GO-101)" }));
+        await user.click(await screen.findByRole("button", { name: "Agregar grupo Gerencia de Operaciones (GO-101)" }));
 
         expect(screen.getByText("Gerencia de Operaciones (GO-101)")).toBeInTheDocument();
         expect(onSubmit).not.toHaveBeenCalled();
@@ -452,17 +452,16 @@ describe("GroupsCombobox (within AuthoringForm)", () => {
         renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
 
         await user.click(screen.getByLabelText(/grupos destino/i));
-        await user.click(await screen.findByRole("button", { name: "Gerencia de Operaciones (GO-101)" }));
+        await user.click(await screen.findByRole("button", { name: "Agregar grupo Gerencia de Operaciones (GO-101)" }));
 
         // Trigger reflects the selection
         expect(screen.getByText(/1 grupo seleccionado/i)).toBeInTheDocument();
 
         // Re-open: the course now appears in the selected section only, not as an addable option
         await user.click(screen.getByLabelText(/grupos destino/i));
-        // Available section is empty; selected section shows the course with checkmark
-        const allMatchingButtons = screen.getAllByRole("button", { name: "Gerencia de Operaciones (GO-101)" });
-        // One inside popover (selected item, removable), one chip below
-        expect(allMatchingButtons).toHaveLength(2);
+        expect(screen.queryByRole("button", { name: "Agregar grupo Gerencia de Operaciones (GO-101)" })).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Quitar selección Gerencia de Operaciones (GO-101)" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Quitar grupo Gerencia de Operaciones (GO-101)" })).toBeInTheDocument();
     });
 
     it("clicking the chip removes the selection", async () => {
@@ -471,10 +470,10 @@ describe("GroupsCombobox (within AuthoringForm)", () => {
 
         // Add the course
         await user.click(screen.getByLabelText(/grupos destino/i));
-        await user.click(await screen.findByRole("button", { name: "Gerencia de Operaciones (GO-101)" }));
+        await user.click(await screen.findByRole("button", { name: "Agregar grupo Gerencia de Operaciones (GO-101)" }));
 
         // Chip should now be visible (popover closed after selection)
-        const chip = screen.getByRole("button", { name: "Gerencia de Operaciones (GO-101)" });
+        const chip = screen.getByRole("button", { name: "Quitar grupo Gerencia de Operaciones (GO-101)" });
         await user.click(chip);
 
         expect(screen.queryByText("Gerencia de Operaciones (GO-101)")).not.toBeInTheDocument();
@@ -795,7 +794,7 @@ describe("Task 3 — sessionStorage persistence", () => {
                 targetGroups: [],
                 studentProfile: "business",
                 industry: "fintech",
-                caseType: "harvard_only",
+                caseType: "harvard_with_eda",
                 notebookToggle: false,
                 suggestedTechniques: [],
                 algoInput: "",
@@ -808,6 +807,7 @@ describe("Task 3 — sessionStorage persistence", () => {
 
         expect(await screen.findByDisplayValue("Escenario restaurado desde storage")).toBeInTheDocument();
         expect(screen.getByDisplayValue("Pregunta restaurada desde storage")).toBeInTheDocument();
+        expect(screen.getByRole("radio", { name: /caso .*an[aá]lisis de datos/i })).toHaveAttribute("aria-checked", "true");
     });
 
     it("writes form state to sessionStorage within 1 second of a field change", async () => {

@@ -204,6 +204,7 @@ class Course(Base):
     course_memberships: Mapped[list["CourseMembership"]] = relationship(back_populates="course")
     syllabus: Mapped["Syllabus | None"] = relationship(back_populates="course", uselist=False)
     assignments: Mapped[list["Assignment"]] = relationship(back_populates="course")
+    assignment_courses: Mapped[list["AssignmentCourse"]] = relationship(back_populates="course")
 
 
 class Invite(Base):
@@ -348,8 +349,32 @@ class Assignment(Base):
 
     teacher: Mapped["User"] = relationship(back_populates="assignments")
     course: Mapped["Course | None"] = relationship(back_populates="assignments")
+    assignment_courses: Mapped[list["AssignmentCourse"]] = relationship(
+        back_populates="assignment",
+        cascade="all, delete-orphan",
+    )
     authoring_jobs: Mapped[list["AuthoringJob"]] = relationship(back_populates="assignment")
     artifacts: Mapped[list["ArtifactManifest"]] = relationship(back_populates="assignment")
+
+
+class AssignmentCourse(Base):
+    """Links a teacher assignment to every target course that receives it."""
+
+    __tablename__ = "assignment_courses"
+    __table_args__ = (
+        UniqueConstraint("assignment_id", "course_id", name="uix_assignment_course"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    assignment_id: Mapped[str] = mapped_column(String(36), ForeignKey("assignments.id"), nullable=False, index=True)
+    course_id: Mapped[str] = mapped_column(Text, ForeignKey("courses.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    assignment: Mapped["Assignment"] = relationship(back_populates="assignment_courses")
+    course: Mapped["Course"] = relationship(back_populates="assignment_courses")
 
 
 class Syllabus(Base):
