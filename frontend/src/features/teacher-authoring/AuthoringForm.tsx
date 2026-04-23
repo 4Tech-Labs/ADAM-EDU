@@ -99,6 +99,7 @@ export function AuthoringForm({
             }
             if (saved.studentProfile === "business" || saved.studentProfile === "ml_ds") setStudentProfile(saved.studentProfile);
             if (typeof saved.industry === "string") setIndustry(saved.industry);
+            if (saved.caseType === "harvard_only" || saved.caseType === "harvard_with_eda") setCaseType(saved.caseType as CaseType);
             if (typeof saved.notebookToggle === "boolean") setNotebookToggle(saved.notebookToggle);
             if (typeof saved.scenarioDescription === "string") setScenarioDescription(saved.scenarioDescription);
             if (typeof saved.guidingQuestion === "string") setGuidingQuestion(saved.guidingQuestion);

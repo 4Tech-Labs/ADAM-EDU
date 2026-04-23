@@ -86,6 +86,7 @@ export function GroupsCombobox({ courses, value, onAdd, onRemove, hasError }: Gr
                                         <button
                                             key={c.id}
                                             type="button"
+                                            aria-label={`Quitar selección ${label}`}
                                             onClick={() => onRemove(c.id)}
                                             className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 text-left"
                                         >
@@ -108,6 +109,7 @@ export function GroupsCombobox({ courses, value, onAdd, onRemove, hasError }: Gr
                                         <button
                                             key={c.id}
                                             type="button"
+                                            aria-label={`Agregar grupo ${label}`}
                                             onClick={() => {
                                                 onAdd(c.id);
                                                 setOpen(false);
@@ -133,6 +135,7 @@ export function GroupsCombobox({ courses, value, onAdd, onRemove, hasError }: Gr
                         <button
                             key={courseId}
                             type="button"
+                            aria-label={`Quitar grupo ${label}`}
                             onClick={() => onRemove(courseId)}
                             className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-[#0144a0] hover:text-[#0144a0]"
                         >
