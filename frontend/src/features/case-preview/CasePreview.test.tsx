@@ -4,6 +4,15 @@ import { fireEvent, screen } from "@testing-library/react";
 import type { CanonicalCaseOutput } from "@/shared/adam-types";
 import { renderWithProviders } from "@/shared/test-utils";
 
+const mockNavigate = vi.fn();
+vi.mock("react-router-dom", async () => {
+    const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+    return {
+        ...actual,
+        useNavigate: () => mockNavigate,
+    };
+});
+
 // ── usePublishCase mock ──────────────────────────────────────────────────────
 const mockMutate = vi.fn();
 vi.mock("@/features/teacher-dashboard/useTeacherDashboard", () => ({
@@ -80,6 +89,7 @@ describe("CasePreview Enviar Caso button", () => {
             writable: true,
         });
         mockMutate.mockReset();
+        mockNavigate.mockReset();
     });
 
     const caseDataWithId: CanonicalCaseOutput = {
@@ -153,5 +163,28 @@ describe("CasePreview Enviar Caso button", () => {
         expect(screen.queryByRole("button", { name: /enviar caso/i })).toBeNull();
         expect(screen.queryByText("¿Confirmar envío?")).toBeNull();
         expect(screen.queryByText(/✓ Caso enviado/)).toBeNull();
+    });
+
+    it("[T8] onSuccess: sidebar CTA changes to 'Volver a Inicio' and navigates to dashboard", () => {
+        mockMutate.mockImplementation((_id: string, { onSuccess }: { onSuccess: () => void }) => {
+            onSuccess();
+        });
+
+        renderWithProviders(
+            <CasePreview caseData={caseDataWithId} onEditParams={vi.fn()} />,
+        );
+
+        expect(screen.getByRole("button", { name: /volver y rehacer/i })).toBeTruthy();
+
+        fireEvent.click(screen.getByRole("button", { name: /enviar caso/i }));
+        fireEvent.click(screen.getByRole("button", { name: /sí, enviar/i }));
+
+        const backToHomeButton = screen.getByRole("button", { name: /volver a inicio/i });
+        expect(backToHomeButton).toBeTruthy();
+        expect(screen.queryByRole("button", { name: /volver y rehacer/i })).toBeNull();
+
+        fireEvent.click(backToHomeButton);
+
+        expect(mockNavigate).toHaveBeenCalledWith("/teacher/dashboard", { replace: true });
     });
 });

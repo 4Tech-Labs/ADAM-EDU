@@ -13,6 +13,7 @@
  */
 
 import { Suspense, lazy, useState, useRef, useCallback, useMemo, useEffect, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { usePublishCase } from "@/features/teacher-dashboard/useTeacherDashboard"; // TODO: move usePublishCase to shared/ — cross-feature import accepted per #154
 import { useToast } from "@/shared/Toast";
 import { marked, type Tokens } from "marked";
@@ -582,6 +583,7 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
     const content = result.content;
     const isEDA = result.caseType === "harvard_with_eda";
     const isMLDS = result.studentProfile === "ml_ds";
+    const navigate = useNavigate();
 
     // ── Módulos visibles según caseType + studentProfile (ISSUE-17) ─────────
     //   harvard_only     → M1, M4(→#2), M5(→#3), M6(→#4)
@@ -795,6 +797,13 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
         onResumeEDA?.();
     }, [onResumeEDA]);
 
+    const handleGoToTeacherDashboard = useCallback(() => {
+        navigate("/teacher/dashboard", { replace: true });
+    }, [navigate]);
+
+    const showEditParamsButton = Boolean(onEditParams) && sendState !== "sent";
+    const showBackToDashboardButton = sendState === "sent";
+
     // ════════════════════════════════════════════════════════════════════════
     // RENDER DE MÓDULOS
     // ════════════════════════════════════════════════════════════════════════
@@ -826,7 +835,15 @@ export function CasePreview({ caseData, onEditParams, isPausedWaitingForApproval
 
                     {/* Header sidebar */}
                     <div className="h-16 flex items-center px-5 border-b border-slate-800 flex-shrink-0">
-                        {onEditParams ? (
+                        {showBackToDashboardButton ? (
+                            <button type="button" onClick={handleGoToTeacherDashboard}
+                                className="w-full flex items-center justify-center gap-2 bg-slate-800/80 hover:bg-[#0144a0] border border-slate-700 hover:border-[#0144a0] text-slate-300 hover:text-white py-2 px-4 rounded-lg text-sm font-semibold transition-all">
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6l-6 6m0 0l6 6m-6-6h16" />
+                                </svg>
+                                Volver a Inicio
+                            </button>
+                        ) : showEditParamsButton ? (
                             <button type="button" onClick={onEditParams}
                                 className="w-full flex items-center justify-center gap-2 bg-slate-800/80 hover:bg-[#0144a0] border border-slate-700 hover:border-[#0144a0] text-slate-300 hover:text-white py-2 px-4 rounded-lg text-sm font-semibold transition-all">
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
