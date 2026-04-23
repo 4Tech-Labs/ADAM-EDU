@@ -47,7 +47,7 @@ describe("DashboardHeader", () => {
         expect(screen.getByText("ADAM")).toBeTruthy();
         expect(screen.getByText("Diseñador de Casos")).toBeTruthy();
         expect(screen.getByText("Julio César Paz")).toBeTruthy();
-        expect(screen.getByText("Docente · Facultad de Administración")).toBeTruthy();
+        expect(screen.getByText("Portal Docente")).toBeTruthy();
         expect(screen.getByLabelText("Notificaciones")).toBeTruthy();
         expect(screen.getByLabelText("Iniciales de Julio César Paz")).toHaveTextContent("JC");
         expect(screen.getByRole("button", { name: "Cerrar sesión" })).toBeTruthy();
