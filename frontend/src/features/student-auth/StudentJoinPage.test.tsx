@@ -6,6 +6,9 @@ import { StudentJoinPage } from "./StudentJoinPage";
 
 vi.mock("@/shared/activationContext");
 vi.mock("@/shared/supabaseClient");
+vi.mock("@/app/auth/useAuth", () => ({
+    useAuth: vi.fn(),
+}));
 vi.mock("react-router-dom", async () => {
     const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
     return { ...actual, useNavigate: vi.fn() };
@@ -18,6 +21,7 @@ vi.mock("@/shared/api", () => ({
             activatePassword: vi.fn(),
             resolveCourseAccess: vi.fn(),
             activateCourseAccessPassword: vi.fn(),
+            enrollWithCourseAccess: vi.fn(),
         },
     },
     ApiError: class ApiError extends Error {
@@ -40,9 +44,47 @@ import {
 } from "@/shared/activationContext";
 import { api } from "@/shared/api";
 import { getSupabaseClient } from "@/shared/supabaseClient";
+import { useAuth } from "@/app/auth/useAuth";
 import { useNavigate } from "react-router-dom";
 
 const mockNavigate = vi.fn();
+const mockRefreshActor = vi.fn().mockResolvedValue(undefined);
+
+function unauthenticatedAuth() {
+    return {
+        session: null,
+        actor: null,
+        loading: false,
+        error: null,
+        signOut: vi.fn(),
+        refreshActor: mockRefreshActor,
+    } as never;
+}
+
+function authenticatedStudentAuth(universityId = "univ-1") {
+    return {
+        session: { access_token: "tok" } as never,
+        actor: {
+            auth_user_id: "user-1",
+            profile: { id: "profile-1", full_name: "Estudiante Test" },
+            memberships: [
+                {
+                    id: "mem-1",
+                    university_id: universityId,
+                    role: "student",
+                    status: "active",
+                    must_rotate_password: false,
+                },
+            ],
+            must_rotate_password: false,
+            primary_role: "student",
+        },
+        loading: false,
+        error: null,
+        signOut: vi.fn(),
+        refreshActor: mockRefreshActor,
+    } as never;
+}
 
 function makeSupabaseMock(
     signInResult: { error: null | { message: string } } = { error: null },
@@ -67,6 +109,7 @@ describe("StudentJoinPage", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         vi.mocked(useNavigate).mockReturnValue(mockNavigate);
+        vi.mocked(useAuth).mockReturnValue(unauthenticatedAuth());
         vi.mocked(readActivationContext).mockReturnValue(null);
         vi.mocked(clearActivationContext).mockImplementation(() => undefined);
         vi.mocked(saveActivationContext).mockImplementation(() => undefined);
@@ -333,5 +376,83 @@ describe("StudentJoinPage", () => {
         expect(supabaseMock.auth.signInWithOAuth).toHaveBeenCalledWith(
             expect.objectContaining({ provider: "azure" }),
         );
+    });
+
+    it("auto-enrolls an already-authenticated student into a second course without showing the form", async () => {
+        vi.mocked(useAuth).mockReturnValue(authenticatedStudentAuth());
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-second",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-2",
+            course_title: "Finanzas II",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password", "microsoft"],
+        });
+        vi.mocked(api.auth.enrollWithCourseAccess).mockResolvedValue({ status: "enrolled" });
+
+        renderPage();
+
+        await waitFor(() => {
+            expect(api.auth.enrollWithCourseAccess).toHaveBeenCalledWith("course-tok-second");
+        });
+        await waitFor(() => {
+            expect(mockRefreshActor).toHaveBeenCalled();
+        });
+        await waitFor(() => {
+            expect(mockNavigate).toHaveBeenCalledWith("/student", { replace: true });
+        });
+        expect(api.auth.activateCourseAccessPassword).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the activation form when an authenticated user lacks a student membership", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            session: { access_token: "tok" } as never,
+            actor: {
+                auth_user_id: "user-2",
+                profile: { id: "profile-2", full_name: "Teacher Test" },
+                memberships: [
+                    {
+                        id: "mem-2",
+                        university_id: "univ-1",
+                        role: "teacher",
+                        status: "active",
+                        must_rotate_password: false,
+                    },
+                ],
+                must_rotate_password: false,
+                primary_role: "teacher",
+            },
+            loading: false,
+            error: null,
+            signOut: vi.fn(),
+            refreshActor: mockRefreshActor,
+        } as never);
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-noskip",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-3",
+            course_title: "Finanzas III",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+
+        renderPage();
+
+        await screen.findByPlaceholderText("tu.correo@universidad.edu");
+        expect(api.auth.enrollWithCourseAccess).not.toHaveBeenCalled();
     });
 });

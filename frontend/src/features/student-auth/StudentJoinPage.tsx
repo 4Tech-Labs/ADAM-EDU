@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import { useAuth } from "@/app/auth/useAuth";
 import { api, ApiError } from "@/shared/api";
 import {
     clearActivationContext,
@@ -80,6 +81,7 @@ function isStudentJoinContext(
 
 export function StudentJoinPage() {
     const navigate = useNavigate();
+    const { session, actor, loading: authLoading, refreshActor } = useAuth();
 
     const [joinContext, setJoinContext] = useState<Extract<ActivationContext, { flow: "student_join_invite" | "student_join_course_access" }> | null>(() => {
         const ctx = readActivationContext();
@@ -90,6 +92,7 @@ export function StudentJoinPage() {
     const [resolvedInvite, setResolvedInvite] = useState<InviteResolveResponse | null>(null);
     const [resolvedCourseAccess, setResolvedCourseAccess] = useState<CourseAccessResolveResponse | null>(null);
     const [resolveError, setResolveError] = useState<string | null>(null);
+    const [autoEnrolling, setAutoEnrolling] = useState(false);
 
     const [email, setEmail] = useState("");
     const [fullName, setFullName] = useState("");
@@ -192,6 +195,49 @@ export function StudentJoinPage() {
         };
     }, [joinContext]);
 
+    // Auto-enroll path: an already-authenticated student opening a second course_access
+    // link. Without this, the page would show the activation form even though the user
+    // is already signed in, and the enrollment would never reach the backend (the new
+    // course_membership row would never be created). See issue #190 follow-up.
+    useEffect(() => {
+        if (authLoading) return;
+        if (!session || !actor) return;
+        if (!joinContext || joinContext.token_kind !== "course_access") return;
+        if (!resolvedCourseAccess) return;
+        const hasActiveStudentMembership = actor.memberships.some(
+            (m) => m.role === "student" && m.status === "active",
+        );
+        if (!hasActiveStudentMembership) return;
+
+        let cancelled = false;
+        setAutoEnrolling(true);
+        api.auth
+            .enrollWithCourseAccess(joinContext.course_access_token)
+            .then(async () => {
+                if (cancelled) return;
+                clearActivationContext();
+                await refreshActor();
+                if (!cancelled) navigate("/student", { replace: true });
+            })
+            .catch((err: unknown) => {
+                if (cancelled) return;
+                // student_membership_required means the active session belongs to a user
+                // without a student membership for this course's university. Fall back to
+                // the activation form so they can complete the proper flow.
+                const apiErr = err as ApiError;
+                if (apiErr?.detail !== "student_membership_required") {
+                    setResolveError(resolveCourseAccessErrorMessage(apiErr));
+                }
+            })
+            .finally(() => {
+                if (!cancelled) setAutoEnrolling(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [authLoading, session, actor, joinContext, resolvedCourseAccess, navigate, refreshActor]);
+
     async function handleMicrosoftJoin() {
         const supabase = getSupabaseClient();
         if (!supabase || !joinContext) return;
@@ -285,6 +331,16 @@ export function StudentJoinPage() {
             <div className="flex flex-col items-center justify-center gap-4 px-4 py-24">
                 <span className="text-sm text-muted-foreground">
                     Verificando acceso...
+                </span>
+            </div>
+        );
+    }
+
+    if (autoEnrolling) {
+        return (
+            <div className="flex flex-col items-center justify-center gap-4 px-4 py-24">
+                <span className="text-sm text-muted-foreground">
+                    Inscribiéndote en el curso...
                 </span>
             </div>
         );
