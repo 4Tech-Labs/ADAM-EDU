@@ -257,12 +257,12 @@ describe("TeacherCoursePage", () => {
             await screen.findByRole("heading", { name: /Syllabus de la asignatura/i }),
         ).toBeTruthy();
         expect(api.teacher.getCourseDetail).toHaveBeenCalledWith("course-1");
-            expect(await screen.findByDisplayValue("GTD-GEME-01-2026")).toBeTruthy();
-            await waitFor(() => {
-                expect(
-                    screen.getByLabelText(/Departamento que la ofrece/i),
-                ).toHaveValue("Gestión de las Organizaciones");
-            });
+        expect(await screen.findByDisplayValue("GTD-GEME-01-2026")).toBeTruthy();
+        await waitFor(() => {
+            expect(
+                screen.getByLabelText(/Departamento que la ofrece/i),
+            ).toHaveValue("Gestión de las Organizaciones");
+        });
     });
 
     it("persists the active tab in the URL", async () => {
