@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from shared.admin_context import AdminContext
 from shared.admin_reads import CourseListItemResponse, get_admin_course_item
 from shared.auth import audit_log, hash_invite_token, normalize_email
+from shared.course_access_schema import CourseAccessLinkRegenerateResponse
 from shared.course_access_links import (
     GeneratedCourseAccessLink,
     create_course_access_link,
@@ -110,12 +111,6 @@ class TeacherInviteResponse(BaseModel):
     email: str
     status: Literal["pending"]
     activation_link: str
-
-
-class CourseAccessLinkRegenerateResponse(BaseModel):
-    course_id: str
-    access_link: str
-    access_link_status: Literal["active"]
 
 
 class AdminResendInviteResponse(BaseModel):

@@ -11,6 +11,7 @@ from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, joinedload, load_only
 
 from shared.auth import CurrentActor, ensure_legacy_teacher_bridge
+from shared.course_access_schema import TeacherCourseAccessLinkResponse
 from shared.models import Assignment, AssignmentCourse, AuthoringJob, Course, CourseAccessLink, CourseMembership, Membership, Syllabus
 from shared.syllabus_schema import (
     TeacherCourseConfigurationResponse,
@@ -151,6 +152,19 @@ def _assignment_course_codes(assignment: Assignment) -> list[str]:
         return [assignment.course.code]
 
     return []
+
+
+def _serialize_teacher_course_configuration(
+    *,
+    access_link_status: str | None,
+    access_link_id: str | None,
+    access_link_created_at: datetime | None,
+) -> TeacherCourseConfigurationResponse:
+    return TeacherCourseConfigurationResponse(
+        access_link_status="active" if access_link_status == "active" else "missing",
+        access_link_id=access_link_id,
+        access_link_created_at=access_link_created_at,
+    )
 
 
 def _serialize_syllabus_response(syllabus: Syllabus | None) -> TeacherSyllabusResponse | None:
@@ -306,11 +320,57 @@ def get_teacher_course_detail(
             saved_at=saved_at,
             saved_by_membership_id=saved_by_membership_id,
         ),
-        configuration=TeacherCourseConfigurationResponse(
-            access_link_status="active" if row["access_link_status"] == "active" else "missing",
+        configuration=_serialize_teacher_course_configuration(
+            access_link_status=row["access_link_status"],
             access_link_id=row["access_link_id"],
             access_link_created_at=row["access_link_created_at"],
         ),
+    )
+
+
+def get_teacher_course_access_link(
+    db: Session,
+    context: TeacherContext,
+    course_id: str,
+) -> TeacherCourseAccessLinkResponse:
+    row = (
+        db.execute(
+            select(
+                Course.id.label("course_id"),
+                CourseAccessLink.id.label("access_link_id"),
+                CourseAccessLink.status.label("access_link_status"),
+                CourseAccessLink.created_at.label("access_link_created_at"),
+            )
+            .select_from(Course)
+            .outerjoin(
+                CourseAccessLink,
+                and_(
+                    CourseAccessLink.course_id == Course.id,
+                    CourseAccessLink.status == "active",
+                ),
+            )
+            .where(
+                Course.id == course_id,
+                Course.university_id == context.university_id,
+                Course.teacher_membership_id == context.teacher_membership_id,
+            )
+            .limit(1)
+        )
+        .mappings()
+        .first()
+    )
+
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="course_not_found")
+
+    configuration = _serialize_teacher_course_configuration(
+        access_link_status=row["access_link_status"],
+        access_link_id=row["access_link_id"],
+        access_link_created_at=row["access_link_created_at"],
+    )
+    return TeacherCourseAccessLinkResponse(
+        course_id=row["course_id"],
+        **configuration.model_dump(),
     )
 
 
