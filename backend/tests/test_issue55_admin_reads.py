@@ -233,7 +233,7 @@ def test_issue55_courses_reflect_second_course_enrollment_for_existing_student(
         headers=_auth_headers(
             auth_headers_factory,
             user_id=student["profile"].id,
-            email="student.second-course-count@example.edu",
+            email="student-second-course-count@example.edu",
         ),
     )
 
