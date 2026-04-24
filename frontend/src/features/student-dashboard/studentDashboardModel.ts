@@ -51,17 +51,6 @@ function isSameCalendarDay(target: Date, reference: Date): boolean {
         && target.getDate() === reference.getDate();
 }
 
-export function getStudentInitials(fullName: string): string {
-    const parts = fullName.trim().split(/\s+/).filter(Boolean);
-    if (parts.length === 0) {
-        return "ES";
-    }
-    if (parts.length === 1) {
-        return parts[0].slice(0, 2).toUpperCase() || "ES";
-    }
-    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-}
-
 export function isPendingStudentCase(caseItem: StudentCaseItem): boolean {
     return caseItem.status !== "closed";
 }
