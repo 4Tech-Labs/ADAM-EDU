@@ -147,6 +147,17 @@ describe("App admin shell layout", () => {
         expect(screen.getByTestId("site-header")).toBeTruthy();
     });
 
+    it("does not render the global SiteHeader on the public landing route", async () => {
+        vi.mocked(useAuth).mockReturnValue(baseContext);
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/"],
+        });
+
+        expect(await screen.findByTestId("app-landing")).toBeTruthy();
+        expect(screen.queryByTestId("site-header")).toBeNull();
+    });
+
     it("does not render the global SiteHeader on /teacher/dashboard", async () => {
         vi.mocked(useAuth).mockReturnValue({
             ...baseContext,
