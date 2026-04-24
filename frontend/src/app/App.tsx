@@ -81,6 +81,7 @@ function RouteFallback() {
 
 function App() {
     const location = useLocation();
+    const isLandingRoute = location.pathname === "/";
     const isAdminDashboardRoute = location.pathname.startsWith("/admin/dashboard");
     const isTeacherShellRoute =
         location.pathname.startsWith("/teacher/dashboard") ||
@@ -92,7 +93,7 @@ function App() {
     return (
         <ToastProvider>
         <div className="flex min-h-screen flex-col bg-bg-page font-sans type-body">
-            {!isAdminDashboardRoute && !isTeacherShellRoute && <SiteHeader />}
+            {!isLandingRoute && !isAdminDashboardRoute && !isTeacherShellRoute && <SiteHeader />}
 
             <main className="flex-1">
                 <Suspense fallback={<RouteFallback />}>
