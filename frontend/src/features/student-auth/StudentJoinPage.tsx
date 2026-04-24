@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/app/auth/useAuth";
@@ -93,6 +93,9 @@ export function StudentJoinPage() {
     const [resolvedCourseAccess, setResolvedCourseAccess] = useState<CourseAccessResolveResponse | null>(null);
     const [resolveError, setResolveError] = useState<string | null>(null);
     const [autoEnrolling, setAutoEnrolling] = useState(false);
+    // Tracks the course_access_token we've already auto-enrolled (or attempted to).
+    // Prevents the effect from re-firing when `actor` mutates after refreshActor().
+    const autoEnrollAttemptedTokenRef = useRef<string | null>(null);
 
     const [email, setEmail] = useState("");
     const [fullName, setFullName] = useState("");
@@ -208,6 +211,11 @@ export function StudentJoinPage() {
             (m) => m.role === "student" && m.status === "active",
         );
         if (!hasActiveStudentMembership) return;
+        // Guard against re-fire: refreshActor() mutates `actor`, which is in this
+        // effect's dep array. Without this sentinel we would POST /enroll twice and
+        // emit a spurious `course_access.enroll` audit-log entry on the second pass.
+        if (autoEnrollAttemptedTokenRef.current === joinContext.course_access_token) return;
+        autoEnrollAttemptedTokenRef.current = joinContext.course_access_token;
 
         let cancelled = false;
         setAutoEnrolling(true);
