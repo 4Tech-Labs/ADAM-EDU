@@ -133,7 +133,7 @@ export function formatCourseDeadlineLabel(course: StudentCourseItem): string | n
     }
     if (isSameCalendarDay(deadline, tomorrow)) {
         const timeLabel = formatTime(course.next_deadline);
-        return `${course.next_case_title} cierra manana${timeLabel ? ` ${timeLabel}` : ""}`;
+        return `${course.next_case_title} cierra mañana${timeLabel ? ` ${timeLabel}` : ""}`;
     }
 
     return `${course.next_case_title} cierra ${formatDateTime(course.next_deadline)}`;
@@ -159,12 +159,12 @@ export function formatCaseStatusMeta(caseItem: StudentCaseItem): { label: string
         }
         if (isSameCalendarDay(deadline, tomorrow)) {
             return {
-                label: `Vence manana${timeLabel ? ` ${timeLabel}` : ""}`,
+                label: `Vence mañana${timeLabel ? ` ${timeLabel}` : ""}`,
                 tone: "amber",
             };
         }
 
-        return { label: `Disponible hasta ${formatDateTime(caseItem.deadline)}`, tone: "blue" };
+        return { label: `Disponible hasta el ${formatDateTime(caseItem.deadline)}`, tone: "blue" };
     }
 
     if (caseItem.status === "upcoming") {
