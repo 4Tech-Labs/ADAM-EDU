@@ -198,6 +198,90 @@ def test_issue88_teacher_courses_returns_assigned_courses_with_student_counts(
     }
 
 
+def test_issue88_teacher_courses_reflect_second_course_enrollment_for_existing_student(
+    client,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000000882"
+    teacher_user_id = str(uuid.uuid4())
+    teacher_email = "teacher-second-course@example.edu"
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email=teacher_email,
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Second Course",
+    )
+    first_course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Finanzas I",
+        code="FIN-111",
+    )
+    second_course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Finanzas II",
+        code="FIN-222",
+    )
+    student_user_id = str(uuid.uuid4())
+    student_email = "student-second-course@example.edu"
+    student = seed_identity(
+        user_id=student_user_id,
+        email=student_email,
+        role="student",
+        university_id=university_id,
+        full_name="Student Second Course",
+    )
+    seed_course_membership(course_id=first_course.id, membership_id=student["membership"].id)
+    _, second_course_token = seed_course_access_link(course_id=second_course.id, status="active")
+
+    enroll_response = client.post(
+        "/api/course-access/enroll",
+        json={"course_access_token": second_course_token},
+        headers=_auth_headers(auth_headers_factory, user_id=student_user_id, email=student_email),
+    )
+
+    assert enroll_response.status_code == 200, enroll_response.text
+    assert enroll_response.json() == {"status": "enrolled"}
+
+    response = client.get(
+        "/api/teacher/courses",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_user_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "courses": [
+            {
+                "id": first_course.id,
+                "title": "Finanzas I",
+                "code": "FIN-111",
+                "semester": "2026-I",
+                "academic_level": "Pregrado",
+                "status": "active",
+                "students_count": 1,
+                "active_cases_count": 0,
+            },
+            {
+                "id": second_course.id,
+                "title": "Finanzas II",
+                "code": "FIN-222",
+                "semester": "2026-I",
+                "academic_level": "Pregrado",
+                "status": "active",
+                "students_count": 1,
+                "active_cases_count": 0,
+            },
+        ],
+        "total": 2,
+    }
+
+
 def test_issue88_teacher_courses_counts_only_active_published_assignments_per_course(
     client,
     db,

@@ -236,6 +236,110 @@ def test_issue57_course_access_enroll_password_rotation_required_precedes_studen
     assert mock_audit.call_args.kwargs["reason"] == "password_rotation_required"
 
 
+def test_issue57_course_access_enroll_rejects_when_course_is_at_capacity(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.capacity@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    enrolled_student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student.capacity.full@example.edu",
+        role="student",
+        university_id=university_id,
+    )
+    blocked_student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student.capacity.blocked@example.edu",
+        role="student",
+        university_id=university_id,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Lleno",
+        code="COURSE-ACCESS-CAP-001",
+        max_students=1,
+    )
+    seed_course_membership(course_id=course.id, membership_id=enrolled_student["membership"].id)
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/enroll",
+        json=_resolve_payload(token),
+        headers=auth_headers_factory(
+            sub=blocked_student["profile"].id,
+            email="student.capacity.blocked@example.edu",
+        ),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "course_capacity_reached"
+
+    db.expire_all()
+    blocked_enrollment = db.scalar(
+        select(CourseMembership.id).where(
+            CourseMembership.course_id == course.id,
+            CourseMembership.membership_id == blocked_student["membership"].id,
+        )
+    )
+    assert blocked_enrollment is None
+
+
+def test_issue57_course_access_enroll_keeps_same_course_idempotence_when_course_is_full(
+    client,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.capacity.idempotent@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student.capacity.idempotent@example.edu",
+        role="student",
+        university_id=university_id,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Idempotente",
+        code="COURSE-ACCESS-CAP-002",
+        max_students=1,
+    )
+    seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/enroll",
+        json=_resolve_payload(token),
+        headers=auth_headers_factory(
+            sub=student["profile"].id,
+            email="student.capacity.idempotent@example.edu",
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "already_enrolled"}
+
+
 @pytest.mark.shared_db_commit_visibility
 def test_issue57_course_access_enroll_is_idempotent_under_concurrency(
     client,
@@ -291,6 +395,68 @@ def test_issue57_course_access_enroll_is_idempotent_under_concurrency(
     assert len(course_memberships) == 1
 
 
+def test_issue57_course_access_enrolls_existing_student_in_second_course(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.second-course@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student.second-course@example.edu",
+        role="student",
+        university_id=university_id,
+    )
+    first_course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Uno",
+        code="COURSE-ACCESS-004A",
+    )
+    second_course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Dos",
+        code="COURSE-ACCESS-004B",
+    )
+    db.add(CourseMembership(course_id=first_course.id, membership_id=student["membership"].id))
+    db.commit()
+
+    _, second_course_token = seed_course_access_link(course_id=second_course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/enroll",
+        json=_resolve_payload(second_course_token),
+        headers=auth_headers_factory(
+            sub=student["profile"].id,
+            email="student.second-course@example.edu",
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "enrolled"}
+
+    db.expire_all()
+    course_memberships = db.scalars(
+        select(CourseMembership).where(
+            CourseMembership.membership_id == student["membership"].id,
+        )
+    ).all()
+    assert {course_membership.course_id for course_membership in course_memberships} == {
+        first_course.id,
+        second_course.id,
+    }
+
+
 def test_issue57_course_access_activate_password_creates_membership_and_enrollment(
     client,
     db,
@@ -341,6 +507,56 @@ def test_issue57_course_access_activate_password_creates_membership_and_enrollme
         )
     )
     assert enrollment is not None
+
+
+def test_issue57_course_access_activate_password_rejects_when_course_is_at_capacity(
+    client,
+    db,
+    fake_admin_client,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    seed_course_access_link,
+) -> None:
+    university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.capacity.password@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    enrolled_student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student.capacity.password.full@example.edu",
+        role="student",
+        university_id=university_id,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Password Full",
+        code="COURSE-ACCESS-CAP-003",
+        max_students=1,
+    )
+    seed_course_membership(course_id=course.id, membership_id=enrolled_student["membership"].id)
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/activate/password",
+        json=_activate_password_payload(token, email="student.capacity.password.blocked@example.edu"),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "course_capacity_reached"
+    assert "student.capacity.password.blocked@example.edu" not in fake_admin_client.users_by_email
+
+    memberships = db.scalars(
+        select(Membership).where(
+            Membership.university_id == university_id,
+            Membership.role == "student",
+        )
+    ).all()
+    assert len(memberships) == 1
 
 
 def test_issue57_course_access_activate_password_returns_idempotent_response_for_existing_activation(
@@ -486,6 +702,192 @@ def test_issue57_course_access_activate_complete_creates_membership_for_existing
         )
     )
     assert enrollment is not None
+
+
+def test_issue57_course_access_activate_complete_enrolls_existing_student_in_second_course(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.complete.second-course@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student.complete.second-course@example.edu",
+        role="student",
+        university_id=university_id,
+        full_name="Estudiante Complete Second Course",
+    )
+    first_course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Complete Uno",
+        code="COURSE-ACCESS-006C",
+    )
+    second_course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Complete Dos",
+        code="COURSE-ACCESS-006D",
+    )
+    db.add(CourseMembership(course_id=first_course.id, membership_id=student["membership"].id))
+    db.commit()
+
+    _, second_course_token = seed_course_access_link(course_id=second_course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/activate/complete",
+        json=_resolve_payload(second_course_token),
+        headers=auth_headers_factory(
+            sub=student["profile"].id,
+            email="student.complete.second-course@example.edu",
+            claims={"user_metadata": {"full_name": "Estudiante Complete Second Course"}},
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "activated"}
+
+    db.expire_all()
+    course_memberships = db.scalars(
+        select(CourseMembership).where(
+            CourseMembership.membership_id == student["membership"].id,
+        )
+    ).all()
+    assert {course_membership.course_id for course_membership in course_memberships} == {
+        first_course.id,
+        second_course.id,
+    }
+
+
+def test_issue57_course_access_activate_complete_rejects_when_course_is_at_capacity(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.complete.capacity@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    enrolled_student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student.complete.capacity.full@example.edu",
+        role="student",
+        university_id=university_id,
+    )
+    blocked_student_id = str(uuid.uuid4())
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Complete Full",
+        code="COURSE-ACCESS-CAP-004",
+        max_students=1,
+    )
+    seed_course_membership(course_id=course.id, membership_id=enrolled_student["membership"].id)
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/activate/complete",
+        json=_resolve_payload(token),
+        headers=auth_headers_factory(
+            sub=blocked_student_id,
+            email="student.complete.capacity.blocked@example.edu",
+            claims={"user_metadata": {"full_name": "Blocked Complete Student"}},
+        ),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "course_capacity_reached"
+
+    blocked_membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == blocked_student_id,
+            Membership.university_id == university_id,
+            Membership.role == "student",
+        )
+    )
+    assert blocked_membership is None
+
+
+def test_issue57_course_access_activate_oauth_complete_rejects_when_course_is_at_capacity(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.oauth.capacity@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    enrolled_student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student.oauth.capacity.full@universidad.edu",
+        role="student",
+        university_id=university_id,
+    )
+    blocked_student_id = str(uuid.uuid4())
+    db.add(
+        UniversitySsoConfig(
+            university_id=university_id,
+            provider="azure",
+            azure_tenant_id="azure-tenant-capacity",
+            client_id="client-id-capacity",
+            enabled=True,
+        )
+    )
+    db.commit()
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso OAuth Full",
+        code="COURSE-ACCESS-CAP-005",
+        max_students=1,
+    )
+    seed_course_membership(course_id=course.id, membership_id=enrolled_student["membership"].id)
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/activate/oauth/complete",
+        json=_resolve_payload(token),
+        headers=auth_headers_factory(
+            sub=blocked_student_id,
+            email="student.oauth.capacity.blocked@universidad.edu",
+            claims={"user_metadata": {"full_name": "Blocked OAuth Student"}},
+        ),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "course_capacity_reached"
+
+    blocked_membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == blocked_student_id,
+            Membership.university_id == university_id,
+            Membership.role == "student",
+        )
+    )
+    assert blocked_membership is None
 
 
 def test_issue57_course_access_activate_password_requires_email_and_full_name(

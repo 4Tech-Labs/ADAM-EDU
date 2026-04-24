@@ -5,7 +5,7 @@ from typing import Literal, cast
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from shared import auth as auth_helpers
@@ -196,6 +196,49 @@ def _get_student_membership_id(actor: CurrentActor, university_id: str) -> str:
     )
 
 
+def _ensure_course_capacity_available(
+    db: Session,
+    *,
+    course_id: str,
+    membership_id: str | None = None,
+) -> None:
+    course = db.scalar(
+        select(Course).where(Course.id == course_id).with_for_update()
+    )
+    if course is None:  # pragma: no cover
+        raise RuntimeError("course_access_course_missing")
+
+    if membership_id is not None:
+        existing_course_membership = db.scalar(
+            select(CourseMembership.id).where(
+                CourseMembership.course_id == course_id,
+                CourseMembership.membership_id == membership_id,
+            )
+        )
+        if existing_course_membership is not None:
+            return
+
+    enrolled_students = int(
+        db.scalar(
+            select(func.count())
+            .select_from(CourseMembership)
+            .join(Membership, CourseMembership.membership_id == Membership.id)
+            .where(
+                CourseMembership.course_id == course_id,
+                Membership.university_id == course.university_id,
+                Membership.role == "student",
+                Membership.status == "active",
+            )
+        )
+        or 0
+    )
+    if enrolled_students >= course.max_students:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="course_capacity_reached",
+        )
+
+
 def _ensure_oauth_allowed(context: CourseAccessContext) -> None:
     if "microsoft" not in context.allowed_auth_methods:
         raise HTTPException(
@@ -286,6 +329,26 @@ def enroll_with_course_access(
 
     ensure_email_domain_allowed(db, context.course.university_id, actor.email)
     membership_id = _get_student_membership_id(actor, context.course.university_id)
+    try:
+        _ensure_course_capacity_available(
+            db,
+            course_id=context.course.id,
+            membership_id=membership_id,
+        )
+    except HTTPException as exc:
+        audit_log(
+            "course_access.enroll",
+            "denied",
+            auth_user_id=actor.auth_user_id,
+            university_id=context.course.university_id,
+            course_id=context.course.id,
+            link_id=context.link.id,
+            membership_id=membership_id,
+            token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+            http_status=exc.status_code,
+            reason=str(exc.detail),
+        )
+        raise
     _, created = ensure_course_membership(
         db,
         course_id=context.course.id,
@@ -379,6 +442,25 @@ def activate_course_access_password(
             status_code=status.HTTP_409_CONFLICT,
             detail="account_exists_sign_in_required",
         )
+
+    try:
+        _ensure_course_capacity_available(
+            db,
+            course_id=context.course.id,
+        )
+    except HTTPException as exc:
+        audit_log(
+            "course_access.activate_password",
+            "denied",
+            auth_user_id=existing_user.id if existing_user is not None else None,
+            university_id=context.course.university_id,
+            course_id=context.course.id,
+            link_id=context.link.id,
+            token_hash_prefix=_course_access_hash_prefix(request.course_access_token),
+            http_status=exc.status_code,
+            reason=str(exc.detail),
+        )
+        raise
 
     created_new_user = False
     auth_user = existing_user
@@ -516,6 +598,34 @@ def _activate_course_access_authenticated(
             reason="already_activated",
         )
         return CourseAccessActivateCompleteResponse(status="activated")
+
+    existing_membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == identity.auth_user_id,
+            Membership.university_id == context.course.university_id,
+            Membership.role == "student",
+            Membership.status == "active",
+        )
+    )
+    try:
+        _ensure_course_capacity_available(
+            db,
+            course_id=context.course.id,
+            membership_id=existing_membership.id if existing_membership is not None else None,
+        )
+    except HTTPException as exc:
+        audit_log(
+            event,
+            "denied",
+            auth_user_id=identity.auth_user_id,
+            university_id=context.course.university_id,
+            course_id=context.course.id,
+            link_id=context.link.id,
+            token_hash_prefix=_course_access_hash_prefix(course_access_token),
+            http_status=exc.status_code,
+            reason=str(exc.detail),
+        )
+        raise
 
     try:
         ensure_profile(

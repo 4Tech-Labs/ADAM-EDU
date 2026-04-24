@@ -6,6 +6,8 @@ import { queryKeys } from "@/shared/queryKeys";
 
 import { useCaseDetail, usePublishCase, useTeacherCases, useTeacherCourses, useUpdateDeadline } from "./useTeacherDashboard";
 
+const DASHBOARD_REFRESH_INTERVAL_MS = 5_000;
+
 vi.mock("@tanstack/react-query", () => ({
     useQuery: vi.fn(),
     useMutation: vi.fn(),
@@ -45,6 +47,8 @@ describe("useTeacherDashboard", () => {
             queryFn: expect.any(Function),
             staleTime: 30_000,
             refetchOnWindowFocus: "always",
+            refetchInterval: DASHBOARD_REFRESH_INTERVAL_MS,
+            refetchIntervalInBackground: false,
         });
 
         const options = vi.mocked(useQuery).mock.calls[0]?.[0] as unknown as {

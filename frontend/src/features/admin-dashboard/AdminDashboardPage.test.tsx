@@ -42,6 +42,7 @@ import { renderWithProviders } from "@/shared/test-utils";
 
 const signOut = vi.fn();
 const nativeFireEventChange = fireEvent.change.bind(fireEvent);
+const DASHBOARD_REFRESH_INTERVAL_MS = 5_000;
 
 const summaryResponse: AdminDashboardSummaryResponse = {
     active_courses: 2,
@@ -777,7 +778,7 @@ describe("AdminDashboardPage", () => {
         });
     });
 
-    it("auto-refreshes the summary every 30 seconds while the dashboard stays open", async () => {
+    it("auto-refreshes the summary every 5 seconds while the dashboard stays open", async () => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
         vi.mocked(api.admin.getDashboardSummary)
             .mockResolvedValueOnce(summaryResponse)
@@ -790,11 +791,38 @@ describe("AdminDashboardPage", () => {
         await screen.findByText("Directorio de Cursos");
 
         await act(async () => {
-            await vi.advanceTimersByTimeAsync(30_000);
+            await vi.advanceTimersByTimeAsync(DASHBOARD_REFRESH_INTERVAL_MS);
         });
 
         expect(await screen.findByText("78%")).toBeTruthy();
         expect(api.admin.getDashboardSummary).toHaveBeenCalledTimes(2);
+    }, 20_000);
+
+    it("auto-refreshes the courses table every 5 seconds while the dashboard stays open", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        vi.mocked(api.admin.listCourses)
+            .mockResolvedValueOnce(coursesResponse)
+            .mockResolvedValueOnce({
+                ...coursesResponse,
+                items: [
+                    {
+                        ...activeCourse,
+                        students_count: 17,
+                        occupancy_percent: 68,
+                    },
+                    inactiveCourse,
+                ],
+            });
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(DASHBOARD_REFRESH_INTERVAL_MS);
+        });
+
+        expect(await screen.findByText("68%")).toBeTruthy();
+        expect(api.admin.listCourses).toHaveBeenCalledTimes(2);
     }, 20_000);
 
     it("keeps the current dashboard mounted while a focus revalidation is pending and updates KPIs in place", async () => {

@@ -4,12 +4,16 @@ import { api } from "@/shared/api";
 import type { DeadlineUpdateRequest } from "@/shared/adam-types";
 import { queryKeys } from "@/shared/queryKeys";
 
+const DASHBOARD_REFRESH_INTERVAL_MS = 5_000;
+
 export function useTeacherCourses() {
     return useQuery({
         queryKey: queryKeys.teacher.courses(),
         queryFn: () => api.teacher.getCourses(),
         staleTime: 30_000,
         refetchOnWindowFocus: "always",
+        refetchInterval: DASHBOARD_REFRESH_INTERVAL_MS,
+        refetchIntervalInBackground: false,
     });
 }
 

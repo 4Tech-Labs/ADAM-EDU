@@ -92,6 +92,7 @@ interface InviteSuccessState {
 const ALL_FILTER_VALUE = "all";
 const UI_UNSET_SELECT_VALUE = "__unset_select_value__";
 const UI_UNASSIGNED_TEACHER_VALUE = "__unassigned_teacher_value__";
+const DASHBOARD_REFRESH_INTERVAL_MS = 5_000;
 
 export function AdminDashboardPage() {
     const { actor, signOut } = useAuth();
@@ -133,7 +134,7 @@ export function AdminDashboardPage() {
         queryKey: queryKeys.admin.summary(),
         queryFn: () => api.admin.getDashboardSummary(),
         staleTime: 30_000,
-        refetchInterval: 30_000,
+        refetchInterval: DASHBOARD_REFRESH_INTERVAL_MS,
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: "always",
     });
@@ -142,6 +143,8 @@ export function AdminDashboardPage() {
         queryFn: () => api.admin.listCourses(courseFilters),
         staleTime: 30_000,
         placeholderData: keepPreviousData,
+        refetchInterval: DASHBOARD_REFRESH_INTERVAL_MS,
+        refetchIntervalInBackground: false,
         refetchOnWindowFocus: "always",
     });
     const teacherOptionsQuery = useQuery({
