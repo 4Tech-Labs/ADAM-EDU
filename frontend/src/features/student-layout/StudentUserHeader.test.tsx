@@ -74,7 +74,7 @@ describe("StudentUserHeader", () => {
         renderWithProviders(<StudentUserHeader />);
 
         expect(screen.getByText("Mateo Vargas")).toBeTruthy();
-        expect(screen.getByText("Estudiante - Pregrado")).toBeTruthy();
+        expect(screen.getByText("Portal Estudiante")).toBeTruthy();
         expect(screen.getByLabelText("Iniciales de Mateo Vargas")).toHaveTextContent("MV");
     });
 });

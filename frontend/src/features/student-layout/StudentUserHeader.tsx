@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "@/app/auth/useAuth";
 
 const STUDENT_NAME_FALLBACK = "Estudiante";
-const STUDENT_SUBTITLE = "Estudiante - Pregrado";
+const STUDENT_SUBTITLE = "Portal Estudiante";
 
 function getStudentInitials(fullName: string): string {
     const parts = fullName.trim().split(/\s+/).filter(Boolean);
