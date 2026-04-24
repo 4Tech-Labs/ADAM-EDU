@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ADAM-EDU — Selecciona tu perfil</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+  <style>
+    /* ─── DESIGN TOKENS ─── */
+    :root {
+      --primary:         #0144A0;
+      --primary-hover:   #012F6E;
+      --primary-dark:    #011E4A;
+      --primary-light:   #0155C8;
+      --primary-faint:   #E8F0FB;
+      --primary-muted:   #C5D8F5;
+
+      --white:           #FFFFFF;
+      --bg:              #F4F7FD;
+      --surface:         #FFFFFF;
+      --surface-2:       #F8FAFF;
+      --border:          rgba(1, 68, 160, 0.10);
+      --border-strong:   rgba(1, 68, 160, 0.18);
+
+      --text:            #0F1F3D;
+      --text-muted:      #4A5C7A;
+      --text-faint:      #8B9BB8;
+      --text-inverse:    #FFFFFF;
+
+      --radius-sm:       0.375rem;
+      --radius-md:       0.625rem;
+      --radius-lg:       1rem;
+      --radius-xl:       1.5rem;
+      --radius-full:     9999px;
+
+      --shadow-sm:  0 1px 3px rgba(1,68,160,0.08), 0 1px 2px rgba(1,68,160,0.04);
+      --shadow-md:  0 4px 16px rgba(1,68,160,0.10), 0 2px 6px rgba(1,68,160,0.06);
+      --shadow-lg:  0 12px 40px rgba(1,68,160,0.14), 0 4px 12px rgba(1,68,160,0.08);
+      --shadow-card:0 2px 8px rgba(1,68,160,0.07), 0 8px 24px rgba(1,68,160,0.05);
+      --shadow-card-hover: 0 8px 32px rgba(1,68,160,0.16), 0 2px 8px rgba(1,68,160,0.10);
+
+      --transition: 200ms cubic-bezier(0.16, 1, 0.3, 1);
+
+      --font-display: 'Instrument Serif', Georgia, serif;
+      --font-body:    'Inter', 'Helvetica Neue', sans-serif;
+
+      --text-xs:   clamp(0.75rem,  0.7rem  + 0.25vw, 0.875rem);
+      --text-sm:   clamp(0.875rem, 0.8rem  + 0.35vw, 1rem);
+      --text-base: clamp(1rem,     0.95rem + 0.25vw, 1.125rem);
+      --text-lg:   clamp(1.125rem, 1rem    + 0.75vw, 1.5rem);
+      --text-xl:   clamp(1.5rem,   1.2rem  + 1.25vw, 2.25rem);
+    }
+
+    /* ─── RESET ─── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html {
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+      scroll-behavior: smooth;
+    }
+    body {
+      min-height: 100dvh;
+      font-family: var(--font-body);
+      font-size: var(--text-base);
+      color: var(--text);
+      background: var(--bg);
+      overflow: hidden;
+    }
+    img { display: block; max-width: 100%; }
+    button { cursor: pointer; font: inherit; border: none; background: none; }
+
+    /* ─── LAYOUT ─── */
+    .page {
+      display: grid;
+      grid-template-columns: 5fr 7fr;
+      min-height: 100dvh;
+    }
+
+    /* ─── LEFT PANEL ─── */
+    .left-panel {
+      position: relative;
+      background: var(--primary-dark);
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: 0;
+      padding: 3.5rem 2.5rem 3.5rem 5.5rem;
+      overflow: hidden;
+    }
+
+    /* Geometric background shapes */
+    .left-panel::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 20% 80%, rgba(1,85,200,0.35) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 50% at 90% 10%, rgba(1,68,160,0.5) 0%, transparent 55%);
+      pointer-events: none;
+    }
+    .left-panel::after {
+      content: '';
+      position: absolute;
+      top: -10%;
+      right: -15%;
+      width: 70%;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      border: 1.5px solid rgba(255,255,255,0.06);
+      pointer-events: none;
+    }
+
+    /* Grid lines decoration */
+    .left-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 48px 48px;
+      pointer-events: none;
+    }
+
+    /* Decorative circles */
+    .circle-1, .circle-2, .circle-3 {
+      position: absolute;
+      border-radius: 50%;
+      pointer-events: none;
+    }
+    .circle-1 {
+      width: 320px; height: 320px;
+      bottom: -80px; left: -80px;
+      border: 1.5px solid rgba(255,255,255,0.05);
+    }
+    .circle-2 {
+      width: 180px; height: 180px;
+      bottom: 60px; left: 0px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .circle-3 {
+      width: 100px; height: 100px;
+      top: 40%;
+      right: 10%;
+      border: 1px solid rgba(255,255,255,0.04);
+      background: rgba(255,255,255,0.02);
+    }
+
+    .left-top {
+      position: relative;
+      z-index: 1;
+    }
+
+    .brand-logo {
+      display: flex;
+      align-items: center;
+      gap: 0.9rem;
+      margin-bottom: 0;
+    }
+
+    .logo-mark {
+      position: relative;
+      width: 50px;
+      height: 50px;
+      background: linear-gradient(145deg, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0.07) 100%);
+      border: 1.5px solid rgba(255,255,255,0.25);
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(16px);
+      box-shadow:
+        0 4px 16px rgba(0,0,0,0.22),
+        inset 0 1px 0 rgba(255,255,255,0.20),
+        inset 0 -1px 0 rgba(0,0,0,0.10);
+      flex-shrink: 0;
+    }
+
+    .logo-mark::after {
+      content: '';
+      position: absolute;
+      inset: 3px;
+      border-radius: 10px;
+      background: linear-gradient(145deg, rgba(255,255,255,0.10) 0%, transparent 55%);
+      pointer-events: none;
+    }
+
+    .brand-wordmark {
+      display: flex;
+      flex-direction: column;
+      line-height: 1;
+      gap: 3px;
+    }
+    .brand-name-top {
+      font-family: var(--font-body);
+      font-size: 1.35rem;
+      font-weight: 800;
+      color: white;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      line-height: 1;
+      margin-bottom: 0.15rem;
+    }
+    .brand-name-sub {
+      font-family: var(--font-body);
+      font-size: 0.6rem;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.65);
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+
+    .left-center {
+      position: relative;
+      z-index: 1;
+      margin-top: clamp(2.5rem, 8vh, 5rem);
+    }
+
+    .left-tagline {
+      font-family: var(--font-display);
+      font-size: clamp(2rem, 2.5vw + 0.5rem, 3rem);
+      font-style: italic;
+      color: white;
+      line-height: 1.2;
+      margin-bottom: 1.25rem;
+      letter-spacing: -0.01em;
+    }
+    .left-tagline span {
+      color: rgba(211, 214, 216, 0.832);
+    }
+
+    .left-description {
+      /* 1. Un tamaño un poco más legible */
+      font-size: 1rem; 
+      
+      /* 2. Color blanco más vibrante para que no se pierda en el azul */
+      color: rgba(255, 255, 255, 0.85); 
+      
+      /* 3. Aumentamos el interlineado para que el bloque "respire" */
+      line-height: 1.7;
+      
+      /* 4. Un poco más de ancho para evitar saltos de línea bruscos */
+      max-width: 45ch; 
+      
+      /* 5. Peso 400 (Regular) es mejor para textos largos sobre fondos oscuros */
+      font-weight: 400; 
+      
+      /* 6. Un toque de espaciado entre letras para modernizarlo */
+      letter-spacing: 0.01em;
+      
+      /* 7. Sutil sombra de texto para que las letras floten sobre el fondo */
+      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    .left-description strong {
+      color: #ffffff; /* Blanco puro para resaltar */
+      font-weight: 600;
+    }
+
+    .left-description span {
+      color: #69bbea; /* Un azul cielo muy suave que evoca tecnología */
+      font-weight: 500;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    /* Stats row */
+    .stats-row {
+      display: flex;
+      gap: 2rem;
+      margin-top: 2.5rem;
+    }
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+    .stat-number {
+      font-size: var(--text-lg);
+      font-weight: 700;
+      color: white;
+      letter-spacing: -0.02em;
+    }
+    .stat-label {
+      font-size: var(--text-xs);
+      color: rgba(255,255,255,0.45);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .left-bottom {
+      position: relative;
+      z-index: 1;
+    }
+
+
+
+    /* ─── RIGHT PANEL ─── */
+    .right-panel {
+      background: var(--surface);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 3.5rem;
+      position: relative;
+    }
+
+    /* Subtle background texture */
+    .right-panel::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 50% at 100% 0%, rgba(1,68,160,0.04) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 0% 100%, rgba(1,68,160,0.03) 0%, transparent 50%);
+      pointer-events: none;
+    }
+
+    .right-content {
+      width: 100%;
+      max-width: 400px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .right-header {
+      display: flex;
+      flex-direction: column;
+      align-items: center; /* Centra los elementos horizontalmente */
+      text-align: center;  /* Centra el texto interno */
+      margin-bottom: 2.5rem; /* Da respiro antes de mostrar las tarjetas */
+    }
+
+
+
+    .right-title {
+      font-family: var(--font-body);
+      font-size: var(--text-xl);
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.15;
+      letter-spacing: -0.025em;
+      margin-bottom: 0.5rem;
+    }
+
+    .right-subtitle {
+      font-size: 1rem;
+      color: #6B7280;
+      max-width: 380px; 
+      line-height: 1.7;
+      font-weight: 500;
+    }
+
+    /* ─── ROLE CARDS ─── */
+    .roles-list {
+      display: grid;
+      grid-auto-rows: 1fr;
+      gap: 1rem;
+    }
+
+    .role-card {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+      padding: 1.25rem 1.5rem;
+      
+      /* EL CAMBIO ESTÁ AQUÍ: Degradado lineal en lugar de color sólido */
+      /* Inicia con un azul ligeramente más vibrante y termina en tu azul oscuro original */
+      background: linear-gradient(135deg, #0144a0 0%, #0b5edd 100%); 
+      
+      border: 1.5px solid transparent; 
+      border-radius: var(--radius-lg, 12px);
+      cursor: pointer;
+      text-align: left;
+      width: 100%;
+      box-shadow: 0 6px 16px rgba(1, 68, 160, 0.2); /* Sombra un poco más suave */
+      overflow: hidden;
+      text-decoration: none;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
+    }
+
+    .role-card:hover {
+      /* En el hover, oscurecemos todo el degradado para dar el efecto de "presionado" o interactuado */
+      background: linear-gradient(135deg, #012b68 0%, #0144a0 100%); 
+      
+      box-shadow: 0 10px 24px rgba(1, 68, 160, 0.35); 
+      transform: translateY(-2px); 
+    }
+
+    .role-card:active { 
+      transform: translateY(0px); 
+    }
+
+    .role-icon-wrap {
+      flex-shrink: 0;
+      width: 48px;
+      height: 48px;
+      border-radius: var(--radius-md, 8px);
+      background: rgba(255, 255, 255, 0.15); 
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.25); 
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s ease;
+    }
+
+    .role-card:hover .role-icon-wrap {
+      transform: scale(1.05); 
+      background: rgba(255, 255, 255, 0.25); 
+      border-color: rgba(255, 255, 255, 0.4);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .role-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .role-title {
+      font-size: var(--text-base, 16px);
+      font-weight: 600;
+      color: #ffffff; 
+      line-height: 1.25;
+      letter-spacing: -0.01em;
+      transition: color 0.3s ease;
+    }
+
+    .role-desc {
+      font-size: var(--text-xs, 14px);
+      color: rgba(255, 255, 255, 0.75); 
+      margin-top: 0.25rem;
+      line-height: 1.4;
+    }
+
+    .role-arrow {
+      flex-shrink: 0;
+      color: rgba(255, 255, 255, 0.5); 
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .role-card:hover .role-arrow {
+      color: #ffffff;
+      opacity: 1;
+      transform: translateX(4px);
+    }
+
+    /* ─── FOOTER ─── */
+    .right-footer {
+      margin-top: 2rem;
+      text-align: center;
+      font-size: var(--text-xs);
+      color: var(--text-faint);
+      line-height: 1.6;
+    }
+    .right-footer a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .right-footer a:hover { text-decoration: underline; }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 860px) {
+      body { overflow: auto; }
+      .page {
+        grid-template-columns: 1fr;
+        min-height: 100dvh;
+      }
+      .left-panel {
+        padding: 2.5rem 2rem 2rem;
+        min-height: 260px;
+      }
+      .left-tagline { font-size: 1.8rem; }
+      .stats-row { gap: 1.5rem; }
+      .right-panel { padding: 2.5rem 1.5rem 3rem; }
+      .right-content { max-width: 100%; }
+    }
+
+    @media (max-width: 480px) {
+      .left-panel { padding: 1.75rem 1.25rem 1.5rem; }
+      .right-panel { padding: 2rem 1.25rem 2.5rem; }
+    }
+
+    /* ─── ANIMATIONS ─── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(-12px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    .left-top    { animation: slideIn 0.5s ease both; }
+    .left-center { animation: fadeUp 0.6s 0.1s ease both; }
+
+    .right-header       { animation: fadeUp 0.5s 0.15s ease both; }
+    .role-card:nth-child(1) { animation: fadeUp 0.5s 0.25s ease both; }
+    .role-card:nth-child(2) { animation: fadeUp 0.5s 0.33s ease both; }
+    .role-card:nth-child(3) { animation: fadeUp 0.5s 0.41s ease both; }
+    .right-footer       { animation: fadeIn 0.5s 0.5s ease both; }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+    }
+
+    /* Focus ring */
+    :focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 3px;
+      border-radius: var(--radius-sm);
+    }
+  </style>
+</head>
+<body>
+
+<div class="page">
+
+  <!-- ═══════════════ LEFT PANEL ═══════════════ -->
+  <aside class="left-panel" aria-label="ADAM-EDU branding">
+    <div class="left-grid" aria-hidden="true"></div>
+    <div class="circle-1" aria-hidden="true"></div>
+    <div class="circle-2" aria-hidden="true"></div>
+    <div class="circle-3" aria-hidden="true"></div>
+
+    <!-- Brand -->
+    <div class="left-top">
+      <div class="brand-logo">
+        <div class="logo-mark" role="img" aria-label="ADAM Edu — Plataforma educativa">
+          <!--
+            Logo: birrete (graduation cap) + libro abierto
+            El rombo superior = tablero del birrete
+            Las páginas del libro = base del conocimiento
+          -->
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <!-- Graduation cap top: diamond/rhombus -->
+            <path d="M14 3.5L2.5 10l11.5 6 11.5-6L14 3.5Z"
+                  fill="white" fill-opacity="0.95"/>
+            <!-- Tassel cord -->
+            <line x1="26" y1="10" x2="26" y2="15.8"
+                  stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-opacity="0.70"/>
+            <!-- Tassel bob -->
+            <circle cx="26" cy="17.2" r="1.7"
+                    fill="white" fill-opacity="0.60"/>
+            <!-- Cap brim body -->
+            <path d="M6.5 14v4.8C6.5 21.8 9.8 24 14 24s7.5-2.2 7.5-5.2V14"
+                  stroke="white" stroke-width="1.65"
+                  stroke-linecap="round" stroke-linejoin="round"
+                  fill="none" stroke-opacity="0.85"/>
+            <!-- Open book pages inside cap (subtle) -->
+            <path d="M14 16v7.8"
+                  stroke="white" stroke-width="1.3"
+                  stroke-linecap="round" stroke-opacity="0.38"/>
+          </svg>
+        </div>
+        <div class="brand-wordmark">
+          <span class="brand-name-top">ADAM</span>
+          <span class="brand-name-sub">Plataforma Educativa</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Center content -->
+    <div class="left-center">
+      <p class="left-tagline">
+        Aprende sin<br/><span>límites.</span><br/>Enseña con<br/>impacto.
+      </p>
+      <p class="left-description">
+        Casos empresariales impulsados por <strong>IA y Data Science</strong>, estructurados a la medida del <strong>currículo universitario</strong>. 
+        <strong>Optimice el tiempo</strong> de diseño académico y sumerja a los estudiantes en escenarios reales para formar <span>líderes estratégicos</span>.
+      </p>
+    </div>
+
+
+  </aside>
+
+  <!-- ═══════════════ RIGHT PANEL ═══════════════ -->
+  <main class="right-panel">
+    <div class="right-content">
+
+      <!-- Header -->
+      <header class="right-header">
+
+        <h1 class="right-title">Selecciona tu perfil</h1>
+        <p class="right-subtitle">
+          Elige el tipo de cuenta con la que deseas acceder a la plataforma.
+        </p>
+      </header>
+
+      <!-- Role Cards -->
+      <div class="roles-list" role="list">
+        <button class="role-card" role="listitem" type="button" aria-label="Ingresar como docente">
+          <div class="role-icon-wrap" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5Z"/>
+              <path d="M2 17l10 5 10-5"/>
+              <path d="M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+          <div class="role-text">
+            <div class="role-title">Ingresar como docente</div>
+            <div class="role-desc">Gestiona cursos, casos y seguimiento</div>
+          </div>
+          <span class="role-arrow" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14M12 5l7 7-7 7"/>
+            </svg>
+          </span>
+        </button>
+
+        <button class="role-card" role="listitem" type="button" aria-label="Ingresar como estudiante">
+          <div class="role-icon-wrap" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="8" r="4"/>
+              <path d="M6 20v-2a6 6 0 0 1 12 0v2"/>
+            </svg>
+          </div>
+          <div class="role-text">
+            <div class="role-title">Ingresar como estudiante</div>
+            <div class="role-desc">Accede a tus cursos, casos y notas</div>
+          </div>
+          <span class="role-arrow" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14M12 5l7 7-7 7"/>
+            </svg>
+          </span>
+        </button>
+
+        <button class="role-card" role="listitem" type="button" aria-label="Portal administrador">
+          <div class="role-icon-wrap" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.07 4.93A10 10 0 0 1 21 12a10 10 0 0 1-2.93 7.07M4.93 4.93A10 10 0 0 0 3 12a10 10 0 0 0 1.93 7.07"/>
+              <path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>
+            </svg>
+          </div>
+          <div class="role-text">
+            <div class="role-title">Portal administrador</div>
+            <div class="role-desc">Panel de control institucional</div>
+          </div>
+          <span class="role-arrow" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14M12 5l7 7-7 7"/>
+            </svg>
+          </span>
+        </button>
+      </div>
+
+      <!-- Footer -->
+      <footer class="right-footer">
+        ¿Problemas para acceder?
+        <a href="#" target="_blank" rel="noopener noreferrer">Contacta a soporte</a>
+        <br/>
+        &copy; 2026 ADAM-EDU · Todos los derechos reservados
+      </footer>
+
+    </div>
+  </main>
+
+</div>
+
+</body>
+</html>
