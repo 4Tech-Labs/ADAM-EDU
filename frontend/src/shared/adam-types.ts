@@ -464,11 +464,13 @@ export interface AdminTeacherInviteResponse {
     activation_link: string;
 }
 
-export interface AdminCourseAccessLinkRegenerateResponse {
+export interface CourseAccessLinkRegenerateResponse {
     course_id: string;
     access_link: string;
     access_link_status: "active";
 }
+
+export type AdminCourseAccessLinkRegenerateResponse = CourseAccessLinkRegenerateResponse;
 
 export interface AdminCourseRef {
     course_id: string;
@@ -651,6 +653,12 @@ export interface TeacherCourseConfiguration {
     access_link_created_at: string | null;
     join_path: string;
 }
+
+export interface TeacherCourseAccessLinkResponse extends TeacherCourseConfiguration {
+    course_id: string;
+}
+
+export type TeacherCourseAccessLinkRegenerateResponse = CourseAccessLinkRegenerateResponse;
 
 export interface TeacherCourseDetailResponse {
     course: TeacherCourseInstitutionalDetail;

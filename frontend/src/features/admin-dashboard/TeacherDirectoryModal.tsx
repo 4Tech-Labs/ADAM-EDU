@@ -8,11 +8,12 @@ import type {
     AdminTeacherDirectoryResponse,
 } from "@/shared/adam-types";
 import { api } from "@/shared/api";
+import { copyToClipboard } from "@/shared/clipboard";
 import { queryKeys } from "@/shared/queryKeys";
-import { useToast } from "@/shared/Toast";
+import { useToast } from "@/shared/toast-context";
 
 import { ConfirmationModal } from "./AdminDashboardModals";
-import { copyToClipboard, getAdminErrorMessage, getInitials } from "./adminDashboardModel";
+import { getAdminErrorMessage, getInitials } from "./adminDashboardModel";
 
 interface Props {
     isOpen: boolean;

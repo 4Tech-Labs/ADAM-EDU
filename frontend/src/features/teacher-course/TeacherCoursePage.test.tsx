@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthContextValue } from "@/app/auth/auth-types";
 import { ApiError, api } from "@/shared/api";
-import type { TeacherCourseDetailResponse } from "@/shared/adam-types";
+import type {
+    TeacherCourseAccessLinkRegenerateResponse,
+    TeacherCourseAccessLinkResponse,
+    TeacherCourseDetailResponse,
+} from "@/shared/adam-types";
 import { renderWithProviders } from "@/shared/test-utils";
 
 import { TeacherCoursePage } from "./TeacherCoursePage";
@@ -19,6 +23,8 @@ vi.mock("@/shared/api", async () => {
             teacher: {
                 ...actual.api.teacher,
                 getCourseDetail: vi.fn(),
+                getCourseAccessLink: vi.fn(),
+                regenerateCourseAccessLink: vi.fn(),
                 saveCourseSyllabus: vi.fn(),
             },
         },
@@ -184,6 +190,30 @@ function createCourseDetailResponse(
     };
 }
 
+function createCourseAccessLinkResponse(
+    overrides?: Partial<TeacherCourseAccessLinkResponse>,
+): TeacherCourseAccessLinkResponse {
+    return {
+        course_id: "course-1",
+        access_link_status: "active",
+        access_link_id: "access-link-1",
+        access_link_created_at: "2026-04-16T10:00:00Z",
+        join_path: "/app/join",
+        ...overrides,
+    };
+}
+
+function createCourseAccessLinkRegenerateResponse(
+    overrides?: Partial<TeacherCourseAccessLinkRegenerateResponse>,
+): TeacherCourseAccessLinkRegenerateResponse {
+    return {
+        course_id: "course-1",
+        access_link: "/app/join#course_access_token=fresh-token-123",
+        access_link_status: "active",
+        ...overrides,
+    };
+}
+
 function renderTeacherCoursePage(initialEntry = "/teacher/courses/course-1") {
     return renderWithProviders(
         <>
@@ -205,6 +235,15 @@ function renderTeacherCoursePage(initialEntry = "/teacher/courses/course-1") {
 describe("TeacherCoursePage", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.mocked(api.teacher.getCourseAccessLink).mockResolvedValue(
+            createCourseAccessLinkResponse(),
+        );
+        Object.defineProperty(window.navigator, "clipboard", {
+            configurable: true,
+            value: {
+                writeText: vi.fn().mockResolvedValue(undefined),
+            },
+        });
     });
 
     it("loads the composed teacher course detail route", async () => {
@@ -218,10 +257,12 @@ describe("TeacherCoursePage", () => {
             await screen.findByRole("heading", { name: /Syllabus de la asignatura/i }),
         ).toBeTruthy();
         expect(api.teacher.getCourseDetail).toHaveBeenCalledWith("course-1");
-        expect(screen.getByDisplayValue("GTD-GEME-01-2026")).toBeTruthy();
-        expect(
-            screen.getByLabelText(/Departamento que la ofrece/i),
-        ).toHaveValue("Gestión de las Organizaciones");
+        expect(await screen.findByDisplayValue("GTD-GEME-01-2026")).toBeTruthy();
+        await waitFor(() => {
+            expect(
+                screen.getByLabelText(/Departamento que la ofrece/i),
+            ).toHaveValue("Gestión de las Organizaciones");
+        });
     });
 
     it("persists the active tab in the URL", async () => {
@@ -372,7 +413,7 @@ describe("TeacherCoursePage", () => {
         expect(screen.getByDisplayValue("1.3 — 19/04/2026")).toBeTruthy();
     });
 
-    it("renders configuration metadata without fake raw-link actions", async () => {
+    it("renders configuration metadata and explains when the raw link is not visible", async () => {
         vi.mocked(api.teacher.getCourseDetail).mockResolvedValueOnce(
             createCourseDetailResponse(),
         );
@@ -380,10 +421,147 @@ describe("TeacherCoursePage", () => {
         renderTeacherCoursePage("/teacher/courses/course-1?tab=configuracion");
 
         expect(await screen.findByRole("heading", { name: /Configuración del Curso/i })).toBeTruthy();
-        expect(screen.getByDisplayValue("access-link-1")).toBeTruthy();
-        expect(screen.getByDisplayValue("/app/join")).toBeTruthy();
-        expect(screen.queryByRole("button", { name: /copiar/i })).toBeNull();
-        expect(screen.queryByRole("button", { name: /regenerar/i })).toBeNull();
+        expect(
+            screen.getByDisplayValue(
+                "Existe un enlace activo, pero el token completo solo puede verse al regenerarlo.",
+            ),
+        ).toBeTruthy();
+        expect(
+            screen.getByText((content) => content.startsWith("Enlace activo. Regenerado el ")),
+        ).toBeTruthy();
+        expect(screen.queryByLabelText("Estado del enlace")).toBeNull();
+        expect(screen.queryByLabelText("Access link ID")).toBeNull();
+        expect(screen.queryByLabelText("Creado en")).toBeNull();
+        expect(screen.queryByLabelText("Join path")).toBeNull();
+        expect(screen.getByRole("button", { name: /Copiar enlace/i })).toBeDisabled();
+        expect(screen.getByRole("button", { name: /Regenerar enlace/i })).toBeEnabled();
+    });
+
+    it("keeps the section usable when the metadata refresh query fails", async () => {
+        vi.mocked(api.teacher.getCourseDetail).mockResolvedValueOnce(
+            createCourseDetailResponse(),
+        );
+        vi.mocked(api.teacher.getCourseAccessLink).mockRejectedValueOnce(
+            new Error("Not Found"),
+        );
+
+        renderTeacherCoursePage("/teacher/courses/course-1?tab=configuracion");
+
+        expect(await screen.findByRole("heading", { name: /Configuración del Curso/i })).toBeTruthy();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(screen.queryByRole("button", { name: /Reintentar metadata/i })).toBeNull();
+        expect(
+            screen.getByDisplayValue(
+                "Existe un enlace activo, pero el token completo solo puede verse al regenerarlo.",
+            ),
+        ).toBeTruthy();
+        expect(screen.getByRole("button", { name: /Regenerar enlace/i })).toBeEnabled();
+    });
+
+    it("regenerates and copies a functional access link from the configuration tab", async () => {
+        vi.mocked(api.teacher.getCourseDetail).mockResolvedValueOnce(
+            createCourseDetailResponse(),
+        );
+        vi.mocked(api.teacher.regenerateCourseAccessLink).mockResolvedValueOnce(
+            createCourseAccessLinkRegenerateResponse(),
+        );
+        const expectedAccessLink = new URL(
+            "/app/join#course_access_token=fresh-token-123",
+            window.location.origin,
+        ).toString();
+
+        renderTeacherCoursePage("/teacher/courses/course-1?tab=configuracion");
+
+        await screen.findByRole("heading", { name: /Configuración del Curso/i });
+        fireEvent.click(screen.getByRole("button", { name: /Regenerar enlace/i }));
+
+        await waitFor(() => {
+            expect(api.teacher.regenerateCourseAccessLink).toHaveBeenCalledWith("course-1");
+        });
+        await waitFor(() => {
+            expect(api.teacher.getCourseAccessLink).toHaveBeenCalledTimes(2);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByLabelText(/Enlace para compartir/i)).toHaveValue(
+                expectedAccessLink,
+            );
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: /Copiar enlace/i }));
+
+        await waitFor(() => {
+            expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith(
+                expectedAccessLink,
+            );
+        });
+        expect(await screen.findByText(
+            "Access link copiado al portapapeles.",
+        )).toBeTruthy();
+    });
+
+    it("keeps unsaved syllabus draft edits when the access link is regenerated", async () => {
+        vi.mocked(api.teacher.getCourseDetail).mockResolvedValueOnce(
+            createCourseDetailResponse(),
+        );
+        vi.mocked(api.teacher.regenerateCourseAccessLink).mockResolvedValueOnce(
+            createCourseAccessLinkRegenerateResponse({
+                access_link: "/app/join#course_access_token=fresh-token-draft",
+            }),
+        );
+
+        renderTeacherCoursePage();
+
+        await screen.findByRole("heading", { name: /Syllabus de la asignatura/i });
+        fireEvent.change(screen.getByLabelText("Departamento que la ofrece"), {
+            target: { value: "Departamento en borrador" },
+        });
+
+        fireEvent.click(screen.getByRole("tab", { name: "Configuración" }));
+        await screen.findByRole("heading", { name: /Configuración del Curso/i });
+        fireEvent.click(screen.getByRole("button", { name: /Regenerar enlace/i }));
+
+        await waitFor(() => {
+            expect(api.teacher.regenerateCourseAccessLink).toHaveBeenCalledWith("course-1");
+        });
+        await waitFor(() => {
+            expect(api.teacher.getCourseDetail).toHaveBeenCalledTimes(1);
+        });
+
+        fireEvent.click(screen.getByRole("tab", { name: /Syllabus/i }));
+
+        expect(await screen.findByLabelText("Departamento que la ofrece")).toHaveValue(
+            "Departamento en borrador",
+        );
+    });
+
+    it("shows a teacher-facing error when access link regeneration fails", async () => {
+        vi.mocked(api.teacher.getCourseDetail).mockResolvedValueOnce(
+            createCourseDetailResponse(),
+        );
+        vi.mocked(api.teacher.regenerateCourseAccessLink).mockRejectedValueOnce(
+            new ApiError(
+                409,
+                "regeneration already running",
+                "course_link_regeneration_in_progress",
+            ),
+        );
+
+        renderTeacherCoursePage("/teacher/courses/course-1?tab=configuracion");
+
+        await screen.findByRole("heading", { name: /Configuración del Curso/i });
+        fireEvent.click(screen.getByRole("button", { name: /Regenerar enlace/i }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Ya hay una regeneración en curso para este access link. Intenta nuevamente en unos segundos.",
+        );
+        await waitFor(() => {
+            expect(
+                screen.getAllByText(
+                    "Ya hay una regeneración en curso para este access link. Intenta nuevamente en unos segundos.",
+                ).length,
+            ).toBeGreaterThanOrEqual(2);
+        });
     });
 
     it("shows a page-level error when the detail query fails", async () => {

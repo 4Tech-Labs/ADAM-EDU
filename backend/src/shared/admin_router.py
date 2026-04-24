@@ -17,12 +17,12 @@ from shared.admin_reads import (
     list_admin_courses,
     list_teacher_options,
 )
+from shared.course_access_schema import CourseAccessLinkRegenerateResponse
 from shared.admin_writes import (
     AdminRemoveTeacherResponse,
     AdminResendInviteResponse,
     AdminRevokeInviteResponse,
     AdminCourseMutationRequest,
-    CourseAccessLinkRegenerateResponse,
     CreateTeacherInviteRequest,
     TeacherInviteResponse,
     create_admin_course,

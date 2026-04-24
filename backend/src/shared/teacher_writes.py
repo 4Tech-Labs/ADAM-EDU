@@ -9,6 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from shared.auth import audit_log
+from shared.course_access_links import regenerate_course_access_link, try_acquire_course_regeneration_lock
+from shared.course_access_schema import CourseAccessLinkRegenerateResponse
 from shared.models import Course, Syllabus, SyllabusRevision
 from shared.syllabus_schema import (
     TeacherCourseDetailResponse,
@@ -183,3 +185,60 @@ def save_teacher_course_syllabus(
         revision=next_revision,
     )
     return get_teacher_course_detail(db, context, course.id)
+
+
+def regenerate_teacher_course_access_link(
+    db: Session,
+    context: TeacherContext,
+    course_id: str,
+) -> CourseAccessLinkRegenerateResponse:
+    course = db.scalar(
+        select(Course)
+        .where(
+            Course.id == course_id,
+            Course.university_id == context.university_id,
+            Course.teacher_membership_id == context.teacher_membership_id,
+        )
+        .with_for_update()
+    )
+    if course is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="course_not_found")
+    if course.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="course_inactive",
+        )
+
+    try:
+        if not try_acquire_course_regeneration_lock(db, course.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="course_link_regeneration_in_progress",
+            )
+        generated_link = regenerate_course_access_link(db, course.id)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="course_link_regeneration_failed",
+        ) from exc
+
+    audit_log(
+        "teacher.course_link.regenerated",
+        "success",
+        auth_user_id=context.auth_user_id,
+        university_id=context.university_id,
+        membership_id=context.teacher_membership_id,
+        course_id=course.id,
+        link_id=generated_link.link_id,
+        http_status=status.HTTP_200_OK,
+    )
+    return CourseAccessLinkRegenerateResponse(
+        course_id=course.id,
+        access_link=generated_link.access_link,
+        access_link_status="active",
+    )

@@ -6,7 +6,7 @@ import uuid
 
 from sqlalchemy import select
 
-from shared.models import Assignment, AssignmentCourse, Membership
+from shared.models import Assignment, AssignmentCourse, CourseMembership, Membership
 from shared.models import Syllabus, SyllabusRevision
 from shared.syllabus_schema import TeacherSyllabusPayload, derive_syllabus_grounding_context
 
@@ -905,6 +905,247 @@ def test_issue88_teacher_course_detail_multiple_teacher_memberships_returns_409(
 
     assert response.status_code == 409
     assert response.json()["detail"] == "teacher_membership_context_required"
+
+
+def test_issue185_teacher_course_access_link_view_returns_active_metadata(
+    client,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000001850"
+    teacher_user_id = str(uuid.uuid4())
+    teacher_email = "teacher-access-link-view@example.edu"
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email=teacher_email,
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Access Link View",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Course Access Link View",
+        code="TCH-ACCESS-001",
+    )
+    access_link, raw_token = seed_course_access_link(course_id=course.id, status="active")
+
+    response = client.get(
+        f"/api/teacher/courses/{course.id}/access-link",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_user_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "course_id": course.id,
+        "access_link_status": "active",
+        "access_link_id": access_link.id,
+        "access_link_created_at": access_link.created_at.isoformat().replace("+00:00", "Z"),
+        "join_path": "/app/join",
+    }
+    assert raw_token not in response.text
+
+
+def test_issue185_teacher_course_access_link_view_returns_missing_without_active_link(
+    client,
+    seed_identity,
+    seed_course,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000001851"
+    teacher_user_id = str(uuid.uuid4())
+    teacher_email = "teacher-access-link-missing@example.edu"
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email=teacher_email,
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Access Link Missing",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Course Access Link Missing",
+        code="TCH-ACCESS-002",
+    )
+
+    response = client.get(
+        f"/api/teacher/courses/{course.id}/access-link",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_user_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "course_id": course.id,
+        "access_link_status": "missing",
+        "access_link_id": None,
+        "access_link_created_at": None,
+        "join_path": "/app/join",
+    }
+
+
+def test_issue185_teacher_regenerate_course_access_link_requires_owned_course(
+    client,
+    seed_identity,
+    seed_course,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000001852"
+    owner = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher-owner-access@example.edu",
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Owner Access",
+    )
+    other_teacher_user_id = str(uuid.uuid4())
+    other_teacher_email = "teacher-other-access@example.edu"
+    seed_identity(
+        user_id=other_teacher_user_id,
+        email=other_teacher_email,
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Other Access",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=owner["membership"].id,
+        title="Owned Teacher Access Course",
+        code="TCH-ACCESS-003",
+    )
+
+    response = client.post(
+        f"/api/teacher/courses/{course.id}/access-link/regenerate",
+        headers=_auth_headers(
+            auth_headers_factory,
+            user_id=other_teacher_user_id,
+            email=other_teacher_email,
+        ),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "course_not_found"
+
+
+def test_issue185_teacher_regenerate_course_access_link_rejects_inactive_course(
+    client,
+    seed_identity,
+    seed_course,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000001853"
+    teacher_user_id = str(uuid.uuid4())
+    teacher_email = "teacher-access-inactive@example.edu"
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email=teacher_email,
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Inactive Access",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        status="inactive",
+        title="Inactive Teacher Access Course",
+        code="TCH-ACCESS-004",
+    )
+
+    response = client.post(
+        f"/api/teacher/courses/{course.id}/access-link/regenerate",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_user_id, email=teacher_email),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "course_inactive"
+
+
+def test_issue185_teacher_regenerate_course_access_link_supports_password_runtime_end_to_end(
+    client,
+    db,
+    fake_admin_client,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000001854"
+    teacher_user_id = str(uuid.uuid4())
+    teacher_email = "teacher-access-runtime@example.edu"
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email=teacher_email,
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Runtime Access",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Teacher Runtime Access Course",
+        code="TCH-ACCESS-005",
+    )
+    _, original_raw = seed_course_access_link(course_id=course.id, status="active")
+
+    regenerate_response = client.post(
+        f"/api/teacher/courses/{course.id}/access-link/regenerate",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_user_id, email=teacher_email),
+    )
+
+    assert regenerate_response.status_code == 200, regenerate_response.text
+    payload = regenerate_response.json()
+    assert payload["course_id"] == course.id
+    assert payload["access_link_status"] == "active"
+    assert payload["access_link"].startswith("/app/join#course_access_token=")
+
+    new_raw = payload["access_link"].split("=", maxsplit=1)[1]
+    assert original_raw != new_raw
+
+    old_resolve = client.post(
+        "/api/course-access/resolve",
+        json={"course_access_token": original_raw},
+    )
+    assert old_resolve.status_code == 410
+    assert old_resolve.json()["detail"] == "course_access_link_rotated"
+
+    new_resolve = client.post(
+        "/api/course-access/resolve",
+        json={"course_access_token": new_raw},
+    )
+    assert new_resolve.status_code == 200
+    assert new_resolve.json()["course_id"] == course.id
+
+    activate_response = client.post(
+        "/api/course-access/activate/password",
+        json={
+            "course_access_token": new_raw,
+            "email": "student.teacher.runtime@example.edu",
+            "full_name": "Student Teacher Runtime",
+            "password": "Secure1234!",
+            "confirm_password": "Secure1234!",
+        },
+    )
+    assert activate_response.status_code == 201, activate_response.text
+
+    auth_user = fake_admin_client.find_user_by_email("student.teacher.runtime@example.edu")
+    assert auth_user is not None
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == auth_user.id,
+            Membership.university_id == university_id,
+            Membership.role == "student",
+        )
+    )
+    assert membership is not None
+    enrollment = db.scalar(
+        select(CourseMembership).where(
+            CourseMembership.course_id == course.id,
+            CourseMembership.membership_id == membership.id,
+        )
+    )
+    assert enrollment is not None
 
 
 def test_issue88_teacher_course_syllabus_save_happy_path_creates_initial_syllabus(

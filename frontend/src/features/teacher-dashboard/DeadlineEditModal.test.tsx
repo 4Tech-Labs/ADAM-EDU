@@ -10,8 +10,10 @@ vi.mock("./useTeacherDashboard", () => ({
     useUpdateDeadline: () => ({ mutate: mutateFn, isPending: false }),
 }));
 
-vi.mock("@/shared/Toast", async () => {
-    const actual = await vi.importActual<typeof import("@/shared/Toast")>("@/shared/Toast");
+vi.mock("@/shared/toast-context", async () => {
+    const actual = await vi.importActual<typeof import("@/shared/toast-context")>(
+        "@/shared/toast-context",
+    );
     return { ...actual, useToast: () => ({ showToast: showToastFn }) };
 });
 

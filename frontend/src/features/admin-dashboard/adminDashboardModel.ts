@@ -291,17 +291,6 @@ export function buildLinkPresentation(
     };
 }
 
-export async function copyToClipboard(value: string): Promise<boolean> {
-    if (!navigator.clipboard?.writeText) return false;
-
-    try {
-        await navigator.clipboard.writeText(value);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
 export function summarizePageRange(response: AdminCourseListResponse | null): string {
     if (!response || response.total === 0) return "Mostrando 0 cursos";
 

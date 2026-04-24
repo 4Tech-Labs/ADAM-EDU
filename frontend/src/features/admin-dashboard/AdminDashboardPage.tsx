@@ -43,8 +43,9 @@ import type {
     AdminTeacherOptionsResponse,
 } from "@/shared/adam-types";
 import { ApiError, api } from "@/shared/api";
+import { copyToClipboard } from "@/shared/clipboard";
 import { queryKeys, type CourseFilters } from "@/shared/queryKeys";
-import { useToast } from "@/shared/Toast";
+import { useToast } from "@/shared/toast-context";
 import {
     Select,
     SelectContent,
@@ -64,7 +65,6 @@ import {
     buildCourseFormFromItem,
     buildCoursePayload,
     buildLinkPresentation,
-    copyToClipboard,
     createEmptyCourseForm,
     encodeTeacherOptionValue,
     getAdminErrorMessage,

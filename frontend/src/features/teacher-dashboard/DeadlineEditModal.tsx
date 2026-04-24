@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import type { FormEvent } from "react";
 
-import { useToast } from "@/shared/Toast";
+import { useToast } from "@/shared/toast-context";
 
 import { useUpdateDeadline } from "./useTeacherDashboard";
 

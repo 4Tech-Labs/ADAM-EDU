@@ -11,18 +11,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from shared.auth import CurrentActor, require_current_actor_password_ready
+from shared.course_access_schema import CourseAccessLinkRegenerateResponse, TeacherCourseAccessLinkResponse
 from shared.database import get_db
 from shared.models import Assignment, AssignmentCourse, Course
 from shared.syllabus_schema import TeacherCourseDetailResponse, TeacherSyllabusSaveRequest
 from shared.teacher_context import TeacherContext, require_teacher_context
 from shared.teacher_reads import (
     TeacherCoursesResponse,
+    get_teacher_course_access_link,
     get_teacher_course_detail,
     list_teacher_active_cases,
     list_teacher_courses,
     resolve_assignment_schedule_values,
 )
-from shared.teacher_writes import save_teacher_course_syllabus
+from shared.teacher_writes import regenerate_teacher_course_access_link, save_teacher_course_syllabus
 
 router = APIRouter(prefix="/api/teacher", tags=["teacher"])
 _BOGOTA_TZ = ZoneInfo("America/Bogota")
@@ -91,6 +93,27 @@ def get_teacher_course(
     db: Session = Depends(get_db),
 ) -> TeacherCourseDetailResponse:
     return get_teacher_course_detail(db, context, course_id)
+
+
+@router.get("/courses/{course_id}/access-link", response_model=TeacherCourseAccessLinkResponse)
+def get_teacher_course_access_link_view(
+    course_id: str,
+    context: Annotated[TeacherContext, Depends(require_teacher_context)],
+    db: Session = Depends(get_db),
+) -> TeacherCourseAccessLinkResponse:
+    return get_teacher_course_access_link(db, context, course_id)
+
+
+@router.post(
+    "/courses/{course_id}/access-link/regenerate",
+    response_model=CourseAccessLinkRegenerateResponse,
+)
+def post_teacher_course_access_link_regenerate(
+    course_id: str,
+    context: Annotated[TeacherContext, Depends(require_teacher_context)],
+    db: Session = Depends(get_db),
+) -> CourseAccessLinkRegenerateResponse:
+    return regenerate_teacher_course_access_link(db, context, course_id)
 
 
 @router.put("/courses/{course_id}/syllabus", response_model=TeacherCourseDetailResponse)
