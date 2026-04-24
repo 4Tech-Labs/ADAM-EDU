@@ -145,7 +145,7 @@ function DashboardActionCards({
                 <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/50 to-transparent" />
                 <div className="relative z-10 flex items-center justify-between gap-4">
                     <div>
-                        <h2 className="text-base font-bold tracking-tight">Desempeno Analitico</h2>
+                        <h2 className="text-base font-bold tracking-tight">Reportes Analiticos</h2>
                         <p className="mt-1 text-xs font-medium text-emerald-100/90">Proximamente</p>
                     </div>
                     <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/20 backdrop-blur-sm">
@@ -293,7 +293,7 @@ function StudentCasesTable({ cases }: { cases: StudentCaseItem[] }) {
                             return (
                                 <tr key={caseItem.id} className="group transition-colors hover:bg-slate-50">
                                     <td className="px-6 py-5 align-middle">
-                                        <div className="text-[15px] font-bold text-slate-900 [font-family:ui-serif,Georgia,Cambria,Times_New_Roman,Times,serif]">
+                                        <div className="text-[15px] font-bold text-slate-900 font-sans">
                                             {caseItem.title}
                                         </div>
                                         <div className="mt-1.5 text-[12.5px] text-slate-400">
