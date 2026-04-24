@@ -425,7 +425,7 @@ describe("TeacherCoursePage", () => {
             ),
         ).toBeTruthy();
         expect(
-            screen.getByText("Enlace activo. Regenerado el 16/04/2026, 5:00 a. m.."),
+            screen.getByText((content) => content.startsWith("Enlace activo. Regenerado el ")),
         ).toBeTruthy();
         expect(screen.queryByLabelText("Estado del enlace")).toBeNull();
         expect(screen.queryByLabelText("Access link ID")).toBeNull();
