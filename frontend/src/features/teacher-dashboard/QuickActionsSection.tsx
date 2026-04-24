@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 
-import { useToast } from "@/shared/Toast";
+import { useToast } from "@/shared/toast-context";
 import { DashboardActionCard } from "@/shared/ui/DashboardActionCard";
 
 function SparklesIcon() {

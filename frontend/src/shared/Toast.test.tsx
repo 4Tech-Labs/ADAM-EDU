@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
 
-import { ToastProvider, useToast } from "./Toast";
+import { ToastProvider } from "./Toast";
+import { useToast } from "./toast-context";
 
 function wrapper({ children }: { children: ReactNode }) {
     return <ToastProvider>{children}</ToastProvider>;

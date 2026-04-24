@@ -15,7 +15,7 @@
 import { Suspense, lazy, useState, useRef, useCallback, useMemo, useEffect, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePublishCase } from "@/features/teacher-dashboard/useTeacherDashboard"; // TODO: move usePublishCase to shared/ — cross-feature import accepted per #154
-import { useToast } from "@/shared/Toast";
+import { useToast } from "@/shared/toast-context";
 import { marked, type Tokens } from "marked";
 import { isMarkdownTableRow } from "./markdownTable";
 
