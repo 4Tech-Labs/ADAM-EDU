@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADAM — Portal del Estudiante</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300&display=swap"
+    rel="stylesheet">
+  <style>
+    /* Base font increased slightly for readability */
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #F0F4F8;
+      color: #1e293b;
+      font-size: 15px;
+    }
+
+    :root {
+      --brand: #0144a0;
+      --brand-dark: #00337a;
+      --brand-lt: #e8f0fe;
+      --success: #16a34a;
+      --warn: #d97706;
+      --danger: #dc2626;
+      --muted: #64748b;
+    }
+
+    /* ── scrollbar ── */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 99px
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    /* ── course card ── */
+    .course-card {
+      background: #fff;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 18px;
+      overflow: hidden;
+      transition: box-shadow .18s, border-color .18s, transform .18s;
+      cursor: default;
+      position: relative;
+    }
+
+    .course-card:hover {
+      box-shadow: 0 12px 40px -8px rgba(1, 68, 160, .13);
+      border-color: #bfdbfe;
+      transform: translateY(-2px);
+    }
+
+    /* left accent bar per card */
+    .course-card::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 5px;
+      border-radius: 18px 0 0 18px;
+    }
+
+    .card-active::before {
+      background: linear-gradient(to bottom, var(--brand), #60a5fa);
+    }
+
+    .card-upcoming::before {
+      background: linear-gradient(to bottom, #a855f7, #c084fc);
+    }
+
+    .card-closed::before {
+      background: #e2e8f0;
+    }
+
+    /* ── Action Cards (New UI) ── */
+    .action-card {
+      position: relative;
+      overflow: hidden;
+      border-radius: 16px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      height: 100px;
+    }
+
+    .action-card:active {
+      transform: scale(0.98);
+    }
+
+    /* ── stat pill ── */
+    .stat-pill {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 10px 16px;
+      background: #f8fafc;
+      border-radius: 12px;
+      border: 1px solid #f1f5f9;
+      min-width: 75px;
+      flex: 1;
+    }
+
+    .stat-val {
+      font-size: 20px;
+      font-weight: 800;
+      color: #0f172a;
+      line-height: 1;
+    }
+
+    .stat-lbl {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-top: 3px;
+      white-space: nowrap;
+    }
+
+    /* ── badges ── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 7px;
+      white-space: nowrap;
+    }
+
+    .b-active {
+      background: #dcfce7;
+      color: #15803d;
+    }
+
+    .b-upcoming {
+      background: #f3e8ff;
+      color: #7e22ce;
+    }
+
+    .b-closed {
+      background: #f1f5f9;
+      color: #64748b;
+    }
+
+    .b-risk {
+      background: #fee2e2;
+      color: #b91c1c;
+    }
+
+    .b-blue {
+      background: var(--brand-lt);
+      color: var(--brand);
+    }
+
+    .b-amber {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .b-case {
+      background: #f5f3ff;
+      border: 1px solid #ddd6fe;
+      color: #6d28d9;
+    }
+
+    /* ── primary button ── */
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 10px 20px;
+      background: var(--brand);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      border-radius: 11px;
+      transition: background .14s, box-shadow .14s, transform .1s;
+      white-space: nowrap;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(1, 68, 160, .25);
+    }
+
+    .btn-primary:hover {
+      background: var(--brand-dark);
+      box-shadow: 0 4px 16px rgba(1, 68, 160, .3);
+    }
+
+    .btn-primary:active {
+      transform: scale(.97);
+    }
+
+    /* ── secondary button ── */
+    .btn-sec {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 10px 18px;
+      background: #fff;
+      color: #475569;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 11px;
+      border: 1.5px solid #e2e8f0;
+      cursor: pointer;
+      transition: all .14s;
+      white-space: nowrap;
+    }
+
+    .btn-sec:hover {
+      background: #f8fafc;
+      border-color: #94a3b8;
+      color: #1e293b;
+    }
+
+    /* ── header gradient ── */
+    .top-header {
+      background: linear-gradient(135deg, #0144a0 0%, #0255c5 100%);
+    }
+
+    /* ── fade-in stagger ── */
+    .fade-card {
+      opacity: 0;
+      transform: translateY(14px);
+      animation: cardIn .35s ease forwards;
+    }
+
+    @keyframes cardIn {
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* ── avatar ring ── */
+    .avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, .2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      font-weight: 800;
+      color: #fff;
+      border: 2px solid rgba(255, 255, 255, .35);
+      flex-shrink: 0;
+    }
+
+    /* ── notification dot ── */
+    .notif-dot {
+      position: absolute;
+      top: -2px;
+      right: -2px;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #ef4444;
+      border: 2px solid #fff;
+    }
+
+    /* ── empty state ── */
+    .empty-state {
+      text-align: center;
+      padding: 56px 24px;
+      color: var(--muted);
+    }
+
+    .empty-state svg {
+      margin: 0 auto 14px;
+      opacity: .3;
+      width: 48px;
+      height: 48px;
+    }
+
+    /* ── search input ── */
+    .search-inp {
+      width: 100%;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 11px;
+      padding: 11px 14px 11px 38px;
+      font-size: 14.5px;
+      color: #1e293b;
+      background: #fff;
+      outline: none;
+      font-family: 'Inter', sans-serif;
+      transition: border-color .14s, box-shadow .14s;
+    }
+
+    .search-inp:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(1, 68, 160, .1);
+    }
+
+    /* ── MODAL NUEVO CURSO ── */
+    .modal-ov {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, .6);
+      backdrop-filter: blur(4px);
+      z-index: 60;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .modal-ov.open {
+      display: flex;
+    }
+
+    .modal-box-sm {
+      background: #fff;
+      border-radius: 20px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, .22);
+      overflow: hidden;
+      animation: cardIn .25s ease;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 14px;
+      font-weight: 700;
+      color: #374151;
+      margin-bottom: 6px;
+    }
+
+    .form-input {
+      width: 100%;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 15px;
+      color: #1e293b;
+      background: #fff;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .form-input:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(1, 68, 160, 0.1);
+    }
+
+    /* ── toast ── */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #0f172a;
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, .22);
+      transform: translateY(80px);
+      opacity: 0;
+      transition: transform .28s cubic-bezier(.4, 0, .2, 1), opacity .28s;
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    #toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+  <div id="toast">
+    <span style="width:8px;height:8px;border-radius:50%;background:#22c55e;flex-shrink:0"></span>
+    <span id="toast-msg"></span>
+  </div>
+
+  <header class="top-header">
+    <div class="max-w-6xl mx-auto px-6 h-20 flex items-center justify-between gap-5">
+
+      <div class="flex items-center gap-3.5 group cursor-default">
+        <div
+          class="relative w-11 h-11 rounded-xl bg-gradient-to-br from-white/20 to-white/5 border border-white/20 flex items-center justify-center flex-shrink-0 shadow-[0_4px_12px_rgba(0,0,0,0.1)] transition-all duration-300 group-hover:shadow-[0_0_20px_rgba(255,255,255,0.15)] group-hover:scale-105 overflow-hidden">
+          <div
+            class="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500">
+          </div>
+
+          <svg class="w-6 h-6 text-white relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+            stroke-width="1.8">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12" />
+            <circle cx="12" cy="12" r="2.5" fill="currentColor" />
+          </svg>
+        </div>
+
+        <div class="flex flex-col justify-center">
+          <span class="text-[19px] font-extrabold text-white tracking-tight leading-none drop-shadow-sm">ADAM</span>
+          <p class="text-[12px] font-medium text-blue-100/90 leading-none mt-1.5 tracking-wide">Portal Académico de
+            Casos</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4">
+
+        <button
+          class="relative w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
+          title="Notificaciones">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+          </svg>
+          <span class="notif-dot"></span>
+        </button>
+
+        <div class="w-px h-8 bg-white/20"></div>
+
+        <div class="flex items-center gap-3">
+          <div class="avatar">MV</div>
+          <div class="hidden sm:block">
+            <p class="text-[15px] font-semibold text-white leading-tight">Mateo Vargas</p>
+            <p class="text-xs text-blue-200 leading-tight mt-0.5">Estudiante - Pregrado</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </header>
+
+  <main class="flex-1 max-w-6xl mx-auto w-full px-6 py-9">
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-8 fade-card">
+
+      <div onclick="document.getElementById('tasks-section').scrollIntoView({behavior:'smooth'})"
+        class="action-card bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-800 text-white shadow-lg hover:shadow-2xl hover:scale-[1.02] group border-none transition-all duration-300 cursor-pointer">
+        <div
+          class="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/50 to-transparent rounded-t-xl">
+        </div>
+        <div class="flex items-center justify-between relative z-10">
+          <div>
+            <h3 class="text-[16px] font-bold tracking-tight">Mis Casos</h3>
+            <p class="text-indigo-100 text-xs font-medium mt-1 opacity-80">2 entregables pendientes</p>
+          </div>
+          <div
+            class="w-11 h-11 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm group-hover:bg-white/30 transition-colors border border-white/20">
+            <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
+            </svg>
+          </div>
+        </div>
+        <div
+          class="absolute -bottom-5 -right-5 w-24 h-24 bg-white/10 rounded-full blur-2xl group-hover:bg-white/20 transition-all duration-500">
+        </div>
+        <div
+          class="absolute -top-4 -left-4 w-16 h-16 bg-violet-300/20 rounded-full blur-xl group-hover:bg-violet-300/30 transition-all duration-500">
+        </div>
+      </div>
+
+      <div onclick="toast('Visualizando analítica de competencias...')"
+        class="action-card bg-gradient-to-br from-slate-400 via-slate-600 to-slate-800 text-white shadow-lg hover:shadow-2xl hover:scale-[1.02] group border-none transition-all duration-300 cursor-pointer">
+        <div
+          class="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/50 to-transparent rounded-t-xl">
+        </div>
+        <div class="flex items-center justify-between relative z-10">
+          <div>
+            <h3 class="text-[16px] font-bold tracking-tight">Desempeño Analítico</h3>
+            <p class="text-emerald-100 text-xs font-medium mt-1 opacity-80">Proximamente</p>
+          </div>
+          <div
+            class="w-11 h-11 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm group-hover:bg-white/30 transition-colors border border-white/20">
+            <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          </div>
+        </div>
+        <div
+          class="absolute -bottom-5 -right-5 w-24 h-24 bg-white/10 rounded-full blur-2xl group-hover:bg-white/20 transition-all duration-500">
+        </div>
+        <div
+          class="absolute -top-4 -left-4 w-16 h-16 bg-emerald-300/20 rounded-full blur-xl group-hover:bg-emerald-300/30 transition-all duration-500">
+        </div>
+      </div>
+
+    </div>
+
+    <div class="flex items-center gap-4 mb-8">
+      <div class="relative flex-1">
+        <svg class="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24"
+          stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35" />
+        </svg>
+        <input type="text" id="search-inp" oninput="filterCourses()" placeholder="Buscar programa o caso de estudio..."
+          class="search-inp shadow-sm hover:shadow transition-shadow">
+      </div>
+    </div>
+
+    <div id="section-active" class="mb-12 fade-card" style="animation-delay:0.2s">
+
+      <div class="flex items-center gap-4 mb-6">
+        <div class="flex items-center gap-3 whitespace-nowrap">
+          <h2 class="text-2xl font-bold text-slate-900 tracking-tight">Mis cursos</h2>
+          <div
+            class="px-3 py-1 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 text-[12px] font-bold flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            Semestre Actual
+          </div>
+        </div>
+        <div class="flex-1 h-[2px] bg-gradient-to-r from-[#0144a0] to-transparent rounded-full ml-2"></div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6" id="grid-active"></div>
+
+    </div>
+
+    <div id="tasks-section" class="mt-10 fade-card" style="animation-delay:0.3s">
+
+      <div class="flex items-center gap-4 mb-6">
+        <h2 class="text-2xl font-bold text-slate-900 tracking-tight whitespace-nowrap">Estado de mis Casos</h2>
+        <div class="flex-1 h-[2px] bg-gradient-to-r from-[#0144a0] to-transparent rounded-full ml-2"></div>
+      </div>
+
+      <div class="bg-white border-[1.5px] border-slate-200 rounded-[18px] overflow-hidden shadow-sm">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr style="background:var(--brand); color:#fff;">
+                <th class="py-4 px-6 text-[14px] font-bold tracking-wide">Caso de Estudio</th>
+                <th class="py-4 px-6 text-[14px] font-bold tracking-wide">Código del Curso</th>
+                <th class="py-4 px-6 text-[14px] font-bold tracking-wide">Estado</th>
+                <th class="py-4 px-6 text-[14px] font-bold tracking-wide text-right">Acciones</th>
+              </tr>
+            </thead>
+            <tbody class="text-[15px] text-slate-700 divide-y divide-slate-100">
+              <tr class="hover:bg-slate-50 transition-colors group">
+                <td class="py-5 px-6 align-middle">
+                  <div class="font-bold text-slate-900 text-[15px]" style="font-family:'Merriweather',serif;">CrediÁgil:
+                    La Trampa del Crecimiento Acelerado</div>
+                  <div class="flex items-center gap-2 mt-1.5">
+                    <span class="badge b-case text-[10.5px]">CASO + EDA</span>
+                    <span class="text-[12.5px] text-slate-400">FinTech / Riesgo Crediticio</span>
+                  </div>
+                </td>
+                <td class="py-5 px-6 align-middle">
+                  <span class="badge b-blue" title="Analítica Predictiva">MBA-ANR</span>
+                </td>
+                <td class="py-5 px-6 align-middle">
+                  <span class="badge b-risk">Vence mañana 6 PM</span>
+                </td>
+                <td class="py-5 px-6 align-middle">
+                  <div
+                    class="flex items-center justify-end gap-2.5 opacity-90 group-hover:opacity-100 transition-opacity">
+                    <button
+                      class="inline-flex items-center justify-center gap-1.5 py-2 px-3.5 h-9 text-[13px] font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg shadow-md hover:shadow-lg hover:scale-[1.02] transition-all border-none">
+                      Resolver Caso
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              <tr class="hover:bg-slate-50 transition-colors group">
+                <td class="py-5 px-6 align-middle">
+                  <div class="font-bold text-slate-900 text-[15px]" style="font-family:'Merriweather',serif;">Predicción
+                    de Churn en TelCo: Retención y LTV</div>
+                  <div class="flex items-center gap-2 mt-1.5">
+                    <span class="badge b-case text-[10.5px]">CASO</span>
+                    <span class="text-[12.5px] text-slate-400">Machine Learning / Estrategia</span>
+                  </div>
+                </td>
+                <td class="py-5 px-6 align-middle">
+                  <span class="badge b-blue" title="Machine Learning para Negocios">MBA-MLN</span>
+                </td>
+                <td class="py-5 px-6 align-middle">
+                  <span class="badge b-amber">En progreso</span>
+                </td>
+                <td class="py-5 px-6 align-middle">
+                  <div
+                    class="flex items-center justify-end gap-2.5 opacity-90 group-hover:opacity-100 transition-opacity">
+                    <button
+                      class="inline-flex items-center justify-center gap-1.5 py-2 px-3.5 h-9 text-[13px] font-bold text-white bg-orange-500 hover:bg-orange-600 rounded-lg shadow-md transition-all hover:scale-[1.02] border-none">
+                      Seguir con el caso
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              <tr class="hover:bg-slate-50 transition-colors group">
+                <td class="py-5 px-6 align-middle">
+                  <div class="font-bold text-slate-900 text-[15px]" style="font-family:'Merriweather',serif;">Detección
+                    de Fraude Bancario en Tiempo Real</div>
+                  <div class="flex items-center gap-2 mt-1.5">
+                    <span class="badge b-case text-[10.5px]">CASO</span>
+                    <span class="text-[12.5px] text-slate-400">Ética Digital / Gobernanza</span>
+                  </div>
+                </td>
+                <td class="py-5 px-6 align-middle">
+                  <span class="badge b-blue" title="Ética Digital y Gobernanza">MBA-EDG</span>
+                </td>
+                <td class="py-5 px-6 align-middle">
+                  <span class="badge b-active">Entregado y evaluado</span>
+                </td>
+                <td class="py-5 px-6 align-middle">
+                  <div
+                    class="flex items-center justify-end gap-2.5 opacity-90 group-hover:opacity-100 transition-opacity">
+                    <button
+                      class="inline-flex items-center justify-center gap-1.5 py-2 px-3.5 h-9 text-[13px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg transition-all hover:bg-emerald-100 hover:border-emerald-300 hover:shadow-sm">
+                      Ver nota y retroalimentación
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // ── Data ──────────────────────────────
+    const courses = [
+      {
+        id: 1,
+        name: 'Analítica Predictiva y Riesgo Crediticio',
+        code: 'MBA-ANR',
+        teacher: 'Rodrigo Peñaloza',
+        gradeLevel: 'Especialización',
+        grade: 4.2,
+        pendingTasks: 1,
+        status: 'active',
+        nextDeadline: 'Caso CrediÁgil cierra mañana',
+      },
+      {
+        id: 2,
+        name: 'Machine Learning para Negocios',
+        code: 'MBA-MLN',
+        teacher: 'Julián Prada',
+        gradeLevel: 'Especialización',
+        grade: 3.8,
+        pendingTasks: 1,
+        status: 'active',
+        nextDeadline: 'Entregable TelCo en 3 días',
+      },
+      {
+        id: 3,
+        name: 'Ética Digital y Gobernanza de Datos',
+        code: 'MBA-EDG',
+        teacher: 'Elena Vargas',
+        gradeLevel: 'Especialización',
+        grade: 4.5,
+        pendingTasks: 0,
+        status: 'active',
+        nextDeadline: null,
+      },
+      {
+        id: 4,
+        name: 'Estrategia Empresarial y Crecimiento (Growth)',
+        code: 'MBA-EEC',
+        teacher: 'Lucas Morales',
+        gradeLevel: 'Especialización',
+        grade: null,
+        pendingTasks: 0,
+        status: 'upcoming',
+        nextDeadline: null,
+      }
+    ];
+
+    // ── Render helpers ────────────────────
+    function gc(g) {
+      if (g === null) return '#94a3b8';
+      if (g >= 4.0) return '#15803d';
+      if (g >= 3.5) return '#d97706';
+      return '#dc2626';
+    }
+
+    function cardClass(s) {
+      if (s === 'active') return 'card-active';
+      if (s === 'upcoming') return 'card-upcoming';
+      return 'card-closed';
+    }
+
+    function pfillClass(s) {
+      if (s === 'active') return 'pfill-blue';
+      if (s === 'upcoming') return 'pfill-purple';
+      return 'pfill-slate';
+    }
+
+    function renderCard(c, delay) {
+      const closed = c.status === 'closed';
+      const upcoming = c.status === 'upcoming';
+      const opacity = closed ? 'opacity-75' : '';
+
+      const gradeDisplay = c.grade
+        ? `<span style="color:${gc(c.grade)};font-weight:700;font-size:19px;line-height:1">${c.grade}</span>`
+        : `<span style="color:#94a3b8;font-size:15px;font-weight:500">—</span>`;
+
+      const pendingTag = c.pendingTasks > 0
+        ? `<span class="badge b-amber">${c.pendingTasks} casos por resolver</span>`
+        : '';
+
+      const deadlineTag = c.nextDeadline && !closed
+        ? `<div class="flex items-center gap-1.5 text-[13px] text-slate-500 mt-4">
+        <svg class="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span>${c.nextDeadline}</span>
+      </div>`
+        : '';
+
+      const cta = !closed
+        ? `<button onclick="enterCourse(${c.id})" class="btn-primary w-full justify-center" style="${upcoming ? 'background:#7e22ce' : ''}" ${upcoming ? 'disabled' : ''}>
+        ${upcoming
+          ? `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Próximamente`
+          : `Entrar al Curso <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>`
+        }
+      </button>`
+        : `<button class="btn-sec w-full justify-center">Ver historial de casos</button>`;
+
+      return `
+    <div class="course-card ${cardClass(c.status)} ${opacity} fade-card" style="animation-delay:${delay}s" data-name="${c.name.toLowerCase()}" data-status="${c.status}">
+      <div class="p-6 pl-8">
+
+        <div class="flex items-start justify-between gap-4 mb-4">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 mb-2 flex-wrap">
+              <span class="badge b-blue">${c.code}</span>
+              <span class="text-[11.5px] text-slate-400 font-medium">Prof. ${c.teacher}</span>
+            </div>
+            <h2 class="text-[16px] font-bold text-slate-900 leading-snug">${c.name}</h2>
+          </div>
+        </div>
+
+        ${(pendingTag)
+          ? `<div class="flex flex-wrap gap-2 mb-4">${pendingTag}</div>`
+          : ''
+        }
+
+        <div class="flex items-center gap-4 mb-5">
+          <div class="stat-pill">
+            <span class="stat-val">${c.grade ?? '—'}</span>
+            <span class="stat-lbl">Evaluación General</span>
+          </div>
+
+          <div class="stat-pill">
+            <span class="stat-val">${c.pendingTasks}</span>
+            <span class="stat-lbl">Entregables</span>
+          </div>
+        </div>
+
+        ${deadlineTag}
+
+        <div class="mt-5 pt-5 border-t border-slate-100">
+          ${cta}
+        </div>
+
+      </div>
+    </div>`;
+    }
+
+    // ── Render all ────────────────────────
+    function renderAll(filter = '') {
+      const active = courses.filter(c => c.status === 'active' && (!filter || c.name.toLowerCase().includes(filter)));
+      document.getElementById('grid-active').innerHTML = active.length
+        ? active.map((c, i) => renderCard(c, .05 + i * .07)).join('')
+        : emptyState('No se encontraron programas que coincidan con tu búsqueda.');
+    }
+
+    function emptyState(msg) {
+      return `<div class="col-span-2 empty-state">
+    <svg class="w-12 h-12 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+    <p class="text-[15px] mt-3 font-medium">${msg}</p>
+  </div>`;
+    }
+
+    // ── Interactions ──────────────────────
+    function filterCourses() {
+      renderAll(document.getElementById('search-inp').value.toLowerCase());
+    }
+
+    function enterCourse(id) {
+      const c = courses.find(x => x.id === id);
+      toast(`Entrando a "${c.name.split(' ').slice(0, 2).join(' ')}…"`);
+    }
+
+    let tt;
+    function toast(msg) {
+      const el = document.getElementById('toast');
+      document.getElementById('toast-msg').textContent = msg;
+      el.classList.add('show');
+      clearTimeout(tt);
+      tt = setTimeout(() => el.classList.remove('show'), 3500);
+    }
+
+    // ── Init ──────────────────────────────
+    renderAll();
+  </script>
+</body>
+
+</html>
