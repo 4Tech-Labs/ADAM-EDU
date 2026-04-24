@@ -327,6 +327,34 @@ export function getTeacherCourseSaveErrorMessage(
     }
 }
 
+export function getTeacherCourseAccessLinkErrorMessage(
+    error: unknown,
+    fallback: string,
+): string {
+    if (!(error instanceof ApiError)) {
+        return error instanceof Error ? error.message : fallback;
+    }
+
+    switch (error.detail) {
+        case "course_inactive":
+            return "No se puede regenerar el access link de un curso inactivo.";
+        case "course_link_regeneration_in_progress":
+            return "Ya hay una regeneración en curso para este access link. Intenta nuevamente en unos segundos.";
+        case "course_link_regeneration_failed":
+            return "No se pudo regenerar el access link por un error interno. Intenta nuevamente.";
+        case "course_not_found":
+            return "El curso ya no existe o no pertenece a tu cuenta docente.";
+        case "invalid_token":
+            return "Tu sesión expiró. Vuelve a iniciar sesión para continuar.";
+        case "profile_incomplete":
+            return "Tu perfil docente todavía no está listo para usar esta vista.";
+        case "membership_required":
+            return "Tu cuenta no tiene una membresía docente activa para este curso.";
+        default:
+            return error.message || fallback;
+    }
+}
+
 export function validateTeacherCourseDraft(draft: TeacherCourseDraft): string | null {
     const payload = sanitizeTeacherSyllabusPayload(draft);
 
@@ -375,6 +403,16 @@ export function useTeacherCourseDetail(courseId: string) {
     });
 }
 
+export function useTeacherCourseAccessLink(courseId: string) {
+    return useQuery({
+        queryKey: queryKeys.teacher.accessLink(courseId),
+        queryFn: () => api.teacher.getCourseAccessLink(courseId),
+        enabled: Boolean(courseId),
+        staleTime: 30_000,
+        refetchOnWindowFocus: false,
+    });
+}
+
 export function useSaveTeacherCourseSyllabus(courseId: string) {
     const queryClient = useQueryClient();
 
@@ -383,6 +421,19 @@ export function useSaveTeacherCourseSyllabus(courseId: string) {
             api.teacher.saveCourseSyllabus(courseId, request),
         onSuccess: (detail) => {
             queryClient.setQueryData(queryKeys.teacher.course(courseId), detail);
+        },
+    });
+}
+
+export function useRegenerateTeacherCourseAccessLink(courseId: string) {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: () => api.teacher.regenerateCourseAccessLink(courseId),
+        onSuccess: () => {
+            void queryClient.invalidateQueries({
+                queryKey: queryKeys.teacher.accessLink(courseId),
+            });
         },
     });
 }

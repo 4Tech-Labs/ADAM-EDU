@@ -4,6 +4,7 @@ import {
     AlertCircle,
     BookOpen,
     ChevronRight,
+    Copy,
     LoaderCircle,
     Plus,
     RefreshCcw,
@@ -26,18 +27,21 @@ import {
     createEmptyTeacherSyllabusModule,
     createEmptyTeacherSyllabusPayload,
     createEmptyTeacherSyllabusUnit,
-    formatAccessLinkStatus,
     formatTeacherCourseStatus,
+    getTeacherCourseAccessLinkErrorMessage,
     formatTeacherCourseTimestamp,
     getTeacherCoursePageErrorMessage,
     getTeacherCourseSaveErrorMessage,
     getTeacherCourseTab,
     isStaleSyllabusRevisionError,
+    useRegenerateTeacherCourseAccessLink,
     useSaveTeacherCourseSyllabus,
+    useTeacherCourseAccessLink,
     useTeacherCourseDetail,
     validateTeacherCourseDraft,
 } from "@/features/teacher-course/teacherCourseModel";
-import { useToast } from "@/shared/Toast";
+import { copyToClipboard } from "@/shared/clipboard";
+import { useToast } from "@/shared/toast-context";
 
 const SYLLABUS_TAB_ID = "teacher-course-tab-syllabus";
 const CONFIG_TAB_ID = "teacher-course-tab-configuracion";
@@ -125,11 +129,15 @@ export function TeacherCoursePage() {
     const [searchParams, setSearchParams] = useSearchParams();
     const activeTab = getTeacherCourseTab(searchParams.get("tab"));
     const courseDetailQuery = useTeacherCourseDetail(courseId);
+    const accessLinkQuery = useTeacherCourseAccessLink(courseId);
+    const regenerateAccessLinkMutation = useRegenerateTeacherCourseAccessLink(courseId);
     const saveSyllabusMutation = useSaveTeacherCourseSyllabus(courseId);
     const [draft, setDraft] = useState<TeacherCourseDraft>(
         createEmptyTeacherSyllabusPayload(),
     );
     const [formError, setFormError] = useState<string | null>(null);
+    const [accessLinkActionError, setAccessLinkActionError] = useState<string | null>(null);
+    const [transientAccessLink, setTransientAccessLink] = useState<string | null>(null);
 
     useEffect(() => {
         if (courseDetailQuery.data) {
@@ -137,6 +145,11 @@ export function TeacherCoursePage() {
             setFormError(null);
         }
     }, [courseDetailQuery.data]);
+
+    useEffect(() => {
+        setAccessLinkActionError(null);
+        setTransientAccessLink(null);
+    }, [courseId]);
 
     const detail = courseDetailQuery.data;
     const pageErrorMessage = courseDetailQuery.error
@@ -152,6 +165,34 @@ export function TeacherCoursePage() {
     );
 
     const revisionLabel = detail?.revision_metadata.current_revision ?? 0;
+    const accessLinkState = detail
+        ? accessLinkQuery.data ?? {
+              course_id: detail.course.id,
+              ...detail.configuration,
+          }
+        : null;
+    const visibleAccessLink = transientAccessLink
+        ? new URL(transientAccessLink, window.location.origin).toString()
+        : null;
+    const accessLinkDisplayValue = visibleAccessLink
+        ? visibleAccessLink
+        : accessLinkState?.access_link_status === "active"
+          ? "Existe un enlace activo, pero el token completo solo puede verse al regenerarlo."
+          : "Aún no existe un enlace activo para estudiantes.";
+    const accessLinkHelperText = visibleAccessLink
+        ? "Este es el enlace recién generado. Cópialo ahora; si recargas la página necesitarás regenerarlo de nuevo porque el token completo no se almacena."
+        : accessLinkState?.access_link_status === "active"
+          ? "Ya existe un enlace activo para estudiantes, pero por seguridad solo puedes ver y copiar un token nuevo en el momento de regenerarlo."
+          : "Regenera el access link para crear el primer enlace de acceso para tus estudiantes.";
+    const accessLinkMetadataText = accessLinkState?.access_link_status === "active"
+        ? accessLinkState.access_link_created_at
+            ? `Enlace activo. Regenerado el ${formatTeacherCourseTimestamp(accessLinkState.access_link_created_at)}.`
+            : "Enlace activo y listo para compartir con estudiantes."
+        : `Aún no existe un enlace activo. Se usará ${accessLinkState?.join_path ?? detail?.configuration.join_path ?? "/app/join"} cuando regeneres uno nuevo.`;
+    const accessLinkErrorMessage = accessLinkActionError;
+    const isRegeneratingAccessLink = regenerateAccessLinkMutation.isPending;
+    const isRefreshingAccessLink = accessLinkQuery.isFetching && !accessLinkQuery.isLoading;
+    const canRegenerateAccessLink = detail?.course.status === "active";
 
     function setTab(tab: TeacherCourseTab) {
         const nextParams = new URLSearchParams(searchParams);
@@ -369,6 +410,46 @@ export function TeacherCoursePage() {
 
             showToast(message, "error");
         }
+    }
+
+    async function handleRegenerateAccessLink() {
+        setAccessLinkActionError(null);
+
+        try {
+            const response = await regenerateAccessLinkMutation.mutateAsync();
+            setTransientAccessLink(response.access_link);
+            showToast(
+                "Nuevo access link generado. Cópialo y compártelo con tus estudiantes.",
+                "success",
+            );
+            void accessLinkQuery.refetch();
+        } catch (error) {
+            const message = getTeacherCourseAccessLinkErrorMessage(
+                error,
+                "No se pudo regenerar el access link. Intenta nuevamente.",
+            );
+            setAccessLinkActionError(message);
+            showToast(message, "error");
+        }
+    }
+
+    async function handleCopyAccessLink() {
+        if (!visibleAccessLink) {
+            return;
+        }
+
+        setAccessLinkActionError(null);
+
+        const copied = await copyToClipboard(visibleAccessLink);
+        if (!copied) {
+            const message =
+                "No se pudo copiar el enlace. Puedes copiarlo manualmente desde el campo visible.";
+            setAccessLinkActionError(message);
+            showToast(message, "error");
+            return;
+        }
+
+        showToast("Access link copiado al portapapeles.", "success");
     }
 
     if (courseDetailQuery.isLoading) {
@@ -1342,58 +1423,67 @@ export function TeacherCoursePage() {
                                 <div className="alert-strip alert-info mb-6">
                                     <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
                                     <span>
-                                        Esta vista solo muestra la metadata entregada por el backend. El contrato actual no expone un raw invite link reutilizable, por eso aquí no aparecen acciones de copiar o regenerar tokens.
+                                        El token completo solo se muestra inmediatamente después de regenerar el enlace. Si vuelves a entrar a la página, deberás crear uno nuevo para copiarlo otra vez.
                                     </span>
                                 </div>
 
-                                <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-                                    <div>
-                                        <label className="form-label" htmlFor="configuration-access-status">
-                                            Estado del enlace
-                                        </label>
-                                        <input
-                                            id="configuration-access-status"
-                                            className="form-input"
-                                            readOnly
-                                            value={formatAccessLinkStatus(
-                                                detail.configuration.access_link_status,
-                                            )}
-                                        />
+                                {accessLinkErrorMessage ? (
+                                    <div className="alert-strip alert-warn mb-6" role="alert">
+                                        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                                        <span>{accessLinkErrorMessage}</span>
                                     </div>
-                                    <div>
-                                        <label className="form-label" htmlFor="configuration-access-id">
-                                            Access link ID
-                                        </label>
-                                        <input
-                                            id="configuration-access-id"
-                                            className="form-input font-mono text-sm"
-                                            readOnly
-                                            value={detail.configuration.access_link_id ?? "No disponible"}
-                                        />
+                                ) : null}
+
+                                <div className="rounded-[22px] border border-slate-200 bg-slate-50 p-5 shadow-sm">
+                                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                        <div>
+                                            <label className="form-label" htmlFor="configuration-visible-access-link">
+                                                Enlace para compartir
+                                            </label>
+                                            <p className="max-w-3xl text-sm text-slate-500">
+                                                Regenera un enlace funcional para estudiantes usando el mismo flujo seguro del join real.
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleCopyAccessLink()}
+                                                disabled={!visibleAccessLink}
+                                                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                <Copy className="h-4 w-4" />
+                                                Copiar enlace
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleRegenerateAccessLink()}
+                                                disabled={!canRegenerateAccessLink || isRegeneratingAccessLink}
+                                                className="inline-flex items-center gap-2 rounded-xl bg-[#0144a0] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#00337a] disabled:cursor-not-allowed disabled:opacity-70"
+                                            >
+                                                {isRegeneratingAccessLink ? (
+                                                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                                                ) : (
+                                                    <RefreshCcw className="h-4 w-4" />
+                                                )}
+                                                {isRegeneratingAccessLink ? "Regenerando..." : "Regenerar enlace"}
+                                            </button>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <label className="form-label" htmlFor="configuration-created-at">
-                                            Creado en
-                                        </label>
-                                        <input
-                                            id="configuration-created-at"
-                                            className="form-input"
+
+                                    <div className="mt-4">
+                                        <textarea
+                                            id="configuration-visible-access-link"
+                                            className="form-input min-h-[112px] font-mono text-sm"
                                             readOnly
-                                            value={formatTeacherCourseTimestamp(
-                                                detail.configuration.access_link_created_at,
-                                            )}
+                                            value={accessLinkDisplayValue}
                                         />
-                                    </div>
-                                    <div>
-                                        <label className="form-label" htmlFor="configuration-join-path">
-                                            Join path
-                                        </label>
-                                        <input
-                                            id="configuration-join-path"
-                                            className="form-input font-mono text-sm"
-                                            readOnly
-                                            value={detail.configuration.join_path}
-                                        />
+                                        <p className="form-hint">{accessLinkHelperText}</p>
+                                        <p className="mt-2 text-sm text-slate-500">{accessLinkMetadataText}</p>
+                                        {isRefreshingAccessLink ? (
+                                            <p className="mt-2 text-xs font-semibold text-slate-400">
+                                                Actualizando metadata del enlace...
+                                            </p>
+                                        ) : null}
                                     </div>
                                 </div>
                             </SectionCard>

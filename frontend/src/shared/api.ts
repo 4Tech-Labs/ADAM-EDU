@@ -39,6 +39,8 @@ import type {
     SuggestRequest,
     SuggestResponse,
     TeacherCaseDetailResponse,
+    TeacherCourseAccessLinkRegenerateResponse,
+    TeacherCourseAccessLinkResponse,
     TeacherCourseDetailResponse,
     TeacherCasesResponse,
     TeacherCoursesResponse,
@@ -1022,6 +1024,11 @@ export const api = {
         async getCourseDetail(courseId: string): Promise<TeacherCourseDetailResponse> {
             return parseJsonResponse<TeacherCourseDetailResponse>(`/teacher/courses/${courseId}`);
         },
+        async getCourseAccessLink(courseId: string): Promise<TeacherCourseAccessLinkResponse> {
+            return parseJsonResponse<TeacherCourseAccessLinkResponse>(
+                `/teacher/courses/${courseId}/access-link`,
+            );
+        },
         async getCases(): Promise<TeacherCasesResponse> {
             return parseJsonResponse<TeacherCasesResponse>("/teacher/cases");
         },
@@ -1035,6 +1042,16 @@ export const api = {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(req),
+                },
+            );
+        },
+        async regenerateCourseAccessLink(
+            courseId: string,
+        ): Promise<TeacherCourseAccessLinkRegenerateResponse> {
+            return parseJsonResponse<TeacherCourseAccessLinkRegenerateResponse>(
+                `/teacher/courses/${courseId}/access-link/regenerate`,
+                {
+                    method: "POST",
                 },
             );
         },

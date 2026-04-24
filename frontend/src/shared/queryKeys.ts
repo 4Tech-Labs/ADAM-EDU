@@ -68,6 +68,8 @@ export const queryKeys = {
         courses: () => ["teacher", "courses"] as const,
         /** ["teacher", "course", courseId] — detalle compuesto de un curso docente */
         course: (courseId: string) => ["teacher", "course", courseId] as const,
+        /** ["teacher", "course-access-link", courseId] — metadata aislada del access link docente */
+        accessLink: (courseId: string) => ["teacher", "course-access-link", courseId] as const,
         /** ["teacher", "cases"] — casos activos del docente autenticado */
         cases: () => ["teacher", "cases"] as const,
         /** ["teacher", "case", id] — detalle de un caso del docente */
