@@ -75,6 +75,49 @@ describe("StudentUserHeader", () => {
 
         expect(screen.getByText("Mateo Vargas")).toBeTruthy();
         expect(screen.getByText("Portal Estudiante")).toBeTruthy();
+        expect(screen.getByText("Portal Académico de Casos")).toBeTruthy();
         expect(screen.getByLabelText("Iniciales de Mateo Vargas")).toHaveTextContent("MV");
+    });
+
+    it("falls back to default identity data when the actor is missing", () => {
+        vi.mocked(useAuth).mockReturnValue({
+            session: null as never,
+            actor: null,
+            loading: false,
+            error: null,
+            signOut,
+            refreshActor: vi.fn(),
+        });
+
+        renderWithProviders(<StudentUserHeader />);
+
+        expect(screen.getByText("Estudiante")).toBeTruthy();
+        expect(screen.getByLabelText("Iniciales de Estudiante")).toHaveTextContent("ES");
+    });
+
+    it("uses two letters for a single-token student name", () => {
+        vi.mocked(useAuth).mockReturnValue({
+            session: { access_token: "jwt" } as never,
+            actor: {
+                ...studentActor,
+                profile: { ...studentActor.profile, full_name: "Mateo" },
+            },
+            loading: false,
+            error: null,
+            signOut,
+            refreshActor: vi.fn(),
+        });
+
+        renderWithProviders(<StudentUserHeader />);
+
+        expect(screen.getByLabelText("Iniciales de Mateo")).toHaveTextContent("MA");
+    });
+
+    it("calls signOut when the user clicks the sign-out button", () => {
+        renderWithProviders(<StudentUserHeader />);
+
+        fireEvent.click(screen.getByRole("button", { name: "Cerrar sesión" }));
+
+        expect(signOut).toHaveBeenCalledTimes(1);
     });
 });

@@ -39,7 +39,7 @@ export function StudentUserHeader() {
                             ADAM
                         </span>
                         <p className="mt-1 text-xs leading-none text-blue-200">
-                            Portal Academico de Casos
+                            Portal Académico de Casos
                         </p>
                     </div>
                 </div>
@@ -81,11 +81,11 @@ export function StudentUserHeader() {
                     <button
                         type="button"
                         onClick={() => void signOut()}
-                        aria-label="Cerrar sesion"
+                        aria-label="Cerrar sesión"
                         className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/10 px-3 text-sm font-semibold text-white transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                     >
                         <span className="sm:hidden">Salir</span>
-                        <span className="hidden sm:inline">Cerrar sesion</span>
+                        <span className="hidden sm:inline">Cerrar sesión</span>
                     </button>
                 </div>
             </div>
