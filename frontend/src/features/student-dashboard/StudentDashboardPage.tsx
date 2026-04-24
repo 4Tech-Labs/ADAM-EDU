@@ -19,6 +19,7 @@ import { useStudentCases, useStudentCourses } from "./useStudentDashboard";
 
 const EMPTY_STUDENT_COURSES: StudentCourseItem[] = [];
 const EMPTY_STUDENT_CASES: StudentCaseItem[] = [];
+type CasesSummaryState = "loading" | "ready" | "error";
 
 function resolveErrorMessage(error: unknown): string {
     if (error instanceof Error && error.message.trim()) {
@@ -101,7 +102,20 @@ function StudentDashboardHeader({ fullName }: { fullName: string }) {
     );
 }
 
-function DashboardActionCards({ pendingCasesCount }: { pendingCasesCount: number }) {
+function DashboardActionCards({
+    pendingCasesCount,
+    casesSummaryState,
+}: {
+    pendingCasesCount: number;
+    casesSummaryState: CasesSummaryState;
+}) {
+    const pendingCasesLabel =
+        casesSummaryState === "error"
+            ? "Estado no disponible"
+            : casesSummaryState === "loading"
+              ? "Cargando estado..."
+              : `${pendingCasesCount} entregables pendientes`;
+
     return (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
             <a
@@ -113,9 +127,7 @@ function DashboardActionCards({ pendingCasesCount }: { pendingCasesCount: number
                 <div className="relative z-10 flex items-center justify-between gap-4">
                     <div>
                         <h2 className="text-base font-bold tracking-tight">Mis Casos</h2>
-                        <p className="mt-1 text-xs font-medium text-blue-100/90">
-                            {pendingCasesCount} entregables pendientes
-                        </p>
+                        <p className="mt-1 text-xs font-medium text-blue-100/90">{pendingCasesLabel}</p>
                     </div>
                     <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/20 backdrop-blur-sm transition-colors group-hover:bg-white/30">
                         <BookOpen className="h-5 w-5" />
@@ -158,10 +170,18 @@ function LoadingState() {
     );
 }
 
-function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+function ErrorState({
+    title = "No se pudo cargar el dashboard",
+    message,
+    onRetry,
+}: {
+    title?: string;
+    message: string;
+    onRetry: () => void;
+}) {
     return (
         <div className="rounded-[24px] border border-red-200 bg-red-50 px-6 py-8 text-center shadow-sm">
-            <h2 className="text-lg font-semibold text-red-900">No se pudo cargar el dashboard</h2>
+            <h2 className="text-lg font-semibold text-red-900">{title}</h2>
             <p className="mt-2 text-sm text-red-700">{message}</p>
             <button
                 type="button"
@@ -350,10 +370,18 @@ export function StudentDashboardPage() {
     );
 
     const hasSearchTerm = deferredSearchTerm.trim().length > 0;
-    const isInitialLoading = coursesQuery.isLoading || casesQuery.isLoading;
-    const initialError = !courses.length && !cases.length
-        ? coursesQuery.error ?? casesQuery.error
+    const coursesInitialLoading = coursesQuery.isLoading && coursesQuery.data === undefined;
+    const casesInitialLoading = casesQuery.isLoading && casesQuery.data === undefined;
+    const coursesInitialError = coursesQuery.data === undefined ? coursesQuery.error ?? null : null;
+    const casesInitialError = casesQuery.data === undefined ? casesQuery.error ?? null : null;
+    const initialError = coursesInitialError && casesInitialError
+        ? coursesInitialError
         : null;
+    const casesSummaryState: CasesSummaryState = casesInitialError
+        ? "error"
+        : casesInitialLoading
+          ? "loading"
+          : "ready";
 
     const handleRetry = () => {
         void coursesQuery.refetch();
@@ -369,7 +397,10 @@ export function StudentDashboardPage() {
                     <ErrorState message={resolveErrorMessage(initialError)} onRetry={handleRetry} />
                 ) : (
                     <>
-                        <DashboardActionCards pendingCasesCount={pendingCasesCount} />
+                        <DashboardActionCards
+                            pendingCasesCount={pendingCasesCount}
+                            casesSummaryState={casesSummaryState}
+                        />
 
                         <div className="relative">
                             <label className="sr-only" htmlFor={searchInputId}>Buscar programa o caso de estudio</label>
@@ -401,7 +432,15 @@ export function StudentDashboardPage() {
                                 <div className="ml-2 h-[2px] flex-1 rounded-full bg-gradient-to-r from-[#0144a0] to-transparent" />
                             </div>
 
-                            {isInitialLoading ? (
+                            {coursesInitialError ? (
+                                <ErrorState
+                                    title="No se pudieron cargar los cursos"
+                                    message={resolveErrorMessage(coursesInitialError)}
+                                    onRetry={() => {
+                                        void coursesQuery.refetch();
+                                    }}
+                                />
+                            ) : coursesInitialLoading ? (
                                 <LoadingState />
                             ) : filteredCourses.length ? (
                                 <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
@@ -426,7 +465,15 @@ export function StudentDashboardPage() {
                                 <div className="ml-2 h-[2px] flex-1 rounded-full bg-gradient-to-r from-[#0144a0] to-transparent" />
                             </div>
 
-                            {isInitialLoading ? (
+                            {casesInitialError ? (
+                                <ErrorState
+                                    title="No se pudieron cargar los casos"
+                                    message={resolveErrorMessage(casesInitialError)}
+                                    onRetry={() => {
+                                        void casesQuery.refetch();
+                                    }}
+                                />
+                            ) : casesInitialLoading ? (
                                 <LoadingState />
                             ) : filteredCases.length ? (
                                 <StudentCasesTable cases={filteredCases} />

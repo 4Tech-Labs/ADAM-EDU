@@ -140,4 +140,39 @@ describe("StudentDashboardPage", () => {
         expect(screen.getByText(/Aun no tienes cursos visibles/i)).toBeTruthy();
         expect(screen.getByText(/Aun no tienes casos visibles/i)).toBeTruthy();
     });
+
+    it("renders a section error when cases fail without hiding loaded courses", () => {
+        vi.mocked(useStudentCourses).mockReturnValue({
+            ...baseQueryState,
+            data: {
+                courses: [
+                    {
+                        id: "course-1",
+                        title: "Analitica Predictiva y Riesgo Crediticio",
+                        code: "MBA-ANR",
+                        semester: "2026-I",
+                        academic_level: "Pregrado",
+                        status: "active",
+                        teacher_display_name: "Rodrigo Penaloza",
+                        pending_cases_count: 2,
+                        next_case_title: "CrediAgil",
+                        next_deadline: "2026-04-25T15:00:00Z",
+                    },
+                ],
+                total: 1,
+            },
+        } as never);
+        vi.mocked(useStudentCases).mockReturnValue({
+            ...baseQueryState,
+            data: undefined,
+            error: new Error("No se pudieron cargar los casos."),
+        } as never);
+
+        renderWithProviders(<StudentDashboardPage />);
+
+        expect(screen.getByText("Analitica Predictiva y Riesgo Crediticio")).toBeTruthy();
+        expect(screen.getByText("Estado no disponible")).toBeTruthy();
+        expect(screen.getByText("No se pudieron cargar los casos")).toBeTruthy();
+        expect(screen.queryByText(/Aun no tienes casos visibles/i)).toBeNull();
+    });
 });

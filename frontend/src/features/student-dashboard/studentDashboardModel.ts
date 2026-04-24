@@ -149,16 +149,17 @@ export function formatCaseStatusMeta(caseItem: StudentCaseItem): { label: string
         const now = new Date();
         const tomorrow = new Date(now);
         tomorrow.setDate(now.getDate() + 1);
+        const timeLabel = formatTime(caseItem.deadline);
 
         if (isSameCalendarDay(deadline, now)) {
             return {
-                label: `Vence hoy${formatTime(caseItem.deadline) ? ` ${formatTime(caseItem.deadline)}` : ""}`,
+                label: `Vence hoy${timeLabel ? ` ${timeLabel}` : ""}`,
                 tone: "amber",
             };
         }
         if (isSameCalendarDay(deadline, tomorrow)) {
             return {
-                label: `Vence manana${formatTime(caseItem.deadline) ? ` ${formatTime(caseItem.deadline)}` : ""}`,
+                label: `Vence manana${timeLabel ? ` ${timeLabel}` : ""}`,
                 tone: "amber",
             };
         }

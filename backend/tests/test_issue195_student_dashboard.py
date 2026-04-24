@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from sqlalchemy import select
 
+import shared.student_reads as student_reads
 from shared.models import Assignment, AssignmentCourse, AuthoringJob, CourseMembership, Membership
 
 
@@ -153,7 +154,13 @@ def test_issue195_student_courses_return_only_enrolled_courses_with_pending_coun
     )
     db.commit()
 
-    with patch("shared.student_router.datetime") as mock_datetime:
+    with (
+        patch("shared.student_router.datetime") as mock_datetime,
+        patch(
+            "shared.student_reads._load_enrolled_courses",
+            wraps=student_reads._load_enrolled_courses,
+        ) as load_enrolled_courses,
+    ):
         mock_datetime.now.return_value = fixed_now
         response = client.get(
             "/api/student/courses",
@@ -190,6 +197,7 @@ def test_issue195_student_courses_return_only_enrolled_courses_with_pending_coun
         ],
         "total": 2,
     }
+    assert load_enrolled_courses.call_count == 1
 
 
 def test_issue195_student_cases_return_availability_statuses_for_enrolled_courses_only(

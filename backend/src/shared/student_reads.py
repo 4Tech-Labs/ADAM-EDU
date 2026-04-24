@@ -156,9 +156,11 @@ def list_student_visible_cases(
     context: StudentContext,
     *,
     now: datetime | None = None,
+    enrolled_course_rows: list[dict[str, Any]] | None = None,
 ) -> list[StudentVisibleCase]:
     reference_now = _resolve_reference_now(now)
-    enrolled_course_rows = _load_enrolled_courses(db, context)
+    if enrolled_course_rows is None:
+        enrolled_course_rows = _load_enrolled_courses(db, context)
     enrolled_course_ids = [str(row["id"]) for row in enrolled_course_rows]
     enrolled_course_id_set = set(enrolled_course_ids)
     if not enrolled_course_ids:
@@ -296,7 +298,12 @@ def list_student_courses(
     if not course_rows:
         return StudentCoursesResponse(courses=[], total=0)
 
-    visible_cases = list_student_visible_cases(db, context, now=reference_now)
+    visible_cases = list_student_visible_cases(
+        db,
+        context,
+        now=reference_now,
+        enrolled_course_rows=course_rows,
+    )
     aggregates: dict[str, dict[str, Any]] = {
         str(row["id"]): {
             "pending_cases_count": 0,
@@ -326,24 +333,27 @@ def list_student_courses(
                     aggregate["next_case_title"] = case.title
                     aggregate["next_deadline"] = case.deadline
 
-    courses = [
-        StudentCourseItemResponse(
-            id=str(row["id"]),
-            title=str(row["title"]),
-            code=str(row["code"]),
-            semester=str(row["semester"]),
-            academic_level=str(row["academic_level"]),
-            status=_student_course_status(row["status"]),
-            teacher_display_name=(
-                str(row["teacher_display_name"])
-                if row["teacher_display_name"]
-                else "Docente asignado"
-            ),
-            pending_cases_count=int(aggregates[str(row["id"])] ["pending_cases_count"]),
-            next_case_title=aggregates[str(row["id"])] ["next_case_title"],
-            next_deadline=aggregates[str(row["id"])] ["next_deadline"],
+    courses: list[StudentCourseItemResponse] = []
+    for row in course_rows:
+        course_id = str(row["id"])
+        aggregate = aggregates[course_id]
+        courses.append(
+            StudentCourseItemResponse(
+                id=course_id,
+                title=str(row["title"]),
+                code=str(row["code"]),
+                semester=str(row["semester"]),
+                academic_level=str(row["academic_level"]),
+                status=_student_course_status(row["status"]),
+                teacher_display_name=(
+                    str(row["teacher_display_name"])
+                    if row["teacher_display_name"]
+                    else "Docente asignado"
+                ),
+                pending_cases_count=int(aggregate["pending_cases_count"]),
+                next_case_title=aggregate["next_case_title"],
+                next_deadline=aggregate["next_deadline"],
+            )
         )
-        for row in course_rows
-    ]
 
     return StudentCoursesResponse(courses=courses, total=len(courses))
