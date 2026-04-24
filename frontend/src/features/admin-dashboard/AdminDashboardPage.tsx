@@ -142,6 +142,8 @@ export function AdminDashboardPage() {
         queryFn: () => api.admin.listCourses(courseFilters),
         staleTime: 30_000,
         placeholderData: keepPreviousData,
+        refetchInterval: 30_000,
+        refetchIntervalInBackground: false,
         refetchOnWindowFocus: "always",
     });
     const teacherOptionsQuery = useQuery({

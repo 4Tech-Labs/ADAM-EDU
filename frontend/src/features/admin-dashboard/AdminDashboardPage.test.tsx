@@ -797,6 +797,33 @@ describe("AdminDashboardPage", () => {
         expect(api.admin.getDashboardSummary).toHaveBeenCalledTimes(2);
     }, 20_000);
 
+    it("auto-refreshes the courses table every 30 seconds while the dashboard stays open", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        vi.mocked(api.admin.listCourses)
+            .mockResolvedValueOnce(coursesResponse)
+            .mockResolvedValueOnce({
+                ...coursesResponse,
+                items: [
+                    {
+                        ...activeCourse,
+                        students_count: 17,
+                        occupancy_percent: 68,
+                    },
+                    inactiveCourse,
+                ],
+            });
+
+        renderPage();
+        await screen.findByText("Directorio de Cursos");
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(30_000);
+        });
+
+        expect(await screen.findByText("68%")).toBeTruthy();
+        expect(api.admin.listCourses).toHaveBeenCalledTimes(2);
+    }, 20_000);
+
     it("keeps the current dashboard mounted while a focus revalidation is pending and updates KPIs in place", async () => {
         const refreshSummaryDeferred = createDeferred<AdminDashboardSummaryResponse>();
         const refreshCoursesDeferred = createDeferred<AdminCourseListResponse>();

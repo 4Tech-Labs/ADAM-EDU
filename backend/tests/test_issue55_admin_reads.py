@@ -188,6 +188,71 @@ def test_issue55_summary_returns_zero_average_without_active_courses(
     assert response.json()["average_occupancy"] == 0
 
 
+def test_issue55_courses_reflect_second_course_enrollment_for_existing_student(
+    client,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-00000000056a"
+    admin_id, admin_email = _seed_admin(seed_identity, university_id=university_id)
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher-second-course-count@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student-second-course-count@example.edu",
+        role="student",
+        university_id=university_id,
+    )
+    first_course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Primer Curso",
+        code="ADMIN-COUNT-001",
+        max_students=10,
+    )
+    second_course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Segundo Curso",
+        code="ADMIN-COUNT-002",
+        max_students=5,
+    )
+    seed_course_membership(course_id=first_course.id, membership_id=student["membership"].id)
+    _, second_course_token = seed_course_access_link(course_id=second_course.id, status="active")
+
+    enroll_response = client.post(
+        "/api/course-access/enroll",
+        json={"course_access_token": second_course_token},
+        headers=_auth_headers(
+            auth_headers_factory,
+            user_id=student["profile"].id,
+            email="student.second-course-count@example.edu",
+        ),
+    )
+
+    assert enroll_response.status_code == 200
+    assert enroll_response.json() == {"status": "enrolled"}
+
+    courses_response = client.get(
+        "/api/admin/courses",
+        headers=_auth_headers(auth_headers_factory, user_id=admin_id, email=admin_email),
+    )
+
+    assert courses_response.status_code == 200
+    items_by_id = {item["id"]: item for item in courses_response.json()["items"]}
+    assert items_by_id[first_course.id]["students_count"] == 1
+    assert items_by_id[first_course.id]["occupancy_percent"] == 10
+    assert items_by_id[second_course.id]["students_count"] == 1
+    assert items_by_id[second_course.id]["occupancy_percent"] == 20
+
+
 def test_issue55_courses_support_filters_search_pagination_and_stable_order(
     client,
     db,
