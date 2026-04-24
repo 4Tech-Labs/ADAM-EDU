@@ -285,7 +285,7 @@ describe("StudentJoinPage", () => {
             });
         });
         await waitFor(() => {
-            expect(mockNavigate).toHaveBeenCalledWith("/student", { replace: true });
+            expect(mockNavigate).toHaveBeenCalledWith("/student/dashboard", { replace: true });
         });
     });
 
@@ -406,7 +406,7 @@ describe("StudentJoinPage", () => {
             expect(mockRefreshActor).toHaveBeenCalled();
         });
         await waitFor(() => {
-            expect(mockNavigate).toHaveBeenCalledWith("/student", { replace: true });
+            expect(mockNavigate).toHaveBeenCalledWith("/student/dashboard", { replace: true });
         });
         expect(api.auth.activateCourseAccessPassword).not.toHaveBeenCalled();
     });

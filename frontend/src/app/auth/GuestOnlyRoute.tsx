@@ -7,7 +7,7 @@ type Role = MembershipSnapshot["role"];
 
 const ROLE_DASHBOARD: Record<Role, string> = {
     teacher: "/teacher/dashboard",
-    student: "/student",
+    student: "/student/dashboard",
     university_admin: "/admin/dashboard",
 };
 

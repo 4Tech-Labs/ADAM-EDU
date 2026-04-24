@@ -225,7 +225,7 @@ export function StudentJoinPage() {
                 if (cancelled) return;
                 clearActivationContext();
                 await refreshActor();
-                if (!cancelled) navigate("/student", { replace: true });
+                if (!cancelled) navigate("/student/dashboard", { replace: true });
             })
             .catch((err: unknown) => {
                 if (cancelled) return;
@@ -315,7 +315,7 @@ export function StudentJoinPage() {
             }
 
             clearActivationContext();
-            navigate("/student", { replace: true });
+            navigate("/student/dashboard", { replace: true });
         } catch (err: unknown) {
             setSubmitError(resolveSubmitError(err as ApiError, joinContext.token_kind));
         } finally {

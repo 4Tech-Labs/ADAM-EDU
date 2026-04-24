@@ -32,6 +32,22 @@ const teacherActor: AuthMeActor = {
     primary_role: "teacher",
 };
 
+const studentActor: AuthMeActor = {
+    auth_user_id: "student-1",
+    profile: { id: "profile-2", full_name: "Mateo Vargas" },
+    memberships: [
+        {
+            id: "membership-2",
+            university_id: "uni-1",
+            role: "student",
+            status: "active",
+            must_rotate_password: false,
+        },
+    ],
+    must_rotate_password: false,
+    primary_role: "student",
+};
+
 function renderTeacherGuestRoute() {
     return render(
         <MemoryRouter initialEntries={["/teacher/login"]}>
@@ -47,6 +63,27 @@ function renderTeacherGuestRoute() {
                 <Route
                     path="/teacher/dashboard"
                     element={<div data-testid="teacher-dashboard-destination" />}
+                />
+            </Routes>
+        </MemoryRouter>,
+    );
+}
+
+function renderStudentGuestRoute() {
+    return render(
+        <MemoryRouter initialEntries={["/student/login"]}>
+            <Routes>
+                <Route
+                    path="/student/login"
+                    element={
+                        <GuestOnlyRoute role="student">
+                            <div data-testid="student-guest-content">Student login</div>
+                        </GuestOnlyRoute>
+                    }
+                />
+                <Route
+                    path="/student/dashboard"
+                    element={<div data-testid="student-dashboard-destination" />}
                 />
             </Routes>
         </MemoryRouter>,
@@ -79,5 +116,20 @@ describe("GuestOnlyRoute", () => {
             await screen.findByTestId("teacher-dashboard-destination"),
         ).toBeTruthy();
         expect(screen.queryByTestId("guest-content")).toBeNull();
+    });
+
+    it("redirects an authenticated student to /student/dashboard", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: studentActor,
+        });
+
+        renderStudentGuestRoute();
+
+        expect(
+            await screen.findByTestId("student-dashboard-destination"),
+        ).toBeTruthy();
+        expect(screen.queryByTestId("student-guest-content")).toBeNull();
     });
 });

@@ -52,6 +52,22 @@ const adminActor: AuthMeActor = {
     primary_role: "university_admin",
 };
 
+const studentActor: AuthMeActor = {
+    auth_user_id: "student-1",
+    profile: { id: "profile-3", full_name: "Mateo Vargas" },
+    memberships: [
+        {
+            id: "membership-3",
+            university_id: "uni-1",
+            role: "student",
+            status: "active",
+            must_rotate_password: false,
+        },
+    ],
+    must_rotate_password: false,
+    primary_role: "student",
+};
+
 const rotatingAdminActor: AuthMeActor = {
     ...adminActor,
     must_rotate_password: true,
@@ -110,6 +126,20 @@ describe("RootRedirect", () => {
 
         expect(await screen.findByTestId("location")).toHaveTextContent(
             "/admin/dashboard",
+        );
+    });
+
+    it("redirects a student actor to /student/dashboard", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: studentActor,
+        });
+
+        renderRootRedirect();
+
+        expect(await screen.findByTestId("location")).toHaveTextContent(
+            "/student/dashboard",
         );
     });
 

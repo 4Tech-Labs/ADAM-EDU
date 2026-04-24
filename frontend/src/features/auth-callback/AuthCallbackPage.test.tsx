@@ -236,7 +236,7 @@ describe("AuthCallbackPage", () => {
             expect(api.auth.activateOAuthComplete).toHaveBeenCalledWith("student-invite-tok"),
         );
         await waitFor(() =>
-            expect(mockNavigate).toHaveBeenCalledWith("/student", { replace: true }),
+            expect(mockNavigate).toHaveBeenCalledWith("/student/dashboard", { replace: true }),
         );
     });
 
@@ -260,7 +260,7 @@ describe("AuthCallbackPage", () => {
             expect(api.auth.enrollWithCourseAccess).toHaveBeenCalledWith("course-access-tok"),
         );
         await waitFor(() =>
-            expect(mockNavigate).toHaveBeenCalledWith("/student", { replace: true }),
+            expect(mockNavigate).toHaveBeenCalledWith("/student/dashboard", { replace: true }),
         );
     });
 

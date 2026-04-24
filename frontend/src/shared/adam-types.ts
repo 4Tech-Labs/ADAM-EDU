@@ -373,6 +373,41 @@ export interface ChangePasswordResponse {
     status: string;
 }
 
+export type StudentCourseStatus = "active" | "inactive";
+export type StudentCaseStatus = "available" | "upcoming" | "closed";
+
+export interface StudentCourseItem {
+    id: string;
+    title: string;
+    code: string;
+    semester: string;
+    academic_level: string;
+    status: StudentCourseStatus;
+    teacher_display_name: string;
+    pending_cases_count: number;
+    next_case_title: string | null;
+    next_deadline: string | null;
+}
+
+export interface StudentCoursesResponse {
+    courses: StudentCourseItem[];
+    total: number;
+}
+
+export interface StudentCaseItem {
+    id: string;
+    title: string;
+    available_from: string | null;
+    deadline: string | null;
+    status: StudentCaseStatus;
+    course_codes: string[];
+}
+
+export interface StudentCasesResponse {
+    cases: StudentCaseItem[];
+    total: number;
+}
+
 export interface AdminDashboardSummaryResponse {
     active_courses: number;
     active_teachers: number;

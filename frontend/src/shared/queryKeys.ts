@@ -34,6 +34,14 @@ export const queryKeys = {
         /** ["auth", "actor"] — perfil del usuario autenticado vía /auth/me */
         actor: () => ["auth", "actor"] as const,
     },
+    student: {
+        /** ["student"] — key raíz para invalidación masiva */
+        all: () => ["student"] as const,
+        /** ["student", "courses"] — cursos visibles del estudiante autenticado */
+        courses: () => ["student", "courses"] as const,
+        /** ["student", "cases"] — casos visibles del estudiante autenticado */
+        cases: () => ["student", "cases"] as const,
+    },
     admin: {
         /** ["admin"] — key raíz para invalidación masiva (ej. al cerrar sesión) */
         all: () => ["admin"] as const,

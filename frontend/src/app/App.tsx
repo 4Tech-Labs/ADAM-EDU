@@ -53,6 +53,11 @@ const StudentJoinPage = lazy(() =>
         default: module.StudentJoinPage,
     })),
 );
+const StudentDashboardPage = lazy(() =>
+    import("@/features/student-dashboard/StudentDashboardPage").then((module) => ({
+        default: module.StudentDashboardPage,
+    })),
+);
 const AdminLoginPage = lazy(() =>
     import("@/features/admin-auth/AdminLoginPage").then((module) => ({
         default: module.AdminLoginPage,
@@ -89,11 +94,14 @@ function App() {
         location.pathname.startsWith("/teacher/cases") ||
         location.pathname.startsWith("/teacher/case-designer") ||
         location.pathname === "/teacher";
+    const isStudentShellRoute =
+        location.pathname.startsWith("/student/dashboard") ||
+        location.pathname === "/student";
 
     return (
         <ToastProvider>
         <div className="flex min-h-screen flex-col bg-bg-page font-sans type-body">
-            {!isLandingRoute && !isAdminDashboardRoute && !isTeacherShellRoute && <SiteHeader />}
+            {!isLandingRoute && !isAdminDashboardRoute && !isTeacherShellRoute && !isStudentShellRoute && <SiteHeader />}
 
             <main className="flex-1">
                 <Suspense fallback={<RouteFallback />}>
@@ -166,18 +174,14 @@ function App() {
                         />
                         <Route path="/join" element={<StudentJoinPage />} />
                         <Route
-                            path="/student/*"
+                            path="/student/dashboard"
                             element={
                                 <RequireRole role="student">
-                                    <div className="flex flex-col items-center justify-center gap-4 px-4 py-24 text-center">
-                                        <h1 className="text-xl font-semibold">Panel del estudiante</h1>
-                                        <p className="max-w-xs text-sm text-muted-foreground">
-                                            El panel completo estará disponible en la próxima versión.
-                                        </p>
-                                    </div>
+                                    <StudentDashboardPage />
                                 </RequireRole>
                             }
                         />
+                        <Route path="/student" element={<Navigate to="/student/dashboard" replace />} />
 
                         <Route
                             path="/admin/login"
