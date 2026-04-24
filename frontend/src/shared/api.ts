@@ -36,6 +36,8 @@ import type {
     IntentType,
     InviteRedeemResponse,
     InviteResolveResponse,
+    StudentCasesResponse,
+    StudentCoursesResponse,
     SuggestRequest,
     SuggestResponse,
     TeacherCaseDetailResponse,
@@ -61,8 +63,10 @@ type ApiErrorCode =
     | "profile_incomplete"
     | "membership_required"
     | "account_suspended"
+    | "student_role_required"
     | "authoring_forbidden"
     | "legacy_bridge_missing"
+    | "student_membership_context_required"
     | "teacher_membership_context_required"
     | "db_saturated"
     | "db_timeout";
@@ -160,6 +164,8 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
                 return "Tu cuenta no esta lista para usar el authoring todavia.";
             case "membership_required":
                 return "Tu cuenta no tiene membresia activa para usar esta accion.";
+            case "student_role_required":
+                return "Tu cuenta no tiene acceso al portal del estudiante.";
             case "account_suspended":
                 return "Tu cuenta esta suspendida para esta accion.";
             case "authoring_forbidden":
@@ -167,6 +173,10 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
             default:
                 return "No tienes permisos para esta accion.";
         }
+    }
+
+    if (status === 409 && code === "student_membership_context_required") {
+        return "Tu cuenta tiene multiples membresias estudiantiles activas y requiere seleccion de contexto.";
     }
 
     if (status === 409 && code === "teacher_membership_context_required") {
@@ -924,6 +934,14 @@ export const api = {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(req),
             });
+        },
+    },
+    student: {
+        async getCourses(): Promise<StudentCoursesResponse> {
+            return parseJsonResponse<StudentCoursesResponse>("/student/courses");
+        },
+        async getCases(): Promise<StudentCasesResponse> {
+            return parseJsonResponse<StudentCasesResponse>("/student/cases");
         },
     },
     admin: {

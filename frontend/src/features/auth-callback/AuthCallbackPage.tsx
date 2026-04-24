@@ -106,7 +106,7 @@ export function AuthCallbackPage() {
                     }
                     clearActivationContext();
                     await refreshActor();
-                    navigate("/student", { replace: true });
+                    navigate("/student/dashboard", { replace: true });
                 } catch (err: unknown) {
                     clearActivationContext();
                     setActivationFlow("student_join_invite");
@@ -150,7 +150,7 @@ export function AuthCallbackPage() {
 
                     clearActivationContext();
                     await refreshActor();
-                    navigate("/student", { replace: true });
+                    navigate("/student/dashboard", { replace: true });
                 } catch (err: unknown) {
                     clearActivationContext();
                     setActivationFlow("student_join_course_access");
@@ -180,7 +180,7 @@ export function AuthCallbackPage() {
                 navigate("/teacher/dashboard", { replace: true });
                 break;
             case "student":
-                navigate("/student", { replace: true });
+                navigate("/student/dashboard", { replace: true });
                 break;
             default:
                 navigate("/", { replace: true });

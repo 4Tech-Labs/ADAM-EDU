@@ -34,6 +34,11 @@ vi.mock("@/features/student-auth/StudentJoinPage", () => ({
 vi.mock("@/features/student-auth/StudentLoginPage", () => ({
     StudentLoginPage: () => <div data-testid="student-login-page">Student login</div>,
 }));
+vi.mock("@/features/student-dashboard/StudentDashboardPage", () => ({
+    StudentDashboardPage: () => (
+        <div data-testid="student-dashboard-page">Student dashboard</div>
+    ),
+}));
 vi.mock("@/app/AppLanding", () => ({
     AppLanding: () => <div data-testid="app-landing">Landing</div>,
 }));
@@ -71,6 +76,22 @@ const teacherActor: AuthMeActor = {
     ],
     must_rotate_password: false,
     primary_role: "teacher",
+};
+
+const studentActor: AuthMeActor = {
+    auth_user_id: "student-1",
+    profile: { id: "profile-3", full_name: "Mateo Vargas" },
+    memberships: [
+        {
+            id: "membership-3",
+            university_id: "uni-1",
+            role: "student",
+            status: "active",
+            must_rotate_password: false,
+        },
+    ],
+    must_rotate_password: false,
+    primary_role: "student",
 };
 
 const baseContext = {
@@ -277,5 +298,35 @@ describe("App admin shell layout", () => {
         });
 
         expect(await screen.findByTestId("student-login-page")).toBeTruthy();
+    });
+
+    it("does not render the global SiteHeader on /student/dashboard", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: studentActor,
+        });
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/student/dashboard"],
+        });
+
+        expect(await screen.findByTestId("student-dashboard-page")).toBeTruthy();
+        expect(screen.queryByTestId("site-header")).toBeNull();
+    });
+
+    it("redirects /student to the canonical dashboard route", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: studentActor,
+        });
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/student"],
+        });
+
+        expect(await screen.findByTestId("student-dashboard-page")).toBeTruthy();
+        expect(screen.queryByTestId("site-header")).toBeNull();
     });
 });
