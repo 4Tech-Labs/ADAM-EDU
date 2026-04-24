@@ -476,6 +476,9 @@ describe("TeacherCoursePage", () => {
         await waitFor(() => {
             expect(api.teacher.regenerateCourseAccessLink).toHaveBeenCalledWith("course-1");
         });
+        await waitFor(() => {
+            expect(api.teacher.getCourseAccessLink).toHaveBeenCalledTimes(2);
+        });
 
         await waitFor(() => {
             expect(screen.getByLabelText(/Enlace para compartir/i)).toHaveValue(

@@ -422,7 +422,6 @@ export function TeacherCoursePage() {
                 "Nuevo access link generado. Cópialo y compártelo con tus estudiantes.",
                 "success",
             );
-            void accessLinkQuery.refetch();
         } catch (error) {
             const message = getTeacherCourseAccessLinkErrorMessage(
                 error,
