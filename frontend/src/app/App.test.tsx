@@ -39,6 +39,11 @@ vi.mock("@/features/student-dashboard/StudentDashboardPage", () => ({
         <div data-testid="student-dashboard-page">Student dashboard</div>
     ),
 }));
+vi.mock("@/features/student-runtime/StudentCaseResolutionPage", () => ({
+    StudentCaseResolutionPage: () => (
+        <div data-testid="student-case-resolution-page">Student case resolution</div>
+    ),
+}));
 vi.mock("@/app/AppLanding", () => ({
     AppLanding: () => <div data-testid="app-landing">Landing</div>,
 }));
@@ -327,6 +332,21 @@ describe("App admin shell layout", () => {
         });
 
         expect(await screen.findByTestId("student-dashboard-page")).toBeTruthy();
+        expect(screen.queryByTestId("site-header")).toBeNull();
+    });
+
+    it("does not render the global SiteHeader on /student/cases/:assignmentId/resolve", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: studentActor,
+        });
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/student/cases/case-1/resolve"],
+        });
+
+        expect(await screen.findByTestId("student-case-resolution-page")).toBeTruthy();
         expect(screen.queryByTestId("site-header")).toBeNull();
     });
 });

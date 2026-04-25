@@ -37,6 +37,11 @@ import type {
     InviteRedeemResponse,
     InviteResolveResponse,
     StudentCasesResponse,
+    StudentCaseDetailResponse,
+    StudentCaseDraftRequest,
+    StudentCaseDraftResponse,
+    StudentCaseSubmitRequest,
+    StudentCaseSubmitResponse,
     StudentCoursesResponse,
     SuggestRequest,
     SuggestResponse,
@@ -69,7 +74,16 @@ type ApiErrorCode =
     | "student_membership_context_required"
     | "teacher_membership_context_required"
     | "db_saturated"
-    | "db_timeout";
+    | "db_timeout"
+    | "assignment_forbidden"
+    | "assignment_not_found"
+    | "version_conflict"
+    | "already_submitted"
+    | "deadline_passed"
+    | "payload_too_large"
+    | "invalid_question_id"
+    | "invalid_answer_value"
+    | "too_many_answers";
 
 export interface ProgressEvent {
     event: string;
@@ -101,7 +115,13 @@ export interface ApiValidationErrorDetail {
     ctx?: Record<string, unknown>;
 }
 
-export type ApiErrorDetail = string | ApiValidationErrorDetail[];
+export interface ApiStructuredErrorDetail {
+    code: string;
+    message?: string;
+    [key: string]: unknown;
+}
+
+export type ApiErrorDetail = string | ApiValidationErrorDetail[] | ApiStructuredErrorDetail;
 
 export class ApiError extends Error {
     readonly status: number;
@@ -144,18 +164,50 @@ export async function createAuthorizedHeaders(init?: HeadersInit): Promise<Heade
 }
 
 function normalizeErrorDetail(detail?: ApiErrorDetail) {
-    if (typeof detail !== "string") {
-        return undefined;
+    if (typeof detail === "string") {
+        return detail.trim() || undefined;
     }
-    return detail.trim() || undefined;
+    if (detail && typeof detail === "object" && !Array.isArray(detail) && typeof detail.code === "string") {
+        return detail.code.trim() || undefined;
+    }
+    return undefined;
+}
+
+function getStructuredErrorMessage(detail?: ApiErrorDetail) {
+    if (detail && typeof detail === "object" && !Array.isArray(detail) && typeof detail.message === "string") {
+        return detail.message.trim() || undefined;
+    }
+    return undefined;
+}
+
+export function getApiErrorCode(error: unknown): string | null {
+    if (!(error instanceof ApiError)) {
+        return null;
+    }
+    return normalizeErrorDetail(error.detail) ?? null;
+}
+
+export function getApiErrorMessage(error: unknown): string {
+    if (error instanceof ApiError) {
+        return error.message;
+    }
+    if (error instanceof Error && error.message.trim()) {
+        return error.message;
+    }
+    return "Error del servidor";
 }
 
 export function formatHttpError(status: number, detail?: ApiErrorDetail) {
     const normalized = normalizeErrorDetail(detail);
+    const structuredMessage = getStructuredErrorMessage(detail);
     const code = normalized as ApiErrorCode | undefined;
 
     if (status === 401) {
         return "Sesion requerida o expirada. Vuelve a iniciar sesion.";
+    }
+
+    if (status === 404 && code === "assignment_not_found") {
+        return structuredMessage || "El caso no esta disponible o no existe.";
     }
 
     if (status === 403) {
@@ -170,6 +222,12 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
                 return "Tu cuenta esta suspendida para esta accion.";
             case "authoring_forbidden":
                 return "Acceso denegado para esta accion.";
+            case "assignment_forbidden":
+                return structuredMessage || "No tienes acceso a este caso.";
+            case "already_submitted":
+                return structuredMessage || "Este caso ya fue entregado.";
+            case "deadline_passed":
+                return structuredMessage || "La fecha limite de este caso ya paso.";
             default:
                 return "No tienes permisos para esta accion.";
         }
@@ -187,6 +245,25 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
         return "Tu cuenta docente no esta completamente aprovisionada para consultar casos.";
     }
 
+    if (status === 409 && code === "version_conflict") {
+        return structuredMessage || "Tu borrador esta desactualizado frente a la version guardada.";
+    }
+
+    if (status === 422) {
+        switch (code) {
+            case "payload_too_large":
+                return structuredMessage || "Tus respuestas exceden el tamano permitido.";
+            case "invalid_question_id":
+                return structuredMessage || "Se detecto una pregunta invalida en el borrador.";
+            case "invalid_answer_value":
+                return structuredMessage || "Una de las respuestas no tiene un formato valido.";
+            case "too_many_answers":
+                return structuredMessage || "El borrador incluye mas respuestas de las permitidas.";
+            default:
+                break;
+        }
+    }
+
     if (status === 503) {
         if (code === "db_saturated") {
             return "El sistema esta temporalmente saturado. Intenta de nuevo en unos segundos.";
@@ -201,7 +278,7 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
         return detail[0]?.msg || "Solicitud invalida.";
     }
 
-    return normalized || "Error del servidor";
+    return structuredMessage || normalized || "Error del servidor";
 }
 
 async function readErrorDetail(res: Response): Promise<ApiErrorDetail | undefined> {
@@ -215,6 +292,9 @@ async function readErrorDetail(res: Response): Promise<ApiErrorDetail | undefine
             }
             if (Array.isArray(payload.detail)) {
                 return payload.detail as ApiValidationErrorDetail[];
+            }
+            if (payload.detail && typeof payload.detail === "object") {
+                return payload.detail as ApiStructuredErrorDetail;
             }
         } catch {
             return undefined;
@@ -942,6 +1022,29 @@ export const api = {
         },
         async getCases(): Promise<StudentCasesResponse> {
             return parseJsonResponse<StudentCasesResponse>("/student/cases");
+        },
+        async getCaseDetail(assignmentId: string): Promise<StudentCaseDetailResponse> {
+            return parseJsonResponse<StudentCaseDetailResponse>(`/student/cases/${assignmentId}`);
+        },
+        async saveCaseDraft(
+            assignmentId: string,
+            request: StudentCaseDraftRequest,
+        ): Promise<StudentCaseDraftResponse> {
+            return parseJsonResponse<StudentCaseDraftResponse>(`/student/cases/${assignmentId}/draft`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(request),
+            });
+        },
+        async submitCase(
+            assignmentId: string,
+            request: StudentCaseSubmitRequest,
+        ): Promise<StudentCaseSubmitResponse> {
+            return parseJsonResponse<StudentCaseSubmitResponse>(`/student/cases/${assignmentId}/submit`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(request),
+            });
         },
     },
     admin: {

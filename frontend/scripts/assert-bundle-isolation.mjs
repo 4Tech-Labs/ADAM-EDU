@@ -43,6 +43,23 @@ function assertContains(content, references, owner) {
   }
 }
 
+function findPreviewLazyOwner(casePreviewAsset, references) {
+  const casePreviewContent = readAsset(casePreviewAsset);
+  const casePreviewImports = listStaticImports(casePreviewContent);
+  const candidateNames = [casePreviewAsset, ...casePreviewImports];
+
+  for (const candidateName of candidateNames) {
+    const candidateContent = readAsset(candidateName);
+    if (references.every((reference) => candidateContent.includes(reference))) {
+      return candidateName;
+    }
+  }
+
+  throw new Error(
+    `${casePreviewAsset} y sus imports estaticos no conservan la cadena async esperada: ${references.join(", ")}`,
+  );
+}
+
 const indexAsset = findAsset("index");
 const teacherLoginAsset = findAsset("TeacherLoginPage");
 const casePreviewAsset = findAsset("CasePreview");
@@ -59,6 +76,7 @@ const teacherLoginContent = readAsset(teacherLoginAsset);
 const casePreviewContent = readAsset(casePreviewAsset);
 const m2Content = readAsset(m2Asset);
 const plotlyChartsRendererContent = readAsset(plotlyChartsRendererAsset);
+const casePreviewLazyOwnerAsset = findPreviewLazyOwner(casePreviewAsset, [m2Asset, m3Asset, m4Asset, m5Asset, m6Asset]);
 
 const indexImports = listStaticImports(indexContent);
 const teacherLoginImports = listStaticImports(teacherLoginContent);
@@ -73,7 +91,7 @@ assertMissing(
   ["CasePreview-", "M2Eda-", "M3AuditSection-", "M4Finance-", "M5ExecutiveReport-", "M6MasterSolution-", "PlotlyChartsRenderer-", "PlotlyComponent-"],
   teacherLoginAsset,
 );
-assertContains(casePreviewContent, [m2Asset, m3Asset, m4Asset, m5Asset, m6Asset], casePreviewAsset);
+assertContains(readAsset(casePreviewLazyOwnerAsset), [m2Asset, m3Asset, m4Asset, m5Asset, m6Asset], casePreviewLazyOwnerAsset);
 assertContains(m2Content, [plotlyChartsRendererAsset], m2Asset);
 assertContains(plotlyChartsRendererContent, [plotlyComponentAsset], plotlyChartsRendererAsset);
 
@@ -81,5 +99,6 @@ console.log("Bundle isolation assertions passed.");
 console.log(`Entry chunk: ${indexAsset}`);
 console.log(`Teacher login chunk: ${teacherLoginAsset}`);
 console.log(`Case preview chunk: ${casePreviewAsset}`);
+console.log(`Case preview lazy owner chunk: ${casePreviewLazyOwnerAsset}`);
 console.log(`Plotly renderer chunk: ${plotlyChartsRendererAsset}`);
 console.log(`Plotly component chunk: ${plotlyComponentAsset}`);

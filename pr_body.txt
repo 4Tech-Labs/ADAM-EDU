@@ -1,52 +1,50 @@
 ﻿## Summary
-- requires `course_id` on authoring intake, persists `assignments.course_id`, and keeps legacy job ownership paths readable
-- resolves syllabus grounding only from persisted server snapshots during authoring execution and fails explicitly when that snapshot is unavailable
-- injects canonical syllabus context and preferred techniques into the LangGraph runtime instead of trusting frontend-authored grounding
-- rewires teacher authoring UI to real teacher course/detail APIs and removes mock course-module authority from the form
-- adds migration, reusable test fixtures, and regression coverage across backend auth/intake/runtime plus frontend authoring flows
-- removes the resolved Issue #139 follow-up from `TODOS.md`
+- aligns the canonical student runtime route to `/student/cases/:assignmentId/resolve` from dashboard to router tests
+- moves student autosave, retry/backoff, local draft backup, submit, conflict handling, and deadline handling into `useStudentCaseResolution`
+- replaces inline submit/conflict handling with dedicated runtime UI components and modal flows required by Issue 196
+- normalizes backend student-case auth/detail errors to the structured envelope expected by the frontend
+- extracts shared case-viewer pieces so teacher preview and student runtime share the same rendering surface without duplicating logic
+- fixes the post-submit dashboard flash found in manual QA by updating student dashboard caches immediately after submit succeeds
 
 ## Executive Summary
-This PR closes the production gap between teacher authoring and the syllabus domain. The backend is now the sole source of truth for course-linked grounding: the intake only accepts a real teacher-owned `course_id`, the runtime resolves the immutable syllabus snapshot captured at job creation, and the frontend only selects canonical course/module/unit identifiers without inventing grounding state client-side.
+This PR takes Issue 196 from blocked-for-merge to production-ready. The student runtime now uses the correct route contract, keeps autosave logic in the hook instead of the page, persists local drafts safely, handles version conflicts and closed deadlines explicitly, and returns the dashboard to a coherent submitted state immediately after delivery. Teacher preview parity remains covered after the shared renderer extraction.
 
 ## Architecture Decisions
-- Keep `Course` authoritative for teacher-owned course identity and persist that link on `Assignment`
-- Validate ownership and syllabus presence at intake time with an explicit `412` guard for courses without syllabus
-- Persist only canonical syllabus identifiers in the job payload and resolve human-readable titles plus grounding from `SyllabusRevision.snapshot`
-- Keep old jobs without `course_id` readable through the legacy ownership branch while new jobs authorize by teacher membership + university scope
-- Feed LangGraph with server-resolved `ai_grounding_context` and merged preferred techniques instead of client strings
-- Replace authoring mock course data with `GET /teacher/courses` and `GET /teacher/courses/{course_id}`; keep target groups as teacher-entered data rather than fake backend-derived options
+- keep `queryKeys.student.caseDetail(assignmentId)` as the canonical runtime query key and preserve `case()` only as a deprecated alias
+- keep autosave orchestration in the hook, not the page, so debounce, retry, reconciliation, and unmount flush stay bound to state ownership
+- treat backend sanitization and structured error envelopes as authoritative for student detail, draft, and submit endpoints
+- reuse the shared case-viewer surface for student and teacher flows by extracting `PreguntaCard`, `SectionRail`, and `SolucionEsperadaRenderer`
+- update `student.cases` and `student.courses` cache optimistically on submit success so the dashboard never flashes stale actionable state
 
 ## Main Files Changed
-- `backend/src/shared/app.py`
-- `backend/src/shared/models.py`
-- `backend/src/shared/teacher_reads.py`
-- `backend/src/case_generator/core/authoring.py`
-- `backend/src/case_generator/graph.py`
-- `backend/src/case_generator/state.py`
-- `backend/alembic/versions/9f3e2a1b7c4d_issue139_authoring_course_grounding.py`
-- `frontend/src/features/teacher-authoring/AuthoringForm.tsx`
-- `frontend/src/features/teacher-authoring/useAuthoringJobProgress.ts`
-- `frontend/src/shared/adam-types.ts`
-- `backend/tests/conftest.py`
-- `backend/tests/test_issue90_teacher_cases.py`
-- `backend/tests/test_phase1a_smoke.py`
-- `backend/tests/test_phase1b_integration.py`
-- `frontend/src/features/teacher-authoring/AuthoringForm.test.tsx`
+- `backend/src/shared/student_reads.py`
+- `backend/tests/test_issue196_student_case_resolution.py`
+- `frontend/src/app/App.tsx`
+- `frontend/src/app/App.test.tsx`
+- `frontend/src/features/student-dashboard/StudentDashboardPage.tsx`
+- `frontend/src/features/student-dashboard/StudentDashboardPage.test.tsx`
+- `frontend/src/features/student-runtime/StudentCaseResolutionPage.tsx`
+- `frontend/src/features/student-runtime/StudentCaseResolutionPage.test.tsx`
+- `frontend/src/features/student-runtime/useStudentCaseResolution.ts`
+- `frontend/src/features/student-runtime/useStudentCaseResolution.test.ts`
+- `frontend/src/shared/queryKeys.ts`
+- `frontend/src/shared/api.ts`
+- `frontend/src/shared/case-viewer/CaseContentRenderer.tsx`
+- `frontend/src/shared/case-viewer/CaseContentRenderer.test.tsx`
 
 ## Validation Evidence
-- [x] `uv run --directory backend pytest -q` (`277 passed, 12 skipped`)
+- [x] `uv run --directory backend pytest -q` (`337 passed, 12 skipped`)
 - [x] `uv run --directory backend mypy src`
 - [x] `npm --prefix frontend run lint`
-- [x] `npm --prefix frontend run test`
+- [x] `npm --prefix frontend run test -- --run` (`49/49` files, `355/355` tests)
 - [x] `npm --prefix frontend run build`
+- [x] manual browser smoke on local student flow: login, `/student/cases/:assignmentId/resolve`, autosave visible, blocking submit modal, read-only post-submit, dashboard returns immediately as `Entregado`
 
 ## Residual Risks
-- Existing legacy jobs remain supported, but only new course-linked jobs get strict syllabus grounding enforcement
-- Target groups remain freeform teacher input because there is still no canonical backend source for section/group options
-- The frontend build still emits the pre-existing Vite chunk-size warning; this PR does not change bundling strategy
+- conflict and deadline modal branches are covered by tests; manual browser smoke exercised the submit path but not a live multi-tab conflict race
+- the tracked `supabase/.temp/cli-latest` change is unrelated local CLI churn and should stay out of the PR
 
 ## References
-- Closes #139
+- References #196
 
 🤖 Generated with GitHub Copilot

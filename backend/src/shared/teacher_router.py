@@ -230,12 +230,12 @@ def parse_datetime_or_422(value: str | None) -> datetime | None:
         dt = datetime.fromisoformat(value)
     except ValueError:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="invalid_datetime_format",
         )
     if dt.tzinfo is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="invalid_datetime_format",
         )
     return dt
@@ -290,7 +290,7 @@ def patch_teacher_case_deadline(
     if new_available_from is not None and new_deadline is not None:
         if new_deadline <= new_available_from:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="deadline_before_available_from",
             )
     if new_available_from is not None:

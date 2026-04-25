@@ -1,5 +1,6 @@
 import { BarChart3, BookOpen, ChevronRight, GraduationCap, Search } from "lucide-react";
 import { startTransition, useDeferredValue, useId, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import type { StudentCaseItem, StudentCourseItem } from "@/shared/adam-types";
 
@@ -9,6 +10,7 @@ import {
     formatCaseStatusMeta,
     formatCourseDeadlineLabel,
     isPendingStudentCase,
+    isStudentCaseActionable,
     matchesStudentCaseSearch,
     matchesStudentCourseSearch,
 } from "./studentDashboardModel";
@@ -213,6 +215,8 @@ function StudentCasesTable({ cases }: { cases: StudentCaseItem[] }) {
                                     : statusMeta.tone === "amber"
                                       ? "bg-amber-100 text-amber-800"
                                       : "bg-slate-100 text-slate-500";
+                            const canOpenCase = isStudentCaseActionable(caseItem);
+                            const actionLabel = formatCaseActionLabel(caseItem.status);
 
                             return (
                                 <tr key={caseItem.id} className="group transition-colors hover:bg-slate-50">
@@ -243,14 +247,24 @@ function StudentCasesTable({ cases }: { cases: StudentCaseItem[] }) {
                                     </td>
                                     <td className="px-6 py-5 align-middle">
                                         <div className="flex items-center justify-end gap-2.5">
-                                            <button
-                                                type="button"
-                                                disabled
-                                                aria-disabled="true"
-                                                className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-100 px-3.5 text-[13px] font-semibold text-slate-500"
-                                            >
-                                                {formatCaseActionLabel(caseItem.status)}
-                                            </button>
+                                            {canOpenCase ? (
+                                                <Link
+                                                    to={`/student/cases/${caseItem.id}/resolve`}
+                                                    className={`inline-flex h-9 items-center justify-center rounded-lg px-3.5 text-[13px] font-semibold transition-colors ${caseItem.status === "submitted" || caseItem.status === "closed"
+                                                        ? "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                                                        : "bg-[#0144a0] text-white hover:bg-[#00337a]"
+                                                        }`}
+                                                >
+                                                    {actionLabel}
+                                                </Link>
+                                            ) : (
+                                                <span
+                                                    aria-disabled="true"
+                                                    className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-100 px-3.5 text-[13px] font-semibold text-slate-500"
+                                                >
+                                                    {actionLabel}
+                                                </span>
+                                            )}
                                         </div>
                                     </td>
                                 </tr>

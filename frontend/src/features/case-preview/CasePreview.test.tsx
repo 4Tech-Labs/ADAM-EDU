@@ -19,26 +19,26 @@ vi.mock("@/features/teacher-dashboard/useTeacherDashboard", () => ({
     usePublishCase: () => ({ mutate: mockMutate }),
 }));
 
-vi.mock("./modules/M1StoryReader", () => ({
+vi.mock("@/shared/case-viewer/modules/M1StoryReader", () => ({
     M1StoryReader: () => <div data-testid="m1-module">M1 listo</div>,
 }));
-vi.mock("./modules/M2Eda", async () => {
+vi.mock("@/shared/case-viewer/modules/M2Eda", async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     return {
         M2Eda: () => <div data-testid="m2-module">M2 listo</div>,
     };
 });
-vi.mock("./modules/M3AuditSection", () => ({
+vi.mock("@/shared/case-viewer/modules/M3AuditSection", () => ({
     M3AuditSection: () => <div data-testid="m3-module">M3 listo</div>,
 }));
-vi.mock("./modules/M4Finance", () => ({
+vi.mock("@/shared/case-viewer/modules/M4Finance", () => ({
     M4Finance: () => <div data-testid="m4-module">M4 listo</div>,
 }));
-vi.mock("./modules/M5ExecutiveReport", () => ({
+vi.mock("@/shared/case-viewer/modules/M5ExecutiveReport", () => ({
     M5ExecutiveReport: () => <div data-testid="m5-module">M5 listo</div>,
 }));
-vi.mock("./modules/M6MasterSolution", () => ({
+vi.mock("@/shared/case-viewer/modules/M6MasterSolution", () => ({
     M6MasterSolution: () => <div data-testid="m6-module">M6 listo</div>,
 }));
 
@@ -78,6 +78,12 @@ describe("CasePreview lazy modules", () => {
         expect(screen.getByText("Cargando módulo...")).toBeTruthy();
         expect(await screen.findByTestId("m2-module")).toBeTruthy();
         expect(screen.queryByTestId("case-preview-module-loading")).toBeNull();
+    });
+
+    it("matches the teacher preview shell snapshot", () => {
+        const { container } = renderWithProviders(<CasePreview caseData={caseData} />);
+
+        expect(container.firstChild).toMatchSnapshot();
     });
 });
 

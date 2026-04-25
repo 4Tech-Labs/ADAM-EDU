@@ -374,7 +374,8 @@ export interface ChangePasswordResponse {
 }
 
 export type StudentCourseStatus = "active" | "inactive";
-export type StudentCaseStatus = "available" | "upcoming" | "closed";
+export type StudentCaseStatus = "available" | "in_progress" | "submitted" | "upcoming" | "closed";
+export type StudentCaseDraftStatus = "draft" | "submitted";
 
 export interface StudentCourseItem {
     id: string;
@@ -406,6 +407,50 @@ export interface StudentCaseItem {
 export interface StudentCasesResponse {
     cases: StudentCaseItem[];
     total: number;
+}
+
+export interface StudentCaseAssignmentMeta {
+    id: string;
+    title: string;
+    available_from: string | null;
+    deadline: string | null;
+    status: StudentCaseStatus;
+    course_codes: string[];
+}
+
+export interface StudentCaseResponseState {
+    status: StudentCaseDraftStatus;
+    answers: Record<string, string>;
+    version: number;
+    last_autosaved_at: string | null;
+    submitted_at: string | null;
+}
+
+export interface StudentCaseDetailResponse {
+    assignment: StudentCaseAssignmentMeta;
+    canonical_output: CanonicalCaseOutput;
+    response: StudentCaseResponseState;
+}
+
+export interface StudentCaseDraftRequest {
+    answers: Record<string, string>;
+    version: number;
+}
+
+export interface StudentCaseDraftResponse {
+    version: number;
+    last_autosaved_at: string;
+}
+
+export interface StudentCaseSubmitRequest {
+    answers: Record<string, string>;
+    version: number;
+}
+
+export interface StudentCaseSubmitResponse {
+    status: "submitted";
+    submitted_at: string;
+    version: number;
 }
 
 export interface AdminDashboardSummaryResponse {
