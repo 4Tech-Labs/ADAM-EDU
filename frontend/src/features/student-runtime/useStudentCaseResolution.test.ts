@@ -170,6 +170,11 @@ describe("useStudentCaseResolution", () => {
         });
         expect(api.student.saveCaseDraft).toHaveBeenCalledTimes(1);
         await waitFor(() => expect(result.current.autosaveState).toBe("retrying"));
+        expect(result.current.errorBanner).toEqual({
+            tone: "amber",
+            title: "Sin conexion, reintentando...",
+            message: "Guardaremos tu borrador apenas el servidor vuelva a responder.",
+        });
 
         await act(async () => {
             await vi.advanceTimersByTimeAsync(1_000);
@@ -346,5 +351,6 @@ describe("useStudentCaseResolution", () => {
                 next_deadline: null,
             },
         ]);
+        expect(result.current.errorBanner).toBeNull();
     });
 });
