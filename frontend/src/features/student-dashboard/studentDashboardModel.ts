@@ -52,7 +52,7 @@ function isSameCalendarDay(target: Date, reference: Date): boolean {
 }
 
 export function isPendingStudentCase(caseItem: StudentCaseItem): boolean {
-    return caseItem.status !== "closed";
+    return caseItem.status === "available" || caseItem.status === "in_progress";
 }
 
 export function buildCourseCaseTitleLookup(cases: StudentCaseItem[]): Map<string, string[]> {
@@ -156,6 +156,40 @@ export function formatCaseStatusMeta(caseItem: StudentCaseItem): { label: string
         return { label: `Disponible hasta el ${formatDateTime(caseItem.deadline)}`, tone: "blue" };
     }
 
+    if (caseItem.status === "in_progress") {
+        const deadline = parseDate(caseItem.deadline);
+        if (!deadline) {
+            return { label: "En progreso", tone: "blue" };
+        }
+
+        const now = new Date();
+        const tomorrow = new Date(now);
+        tomorrow.setDate(now.getDate() + 1);
+        const timeLabel = formatTime(caseItem.deadline);
+
+        if (isSameCalendarDay(deadline, now)) {
+            return {
+                label: `En progreso, vence hoy${timeLabel ? ` ${timeLabel}` : ""}`,
+                tone: "amber",
+            };
+        }
+        if (isSameCalendarDay(deadline, tomorrow)) {
+            return {
+                label: `En progreso, vence manana${timeLabel ? ` ${timeLabel}` : ""}`,
+                tone: "amber",
+            };
+        }
+
+        return {
+            label: `En progreso hasta el ${formatDateTime(caseItem.deadline)}`,
+            tone: "blue",
+        };
+    }
+
+    if (caseItem.status === "submitted") {
+        return { label: "Entregado", tone: "slate" };
+    }
+
     if (caseItem.status === "upcoming") {
         return {
             label: caseItem.available_from
@@ -171,12 +205,22 @@ export function formatCaseStatusMeta(caseItem: StudentCaseItem): { label: string
     };
 }
 
+export function isStudentCaseActionable(caseItem: StudentCaseItem): boolean {
+    return caseItem.status !== "upcoming";
+}
+
 export function formatCaseActionLabel(status: StudentCaseStatus): string {
     if (status === "available") {
-        return "Resolver caso proximamente";
+        return "Resolver caso";
+    }
+    if (status === "in_progress") {
+        return "Continuar resolucion";
+    }
+    if (status === "submitted") {
+        return "Ver entrega";
     }
     if (status === "upcoming") {
         return "Aun no disponible";
     }
-    return "Feedback proximamente";
+    return "Ver caso";
 }

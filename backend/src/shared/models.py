@@ -377,6 +377,92 @@ class AssignmentCourse(Base):
     course: Mapped["Course"] = relationship(back_populates="assignment_courses")
 
 
+class StudentCaseResponse(Base):
+    """
+    Student-authored case resolution draft keyed by membership and assignment.
+
+    State machine:
+        draft --submit--> submitted
+
+    Invariants:
+        - UNIQUE(membership_id, assignment_id)
+        - version is monotonic and non-negative
+        - submitted rows remain immutable at the application layer
+    """
+
+    __tablename__ = "student_case_responses"
+    __table_args__ = (
+        UniqueConstraint(
+            "membership_id",
+            "assignment_id",
+            name="uix_student_case_response_membership_assignment",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'submitted')",
+            name="ck_student_case_responses_status",
+        ),
+        CheckConstraint(
+            "version >= 0",
+            name="ck_student_case_responses_version_nonnegative",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    membership_id: Mapped[str] = mapped_column(Text, ForeignKey("memberships.id"), nullable=False)
+    assignment_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("assignments.id"),
+        nullable=False,
+        index=True,
+    )
+    answers: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    first_opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_autosaved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    membership: Mapped["Membership"] = relationship()
+    assignment: Mapped["Assignment"] = relationship()
+    submissions: Mapped[list["StudentCaseResponseSubmission"]] = relationship(
+        back_populates="response",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class StudentCaseResponseSubmission(Base):
+    """Append-only immutable audit snapshot captured at student submit time."""
+
+    __tablename__ = "student_case_response_submissions"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_uuid)
+    response_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("student_case_responses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    answers_snapshot: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    canonical_output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    response: Mapped["StudentCaseResponse"] = relationship(back_populates="submissions")
+
+
 class Syllabus(Base):
     """
     Current pedagogical syllabus state for a course.

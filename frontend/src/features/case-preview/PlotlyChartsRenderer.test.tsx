@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 
 import type { EDAChartSpec } from "@/shared/adam-types";
 
-vi.mock("./PlotlyComponent", async () => {
+vi.mock("@/shared/case-viewer/PlotlyComponent", async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     return {

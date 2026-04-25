@@ -10,6 +10,11 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: "/app/",
+  build: {
+    // Plotly stays in a dedicated lazy chunk by design. Raise the warning limit
+    // above that known isolated payload so future warnings still signal new growth.
+    chunkSizeWarningLimit: 1300,
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -25,13 +30,10 @@ export default defineConfig({
     // Use forked processes instead of worker_threads so each worker gets an
     // isolated V8 heap and event loop. Without this, jsdom timer pressure from
     // heavy test files (AuthoringForm, TeacherCoursePage) causes timeouts in the
-    // full-suite run. maxForks caps parallelism; on CI (2 vCPUs) Vitest clamps
-    // automatically to min(maxForks, cpuCount).
+    // full-suite run. maxWorkers caps parallelism; on CI (2 vCPUs) Vitest clamps
+    // automatically to min(maxWorkers, cpuCount).
     pool: "forks",
-    // @ts-expect-error -- vitest 4.1.2 InlineConfig type omits poolOptions; valid at runtime
-    poolOptions: {
-      forks: { maxForks: 3 },
-    },
+    maxWorkers: 3,
     // Slow async-UI tests (MSW + jsdom) can legitimately take >5s under load.
     testTimeout: 10_000,
   },

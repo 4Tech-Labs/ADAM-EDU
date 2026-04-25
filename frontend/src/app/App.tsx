@@ -58,6 +58,11 @@ const StudentDashboardPage = lazy(() =>
         default: module.StudentDashboardPage,
     })),
 );
+const StudentCaseResolutionPage = lazy(() =>
+    import("@/features/student-runtime/StudentCaseResolutionPage").then((module) => ({
+        default: module.StudentCaseResolutionPage,
+    })),
+);
 const AdminLoginPage = lazy(() =>
     import("@/features/admin-auth/AdminLoginPage").then((module) => ({
         default: module.AdminLoginPage,
@@ -96,6 +101,7 @@ function App() {
         location.pathname === "/teacher";
     const isStudentShellRoute =
         location.pathname.startsWith("/student/dashboard") ||
+        location.pathname.startsWith("/student/cases") ||
         location.pathname === "/student";
 
     return (
@@ -178,6 +184,14 @@ function App() {
                             element={
                                 <RequireRole role="student">
                                     <StudentDashboardPage />
+                                </RequireRole>
+                            }
+                        />
+                        <Route
+                            path="/student/cases/:assignmentId"
+                            element={
+                                <RequireRole role="student">
+                                    <StudentCaseResolutionPage />
                                 </RequireRole>
                             }
                         />
