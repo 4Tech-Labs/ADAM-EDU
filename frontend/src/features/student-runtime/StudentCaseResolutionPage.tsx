@@ -20,6 +20,7 @@ import { StudentVersionConflictModal } from "./StudentVersionConflictModal";
 import { useStudentCaseResolution } from "./useStudentCaseResolution";
 
 type BannerTone = "amber" | "red" | "emerald";
+const STUDENT_HEADER_HEIGHT_PX = 80;
 
 interface RuntimeBannerState {
     tone: BannerTone;
@@ -164,34 +165,31 @@ export function StudentCaseResolutionPage() {
 
     const statusBadge = resolveStatusBadge(effectiveStatus);
     const banner = useMemo<RuntimeBannerState | null>(() => {
-        if (errorBanner) {
-            return errorBanner;
+        if (!errorBanner || errorBanner.tone === "emerald") {
+            return null;
         }
 
-        if (detail?.response.status === "submitted" || submittedAt) {
-            return {
-                tone: "emerald",
-                title: "Entregado",
-                message: "Entregado, esperando retroalimentacion.",
-            };
+        return errorBanner;
+    }, [errorBanner]);
+
+    useEffect(() => {
+        const shouldLockBodyScroll = Boolean(detail && caseOutput);
+        const previousOverflow = document.body.style.overflow;
+
+        if (shouldLockBodyScroll) {
+            document.body.style.overflow = "hidden";
         }
 
-        if (detail && effectiveStatus === "closed") {
-            return {
-                tone: "amber",
-                title: "Plazo cerrado",
-                message: "El caso quedo en modo solo lectura porque la ventana de entrega cerro.",
-            };
-        }
-
-        return null;
-    }, [detail, effectiveStatus, errorBanner, submittedAt]);
+        return () => {
+            document.body.style.overflow = previousOverflow;
+        };
+    }, [caseOutput, detail]);
 
     if (!assignmentId) {
         return (
-            <div className="min-h-screen bg-[#F0F4F8]" data-testid="student-case-resolution-page">
+            <div className="flex min-h-screen flex-col bg-[#F0F4F8]" data-testid="student-case-resolution-page">
                 <StudentUserHeader />
-                <main className="mx-auto max-w-4xl px-6 py-9">
+                <main className="flex flex-1 items-center justify-center px-6 py-9">
                     <ErrorState
                         title="Caso no encontrado"
                         message="No pudimos resolver la ruta del caso solicitado."
@@ -203,10 +201,10 @@ export function StudentCaseResolutionPage() {
     }
 
     return (
-        <div className="min-h-screen bg-[#F0F4F8]" data-testid="student-case-resolution-page">
+        <div className="flex min-h-screen flex-col bg-[#F0F4F8]" data-testid="student-case-resolution-page">
             <StudentUserHeader />
 
-            <main className="mx-auto flex max-w-[1440px] flex-col gap-6 px-6 py-8">
+            <main className="flex flex-1 min-h-0 flex-col">
                 <StudentVersionConflictModal
                     isOpen={isConflictModalOpen}
                     isReloading={isReloadingConflict}
@@ -215,21 +213,27 @@ export function StudentCaseResolutionPage() {
                 <StudentDeadlineClosedModal isOpen={isDeadlineModalOpen} onClose={closeDeadlineModal} />
 
                 {detailQuery.isLoading && !detail ? (
-                    <LoadingState />
+                    <div className="flex flex-1 items-center justify-center px-6 py-9">
+                        <LoadingState />
+                    </div>
                 ) : detailQuery.error || !detail || !caseOutput ? (
-                    <ErrorState
-                        title="No se pudo cargar el caso"
-                        message={getApiErrorMessage(detailQuery.error)}
-                        onRetry={() => {
-                            void detailQuery.refetch();
-                        }}
-                    />
+                    <div className="flex flex-1 items-center justify-center px-6 py-9">
+                        <ErrorState
+                            title="No se pudo cargar el caso"
+                            message={getApiErrorMessage(detailQuery.error)}
+                            onRetry={() => {
+                                void detailQuery.refetch();
+                            }}
+                        />
+                    </div>
                 ) : (
                     <>
-                        {banner ? <RuntimeBanner banner={banner} /> : null}
-
                         <style>{CASE_VIEWER_STYLES}</style>
-                        <div className="case-preview flex min-h-[calc(100vh-120px)] overflow-hidden rounded-[28px] border border-slate-200 shadow-sm">
+                        <div
+                            className="case-preview flex overflow-hidden font-sans"
+                            data-testid="student-case-shell"
+                            style={{ height: `calc(100dvh - ${STUDENT_HEADER_HEIGHT_PX}px)` }}
+                        >
                             <aside className="flex flex-shrink-0 flex-col bg-[#0f172a] text-slate-400" style={{ width: 280 }}>
                                 <div className="flex h-16 flex-shrink-0 items-center border-b border-slate-800 px-5">
                                     <Link
@@ -285,20 +289,35 @@ export function StudentCaseResolutionPage() {
                                         </span>
                                     </div>
 
-                                    <div className="hidden flex-shrink-0 items-center gap-4 lg:flex">
-                                        <StudentDeadlineCountdown
-                                            deadline={detail.assignment.deadline}
-                                            isClosed={effectiveStatus === "closed"}
-                                            className="text-slate-500"
-                                        />
-                                        <StudentAutosaveIndicator
-                                            state={autosaveState}
-                                            lastAutosavedAt={lastAutosavedAt}
-                                            submittedAt={submittedAt}
-                                            className="text-slate-500"
+                                    <div className="flex flex-shrink-0 items-center gap-3">
+                                        <div className="hidden xl:flex items-center gap-4">
+                                            <StudentDeadlineCountdown
+                                                deadline={detail.assignment.deadline}
+                                                isClosed={effectiveStatus === "closed"}
+                                                className="text-slate-500"
+                                            />
+                                            <StudentAutosaveIndicator
+                                                state={autosaveState}
+                                                lastAutosavedAt={lastAutosavedAt}
+                                                submittedAt={submittedAt}
+                                                className="text-slate-500"
+                                            />
+                                        </div>
+
+                                        <StudentSubmitBar
+                                            isVisible={!isReadOnly}
+                                            hasAnyAnswer={hasAnyAnswer}
+                                            isSubmitting={submitMutation.isPending}
+                                            onSubmit={submitCase}
                                         />
                                     </div>
                                 </header>
+
+                                {banner ? (
+                                    <div className="flex-shrink-0 border-b border-slate-200 bg-white px-6 py-4">
+                                        <RuntimeBanner banner={banner} />
+                                    </div>
+                                ) : null}
 
                                 <CaseContentRenderer
                                     result={caseOutput}
@@ -309,13 +328,6 @@ export function StudentCaseResolutionPage() {
                                     onAnswersChange={setLocalAnswers}
                                     readOnly={isReadOnly}
                                     showExpectedSolutions={false}
-                                />
-
-                                <StudentSubmitBar
-                                    isVisible={!isReadOnly}
-                                    hasAnyAnswer={hasAnyAnswer}
-                                    isSubmitting={submitMutation.isPending}
-                                    onSubmit={submitCase}
                                 />
                             </section>
                         </div>
