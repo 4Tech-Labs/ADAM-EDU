@@ -335,7 +335,7 @@ describe("App admin shell layout", () => {
         expect(screen.queryByTestId("site-header")).toBeNull();
     });
 
-    it("does not render the global SiteHeader on /student/cases/:assignmentId", async () => {
+    it("does not render the global SiteHeader on /student/cases/:assignmentId/resolve", async () => {
         vi.mocked(useAuth).mockReturnValue({
             ...baseContext,
             session: { access_token: "jwt" } as never,
@@ -343,7 +343,7 @@ describe("App admin shell layout", () => {
         });
 
         renderWithProviders(<App />, {
-            initialEntries: ["/student/cases/case-1"],
+            initialEntries: ["/student/cases/case-1/resolve"],
         });
 
         expect(await screen.findByTestId("student-case-resolution-page")).toBeTruthy();

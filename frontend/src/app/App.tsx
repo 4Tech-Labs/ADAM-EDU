@@ -188,7 +188,7 @@ function App() {
                             }
                         />
                         <Route
-                            path="/student/cases/:assignmentId"
+                            path="/student/cases/:assignmentId/resolve"
                             element={
                                 <RequireRole role="student">
                                     <StudentCaseResolutionPage />

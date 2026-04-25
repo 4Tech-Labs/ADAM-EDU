@@ -366,7 +366,7 @@ def test_issue196_get_detail_rejects_cross_tenant_assignment_links(
         )
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "assignment_forbidden"
+    assert response.json()["detail"]["code"] == "assignment_forbidden"
 
 
 def test_issue196_put_draft_persists_answers_and_updates_status(

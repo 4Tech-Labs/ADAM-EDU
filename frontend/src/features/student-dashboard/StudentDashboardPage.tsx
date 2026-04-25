@@ -249,7 +249,7 @@ function StudentCasesTable({ cases }: { cases: StudentCaseItem[] }) {
                                         <div className="flex items-center justify-end gap-2.5">
                                             {canOpenCase ? (
                                                 <Link
-                                                    to={`/student/cases/${caseItem.id}`}
+                                                    to={`/student/cases/${caseItem.id}/resolve`}
                                                     className={`inline-flex h-9 items-center justify-center rounded-lg px-3.5 text-[13px] font-semibold transition-colors ${caseItem.status === "submitted" || caseItem.status === "closed"
                                                         ? "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                                                         : "bg-[#0144a0] text-white hover:bg-[#00337a]"

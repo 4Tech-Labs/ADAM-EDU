@@ -75,6 +75,7 @@ type ApiErrorCode =
     | "teacher_membership_context_required"
     | "db_saturated"
     | "db_timeout"
+    | "assignment_forbidden"
     | "assignment_not_found"
     | "version_conflict"
     | "already_submitted"
@@ -221,6 +222,8 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
                 return "Tu cuenta esta suspendida para esta accion.";
             case "authoring_forbidden":
                 return "Acceso denegado para esta accion.";
+            case "assignment_forbidden":
+                return structuredMessage || "No tienes acceso a este caso.";
             case "already_submitted":
                 return structuredMessage || "Este caso ya fue entregado.";
             case "deadline_passed":

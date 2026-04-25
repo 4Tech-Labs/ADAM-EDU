@@ -406,7 +406,11 @@ def _load_student_visible_assignment_detail(
         return None
 
     if target_university_ids and target_university_ids != {context.university_id}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="assignment_forbidden")
+        raise _student_error(
+            status.HTTP_403_FORBIDDEN,
+            "assignment_forbidden",
+            "This assignment is not visible for the current student membership.",
+        )
 
     return StudentVisibleAssignmentDetail(
         assignment=assignment,
@@ -740,9 +744,17 @@ def get_student_case_detail(
     reference_now = _resolve_reference_now(now)
     detail = _load_student_visible_assignment_detail(db, context, assignment_id)
     if detail is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assignment_not_found")
+        raise _student_error(
+            status.HTTP_404_NOT_FOUND,
+            "assignment_not_found",
+            "This case is not available or no longer exists.",
+        )
     if detail.available_from is not None and detail.available_from > reference_now:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assignment_not_found")
+        raise _student_error(
+            status.HTTP_404_NOT_FOUND,
+            "assignment_not_found",
+            "This case is not available or no longer exists.",
+        )
 
     canonical_output = detail.assignment.canonical_output if isinstance(detail.assignment.canonical_output, dict) else {}
     sanitized_output = sanitize_canonical_output_for_student(canonical_output)
@@ -785,9 +797,17 @@ def save_student_case_draft(
     reference_now = _resolve_reference_now(now)
     detail = _load_student_visible_assignment_detail(db, context, assignment_id)
     if detail is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assignment_not_found")
+        raise _student_error(
+            status.HTTP_404_NOT_FOUND,
+            "assignment_not_found",
+            "This case is not available or no longer exists.",
+        )
     if detail.available_from is not None and detail.available_from > reference_now:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assignment_not_found")
+        raise _student_error(
+            status.HTTP_404_NOT_FOUND,
+            "assignment_not_found",
+            "This case is not available or no longer exists.",
+        )
     if detail.deadline is not None and reference_now > detail.deadline:
         raise _student_error(
             status.HTTP_403_FORBIDDEN,
@@ -842,9 +862,17 @@ def submit_student_case(
     reference_now = _resolve_reference_now(now)
     detail = _load_student_visible_assignment_detail(db, context, assignment_id)
     if detail is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assignment_not_found")
+        raise _student_error(
+            status.HTTP_404_NOT_FOUND,
+            "assignment_not_found",
+            "This case is not available or no longer exists.",
+        )
     if detail.available_from is not None and detail.available_from > reference_now:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assignment_not_found")
+        raise _student_error(
+            status.HTTP_404_NOT_FOUND,
+            "assignment_not_found",
+            "This case is not available or no longer exists.",
+        )
     if detail.deadline is not None and reference_now > detail.deadline:
         raise _student_error(
             status.HTTP_403_FORBIDDEN,

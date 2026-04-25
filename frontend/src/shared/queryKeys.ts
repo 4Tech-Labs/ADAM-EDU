@@ -41,8 +41,10 @@ export const queryKeys = {
         courses: () => ["student", "courses"] as const,
         /** ["student", "cases"] — casos visibles del estudiante autenticado */
         cases: () => ["student", "cases"] as const,
-        /** ["student", "case", assignmentId] — detalle de resolucion de un caso estudiante */
-        case: (assignmentId: string) => ["student", "case", assignmentId] as const,
+        /** ["student", "caseDetail", assignmentId] — detalle de resolucion de un caso estudiante */
+        caseDetail: (assignmentId: string) => ["student", "caseDetail", assignmentId] as const,
+        /** @deprecated usar caseDetail() */
+        case: (assignmentId: string) => ["student", "caseDetail", assignmentId] as const,
     },
     admin: {
         /** ["admin"] — key raíz para invalidación masiva (ej. al cerrar sesión) */

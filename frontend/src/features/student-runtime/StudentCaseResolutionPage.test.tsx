@@ -1,6 +1,6 @@
-﻿import { act, fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { Route, Routes } from "react-router-dom";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "@/shared/test-utils";
 
@@ -29,7 +29,7 @@ vi.mock("@/shared/case-viewer", () => ({
     ],
     ModulesSidebar: () => <div data-testid="modules-sidebar">Sidebar</div>,
     CaseContentRenderer: ({ answers, onAnswersChange, readOnly }: { answers: Record<string, string>; onAnswersChange: (next: Record<string, string>) => void; readOnly: boolean }) => (
-        <div data-testid="case-content-renderer" data-read-only={String(readOnly)}>
+        <div data-testid="case-content-renderer" data-answer={answers["M1-Q1"] ?? ""} data-read-only={String(readOnly)}>
             <button type="button" onClick={() => onAnswersChange({ ...answers, "M1-Q1": "respuesta actualizada" })}>
                 change-answer
             </button>
@@ -40,102 +40,112 @@ vi.mock("@/shared/case-viewer", () => ({
 import { StudentCaseResolutionPage } from "./StudentCaseResolutionPage";
 import { useStudentCaseResolution } from "./useStudentCaseResolution";
 
-describe("StudentCaseResolutionPage", () => {
+function buildHookState(overrides: Record<string, unknown> = {}) {
     const refetch = vi.fn().mockResolvedValue({});
-    const saveDraft = vi.fn().mockResolvedValue({ version: 2, last_autosaved_at: "2026-04-25T16:00:00Z" });
-    const submitCase = vi.fn().mockResolvedValue({ status: "submitted", submitted_at: "2026-04-25T17:00:00Z", version: 3 });
 
+    return {
+        detailQuery: {
+            data: {
+                assignment: {
+                    id: "case-1",
+                    title: "CrediAgil",
+                    available_from: null,
+                    deadline: "2026-04-25T18:00:00Z",
+                    status: "available",
+                    course_codes: ["MBA-ANR"],
+                },
+                canonical_output: {
+                    title: "CrediAgil",
+                    subject: "Analitica",
+                    syllabusModule: "Modulo 1",
+                    guidingQuestion: "Que deberia hacer la junta?",
+                    industry: "Fintech",
+                    academicLevel: "MBA",
+                    caseType: "harvard_only",
+                    studentProfile: "business",
+                    generatedAt: "2026-04-25T12:00:00Z",
+                    outputDepth: "standard",
+                    content: {},
+                },
+                response: {
+                    status: "draft",
+                    answers: { "M1-Q1": "borrador" },
+                    version: 1,
+                    last_autosaved_at: null,
+                    submitted_at: null,
+                },
+            },
+            error: null,
+            isLoading: false,
+            refetch,
+        },
+        answers: { "M1-Q1": "borrador" },
+        autosaveState: "saved",
+        closeDeadlineModal: vi.fn(),
+        effectiveStatus: "available",
+        errorBanner: null,
+        hasAnyAnswer: true,
+        isConflictModalOpen: false,
+        isDeadlineModalOpen: false,
+        isReadOnly: false,
+        isReloadingConflict: false,
+        lastAutosavedAt: "2026-04-25T16:00:00Z",
+        reloadAfterConflict: vi.fn().mockResolvedValue(undefined),
+        setLocalAnswers: vi.fn(),
+        submittedAt: null,
+        submitCase: vi.fn().mockResolvedValue(undefined),
+        submitMutation: { isPending: false },
+        version: 1,
+        ...overrides,
+    };
+}
+
+describe("StudentCaseResolutionPage", () => {
     beforeEach(() => {
-        vi.useFakeTimers();
         vi.clearAllMocks();
-    });
-
-    afterEach(() => {
-        vi.useRealTimers();
     });
 
     function renderPage() {
         return renderWithProviders(
             <Routes>
-                <Route path="/student/cases/:assignmentId" element={<StudentCaseResolutionPage />} />
+                <Route path="/student/cases/:assignmentId/resolve" element={<StudentCaseResolutionPage />} />
             </Routes>,
-            { initialEntries: ["/student/cases/case-1"] },
+            { initialEntries: ["/student/cases/case-1/resolve"] },
         );
     }
 
     it("renders a loading state while the detail query resolves", () => {
-        vi.mocked(useStudentCaseResolution).mockReturnValue({
+        vi.mocked(useStudentCaseResolution).mockReturnValue(buildHookState({
             detailQuery: {
                 data: undefined,
                 error: null,
                 isLoading: true,
-                refetch,
+                refetch: vi.fn().mockResolvedValue({}),
             },
-            saveDraftMutation: { isPending: false, mutateAsync: saveDraft },
-            submitMutation: { isPending: false, mutateAsync: submitCase },
-        } as never);
+        }) as never);
 
         renderPage();
 
         expect(screen.getByText(/Cargando caso del estudiante/i)).toBeTruthy();
     });
 
-    it("autosaves draft edits for an available case", async () => {
-        vi.mocked(useStudentCaseResolution).mockReturnValue({
-            detailQuery: {
-                data: {
-                    assignment: {
-                        id: "case-1",
-                        title: "CrediAgil",
-                        available_from: null,
-                        deadline: "2026-04-25T18:00:00Z",
-                        status: "available",
-                        course_codes: ["MBA-ANR"],
-                    },
-                    canonical_output: {
-                        title: "CrediAgil",
-                        subject: "Analitica",
-                        syllabusModule: "Modulo 1",
-                        guidingQuestion: "Que deberia hacer la junta?",
-                        industry: "Fintech",
-                        academicLevel: "MBA",
-                        caseType: "harvard_only",
-                        studentProfile: "business",
-                        generatedAt: "2026-04-25T12:00:00Z",
-                        outputDepth: "standard",
-                        content: {},
-                    },
-                    response: {
-                        status: "draft",
-                        answers: { "M1-Q1": "borrador" },
-                        version: 1,
-                        last_autosaved_at: null,
-                        submitted_at: null,
-                    },
-                },
-                error: null,
-                isLoading: false,
-                refetch,
-            },
-            saveDraftMutation: { isPending: false, mutateAsync: saveDraft },
-            submitMutation: { isPending: false, mutateAsync: submitCase },
-        } as never);
+    it("renders the existing answers and confirms submit through a modal", async () => {
+        const submitCase = vi.fn().mockResolvedValue(undefined);
+        vi.mocked(useStudentCaseResolution).mockReturnValue(buildHookState({ submitCase }) as never);
 
         renderPage();
 
-        await act(async () => {
-            fireEvent.click(screen.getByRole("button", { name: /change-answer/i }));
-            await vi.advanceTimersByTimeAsync(1300);
-        });
+        expect(screen.getByTestId("case-content-renderer")).toHaveAttribute("data-answer", "borrador");
+        fireEvent.click(screen.getByRole("button", { name: /Enviar respuestas/i }));
 
-        expect(saveDraft).toHaveBeenCalledWith({
-            answers: { "M1-Q1": "respuesta actualizada" },
-            version: 1,
-        });
+        expect(screen.getByText(/Esto es definitivo, no podras editar/i)).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: /Confirmar entrega/i }));
+
+        await waitFor(() => expect(submitCase).toHaveBeenCalled());
     });
 
     it("renders submitted cases in read-only mode", () => {
-        vi.mocked(useStudentCaseResolution).mockReturnValue({
+        vi.mocked(useStudentCaseResolution).mockReturnValue(buildHookState({
             detailQuery: {
                 data: {
                     assignment: {
@@ -162,23 +172,57 @@ describe("StudentCaseResolutionPage", () => {
                     response: {
                         status: "submitted",
                         answers: { "M1-Q1": "entrega final" },
-                        version: 3,
+                        version: 2,
                         last_autosaved_at: "2026-04-25T16:00:00Z",
                         submitted_at: "2026-04-25T17:00:00Z",
                     },
                 },
                 error: null,
                 isLoading: false,
-                refetch,
+                refetch: vi.fn().mockResolvedValue({}),
             },
-            saveDraftMutation: { isPending: false, mutateAsync: saveDraft },
-            submitMutation: { isPending: false, mutateAsync: submitCase },
-        } as never);
+            answers: { "M1-Q1": "entrega final" },
+            effectiveStatus: "submitted",
+            isReadOnly: true,
+            submittedAt: "2026-04-25T17:00:00Z",
+        }) as never);
 
         renderPage();
 
         expect(screen.getAllByText(/Entregado/i).length).toBeGreaterThan(0);
         expect(screen.getByTestId("case-content-renderer")).toHaveAttribute("data-read-only", "true");
-        expect(screen.queryByRole("button", { name: /Entregar caso/i })).toBeNull();
+        expect(screen.queryByRole("button", { name: /Enviar respuestas/i })).toBeNull();
+    });
+
+    it("shows the version conflict modal and reload action when the hook requests it", async () => {
+        const reloadAfterConflict = vi.fn().mockResolvedValue(undefined);
+        vi.mocked(useStudentCaseResolution).mockReturnValue(buildHookState({
+            isConflictModalOpen: true,
+            reloadAfterConflict,
+        }) as never);
+
+        renderPage();
+
+        expect(screen.getByText(/Tu trabajo fue editado en otra pestaña o dispositivo/i)).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: /Recargar/i }));
+
+        await waitFor(() => expect(reloadAfterConflict).toHaveBeenCalled());
+    });
+
+    it("shows the deadline modal and keeps the UI read-only on a closed case", () => {
+        const closeDeadlineModal = vi.fn();
+        vi.mocked(useStudentCaseResolution).mockReturnValue(buildHookState({
+            effectiveStatus: "closed",
+            isDeadlineModalOpen: true,
+            isReadOnly: true,
+            closeDeadlineModal,
+        }) as never);
+
+        renderPage();
+
+        expect(screen.getAllByText(/Plazo cerrado/i).length).toBeGreaterThan(0);
+        expect(screen.getByTestId("case-content-renderer")).toHaveAttribute("data-read-only", "true");
+        fireEvent.click(screen.getByRole("button", { name: /Entendido/i }));
+        expect(closeDeadlineModal).toHaveBeenCalled();
     });
 });
