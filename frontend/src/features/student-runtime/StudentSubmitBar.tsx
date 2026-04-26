@@ -26,23 +26,16 @@ export function StudentSubmitBar({
 
     return (
         <>
-            <div className="sticky bottom-0 z-10 border-t border-slate-200 bg-white/95 px-6 py-4 backdrop-blur-sm">
-                <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-                    <div>
-                        <p className="text-sm font-bold text-slate-900">Enviar respuestas</p>
-                        <p className="mt-1 text-xs text-slate-500">Tus respuestas se guardan automaticamente hasta que confirmes el envio final.</p>
-                    </div>
-                    <button
-                        type="button"
-                        disabled={!hasAnyAnswer || isSubmitting}
-                        onClick={() => setIsConfirming(true)}
-                        className="inline-flex items-center gap-2 rounded-xl bg-[#0144a0] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#00337a] disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        {isSubmitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />}
-                        Enviar respuestas
-                    </button>
-                </div>
-            </div>
+            <button
+                type="button"
+                data-testid="student-submit-trigger"
+                disabled={!hasAnyAnswer || isSubmitting}
+                onClick={() => setIsConfirming(true)}
+                className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#0144a0] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#00337a] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+                {isSubmitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />}
+                Enviar respuestas
+            </button>
 
             {isConfirming ? (
                 <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 px-4 py-6 backdrop-blur-sm">

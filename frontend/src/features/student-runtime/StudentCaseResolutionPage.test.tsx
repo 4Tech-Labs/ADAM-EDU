@@ -136,12 +136,27 @@ describe("StudentCaseResolutionPage", () => {
         renderPage();
 
         expect(screen.getByTestId("case-content-renderer")).toHaveAttribute("data-answer", "borrador");
+        expect(screen.queryByText(/Tus respuestas se guardan automaticamente hasta que confirmes el envio final\./i)).toBeNull();
+        expect(screen.getByTestId("student-submit-trigger")).toBeTruthy();
         fireEvent.click(screen.getByRole("button", { name: /Enviar respuestas/i }));
 
         expect(screen.getByText(/Esto es definitivo, no podras editar/i)).toBeTruthy();
         fireEvent.click(screen.getByRole("button", { name: /Confirmar entrega/i }));
 
         await waitFor(() => expect(submitCase).toHaveBeenCalled());
+    });
+
+    it("locks body scroll while the case shell is active", () => {
+        vi.mocked(useStudentCaseResolution).mockReturnValue(buildHookState() as never);
+
+        const { unmount } = renderPage();
+
+        expect(screen.getByTestId("student-case-shell")).toBeTruthy();
+        expect(document.body.style.overflow).toBe("hidden");
+
+        unmount();
+
+        expect(document.body.style.overflow).toBe("");
     });
 
     it("renders submitted cases in read-only mode", () => {
@@ -190,6 +205,7 @@ describe("StudentCaseResolutionPage", () => {
         renderPage();
 
         expect(screen.getAllByText(/Entregado/i).length).toBeGreaterThan(0);
+        expect(screen.queryByText(/Entregado, esperando retroalimentacion\./i)).toBeNull();
         expect(screen.getByTestId("case-content-renderer")).toHaveAttribute("data-read-only", "true");
         expect(screen.queryByRole("button", { name: /Enviar respuestas/i })).toBeNull();
     });
@@ -221,8 +237,24 @@ describe("StudentCaseResolutionPage", () => {
         renderPage();
 
         expect(screen.getAllByText(/Plazo cerrado/i).length).toBeGreaterThan(0);
+        expect(screen.queryByText(/El caso quedo en modo solo lectura porque la ventana de entrega cerro\./i)).toBeNull();
         expect(screen.getByTestId("case-content-renderer")).toHaveAttribute("data-read-only", "true");
         fireEvent.click(screen.getByRole("button", { name: /Entendido/i }));
         expect(closeDeadlineModal).toHaveBeenCalled();
+    });
+
+    it("renders operational banners when the hook reports an active alert", () => {
+        vi.mocked(useStudentCaseResolution).mockReturnValue(buildHookState({
+            errorBanner: {
+                tone: "red",
+                title: "No se pudo guardar el borrador",
+                message: "Intenta de nuevo en unos segundos.",
+            },
+        }) as never);
+
+        renderPage();
+
+        expect(screen.getByText(/No se pudo guardar el borrador/i)).toBeTruthy();
+        expect(screen.getByText(/Intenta de nuevo en unos segundos\./i)).toBeTruthy();
     });
 });

@@ -594,11 +594,7 @@ export function useStudentCaseResolution(assignmentId: string) {
             setAutosaveState("saved");
             setReadOnlyOverride(false);
             clearDraftBackup(assignmentIdRef.current);
-            setErrorBanner({
-                tone: "emerald",
-                title: "Entregado",
-                message: "Entregado, esperando retroalimentacion.",
-            });
+            setErrorBanner(null);
         } catch (error) {
             await handleMutationError(error, "submit");
             throw error;

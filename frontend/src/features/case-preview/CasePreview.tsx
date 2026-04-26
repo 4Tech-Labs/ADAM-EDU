@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import type { CanonicalCaseOutput, ModuleId } from "@/shared/adam-types";
 import { usePublishCase } from "@/features/teacher-dashboard/useTeacherDashboard";
 import { useToast } from "@/shared/toast-context";
+import { PORTAL_SHELL_HEIGHT_VH_CLASSNAME } from "@/shared/ui/layout";
 import {
     CASE_VIEWER_STYLES,
     CaseContentRenderer,
@@ -143,7 +144,7 @@ export function CasePreview({
     return (
         <>
             <style>{CASE_VIEWER_STYLES}</style>
-            <div className="case-preview flex h-[calc(100vh-80px)] overflow-hidden font-sans">
+            <div className={`case-preview flex ${PORTAL_SHELL_HEIGHT_VH_CLASSNAME} overflow-hidden font-sans`}>
                 <aside className="flex flex-col flex-shrink-0 bg-[#0f172a] text-slate-400" style={{ width: 280 }}>
                     <div className="h-16 flex items-center px-5 border-b border-slate-800 flex-shrink-0">
                         {showBackToDashboardButton ? (

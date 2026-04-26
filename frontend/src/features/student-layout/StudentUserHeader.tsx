@@ -2,6 +2,7 @@ import { Bell, GraduationCap } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { useAuth } from "@/app/auth/useAuth";
+import { PORTAL_HEADER_HEIGHT_CLASSNAME } from "@/shared/ui/layout";
 
 const STUDENT_NAME_FALLBACK = "Estudiante";
 const STUDENT_SUBTITLE = "Portal Estudiante";
@@ -23,7 +24,7 @@ export function StudentUserHeader() {
             className="w-full"
             style={{ background: "linear-gradient(135deg, #0144a0 0%, #0255c5 100%)" }}
         >
-            <div className="mx-auto flex h-20 max-w-6xl items-center justify-between gap-4 px-6">
+            <div className={`mx-auto flex ${PORTAL_HEADER_HEIGHT_CLASSNAME} max-w-6xl items-center justify-between gap-4 px-6`}>
                 <div className="flex min-w-0 items-center gap-3.5">
                     <Link
                         to="/student/dashboard"
