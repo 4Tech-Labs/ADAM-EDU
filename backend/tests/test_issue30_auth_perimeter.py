@@ -13,6 +13,7 @@ from jwt.exceptions import PyJWKClientError
 from sqlalchemy import select
 
 from shared.auth import AuthError, AuthSettings, JwtVerifier, SupabaseAdminAuthClient
+from shared.identity_activation import upsert_legacy_user
 from shared.models import Assignment, AuthoringJob, Course, CourseMembership, Membership, Profile, Tenant, User
 
 
@@ -1594,6 +1595,37 @@ def test_activate_password_repairs_consumed_teacher_courses_left_pending(
     assert refreshed_course is not None
     assert refreshed_course.teacher_membership_id == teacher_seed["membership"].id
     assert refreshed_course.pending_teacher_invite_id is None
+
+
+def test_upsert_legacy_user_student_path_preserves_existing_teacher_role(db) -> None:
+    university_id = "10000000-0000-0000-0000-000000000077"
+    auth_user_id = str(uuid.uuid4())
+    db.add(Tenant(id=university_id, name="Legacy User Upsert University"))
+    db.add(
+        User(
+            id=auth_user_id,
+            tenant_id=university_id,
+            email="teacher.original@example.edu",
+            role="teacher",
+        )
+    )
+    db.commit()
+
+    upserted_user = upsert_legacy_user(
+        db,
+        auth_user_id=auth_user_id,
+        university_id=university_id,
+        email="teacher.updated@example.edu",
+        role="student",
+    )
+    db.commit()
+    db.expire_all()
+
+    refreshed_user = db.get(User, auth_user_id)
+    assert upserted_user.id == auth_user_id
+    assert refreshed_user is not None
+    assert refreshed_user.email == "teacher.updated@example.edu"
+    assert refreshed_user.role == "teacher"
 
 
 def test_activate_oauth_complete_keeps_first_tenant_bridge_and_admin_reads_work_across_universities(

@@ -6,12 +6,12 @@ from typing import Any
 
 from cachetools import TTLCache
 from fastapi import HTTPException, status
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from shared.auth import normalize_email
-from shared.models import AllowedEmailDomain, Course, CourseMembership, Membership, Profile, UniversitySsoConfig
+from shared.models import AllowedEmailDomain, Course, CourseMembership, Membership, Profile, UniversitySsoConfig, User
 
 
 def utc_now() -> datetime:
@@ -145,6 +145,42 @@ def upsert_membership(
     if membership is None:  # pragma: no cover
         raise RuntimeError("membership_upsert_failed")
     return membership
+
+
+def upsert_legacy_user(
+    db: Session,
+    *,
+    auth_user_id: str,
+    university_id: str,
+    email: str,
+    role: str,
+) -> User:
+    insert_stmt = pg_insert(User).values(
+        id=auth_user_id,
+        tenant_id=university_id,
+        email=email,
+        role=role,
+        created_at=utc_now(),
+    )
+    excluded = insert_stmt.excluded
+    legacy_user_id = db.execute(
+        insert_stmt.on_conflict_do_update(
+            index_elements=[User.id],
+            set_={
+                "email": excluded.email,
+                "role": case(
+                    (excluded.role == "teacher", excluded.role),
+                    (User.role == "student", excluded.role),
+                    else_=User.role,
+                ),
+            },
+        ).returning(User.id)
+    ).scalar_one()
+
+    legacy_user = db.get(User, legacy_user_id)
+    if legacy_user is None:  # pragma: no cover
+        raise RuntimeError("legacy_user_upsert_failed")
+    return legacy_user
 
 
 def ensure_course_membership(db: Session, *, course_id: str, membership_id: str) -> tuple[CourseMembership, bool]:
