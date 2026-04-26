@@ -399,6 +399,19 @@ class CaseGrade(Base):
             "status IN ('in_progress', 'submitted', 'graded')",
             name="ck_case_grades_status",
         ),
+        CheckConstraint(
+            "max_score > 0",
+            name="ck_case_grades_max_score_positive",
+        ),
+        CheckConstraint(
+            "score IS NULL OR (score >= 0 AND score <= max_score)",
+            name="ck_case_grades_score_range",
+        ),
+        CheckConstraint(
+            "((status = 'graded' AND score IS NOT NULL AND graded_at IS NOT NULL) OR "
+            "(status IN ('in_progress', 'submitted') AND score IS NULL AND graded_at IS NULL))",
+            name="ck_case_grades_state_consistency",
+        ),
         Index("ix_case_grades_course_assignment", "course_id", "assignment_id"),
         Index("ix_case_grades_course_membership", "course_id", "membership_id"),
     )

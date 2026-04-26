@@ -33,6 +33,13 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint("status IN ('in_progress', 'submitted', 'graded')", name='ck_case_grades_status'),
+    sa.CheckConstraint('max_score > 0', name='ck_case_grades_max_score_positive'),
+    sa.CheckConstraint('score IS NULL OR (score >= 0 AND score <= max_score)', name='ck_case_grades_score_range'),
+    sa.CheckConstraint(
+        "((status = 'graded' AND score IS NOT NULL AND graded_at IS NOT NULL) OR "
+        "(status IN ('in_progress', 'submitted') AND score IS NULL AND graded_at IS NULL))",
+        name='ck_case_grades_state_consistency',
+    ),
     sa.ForeignKeyConstraint(['assignment_id'], ['assignments.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['course_id'], ['courses.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['graded_by_membership_id'], ['memberships.id'], ondelete='SET NULL'),

@@ -7,7 +7,7 @@ from typing import Generator
 import uuid
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, inspect
 from sqlalchemy.exc import IntegrityError
 
 from shared.models import Assignment, AssignmentCourse, CaseGrade, StudentCaseResponse, User
@@ -553,6 +553,79 @@ def test_issue205_case_grade_status_check_rejects_not_started(db, seed_identity,
             assignment_id=assignment.id,
             course_id=course.id,
             status="not_started",
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        db.flush()
+    db.rollback()
+
+
+def test_issue205_case_grade_schema_declares_score_invariants(db) -> None:
+    check_constraints = {
+        constraint["name"]
+        for constraint in inspect(db.bind).get_check_constraints("case_grades")
+    }
+
+    assert "ck_case_grades_status" in check_constraints
+    assert "ck_case_grades_max_score_positive" in check_constraints
+    assert "ck_case_grades_score_range" in check_constraints
+    assert "ck_case_grades_state_consistency" in check_constraints
+
+
+@pytest.mark.parametrize(
+    ("status", "score", "max_score", "graded_at"),
+    [
+        ("submitted", Decimal("1.00"), Decimal("5.00"), None),
+        ("graded", None, Decimal("5.00"), datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)),
+        ("graded", Decimal("4.00"), Decimal("0.00"), datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)),
+        ("graded", Decimal("6.00"), Decimal("5.00"), datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)),
+        ("graded", Decimal("4.00"), Decimal("5.00"), None),
+    ],
+)
+def test_issue205_case_grade_checks_reject_invalid_persisted_states(
+    db,
+    seed_identity,
+    seed_course,
+    status: str,
+    score: Decimal | None,
+    max_score: Decimal,
+    graded_at: datetime | None,
+) -> None:
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email=f"teacher-invalid-grade-{uuid.uuid4().hex[:8]}@example.edu",
+        role="teacher",
+        university_id="10000000-0000-0000-0000-000000002061",
+    )
+    student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email=f"student-invalid-grade-{uuid.uuid4().hex[:8]}@example.edu",
+        role="student",
+        university_id=teacher["membership"].university_id,
+    )
+    course = seed_course(
+        university_id=teacher["membership"].university_id,
+        teacher_membership_id=teacher["membership"].id,
+    )
+    assignment = Assignment(
+        teacher_id=teacher["membership"].user_id,
+        course_id=course.id,
+        title="Invalid Grade Constraint Check",
+        status="published",
+    )
+    db.add(assignment)
+    db.flush()
+
+    db.add(
+        CaseGrade(
+            membership_id=student["membership"].id,
+            assignment_id=assignment.id,
+            course_id=course.id,
+            status=status,
+            score=score,
+            max_score=max_score,
+            graded_at=graded_at,
         )
     )
 
