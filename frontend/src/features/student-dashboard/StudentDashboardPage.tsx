@@ -250,7 +250,7 @@ function StudentCasesTable({ cases }: { cases: StudentCaseItem[] }) {
                                             {canOpenCase ? (
                                                 <Link
                                                     to={`/student/cases/${caseItem.id}/resolve`}
-                                                    className={`inline-flex h-9 items-center justify-center rounded-lg px-3.5 text-[13px] font-semibold transition-colors ${caseItem.status === "submitted" || caseItem.status === "closed"
+                                                    className={`inline-flex h-9 items-center justify-center rounded-lg px-3.5 text-[13px] font-semibold whitespace-nowrap transition-colors ${caseItem.status === "submitted" || caseItem.status === "closed"
                                                         ? "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                                                         : "bg-[#0144a0] text-white hover:bg-[#00337a]"
                                                         }`}
@@ -260,7 +260,7 @@ function StudentCasesTable({ cases }: { cases: StudentCaseItem[] }) {
                                             ) : (
                                                 <span
                                                     aria-disabled="true"
-                                                    className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-100 px-3.5 text-[13px] font-semibold text-slate-500"
+                                                    className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-100 px-3.5 text-[13px] font-semibold whitespace-nowrap text-slate-500"
                                                 >
                                                     {actionLabel}
                                                 </span>

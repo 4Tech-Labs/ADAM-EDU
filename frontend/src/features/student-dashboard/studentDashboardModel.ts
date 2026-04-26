@@ -175,7 +175,7 @@ export function formatCaseStatusMeta(caseItem: StudentCaseItem): { label: string
         }
         if (isSameCalendarDay(deadline, tomorrow)) {
             return {
-                label: `En progreso, vence manana${timeLabel ? ` ${timeLabel}` : ""}`,
+                label: `En progreso, vence mañana${timeLabel ? ` ${timeLabel}` : ""}`,
                 tone: "amber",
             };
         }
@@ -194,7 +194,7 @@ export function formatCaseStatusMeta(caseItem: StudentCaseItem): { label: string
         return {
             label: caseItem.available_from
                 ? `Disponible ${formatDateTime(caseItem.available_from)}`
-                : "Proximamente",
+                : "Próximamente",
             tone: "amber",
         };
     }
@@ -214,13 +214,13 @@ export function formatCaseActionLabel(status: StudentCaseStatus): string {
         return "Resolver caso";
     }
     if (status === "in_progress") {
-        return "Continuar resolucion";
+        return "Continuar resolución";
     }
     if (status === "submitted") {
         return "Ver entrega";
     }
     if (status === "upcoming") {
-        return "Aun no disponible";
+        return "Aún no disponible";
     }
     return "Ver caso";
 }
