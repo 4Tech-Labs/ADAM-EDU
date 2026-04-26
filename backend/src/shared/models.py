@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -13,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -375,6 +377,79 @@ class AssignmentCourse(Base):
 
     assignment: Mapped["Assignment"] = relationship(back_populates="assignment_courses")
     course: Mapped["Course"] = relationship(back_populates="assignment_courses")
+
+
+class CaseGrade(Base):
+    """
+    Read-model grade row keyed by membership and assignment.
+
+    Synthetic `not_started` lives in the read layer only. Persisted rows represent
+    actual progress or grading state. Multi-course cross-enrollment for the same
+    membership-assignment pair remains unsupported and is guarded in the service layer.
+    """
+
+    __tablename__ = "case_grades"
+    __table_args__ = (
+        UniqueConstraint(
+            "membership_id",
+            "assignment_id",
+            name="uix_case_grades_membership_assignment",
+        ),
+        CheckConstraint(
+            "status IN ('in_progress', 'submitted', 'graded')",
+            name="ck_case_grades_status",
+        ),
+        Index("ix_case_grades_course_assignment", "course_id", "assignment_id"),
+        Index("ix_case_grades_course_membership", "course_id", "membership_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    membership_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("memberships.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    assignment_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("assignments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    course_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("courses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    max_score: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2),
+        nullable=False,
+        default=Decimal("5.00"),
+        server_default=sql_text("5.00"),
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    graded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    graded_by_membership_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("memberships.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    membership: Mapped["Membership"] = relationship(foreign_keys=[membership_id])
+    assignment: Mapped["Assignment"] = relationship()
+    course: Mapped["Course"] = relationship()
+    graded_by_membership: Mapped["Membership | None"] = relationship(
+        foreign_keys=[graded_by_membership_id],
+    )
 
 
 class StudentCaseResponse(Base):

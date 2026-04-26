@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal
+from decimal import Decimal
+from typing import Any, Literal, Sequence
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
@@ -12,7 +13,20 @@ from sqlalchemy.orm import Session, joinedload, load_only
 
 from shared.auth import CurrentActor, ensure_legacy_teacher_bridge
 from shared.course_access_schema import TeacherCourseAccessLinkResponse
-from shared.models import Assignment, AssignmentCourse, AuthoringJob, Course, CourseAccessLink, CourseMembership, Membership, Syllabus
+from shared.models import (
+    Assignment,
+    AssignmentCourse,
+    AuthoringJob,
+    CaseGrade,
+    Course,
+    CourseAccessLink,
+    CourseMembership,
+    Membership,
+    Profile,
+    StudentCaseResponse,
+    Syllabus,
+    User,
+)
 from shared.syllabus_schema import (
     TeacherCourseConfigurationResponse,
     TeacherCourseDetailResponse,
@@ -21,8 +35,16 @@ from shared.syllabus_schema import (
     TeacherSyllabusRevisionMetadataResponse,
 )
 from shared.teacher_context import TeacherContext
+from shared.teacher_gradebook_schema import (
+    TeacherCourseGradebookCase,
+    TeacherCourseGradebookCell,
+    TeacherCourseGradebookCourse,
+    TeacherCourseGradebookResponse,
+    TeacherCourseGradebookStudent,
+)
 
 _BOGOTA_TZ = ZoneInfo("America/Bogota")
+_DEFAULT_CASE_MAX_SCORE = 5.0
 
 
 class TeacherCourseItemResponse(BaseModel):
@@ -55,6 +77,89 @@ class TeacherCaseItem:
 class TeacherOwnedCourseSyllabus:
     course: Course
     syllabus: Syllabus
+
+
+def _decimal_to_float(value: Decimal | None) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _display_name(*, profile_full_name: str | None, email: str) -> str:
+    candidate = profile_full_name.strip() if profile_full_name is not None else ""
+    return candidate or email
+
+
+def _map_student_case_status(status_value: str) -> Literal["in_progress", "submitted"]:
+    if status_value == "submitted":
+        return "submitted"
+    return "in_progress"
+
+
+def _resolve_assignment_title(assignment: Assignment) -> str:
+    canonical_output = assignment.canonical_output if isinstance(assignment.canonical_output, dict) else {}
+    candidate = canonical_output.get("title")
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate
+    return assignment.title
+
+
+def _ensure_supported_gradebook_topology(
+    db: Session,
+    context: TeacherContext,
+    *,
+    assignments: Sequence[Assignment],
+    student_membership_ids: list[str],
+) -> None:
+    multi_course_targets = {
+        assignment.id: {assignment_course.course_id for assignment_course in assignment.assignment_courses}
+        for assignment in assignments
+        if len({assignment_course.course_id for assignment_course in assignment.assignment_courses}) > 1
+    }
+    if not multi_course_targets or not student_membership_ids:
+        return
+
+    relevant_course_ids = sorted({
+        target_course_id
+        for target_course_ids in multi_course_targets.values()
+        for target_course_id in target_course_ids
+    })
+    enrollment_rows = (
+        db.execute(
+            select(
+                CourseMembership.membership_id.label("membership_id"),
+                CourseMembership.course_id.label("course_id"),
+            )
+            .select_from(CourseMembership)
+            .join(
+                Membership,
+                and_(
+                    CourseMembership.membership_id == Membership.id,
+                    Membership.university_id == context.university_id,
+                    Membership.role == "student",
+                    Membership.status == "active",
+                ),
+            )
+            .where(
+                CourseMembership.membership_id.in_(student_membership_ids),
+                CourseMembership.course_id.in_(relevant_course_ids),
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    memberships_to_courses: dict[str, set[str]] = {}
+    for row in enrollment_rows:
+        memberships_to_courses.setdefault(row["membership_id"], set()).add(row["course_id"])
+
+    for target_course_ids in multi_course_targets.values():
+        for enrolled_course_ids in memberships_to_courses.values():
+            if len(enrolled_course_ids & target_course_ids) > 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="course_gradebook_cross_enrollment_unsupported",
+                )
 
 
 def _build_student_counts_subquery(context: TeacherContext):
@@ -325,6 +430,234 @@ def get_teacher_course_detail(
             access_link_id=row["access_link_id"],
             access_link_created_at=row["access_link_created_at"],
         ),
+    )
+
+
+def get_teacher_course_gradebook(
+    db: Session,
+    context: TeacherContext,
+    course_id: str,
+) -> TeacherCourseGradebookResponse:
+    course_row = (
+        db.execute(
+            select(
+                Course.id.label("id"),
+                Course.title.label("title"),
+                Course.code.label("code"),
+            )
+            .where(
+                Course.id == course_id,
+                Course.university_id == context.university_id,
+                Course.teacher_membership_id == context.teacher_membership_id,
+            )
+            .limit(1)
+        )
+        .mappings()
+        .first()
+    )
+    if course_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="course_not_found")
+
+    assignment_target_courses = _build_assignment_target_courses_subquery()
+    assignments = (
+        db.execute(
+            select(Assignment)
+            .options(
+                load_only(
+                    Assignment.id,
+                    Assignment.title,
+                    Assignment.canonical_output,
+                    Assignment.status,
+                    Assignment.available_from,
+                    Assignment.deadline,
+                    Assignment.created_at,
+                ),
+                joinedload(Assignment.assignment_courses).load_only(AssignmentCourse.course_id),
+            )
+            .join(
+                assignment_target_courses,
+                assignment_target_courses.c.assignment_id == Assignment.id,
+            )
+            .where(
+                assignment_target_courses.c.course_id == course_id,
+                Assignment.status == "published",
+            )
+            .order_by(
+                Assignment.available_from.asc().nullslast(),
+                Assignment.deadline.asc().nullslast(),
+                Assignment.created_at.asc(),
+                Assignment.id.asc(),
+            )
+        )
+        .unique()
+        .scalars()
+        .all()
+    )
+
+    student_rows = (
+        db.execute(
+            select(
+                CourseMembership.membership_id.label("membership_id"),
+                CourseMembership.created_at.label("enrolled_at"),
+                Profile.full_name.label("profile_full_name"),
+                User.email.label("email"),
+            )
+            .select_from(CourseMembership)
+            .join(
+                Membership,
+                and_(
+                    CourseMembership.membership_id == Membership.id,
+                    Membership.university_id == context.university_id,
+                    Membership.role == "student",
+                    Membership.status == "active",
+                ),
+            )
+            .join(User, User.id == Membership.user_id)
+            .outerjoin(Profile, Profile.id == Membership.user_id)
+            .where(CourseMembership.course_id == course_id)
+            .order_by(
+                func.lower(func.coalesce(func.nullif(func.btrim(Profile.full_name), ""), User.email)).asc(),
+                CourseMembership.membership_id.asc(),
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    student_membership_ids = [row["membership_id"] for row in student_rows]
+    assignment_ids = [assignment.id for assignment in assignments]
+
+    _ensure_supported_gradebook_topology(
+        db,
+        context,
+        assignments=assignments,
+        student_membership_ids=student_membership_ids,
+    )
+
+    progress_by_key: dict[tuple[str, str], Literal["in_progress", "submitted"]] = {}
+    if student_membership_ids and assignment_ids:
+        progress_rows = (
+            db.execute(
+                select(
+                    StudentCaseResponse.membership_id.label("membership_id"),
+                    StudentCaseResponse.assignment_id.label("assignment_id"),
+                    StudentCaseResponse.status.label("status"),
+                )
+                .where(
+                    StudentCaseResponse.membership_id.in_(student_membership_ids),
+                    StudentCaseResponse.assignment_id.in_(assignment_ids),
+                )
+            )
+            .mappings()
+            .all()
+        )
+        progress_by_key = {
+            (row["membership_id"], row["assignment_id"]): _map_student_case_status(row["status"])
+            for row in progress_rows
+        }
+
+    grade_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    max_score_by_assignment: dict[str, float] = {}
+    if student_membership_ids and assignment_ids:
+        grade_rows = (
+            db.execute(
+                select(
+                    CaseGrade.membership_id.label("membership_id"),
+                    CaseGrade.assignment_id.label("assignment_id"),
+                    CaseGrade.status.label("status"),
+                    CaseGrade.score.label("score"),
+                    CaseGrade.max_score.label("max_score"),
+                    CaseGrade.graded_at.label("graded_at"),
+                )
+                .where(
+                    CaseGrade.course_id == course_id,
+                    CaseGrade.membership_id.in_(student_membership_ids),
+                    CaseGrade.assignment_id.in_(assignment_ids),
+                )
+            )
+            .mappings()
+            .all()
+        )
+        for row in grade_rows:
+            score = _decimal_to_float(row["score"])
+            max_score = _decimal_to_float(row["max_score"])
+            grade_by_key[(row["membership_id"], row["assignment_id"])] = {
+                "status": row["status"],
+                "score": score,
+                "graded_at": row["graded_at"],
+            }
+            if max_score is not None:
+                max_score_by_assignment.setdefault(row["assignment_id"], max_score)
+
+    cases = [
+        TeacherCourseGradebookCase(
+            assignment_id=assignment.id,
+            title=_resolve_assignment_title(assignment),
+            status="published",
+            available_from=assignment.available_from,
+            deadline=assignment.deadline,
+            max_score=max_score_by_assignment.get(assignment.id, _DEFAULT_CASE_MAX_SCORE),
+        )
+        for assignment in assignments
+    ]
+
+    students: list[TeacherCourseGradebookStudent] = []
+    for row in student_rows:
+        membership_id = row["membership_id"]
+        grades: list[TeacherCourseGradebookCell] = []
+        scored_values: list[float] = []
+
+        for assignment in assignments:
+            grade = grade_by_key.get((membership_id, assignment.id))
+            if grade is not None:
+                score = grade["score"]
+                if score is not None:
+                    scored_values.append(score)
+                grades.append(
+                    TeacherCourseGradebookCell(
+                        assignment_id=assignment.id,
+                        status=grade["status"],
+                        score=score,
+                        graded_at=grade["graded_at"],
+                    )
+                )
+                continue
+
+            progress_status = progress_by_key.get((membership_id, assignment.id), "not_started")
+            grades.append(
+                TeacherCourseGradebookCell(
+                    assignment_id=assignment.id,
+                    status=progress_status,
+                    score=None,
+                    graded_at=None,
+                )
+            )
+
+        average_score = round(sum(scored_values) / len(scored_values), 2) if scored_values else None
+        students.append(
+            TeacherCourseGradebookStudent(
+                membership_id=membership_id,
+                full_name=_display_name(
+                    profile_full_name=row["profile_full_name"],
+                    email=row["email"],
+                ),
+                email=row["email"],
+                enrolled_at=row["enrolled_at"],
+                average_score=average_score,
+                grades=grades,
+            )
+        )
+
+    return TeacherCourseGradebookResponse(
+        course=TeacherCourseGradebookCourse(
+            id=course_row["id"],
+            title=course_row["title"],
+            code=course_row["code"],
+            students_count=len(students),
+            cases_count=len(cases),
+        ),
+        cases=cases,
+        students=students,
     )
 
 

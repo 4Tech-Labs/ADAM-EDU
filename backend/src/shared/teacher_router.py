@@ -14,12 +14,14 @@ from shared.auth import CurrentActor, require_current_actor_password_ready
 from shared.course_access_schema import CourseAccessLinkRegenerateResponse, TeacherCourseAccessLinkResponse
 from shared.database import get_db
 from shared.models import Assignment, AssignmentCourse, Course
+from shared.teacher_gradebook_schema import TeacherCourseGradebookResponse
 from shared.syllabus_schema import TeacherCourseDetailResponse, TeacherSyllabusSaveRequest
 from shared.teacher_context import TeacherContext, require_teacher_context
 from shared.teacher_reads import (
     TeacherCoursesResponse,
     get_teacher_course_access_link,
     get_teacher_course_detail,
+    get_teacher_course_gradebook,
     list_teacher_active_cases,
     list_teacher_courses,
     resolve_assignment_schedule_values,
@@ -93,6 +95,15 @@ def get_teacher_course(
     db: Session = Depends(get_db),
 ) -> TeacherCourseDetailResponse:
     return get_teacher_course_detail(db, context, course_id)
+
+
+@router.get("/courses/{course_id}/students", response_model=TeacherCourseGradebookResponse)
+def get_teacher_course_students(
+    course_id: str,
+    context: Annotated[TeacherContext, Depends(require_teacher_context)],
+    db: Session = Depends(get_db),
+) -> TeacherCourseGradebookResponse:
+    return get_teacher_course_gradebook(db, context, course_id)
 
 
 @router.get("/courses/{course_id}/access-link", response_model=TeacherCourseAccessLinkResponse)
