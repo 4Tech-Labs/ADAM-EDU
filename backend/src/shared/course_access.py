@@ -16,6 +16,7 @@ from shared.identity_activation import (
     derive_oauth_full_name,
     ensure_email_domain_allowed,
     ensure_course_membership,
+    upsert_legacy_user,
     upsert_membership as ensure_membership,
     upsert_profile as ensure_profile,
 )
@@ -409,6 +410,21 @@ def activate_course_access_password(
         university_id=context.course.university_id,
         course_id=context.course.id,
     ):
+        try:
+            upsert_legacy_user(
+                db,
+                auth_user_id=existing_user.id,
+                university_id=context.course.university_id,
+                email=normalized_email,
+                role="student",
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="activation_failed",
+            ) from exc
         audit_log(
             "course_access.activate_password",
             "activated",
@@ -479,6 +495,13 @@ def activate_course_access_password(
             db,
             auth_user_id=auth_user.id,
             university_id=context.course.university_id,
+            role="student",
+        )
+        upsert_legacy_user(
+            db,
+            auth_user_id=auth_user.id,
+            university_id=context.course.university_id,
+            email=normalized_email,
             role="student",
         )
         ensure_course_membership(db, course_id=context.course.id, membership_id=membership.id)
@@ -586,6 +609,21 @@ def _activate_course_access_authenticated(
         university_id=context.course.university_id,
         course_id=context.course.id,
     ):
+        try:
+            upsert_legacy_user(
+                db,
+                auth_user_id=identity.auth_user_id,
+                university_id=context.course.university_id,
+                email=normalized_email,
+                role="student",
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="activation_failed",
+            ) from exc
         audit_log(
             event,
             "activated",
@@ -637,6 +675,13 @@ def _activate_course_access_authenticated(
             db,
             auth_user_id=identity.auth_user_id,
             university_id=context.course.university_id,
+            role="student",
+        )
+        upsert_legacy_user(
+            db,
+            auth_user_id=identity.auth_user_id,
+            university_id=context.course.university_id,
+            email=normalized_email,
             role="student",
         )
         ensure_course_membership(db, course_id=context.course.id, membership_id=membership.id)

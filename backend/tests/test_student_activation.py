@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from shared.identity_activation import _allowed_domains_cache, _allowed_domains_lock
-from shared.models import AllowedEmailDomain, Course, Membership, Profile, Tenant
+from shared.models import AllowedEmailDomain, Course, CourseMembership, Membership, Profile, Tenant, User
 
 
 UNIVERSITY_ID = "20000000-0000-0000-0000-000000000001"
@@ -266,7 +266,7 @@ class TestActivatePasswordDomainValidation:
         assert resp.json()["detail"] == "email_domain_not_allowed"
 
     def test_success_when_student_email_domain_allowed(
-        self, client: TestClient, seed_invite, university, course, allowed_domain, fake_admin_client
+        self, client: TestClient, seed_invite, university, course, allowed_domain, fake_admin_client, db
     ):
         _, token = seed_invite(
             email="stu@universidad.edu",  # matches allowed_email_domains
@@ -285,6 +285,11 @@ class TestActivatePasswordDomainValidation:
         )
         assert resp.status_code == 201
         assert resp.json()["status"] == "activated"
+        auth_user = fake_admin_client.users_by_email["stu@universidad.edu"]
+        legacy_user = db.get(User, auth_user.id)
+        assert legacy_user is not None
+        assert legacy_user.email == "stu@universidad.edu"
+        assert legacy_user.role == "student"
 
     def test_no_domain_restriction_when_no_domains_configured(
         self, client: TestClient, seed_invite, university, course, fake_admin_client
@@ -367,6 +372,62 @@ class TestActivateOAuthDomainValidation:
             )
         )
         assert membership is not None
+        legacy_user = db.get(User, user_id)
+        assert legacy_user is not None
+        assert legacy_user.email == "student@universidad.edu"
+        assert legacy_user.role == "student"
+
+    def test_activate_password_repairs_consumed_student_invite_without_legacy_bridge(
+        self,
+        client: TestClient,
+        db,
+        seed_invite,
+        course,
+        fake_admin_client,
+        seed_identity,
+    ) -> None:
+        auth_user = fake_admin_client.create_password_user("repair.student@universidad.edu", "Secure1234!")
+        student = seed_identity(
+            user_id=auth_user.id,
+            email="repair.student@universidad.edu",
+            role="student",
+            university_id=UNIVERSITY_ID,
+            full_name="Repair Student",
+            create_legacy_user=False,
+        )
+        db.add(CourseMembership(course_id=course.id, membership_id=student["membership"].id))
+        db.commit()
+        assert db.get(User, auth_user.id) is None
+
+        _, token = seed_invite(
+            email="repair.student@universidad.edu",
+            university_id=UNIVERSITY_ID,
+            role="student",
+            course_id=course.id,
+            full_name="Repair Student",
+            status="consumed",
+        )
+
+        response = client.post(
+            "/api/auth/activate/password",
+            json={
+                "invite_token": token,
+                "full_name": "Repair Student",
+                "password": "Secure1234!",
+                "confirm_password": "Secure1234!",
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.json() == {
+            "status": "activated",
+            "next_step": "sign_in",
+            "email": "repair.student@universidad.edu",
+        }
+        legacy_user = db.get(User, auth_user.id)
+        assert legacy_user is not None
+        assert legacy_user.email == "repair.student@universidad.edu"
+        assert legacy_user.role == "student"
 
     def test_oauth_complete_teacher_bypasses_domain_check(
         self, client: TestClient, university, allowed_domain, seed_invite, auth_headers_factory

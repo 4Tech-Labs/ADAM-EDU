@@ -9,10 +9,12 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session, joinedload, load_only
 
-from shared.auth import CurrentActor, ensure_legacy_teacher_bridge
+from shared.auth import CurrentActor, ensure_legacy_teacher_bridge, get_supabase_admin_auth_client
 from shared.course_access_schema import TeacherCourseAccessLinkResponse
+from shared.identity_activation import upsert_legacy_user
 from shared.models import (
     Assignment,
     AssignmentCourse,
@@ -185,6 +187,71 @@ def _build_student_counts_subquery(context: TeacherContext):
 
 def _resolve_reference_now(now: datetime | None = None) -> datetime:
     return now if now is not None else datetime.now(timezone.utc)
+
+
+def _normalize_grade_score(*, score: float, max_score: float) -> float:
+    if max_score <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="course_gradebook_invalid_max_score",
+        )
+    return round((score / max_score) * _DEFAULT_CASE_MAX_SCORE, 2)
+
+
+def _repair_gradebook_student_rows(
+    db: Session,
+    context: TeacherContext,
+    *,
+    student_rows: Sequence[RowMapping],
+) -> list[dict[str, Any]]:
+    resolved_rows = [dict(row) for row in student_rows]
+    missing_rows = [row for row in resolved_rows if not row["email"]]
+    if not missing_rows:
+        return sorted(
+            resolved_rows,
+            key=lambda row: (
+                _display_name(profile_full_name=row["profile_full_name"], email=row["email"]).lower(),
+                row["membership_id"],
+            ),
+        )
+
+    admin_client = get_supabase_admin_auth_client()
+    try:
+        for row in missing_rows:
+            auth_user = admin_client.get_user_by_id(row["user_id"])
+            if auth_user is None or not auth_user.email:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="student_identity_unavailable",
+                )
+
+            row["email"] = auth_user.email
+            upsert_legacy_user(
+                db,
+                auth_user_id=row["user_id"],
+                university_id=context.university_id,
+                email=auth_user.email,
+                role="student",
+            )
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="student_identity_unavailable",
+        ) from exc
+
+    return sorted(
+        resolved_rows,
+        key=lambda row: (
+            _display_name(profile_full_name=row["profile_full_name"], email=row["email"]).lower(),
+            row["membership_id"],
+        ),
+    )
 
 
 def _active_assignment_predicate(*, now: datetime):
@@ -438,13 +505,17 @@ def get_teacher_course_gradebook(
     context: TeacherContext,
     course_id: str,
 ) -> TeacherCourseGradebookResponse:
+    student_counts = _build_student_counts_subquery(context)
     course_row = (
         db.execute(
             select(
                 Course.id.label("id"),
                 Course.title.label("title"),
                 Course.code.label("code"),
+                func.coalesce(student_counts.c.students_count, 0).label("students_count"),
             )
+            .select_from(Course)
+            .outerjoin(student_counts, student_counts.c.course_id == Course.id)
             .where(
                 Course.id == course_id,
                 Course.university_id == context.university_id,
@@ -484,7 +555,6 @@ def get_teacher_course_gradebook(
             )
             .order_by(
                 Assignment.available_from.asc().nullslast(),
-                Assignment.deadline.asc().nullslast(),
                 Assignment.created_at.asc(),
                 Assignment.id.asc(),
             )
@@ -494,10 +564,11 @@ def get_teacher_course_gradebook(
         .all()
     )
 
-    student_rows = (
+    student_row_records = (
         db.execute(
             select(
                 CourseMembership.membership_id.label("membership_id"),
+                Membership.user_id.label("user_id"),
                 CourseMembership.created_at.label("enrolled_at"),
                 Profile.full_name.label("profile_full_name"),
                 User.email.label("email"),
@@ -512,17 +583,14 @@ def get_teacher_course_gradebook(
                     Membership.status == "active",
                 ),
             )
-            .join(User, User.id == Membership.user_id)
+            .outerjoin(User, User.id == Membership.user_id)
             .outerjoin(Profile, Profile.id == Membership.user_id)
             .where(CourseMembership.course_id == course_id)
-            .order_by(
-                func.lower(func.coalesce(func.nullif(func.btrim(Profile.full_name), ""), User.email)).asc(),
-                CourseMembership.membership_id.asc(),
-            )
         )
         .mappings()
         .all()
     )
+    student_rows = _repair_gradebook_student_rows(db, context, student_rows=student_row_records)
 
     student_membership_ids = [row["membership_id"] for row in student_rows]
     assignment_ids = [assignment.id for assignment in assignments]
@@ -578,16 +646,23 @@ def get_teacher_course_gradebook(
             .mappings()
             .all()
         )
-        for row in grade_rows:
-            score = _decimal_to_float(row["score"])
-            max_score = _decimal_to_float(row["max_score"])
-            grade_by_key[(row["membership_id"], row["assignment_id"])] = {
-                "status": row["status"],
+        for grade_row in grade_rows:
+            score = _decimal_to_float(grade_row["score"])
+            max_score = _decimal_to_float(grade_row["max_score"])
+            grade_by_key[(grade_row["membership_id"], grade_row["assignment_id"])] = {
+                "status": grade_row["status"],
                 "score": score,
-                "graded_at": row["graded_at"],
+                "max_score": max_score,
+                "graded_at": grade_row["graded_at"],
             }
             if max_score is not None:
-                max_score_by_assignment.setdefault(row["assignment_id"], max_score)
+                existing_max_score = max_score_by_assignment.get(grade_row["assignment_id"])
+                if existing_max_score is not None and existing_max_score != max_score:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="course_gradebook_inconsistent_max_score",
+                    )
+                max_score_by_assignment[grade_row["assignment_id"]] = max_score
 
     cases = [
         TeacherCourseGradebookCase(
@@ -602,8 +677,8 @@ def get_teacher_course_gradebook(
     ]
 
     students: list[TeacherCourseGradebookStudent] = []
-    for row in student_rows:
-        membership_id = row["membership_id"]
+    for student_row in student_rows:
+        membership_id = student_row["membership_id"]
         grades: list[TeacherCourseGradebookCell] = []
         scored_values: list[float] = []
 
@@ -611,8 +686,12 @@ def get_teacher_course_gradebook(
             grade = grade_by_key.get((membership_id, assignment.id))
             if grade is not None:
                 score = grade["score"]
-                if score is not None:
-                    scored_values.append(score)
+                if score is not None and grade["status"] == "graded":
+                    normalized_score = _normalize_grade_score(
+                        score=score,
+                        max_score=grade["max_score"] or max_score_by_assignment.get(assignment.id, _DEFAULT_CASE_MAX_SCORE),
+                    )
+                    scored_values.append(normalized_score)
                 grades.append(
                     TeacherCourseGradebookCell(
                         assignment_id=assignment.id,
@@ -638,11 +717,11 @@ def get_teacher_course_gradebook(
             TeacherCourseGradebookStudent(
                 membership_id=membership_id,
                 full_name=_display_name(
-                    profile_full_name=row["profile_full_name"],
-                    email=row["email"],
+                    profile_full_name=student_row["profile_full_name"],
+                    email=student_row["email"],
                 ),
-                email=row["email"],
-                enrolled_at=row["enrolled_at"],
+                email=student_row["email"],
+                enrolled_at=student_row["enrolled_at"],
                 average_score=average_score,
                 grades=grades,
             )
@@ -653,7 +732,7 @@ def get_teacher_course_gradebook(
             id=course_row["id"],
             title=course_row["title"],
             code=course_row["code"],
-            students_count=len(students),
+            students_count=int(course_row["students_count"]),
             cases_count=len(cases),
         ),
         cases=cases,

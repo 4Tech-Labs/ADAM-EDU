@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import select
 
-from shared.models import AllowedEmailDomain, CourseMembership, Membership, Profile, UniversitySsoConfig
+from shared.models import AllowedEmailDomain, CourseMembership, Membership, Profile, UniversitySsoConfig, User
 
 
 def _resolve_payload(token: str) -> dict[str, str]:
@@ -586,9 +586,11 @@ def test_issue57_course_access_activate_password_returns_idempotent_response_for
         email="student.reuse@example.edu",
         role="student",
         university_id=university_id,
+        create_legacy_user=False,
     )
     db.add(CourseMembership(course_id=course.id, membership_id=student["membership"].id))
     db.commit()
+    assert db.get(User, existing_user.id) is None
     _, token = seed_course_access_link(course_id=course.id, status="active")
 
     response = client.post(
@@ -605,6 +607,10 @@ def test_issue57_course_access_activate_password_returns_idempotent_response_for
         )
     )
     assert membership is not None
+    legacy_user = db.get(User, existing_user.id)
+    assert legacy_user is not None
+    assert legacy_user.email == "student.reuse@example.edu"
+    assert legacy_user.role == "student"
     assert len(fake_admin_client.users_by_email) == 1
 
 
@@ -1026,6 +1032,10 @@ def test_issue57_course_access_activate_oauth_complete_creates_membership_and_en
         )
     )
     assert membership is not None
+    legacy_user = db.get(User, student_id)
+    assert legacy_user is not None
+    assert legacy_user.email == "student.oauth@universidad.edu"
+    assert legacy_user.role == "student"
     enrollment = db.scalar(
         select(CourseMembership).where(
             CourseMembership.course_id == course.id,
