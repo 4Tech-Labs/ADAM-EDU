@@ -3,16 +3,25 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Generator
 import uuid
 
+from alembic import command
+from alembic.config import Config
 import pytest
-from sqlalchemy import event, inspect
+from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import IntegrityError
 
+from shared.database import settings
 from shared.models import Assignment, AssignmentCourse, CaseGrade, StudentCaseResponse, User
 from shared.teacher_context import TeacherContext
 from shared.teacher_reads import get_teacher_course_gradebook
+
+
+ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
+PRE_ISSUE205_REVISION = "c1964e5f6a7b"
 
 
 def _auth_headers(auth_headers_factory, *, user_id: str, email: str) -> dict[str, str]:
@@ -79,6 +88,52 @@ def _count_queries(bind) -> Generator[dict[str, int], None, None]:
         yield counter
     finally:
         event.remove(bind, "before_cursor_execute", _before_cursor_execute)
+
+
+def _make_temp_database_urls() -> tuple[str, URL, URL]:
+    base_url = make_url(settings.database_url)
+    temp_name = f"issue205_{uuid.uuid4().hex[:10]}"
+    temp_url = base_url.set(database=temp_name)
+    admin_url = base_url.set(database="postgres")
+    return temp_name, temp_url, admin_url
+
+
+@contextmanager
+def temporary_database() -> Generator[str, None, None]:
+    db_name, temp_url, admin_url = _make_temp_database_urls()
+    admin_engine = create_engine(
+        admin_url.render_as_string(hide_password=False),
+        isolation_level="AUTOCOMMIT",
+    )
+    temp_engine = None
+    try:
+        with admin_engine.connect() as conn:
+            conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+        temp_engine = create_engine(temp_url.render_as_string(hide_password=False))
+        yield temp_url.render_as_string(hide_password=False)
+    finally:
+        if temp_engine is not None:
+            temp_engine.dispose()
+        with admin_engine.connect() as conn:
+            conn.execute(
+                text(
+                    """
+                    SELECT pg_terminate_backend(pid)
+                    FROM pg_stat_activity
+                    WHERE datname = :db_name
+                      AND pid <> pg_backend_pid()
+                    """
+                ),
+                {"db_name": db_name},
+            )
+            conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        admin_engine.dispose()
+
+
+def _alembic_config(db_url: str) -> Config:
+    config = Config(str(ALEMBIC_INI))
+    config.set_main_option("sqlalchemy.url", db_url)
+    return config
 
 
 def test_issue205_teacher_course_students_returns_gradebook_overlay_and_filters_scope(
@@ -283,6 +338,7 @@ def test_issue205_teacher_course_students_returns_gradebook_overlay_and_filters_
         "code": "AN-205",
         "students_count": 2,
         "cases_count": 5,
+        "average_score_scale": 5.0,
     }
 
     returned_titles = {case["title"] for case in payload["cases"]}
@@ -339,6 +395,69 @@ def test_issue205_teacher_course_students_returns_gradebook_overlay_and_filters_
     assert students[1]["average_score"] is None
 
 
+def test_issue205_teacher_course_students_degrades_missing_auth_identity(
+    client,
+    db,
+    fake_admin_client,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000002063"
+    teacher_user_id = str(uuid.uuid4())
+    teacher_email = "teacher-gradebook-degraded@example.edu"
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email=teacher_email,
+        role="teacher",
+        university_id=university_id,
+        full_name="Teacher Degraded Gradebook",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Legacy Gradebook Repair",
+        code="LGR-205",
+    )
+
+    missing_auth_user = fake_admin_client.create_password_user(
+        "legacy-missing@example.edu",
+        "Secure1234!",
+    )
+    fake_admin_client.delete_user(missing_auth_user.id)
+    student = seed_identity(
+        user_id=missing_auth_user.id,
+        email="legacy-missing@example.edu",
+        role="student",
+        university_id=university_id,
+        full_name="Legacy Missing",
+        create_legacy_user=False,
+    )
+    seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
+
+    assignment = Assignment(
+        teacher_id=teacher_user_id,
+        course_id=course.id,
+        title="Legacy Assignment",
+        status="published",
+        available_from=datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc),
+    )
+    db.add(assignment)
+    db.commit()
+
+    response = client.get(
+        f"/api/teacher/courses/{course.id}/students",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_user_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["course"]["average_score_scale"] == 5.0
+    assert payload["students"][0]["email"].startswith("Correo no disponible (")
+    assert db.get(User, missing_auth_user.id) is None
+
+
 def test_issue205_teacher_course_students_returns_empty_gradebook_for_owned_course_without_rows(
     client,
     seed_identity,
@@ -374,6 +493,7 @@ def test_issue205_teacher_course_students_returns_empty_gradebook_for_owned_cour
             "code": "EMPTY-205",
             "students_count": 0,
             "cases_count": 0,
+            "average_score_scale": 5.0,
         },
         "cases": [],
         "students": [],
@@ -571,6 +691,52 @@ def test_issue205_case_grade_schema_declares_score_invariants(db) -> None:
     assert "ck_case_grades_max_score_positive" in check_constraints
     assert "ck_case_grades_score_range" in check_constraints
     assert "ck_case_grades_state_consistency" in check_constraints
+
+
+def test_issue205_case_grades_rls_is_deployed_from_migration(db) -> None:
+    row_security_enabled = db.execute(
+        text("SELECT relrowsecurity FROM pg_class WHERE oid = 'public.case_grades'::regclass"),
+    ).scalar_one()
+    policies = {
+        row[0]
+        for row in db.execute(
+            text(
+                "SELECT policyname FROM pg_policies WHERE schemaname = 'public' AND tablename = 'case_grades'",
+            )
+        )
+    }
+
+    assert row_security_enabled is True
+    assert policies == {"case_grades_deny_all"}
+
+
+@pytest.mark.ddl_isolation
+def test_issue205_alembic_upgrade_creates_case_grades_rls_policy() -> None:
+    with temporary_database() as db_url:
+        config = _alembic_config(db_url)
+        command.upgrade(config, PRE_ISSUE205_REVISION)
+
+        engine = create_engine(db_url)
+        command.upgrade(config, "head")
+
+        with engine.begin() as conn:
+            row_security_enabled = conn.execute(
+                text("SELECT relrowsecurity FROM pg_class WHERE oid = 'public.case_grades'::regclass"),
+            ).scalar_one()
+            policies = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT policyname FROM pg_policies WHERE schemaname = 'public' AND tablename = 'case_grades'",
+                    )
+                )
+            }
+
+        assert row_security_enabled is True
+        assert policies == {"case_grades_deny_all"}
+
+        command.downgrade(config, PRE_ISSUE205_REVISION)
+        engine.dispose()
 
 
 @pytest.mark.parametrize(

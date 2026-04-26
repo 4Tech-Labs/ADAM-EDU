@@ -16,6 +16,7 @@ from shared.identity_activation import (
     derive_oauth_full_name,
     ensure_email_domain_allowed,
     ensure_course_membership,
+    try_upsert_legacy_user,
     upsert_legacy_user,
     upsert_membership as ensure_membership,
     upsert_profile as ensure_profile,
@@ -411,12 +412,13 @@ def activate_course_access_password(
         course_id=context.course.id,
     ):
         try:
-            upsert_legacy_user(
+            try_upsert_legacy_user(
                 db,
                 auth_user_id=existing_user.id,
                 university_id=context.course.university_id,
                 email=normalized_email,
                 role="student",
+                context="course_access.activate_password.existing_student",
             )
             db.commit()
         except Exception as exc:
@@ -497,12 +499,13 @@ def activate_course_access_password(
             university_id=context.course.university_id,
             role="student",
         )
-        upsert_legacy_user(
+        try_upsert_legacy_user(
             db,
             auth_user_id=auth_user.id,
             university_id=context.course.university_id,
             email=normalized_email,
             role="student",
+            context="course_access.activate_password.new_student",
         )
         ensure_course_membership(db, course_id=context.course.id, membership_id=membership.id)
         db.commit()
@@ -610,12 +613,13 @@ def _activate_course_access_authenticated(
         course_id=context.course.id,
     ):
         try:
-            upsert_legacy_user(
+            try_upsert_legacy_user(
                 db,
                 auth_user_id=identity.auth_user_id,
                 university_id=context.course.university_id,
                 email=normalized_email,
                 role="student",
+                context=f"{event}.existing_student",
             )
             db.commit()
         except Exception as exc:
@@ -677,12 +681,13 @@ def _activate_course_access_authenticated(
             university_id=context.course.university_id,
             role="student",
         )
-        upsert_legacy_user(
+        try_upsert_legacy_user(
             db,
             auth_user_id=identity.auth_user_id,
             university_id=context.course.university_id,
             email=normalized_email,
             role="student",
+            context=f"{event}.new_student",
         )
         ensure_course_membership(db, course_id=context.course.id, membership_id=membership.id)
         db.commit()

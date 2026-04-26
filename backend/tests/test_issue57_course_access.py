@@ -614,6 +614,67 @@ def test_issue57_course_access_activate_password_returns_idempotent_response_for
     assert len(fake_admin_client.users_by_email) == 1
 
 
+def test_issue57_course_access_activate_password_idempotent_when_legacy_bridge_write_fails(
+    client,
+    db,
+    fake_admin_client,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    monkeypatch,
+) -> None:
+    university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.reuse.bridge.fail@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    existing_user = fake_admin_client.create_password_user(
+        "student.reuse.bridge.fail@example.edu",
+        "Existing123!",
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso Reuse Bridge Fail",
+        code="COURSE-ACCESS-006B",
+    )
+    student = seed_identity(
+        user_id=existing_user.id,
+        email="student.reuse.bridge.fail@example.edu",
+        role="student",
+        university_id=university_id,
+        create_legacy_user=False,
+    )
+    db.add(CourseMembership(course_id=course.id, membership_id=student["membership"].id))
+    db.commit()
+    assert db.get(User, existing_user.id) is None
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+    monkeypatch.setattr("shared.course_access.try_upsert_legacy_user", lambda *args, **kwargs: False)
+
+    response = client.post(
+        "/api/course-access/activate/password",
+        json=_activate_password_payload(token, email="student.reuse.bridge.fail@example.edu"),
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "status": "activated",
+        "next_step": "sign_in",
+        "email": "student.reuse.bridge.fail@example.edu",
+    }
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == existing_user.id,
+            Membership.university_id == university_id,
+            Membership.role == "student",
+        )
+    )
+    assert membership is not None
+    assert db.get(User, existing_user.id) is None
+
+
 def test_issue57_course_access_activate_password_existing_account_requires_sign_in(
     client,
     db,

@@ -759,6 +759,7 @@ export interface TeacherCourseGradebookCourse {
     code: string;
     students_count: number;
     cases_count: number;
+    average_score_scale: number;
 }
 
 export interface TeacherCourseGradebookCase {

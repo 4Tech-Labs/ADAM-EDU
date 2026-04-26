@@ -226,6 +226,7 @@ function createCourseStudentsResponse(
             code: "GTD-GEME-01-2026",
             students_count: 2,
             cases_count: 2,
+            average_score_scale: 5,
         },
         cases: [
             {

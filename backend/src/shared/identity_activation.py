@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 import threading
 from typing import Any
 
@@ -20,6 +21,7 @@ def utc_now() -> datetime:
 
 _allowed_domains_cache: TTLCache[str, list[str]] = TTLCache(maxsize=100, ttl=300)
 _allowed_domains_lock = threading.Lock()
+_logger = logging.getLogger(__name__)
 
 
 def get_allowed_domains(db: Session, university_id: str) -> list[str]:
@@ -181,6 +183,39 @@ def upsert_legacy_user(
     if legacy_user is None:  # pragma: no cover
         raise RuntimeError("legacy_user_upsert_failed")
     return legacy_user
+
+
+def try_upsert_legacy_user(
+    db: Session,
+    *,
+    auth_user_id: str,
+    university_id: str,
+    email: str,
+    role: str,
+    context: str,
+) -> bool:
+    try:
+        with db.begin_nested():
+            upsert_legacy_user(
+                db,
+                auth_user_id=auth_user_id,
+                university_id=university_id,
+                email=email,
+                role=role,
+            )
+        return True
+    except Exception:
+        _logger.warning(
+            "legacy_user_bridge_upsert_failed",
+            extra={
+                "activation_context": context,
+                "auth_user_id": auth_user_id,
+                "university_id": university_id,
+                "role": role,
+            },
+            exc_info=True,
+        )
+        return False
 
 
 def ensure_course_membership(db: Session, *, course_id: str, membership_id: str) -> tuple[CourseMembership, bool]:

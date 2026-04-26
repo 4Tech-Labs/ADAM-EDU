@@ -429,6 +429,51 @@ class TestActivateOAuthDomainValidation:
         assert legacy_user.email == "repair.student@universidad.edu"
         assert legacy_user.role == "student"
 
+    def test_activate_password_succeeds_when_student_legacy_bridge_write_fails(
+        self,
+        client: TestClient,
+        db,
+        seed_invite,
+        course,
+        fake_admin_client,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _, token = seed_invite(
+            email="bridge.failure@universidad.edu",
+            university_id=UNIVERSITY_ID,
+            role="student",
+            course_id=course.id,
+            full_name="Bridge Failure",
+        )
+        monkeypatch.setattr("shared.app.try_upsert_legacy_user", lambda *args, **kwargs: False)
+
+        response = client.post(
+            "/api/auth/activate/password",
+            json={
+                "invite_token": token,
+                "full_name": "Bridge Failure",
+                "password": "Secure1234!",
+                "confirm_password": "Secure1234!",
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.json() == {
+            "status": "activated",
+            "next_step": "sign_in",
+            "email": "bridge.failure@universidad.edu",
+        }
+        auth_user = fake_admin_client.users_by_email["bridge.failure@universidad.edu"]
+        membership = db.scalar(
+            select(Membership).where(
+                Membership.user_id == auth_user.id,
+                Membership.university_id == UNIVERSITY_ID,
+                Membership.role == "student",
+            )
+        )
+        assert membership is not None
+        assert db.get(User, auth_user.id) is None
+
     def test_oauth_complete_teacher_bypasses_domain_check(
         self, client: TestClient, university, allowed_domain, seed_invite, auth_headers_factory
     ) -> None:

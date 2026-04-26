@@ -82,35 +82,12 @@ CREATE POLICY authoring_jobs_teacher_owner_select ON authoring_jobs
   );
 
 DROP POLICY IF EXISTS case_grades_teacher_select ON case_grades;
-CREATE POLICY case_grades_teacher_select ON case_grades
-  FOR SELECT
-  TO authenticated
-  USING (
-    (select auth.uid()) IS NOT NULL
-    AND course_id IN (
-      SELECT c.id
-      FROM courses c
-      JOIN memberships m ON m.id = c.teacher_membership_id
-      WHERE m.user_id = (select auth.uid())::text
-        AND m.role = 'teacher'
-        AND m.status = 'active'
-    )
-  );
-
 DROP POLICY IF EXISTS case_grades_student_self_select ON case_grades;
-CREATE POLICY case_grades_student_self_select ON case_grades
-  FOR SELECT
-  TO authenticated
-  USING (
-    (select auth.uid()) IS NOT NULL
-    AND membership_id IN (
-      SELECT m.id
-      FROM memberships m
-      WHERE m.user_id = (select auth.uid())::text
-        AND m.role = 'student'
-        AND m.status = 'active'
-    )
-  );
+DROP POLICY IF EXISTS case_grades_deny_all ON case_grades;
+CREATE POLICY case_grades_deny_all ON case_grades
+  FOR ALL
+  USING (false)
+  WITH CHECK (false);
 
 DO $$
 BEGIN

@@ -201,7 +201,7 @@ export function TeacherCourseStudentsTab({
                                         Correo
                                     </th>
                                     <th scope="col" className="teacher-gradebook-sticky teacher-gradebook-sticky-average">
-                                        Promedio
+                                        Promedio / {formatTeacherGradebookScore(gradebook.course.average_score_scale)}
                                     </th>
                                     {gradebook.cases.map((item) => (
                                         <th key={item.assignment_id} scope="col">

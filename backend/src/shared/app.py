@@ -59,6 +59,7 @@ from shared.identity_activation import (
     ensure_course_membership as ensure_course_membership_impl,
     ensure_email_domain_allowed,
     promote_pending_teacher_courses as promote_pending_teacher_courses_impl,
+    try_upsert_legacy_user as try_upsert_legacy_user_impl,
     upsert_legacy_user as upsert_legacy_user_impl,
     upsert_membership as upsert_membership_impl,
     upsert_profile as upsert_profile_impl,
@@ -392,6 +393,25 @@ def upsert_legacy_teacher_user(db: Session, *, auth_user_id: str, university_id:
     )
 
 
+def try_upsert_legacy_user(
+    db: Session,
+    *,
+    auth_user_id: str,
+    university_id: str,
+    email: str,
+    role: str,
+    context: str,
+) -> bool:
+    return try_upsert_legacy_user_impl(
+        db,
+        auth_user_id=auth_user_id,
+        university_id=university_id,
+        email=email,
+        role=role,
+        context=context,
+    )
+
+
 def promote_pending_teacher_courses(db: Session, invite_id: str, membership_id: str, university_id: str) -> None:
     promote_pending_teacher_courses_impl(
         db,
@@ -472,12 +492,13 @@ def repair_consumed_activation_state(
         )
         promote_pending_teacher_courses(db, invite.id, membership.id, invite.university_id)
     elif invite.role == "student":
-        upsert_legacy_user(
+        try_upsert_legacy_user(
             db,
             auth_user_id=auth_user_id,
             university_id=invite.university_id,
             email=email,
             role="student",
+            context="activate.repair_consumed_student",
         )
 
 def _check_student_email_domain(db: Session, invite: Invite) -> None:
@@ -1372,12 +1393,13 @@ def activate_password(
             )
             promote_pending_teacher_courses(db, invite.id, membership.id, invite.university_id)
         if invite.role == "student":
-            upsert_legacy_user(
+            try_upsert_legacy_user(
                 db,
                 auth_user_id=auth_user.id,
                 university_id=invite.university_id,
                 email=invite.email,
                 role="student",
+                context="activate.password.student",
             )
         if invite.role == "student" and invite.course_id:
             upsert_course_membership(db, invite.course_id, membership.id)
@@ -1501,12 +1523,13 @@ def activate_oauth_complete(
             )
             promote_pending_teacher_courses(db, invite.id, membership.id, invite.university_id)
         if invite.role == "student":
-            upsert_legacy_user(
+            try_upsert_legacy_user(
                 db,
                 auth_user_id=identity.auth_user_id,
                 university_id=invite.university_id,
                 email=invite.email,
                 role="student",
+                context="activate.oauth.student",
             )
         if invite.role == "student" and invite.course_id:
             upsert_course_membership(db, invite.course_id, membership.id)

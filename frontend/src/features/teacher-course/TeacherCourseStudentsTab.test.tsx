@@ -16,6 +16,7 @@ function createCourseStudentsResponse(
             code: "AN-205",
             students_count: 2,
             cases_count: 2,
+            average_score_scale: 5,
         },
         cases: [
             {
@@ -126,6 +127,7 @@ describe("TeacherCourseStudentsTab", () => {
         ).toBeTruthy();
         expect(screen.getByText("Estudiante").closest("th")).toHaveAttribute("scope", "col");
         expect(screen.getByText("Ana Student").closest("th")).toHaveAttribute("scope", "row");
+        expect(screen.getByText(/Promedio\s*\/\s*5/i)).toBeTruthy();
     });
 
     it("disables the refresh action while the gradebook is fetching", () => {
@@ -157,6 +159,7 @@ describe("TeacherCourseStudentsTab", () => {
                         code: "AN-205",
                         students_count: 0,
                         cases_count: 0,
+                        average_score_scale: 5,
                     },
                     cases: [],
                     students: [],

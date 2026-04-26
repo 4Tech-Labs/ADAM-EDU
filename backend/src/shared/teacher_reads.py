@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+import logging
 from typing import Any, Literal, Sequence
 from zoneinfo import ZoneInfo
 
@@ -47,6 +48,7 @@ from shared.teacher_gradebook_schema import (
 
 _BOGOTA_TZ = ZoneInfo("America/Bogota")
 _DEFAULT_CASE_MAX_SCORE = 5.0
+_logger = logging.getLogger(__name__)
 
 
 class TeacherCourseItemResponse(BaseModel):
@@ -198,6 +200,11 @@ def _normalize_grade_score(*, score: float, max_score: float) -> float:
     return round((score / max_score) * _DEFAULT_CASE_MAX_SCORE, 2)
 
 
+def _missing_gradebook_email(*, user_id: str | None) -> str:
+    identifier = (user_id or "desconocido")[:8]
+    return f"Correo no disponible ({identifier})"
+
+
 def _repair_gradebook_student_rows(
     db: Session,
     context: TeacherContext,
@@ -215,15 +222,36 @@ def _repair_gradebook_student_rows(
             ),
         )
 
-    admin_client = get_supabase_admin_auth_client()
+    admin_client = None
     try:
-        for row in missing_rows:
+        admin_client = get_supabase_admin_auth_client()
+    except Exception:
+        _logger.warning(
+            "gradebook_identity_repair_admin_client_unavailable",
+            extra={"university_id": context.university_id},
+            exc_info=True,
+        )
+
+    persisted_repair = False
+    for row in missing_rows:
+        fallback_email = _missing_gradebook_email(user_id=row["user_id"])
+        if admin_client is None:
+            row["email"] = fallback_email
+            continue
+
+        try:
             auth_user = admin_client.get_user_by_id(row["user_id"])
             if auth_user is None or not auth_user.email:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="student_identity_unavailable",
+                row["email"] = fallback_email
+                _logger.warning(
+                    "gradebook_identity_repair_missing_auth_user",
+                    extra={
+                        "university_id": context.university_id,
+                        "course_membership_id": row["membership_id"],
+                        "auth_user_id": row["user_id"],
+                    },
                 )
+                continue
 
             row["email"] = auth_user.email
             upsert_legacy_user(
@@ -233,17 +261,31 @@ def _repair_gradebook_student_rows(
                 email=auth_user.email,
                 role="student",
             )
+            persisted_repair = True
+        except Exception:
+            db.rollback()
+            persisted_repair = False
+            row["email"] = fallback_email
+            _logger.warning(
+                "gradebook_identity_repair_failed",
+                extra={
+                    "university_id": context.university_id,
+                    "course_membership_id": row["membership_id"],
+                    "auth_user_id": row["user_id"],
+                },
+                exc_info=True,
+            )
 
-        db.commit()
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="student_identity_unavailable",
-        ) from exc
+    if persisted_repair:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            _logger.warning(
+                "gradebook_identity_repair_commit_failed",
+                extra={"university_id": context.university_id},
+                exc_info=True,
+            )
 
     return sorted(
         resolved_rows,
@@ -734,6 +776,7 @@ def get_teacher_course_gradebook(
             code=course_row["code"],
             students_count=int(course_row["students_count"]),
             cases_count=len(cases),
+            average_score_scale=_DEFAULT_CASE_MAX_SCORE,
         ),
         cases=cases,
         students=students,

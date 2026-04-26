@@ -16,6 +16,7 @@ class TeacherCourseGradebookCourse(StrictModel):
     code: str
     students_count: int = Field(ge=0)
     cases_count: int = Field(ge=0)
+    average_score_scale: float = Field(gt=0)
 
 
 class TeacherCourseGradebookCase(StrictModel):
