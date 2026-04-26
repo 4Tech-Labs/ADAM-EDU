@@ -5,6 +5,7 @@ import { Link, useParams } from "react-router-dom";
 import { StudentUserHeader } from "@/features/student-layout/StudentUserHeader";
 import type { ModuleId } from "@/shared/adam-types";
 import { getApiErrorMessage } from "@/shared/api";
+import { PORTAL_SHELL_HEIGHT_DVH } from "@/shared/ui/layout";
 import {
     CASE_VIEWER_STYLES,
     CaseContentRenderer,
@@ -20,7 +21,6 @@ import { StudentVersionConflictModal } from "./StudentVersionConflictModal";
 import { useStudentCaseResolution } from "./useStudentCaseResolution";
 
 type BannerTone = "amber" | "red" | "emerald";
-const STUDENT_HEADER_HEIGHT_PX = 80;
 
 interface RuntimeBannerState {
     tone: BannerTone;
@@ -232,7 +232,7 @@ export function StudentCaseResolutionPage() {
                         <div
                             className="case-preview flex overflow-hidden font-sans"
                             data-testid="student-case-shell"
-                            style={{ height: `calc(100dvh - ${STUDENT_HEADER_HEIGHT_PX}px)` }}
+                            style={{ height: PORTAL_SHELL_HEIGHT_DVH }}
                         >
                             <aside className="flex flex-shrink-0 flex-col bg-[#0f172a] text-slate-400" style={{ width: 280 }}>
                                 <div className="flex h-16 flex-shrink-0 items-center border-b border-slate-800 px-5">
