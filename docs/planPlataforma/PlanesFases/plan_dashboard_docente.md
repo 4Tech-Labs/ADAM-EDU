@@ -1000,7 +1000,7 @@ Issues 3 y 4. Issues 5, 6, 7 pueden ejecutarse en paralelo.
 
 | Item | Motivo |
 |---|---|
-| Vista de detalle de un curso (`/teacher/courses/:id`) | Sin mockup — botón "Entrar al curso" navega al placeholder |
+| Edicion o calificacion masiva desde el detalle del curso | Issue 205 deja el gradebook como lectura y observabilidad, no como flujo bulk-write |
 | Funcionalidad real de Ver Caso / Entregas / Editar | Botones placeholder con toast |
 | Paginación server-side de cursos | Volumen esperado < 20 cursos por docente |
 | Cálculo real de promedio | Sin sistema de calificaciones en V1 |
