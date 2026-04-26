@@ -491,7 +491,8 @@ export function useTeacherCourseStudents(courseId: string, enabled: boolean) {
         queryFn: () => api.teacher.getCourseStudents(courseId),
         enabled: Boolean(courseId) && enabled,
         staleTime: 30_000,
-        refetchOnWindowFocus: false,
+        refetchOnMount: true,
+        refetchOnWindowFocus: true,
     });
 }
 

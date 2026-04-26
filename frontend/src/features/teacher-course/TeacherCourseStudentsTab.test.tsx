@@ -116,6 +116,35 @@ describe("TeacherCourseStudentsTab", () => {
         expect(screen.getAllByText("Sin iniciar").length).toBeGreaterThan(0);
         expect(screen.getAllByText("En progreso").length).toBeGreaterThan(0);
         expect(screen.getAllByText(/4[,.]5/).length).toBeGreaterThan(0);
+        expect(
+            screen.getByRole("button", { name: /Actualizar gradebook/i }),
+        ).toBeTruthy();
+        expect(
+            screen.getByRole("table", {
+                name: /Gradebook del curso Analitica de Negocios con 2 estudiantes activos y 2 casos publicados\./i,
+            }),
+        ).toBeTruthy();
+        expect(screen.getByText("Estudiante").closest("th")).toHaveAttribute("scope", "col");
+        expect(screen.getByText("Ana Student").closest("th")).toHaveAttribute("scope", "row");
+    });
+
+    it("disables the refresh action while the gradebook is fetching", () => {
+        render(
+            <TeacherCourseStudentsTab
+                gradebook={createCourseStudentsResponse()}
+                isLoading={false}
+                isFetching={true}
+                errorMessage={null}
+                onRetry={() => undefined}
+            />,
+        );
+
+        expect(
+            screen.getByRole("button", { name: /Actualizando gradebook/i }),
+        ).toBeDisabled();
+        expect(
+            screen.getByText("Sincronizando cambios recientes del curso."),
+        ).toBeTruthy();
     });
 
     it("shows an empty state when the course still has no students or published cases", () => {

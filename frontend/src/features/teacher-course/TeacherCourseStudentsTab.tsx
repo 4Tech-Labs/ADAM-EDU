@@ -80,6 +80,7 @@ export function TeacherCourseStudentsTab({
     onRetry,
 }: TeacherCourseStudentsTabProps) {
     const caseById = new Map(gradebook?.cases.map((item) => [item.assignment_id, item]) ?? []);
+    const refreshLabel = isFetching && !isLoading ? "Actualizando gradebook" : "Actualizar gradebook";
 
     return (
         <div
@@ -98,31 +99,45 @@ export function TeacherCourseStudentsTab({
                             Consulta el progreso real por caso publicado sin salir de la vista del curso.
                         </p>
                     </div>
-                    {gradebook ? (
-                        <div className="teacher-gradebook-metrics">
-                            <MetricCard
-                                icon={<Users className="h-4 w-4" />}
-                                label="Estudiantes activos"
-                                value={String(gradebook.course.students_count)}
-                            />
-                            <MetricCard
-                                icon={<BookOpen className="h-4 w-4" />}
-                                label="Casos publicados"
-                                value={String(gradebook.course.cases_count)}
-                            />
-                            <MetricCard
-                                icon={<BarChart3 className="h-4 w-4" />}
-                                label="Curso"
-                                value={gradebook.course.code}
-                            />
+                    <div className="teacher-gradebook-header-actions">
+                        {gradebook ? (
+                            <div className="teacher-gradebook-metrics">
+                                <MetricCard
+                                    icon={<Users className="h-4 w-4" />}
+                                    label="Estudiantes activos"
+                                    value={String(gradebook.course.students_count)}
+                                />
+                                <MetricCard
+                                    icon={<BookOpen className="h-4 w-4" />}
+                                    label="Casos publicados"
+                                    value={String(gradebook.course.cases_count)}
+                                />
+                                <MetricCard
+                                    icon={<BarChart3 className="h-4 w-4" />}
+                                    label="Curso"
+                                    value={gradebook.course.code}
+                                />
+                            </div>
+                        ) : null}
+                        <div className="teacher-gradebook-refresh-group">
+                            <button
+                                type="button"
+                                onClick={onRetry}
+                                disabled={isFetching}
+                                className="teacher-gradebook-refresh-button"
+                                aria-label={refreshLabel}
+                            >
+                                <RefreshCcw className={`h-4 w-4${isFetching ? " animate-spin" : ""}`} />
+                                {refreshLabel}
+                            </button>
+                            {isFetching && !isLoading ? (
+                                <p className="teacher-gradebook-refresh-status" aria-live="polite">
+                                    Sincronizando cambios recientes del curso.
+                                </p>
+                            ) : null}
                         </div>
-                    ) : null}
+                    </div>
                 </div>
-                {isFetching && !isLoading ? (
-                    <p className="mt-4 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
-                        Actualizando gradebook...
-                    </p>
-                ) : null}
             </section>
 
             {errorMessage ? (
@@ -171,22 +186,25 @@ export function TeacherCourseStudentsTab({
             ) : null}
 
             {!isLoading && gradebook && gradebook.students.length > 0 && gradebook.cases.length > 0 ? (
-                <section className="teacher-gradebook-shell">
+                <section className="teacher-gradebook-shell" aria-busy={isFetching}>
                     <div className="teacher-gradebook-scroll">
                         <table className="teacher-gradebook-table">
+                            <caption className="sr-only">
+                                Gradebook del curso {gradebook.course.title} con {gradebook.course.students_count} estudiantes activos y {gradebook.course.cases_count} casos publicados.
+                            </caption>
                             <thead>
                                 <tr>
-                                    <th className="teacher-gradebook-sticky teacher-gradebook-sticky-name">
+                                    <th scope="col" className="teacher-gradebook-sticky teacher-gradebook-sticky-name">
                                         Estudiante
                                     </th>
-                                    <th className="teacher-gradebook-sticky teacher-gradebook-sticky-email">
+                                    <th scope="col" className="teacher-gradebook-sticky teacher-gradebook-sticky-email">
                                         Correo
                                     </th>
-                                    <th className="teacher-gradebook-sticky teacher-gradebook-sticky-average">
+                                    <th scope="col" className="teacher-gradebook-sticky teacher-gradebook-sticky-average">
                                         Promedio
                                     </th>
                                     {gradebook.cases.map((item) => (
-                                        <th key={item.assignment_id}>
+                                        <th key={item.assignment_id} scope="col">
                                             <div className="teacher-gradebook-case-heading">
                                                 <span className="teacher-gradebook-case-title">{item.title}</span>
                                                 <span className="teacher-gradebook-case-meta">
@@ -203,12 +221,15 @@ export function TeacherCourseStudentsTab({
                             <tbody>
                                 {gradebook.students.map((student) => (
                                     <tr key={student.membership_id}>
-                                        <td className="teacher-gradebook-sticky teacher-gradebook-sticky-name teacher-gradebook-student-cell">
+                                        <th
+                                            scope="row"
+                                            className="teacher-gradebook-sticky teacher-gradebook-sticky-name teacher-gradebook-student-cell"
+                                        >
                                             <div className="teacher-gradebook-student-name">{student.full_name}</div>
                                             <div className="teacher-gradebook-student-meta">
                                                 Ingresó: {formatTeacherCourseTimestamp(student.enrolled_at)}
                                             </div>
-                                        </td>
+                                        </th>
                                         <td className="teacher-gradebook-sticky teacher-gradebook-sticky-email teacher-gradebook-email-cell">
                                             {student.email}
                                         </td>

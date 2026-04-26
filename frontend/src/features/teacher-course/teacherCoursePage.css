@@ -178,6 +178,55 @@
   max-width: 520px;
 }
 
+.teacher-course-page .teacher-gradebook-header-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.teacher-course-page .teacher-gradebook-refresh-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.teacher-course-page .teacher-gradebook-refresh-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  padding: 10px 14px;
+  background: #fff;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+}
+
+.teacher-course-page .teacher-gradebook-refresh-button:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #0144a0;
+}
+
+.teacher-course-page .teacher-gradebook-refresh-button:disabled {
+  cursor: wait;
+  border-color: #dbeafe;
+  background: #eff6ff;
+  color: #0144a0;
+}
+
+.teacher-course-page .teacher-gradebook-refresh-status {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+
 .teacher-course-page .teacher-gradebook-metric-card {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -305,16 +354,20 @@
 }
 
 .teacher-course-page .teacher-gradebook-sticky-average {
-  left: 480px;
+  right: 0;
   min-width: 140px;
   max-width: 140px;
-  box-shadow: 8px 0 18px -18px rgba(15, 23, 42, 0.35);
+  box-shadow: -8px 0 18px -18px rgba(15, 23, 42, 0.35);
 }
 
 .teacher-course-page .teacher-gradebook-student-cell,
 .teacher-course-page .teacher-gradebook-email-cell,
 .teacher-course-page .teacher-gradebook-average-cell {
   background: #f8fafc !important;
+}
+
+.teacher-course-page .teacher-gradebook-student-cell {
+  text-align: left;
 }
 
 .teacher-course-page .teacher-gradebook-student-name {
@@ -413,6 +466,16 @@
 }
 
 @media (min-width: 1024px) {
+  .teacher-course-page .teacher-gradebook-header-actions {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+
+  .teacher-course-page .teacher-gradebook-refresh-group {
+    align-items: flex-end;
+  }
+
   .teacher-course-page .teacher-gradebook-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
