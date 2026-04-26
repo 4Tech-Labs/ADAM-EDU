@@ -747,6 +747,51 @@ export interface TeacherCourseDetailResponse {
     configuration: TeacherCourseConfiguration;
 }
 
+export type TeacherCourseGradebookStatus =
+    | "not_started"
+    | "in_progress"
+    | "submitted"
+    | "graded";
+
+export interface TeacherCourseGradebookCourse {
+    id: string;
+    title: string;
+    code: string;
+    students_count: number;
+    cases_count: number;
+}
+
+export interface TeacherCourseGradebookCase {
+    assignment_id: string;
+    title: string;
+    status: "published";
+    available_from: string | null;
+    deadline: string | null;
+    max_score: number;
+}
+
+export interface TeacherCourseGradebookCell {
+    assignment_id: string;
+    status: TeacherCourseGradebookStatus;
+    score: number | null;
+    graded_at: string | null;
+}
+
+export interface TeacherCourseGradebookStudent {
+    membership_id: string;
+    full_name: string;
+    email: string;
+    enrolled_at: string;
+    average_score: number | null;
+    grades: TeacherCourseGradebookCell[];
+}
+
+export interface TeacherCourseGradebookResponse {
+    course: TeacherCourseGradebookCourse;
+    cases: TeacherCourseGradebookCase[];
+    students: TeacherCourseGradebookStudent[];
+}
+
 export interface TeacherSyllabusSaveRequest {
     expected_revision: number;
     syllabus: TeacherSyllabusPayload;

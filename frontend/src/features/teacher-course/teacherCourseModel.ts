@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, api } from "@/shared/api";
 import type {
+    TeacherCourseGradebookResponse,
     TeacherCourseDetailResponse,
     TeacherDidacticStrategy,
     TeacherEvaluationStrategyItem,
@@ -12,12 +13,19 @@ import type {
 } from "@/shared/adam-types";
 import { queryKeys } from "@/shared/queryKeys";
 
-export type TeacherCourseTab = "syllabus" | "configuracion";
+export type TeacherCourseTab = "syllabus" | "estudiantes" | "configuracion";
 export type TeacherCourseDraft = TeacherSyllabusPayload;
 
 const SPANISH_DATETIME_FORMATTER = new Intl.DateTimeFormat("es-CO", {
     dateStyle: "medium",
     timeStyle: "short",
+});
+const SPANISH_DATE_FORMATTER = new Intl.DateTimeFormat("es-CO", {
+    dateStyle: "medium",
+});
+const SPANISH_SCORE_FORMATTER = new Intl.NumberFormat("es-CO", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 2,
 });
 
 export function createEmptyTeacherSyllabusPayload(): TeacherSyllabusPayload {
@@ -245,7 +253,13 @@ export function buildTeacherSyllabusSaveRequest(
 }
 
 export function getTeacherCourseTab(searchValue: string | null): TeacherCourseTab {
-    return searchValue === "configuracion" ? "configuracion" : "syllabus";
+    if (searchValue === "configuracion") {
+        return "configuracion";
+    }
+    if (searchValue === "estudiantes") {
+        return "estudiantes";
+    }
+    return "syllabus";
 }
 
 export function formatTeacherCourseTimestamp(value: string | null): string {
@@ -263,6 +277,40 @@ export function formatTeacherCourseTimestamp(value: string | null): string {
 
 export function formatTeacherCourseStatus(status: string): string {
     return status === "active" ? "Activo" : "Inactivo";
+}
+
+export function formatTeacherGradebookScore(value: number): string {
+    return SPANISH_SCORE_FORMATTER.format(value);
+}
+
+export function formatTeacherGradebookAverage(value: number | null): string {
+    return value === null ? "Sin nota" : formatTeacherGradebookScore(value);
+}
+
+export function formatTeacherGradebookCellStatus(status: string): string {
+    switch (status) {
+        case "in_progress":
+            return "En progreso";
+        case "submitted":
+            return "Entregado";
+        case "graded":
+            return "Calificado";
+        default:
+            return "Sin iniciar";
+    }
+}
+
+export function formatTeacherGradebookDeadline(value: string | null): string {
+    if (!value) {
+        return "Sin fecha";
+    }
+
+    const asDate = new Date(value);
+    if (Number.isNaN(asDate.getTime())) {
+        return "Fecha inválida";
+    }
+
+    return SPANISH_DATE_FORMATTER.format(asDate);
 }
 
 export function formatAccessLinkStatus(status: string): string {
@@ -355,6 +403,30 @@ export function getTeacherCourseAccessLinkErrorMessage(
     }
 }
 
+export function getTeacherCourseStudentsErrorMessage(
+    error: unknown,
+    fallback: string,
+): string {
+    if (!(error instanceof ApiError)) {
+        return error instanceof Error ? error.message : fallback;
+    }
+
+    switch (error.detail) {
+        case "course_gradebook_cross_enrollment_unsupported":
+            return "Este curso tiene un caso compartido entre varios cursos con estudiantes superpuestos. Corrige esa configuración antes de abrir el gradebook.";
+        case "course_not_found":
+            return "El curso ya no existe o no pertenece a tu cuenta docente.";
+        case "invalid_token":
+            return "Tu sesión expiró. Vuelve a iniciar sesión para continuar.";
+        case "profile_incomplete":
+            return "Tu perfil docente todavía no está listo para usar esta vista.";
+        case "membership_required":
+            return "Tu cuenta no tiene una membresía docente activa para este curso.";
+        default:
+            return error.message || fallback;
+    }
+}
+
 export function validateTeacherCourseDraft(draft: TeacherCourseDraft): string | null {
     const payload = sanitizeTeacherSyllabusPayload(draft);
 
@@ -408,6 +480,16 @@ export function useTeacherCourseAccessLink(courseId: string) {
         queryKey: queryKeys.teacher.accessLink(courseId),
         queryFn: () => api.teacher.getCourseAccessLink(courseId),
         enabled: Boolean(courseId),
+        staleTime: 30_000,
+        refetchOnWindowFocus: false,
+    });
+}
+
+export function useTeacherCourseStudents(courseId: string, enabled: boolean) {
+    return useQuery<TeacherCourseGradebookResponse>({
+        queryKey: queryKeys.teacher.courseStudents(courseId),
+        queryFn: () => api.teacher.getCourseStudents(courseId),
+        enabled: Boolean(courseId) && enabled,
         staleTime: 30_000,
         refetchOnWindowFocus: false,
     });

@@ -49,6 +49,7 @@ import type {
     TeacherCourseAccessLinkRegenerateResponse,
     TeacherCourseAccessLinkResponse,
     TeacherCourseDetailResponse,
+    TeacherCourseGradebookResponse,
     TeacherCasesResponse,
     TeacherCoursesResponse,
     DeadlineUpdateRequest,
@@ -1148,6 +1149,11 @@ export const api = {
         async getCourseAccessLink(courseId: string): Promise<TeacherCourseAccessLinkResponse> {
             return parseJsonResponse<TeacherCourseAccessLinkResponse>(
                 `/teacher/courses/${courseId}/access-link`,
+            );
+        },
+        async getCourseStudents(courseId: string): Promise<TeacherCourseGradebookResponse> {
+            return parseJsonResponse<TeacherCourseGradebookResponse>(
+                `/teacher/courses/${courseId}/students`,
             );
         },
         async getCases(): Promise<TeacherCasesResponse> {

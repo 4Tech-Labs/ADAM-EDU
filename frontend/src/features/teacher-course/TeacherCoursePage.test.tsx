@@ -8,6 +8,7 @@ import type {
     TeacherCourseAccessLinkRegenerateResponse,
     TeacherCourseAccessLinkResponse,
     TeacherCourseDetailResponse,
+    TeacherCourseGradebookResponse,
 } from "@/shared/adam-types";
 import { renderWithProviders } from "@/shared/test-utils";
 
@@ -24,6 +25,7 @@ vi.mock("@/shared/api", async () => {
                 ...actual.api.teacher,
                 getCourseDetail: vi.fn(),
                 getCourseAccessLink: vi.fn(),
+                getCourseStudents: vi.fn(),
                 regenerateCourseAccessLink: vi.fn(),
                 saveCourseSyllabus: vi.fn(),
             },
@@ -214,6 +216,93 @@ function createCourseAccessLinkRegenerateResponse(
     };
 }
 
+function createCourseStudentsResponse(
+    overrides?: Partial<TeacherCourseGradebookResponse>,
+): TeacherCourseGradebookResponse {
+    const baseResponse: TeacherCourseGradebookResponse = {
+        course: {
+            id: "course-1",
+            title: "Gerencia Estratégica y Modelos de Negocio en Ecosistemas Digitales",
+            code: "GTD-GEME-01-2026",
+            students_count: 2,
+            cases_count: 2,
+        },
+        cases: [
+            {
+                assignment_id: "assignment-1",
+                title: "Caso Plataformas",
+                status: "published",
+                available_from: "2026-04-15T10:00:00Z",
+                deadline: "2026-04-22T10:00:00Z",
+                max_score: 5,
+            },
+            {
+                assignment_id: "assignment-2",
+                title: "Caso Gobernanza",
+                status: "published",
+                available_from: "2026-04-18T10:00:00Z",
+                deadline: null,
+                max_score: 5,
+            },
+        ],
+        students: [
+            {
+                membership_id: "membership-student-1",
+                full_name: "Ana Student",
+                email: "ana.student@example.edu",
+                enrolled_at: "2026-04-10T10:00:00Z",
+                average_score: 4.5,
+                grades: [
+                    {
+                        assignment_id: "assignment-1",
+                        status: "graded",
+                        score: 4.5,
+                        graded_at: "2026-04-21T15:00:00Z",
+                    },
+                    {
+                        assignment_id: "assignment-2",
+                        status: "submitted",
+                        score: null,
+                        graded_at: null,
+                    },
+                ],
+            },
+            {
+                membership_id: "membership-student-2",
+                full_name: "beta-fallback@example.edu",
+                email: "beta-fallback@example.edu",
+                enrolled_at: "2026-04-12T10:00:00Z",
+                average_score: null,
+                grades: [
+                    {
+                        assignment_id: "assignment-1",
+                        status: "not_started",
+                        score: null,
+                        graded_at: null,
+                    },
+                    {
+                        assignment_id: "assignment-2",
+                        status: "in_progress",
+                        score: null,
+                        graded_at: null,
+                    },
+                ],
+            },
+        ],
+    };
+
+    return {
+        ...baseResponse,
+        ...overrides,
+        course: {
+            ...baseResponse.course,
+            ...overrides?.course,
+        },
+        cases: overrides?.cases ?? baseResponse.cases,
+        students: overrides?.students ?? baseResponse.students,
+    };
+}
+
 function renderTeacherCoursePage(initialEntry = "/teacher/courses/course-1") {
     return renderWithProviders(
         <>
@@ -237,6 +326,9 @@ describe("TeacherCoursePage", () => {
         vi.clearAllMocks();
         vi.mocked(api.teacher.getCourseAccessLink).mockResolvedValue(
             createCourseAccessLinkResponse(),
+        );
+        vi.mocked(api.teacher.getCourseStudents).mockResolvedValue(
+            createCourseStudentsResponse(),
         );
         Object.defineProperty(window.navigator, "clipboard", {
             configurable: true,
@@ -279,6 +371,27 @@ describe("TeacherCoursePage", () => {
         expect(screen.getByTestId("location-search")).toHaveTextContent("?tab=configuracion");
     });
 
+    it("loads the students gradebook only when the estudiantes tab becomes active", async () => {
+        vi.mocked(api.teacher.getCourseDetail).mockResolvedValueOnce(
+            createCourseDetailResponse(),
+        );
+
+        renderTeacherCoursePage();
+
+        await screen.findByRole("heading", { name: /Syllabus de la asignatura/i });
+        expect(api.teacher.getCourseStudents).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole("tab", { name: /Estudiantes/i }));
+
+        expect(
+            await screen.findByRole("heading", { name: /Estudiantes y calificaciones/i }),
+        ).toBeTruthy();
+        await waitFor(() => {
+            expect(api.teacher.getCourseStudents).toHaveBeenCalledWith("course-1");
+        });
+        expect(screen.getByTestId("location-search")).toHaveTextContent("?tab=estudiantes");
+    });
+
     it("wires tab semantics correctly for deep-linked tabs", async () => {
         vi.mocked(api.teacher.getCourseDetail).mockResolvedValueOnce(
             createCourseDetailResponse(),
@@ -304,6 +417,31 @@ describe("TeacherCoursePage", () => {
             "aria-labelledby",
             "teacher-course-tab-configuracion",
         );
+    });
+
+    it("wires tab semantics correctly for deep-linked estudiantes tab", async () => {
+        vi.mocked(api.teacher.getCourseDetail).mockResolvedValueOnce(
+            createCourseDetailResponse(),
+        );
+
+        renderTeacherCoursePage("/teacher/courses/course-1?tab=estudiantes");
+
+        const tablist = await screen.findByRole("tablist", { name: "Secciones del curso" });
+        const studentsTab = screen.getByRole("tab", { name: /Estudiantes/i });
+        const studentsPanel = await screen.findByRole("tabpanel");
+
+        expect(tablist).toBeTruthy();
+        expect(studentsTab).toHaveAttribute("id", "teacher-course-tab-estudiantes");
+        expect(studentsTab).toHaveAttribute("aria-controls", "teacher-course-students-panel");
+        expect(studentsTab).toHaveAttribute("aria-selected", "true");
+        expect(studentsTab).toHaveAttribute("tabindex", "0");
+        expect(studentsPanel).toHaveAttribute("id", "teacher-course-students-panel");
+        expect(studentsPanel).toHaveAttribute(
+            "aria-labelledby",
+            "teacher-course-tab-estudiantes",
+        );
+        expect(api.teacher.getCourseStudents).toHaveBeenCalledWith("course-1");
+        expect(screen.getByText("Ana Student")).toBeTruthy();
     });
 
     it("saves the syllabus with expected_revision and updates the visible revision metadata", async () => {
