@@ -98,6 +98,20 @@ CREATE POLICY case_grades_teacher_select ON case_grades
   );
 
 DROP POLICY IF EXISTS case_grades_student_self_select ON case_grades;
+CREATE POLICY case_grades_student_self_select ON case_grades
+  FOR SELECT
+  TO authenticated
+  USING (
+    (select auth.uid()) IS NOT NULL
+    AND membership_id IN (
+      SELECT m.id
+      FROM memberships m
+      WHERE m.user_id = (select auth.uid())::text
+        AND m.role = 'student'
+        AND m.status = 'active'
+    )
+  );
+
 DO $$
 BEGIN
   IF NOT EXISTS (

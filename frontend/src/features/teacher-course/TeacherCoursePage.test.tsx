@@ -444,6 +444,38 @@ describe("TeacherCoursePage", () => {
         expect(screen.getByText("Ana Student")).toBeTruthy();
     });
 
+    it.each([
+        {
+            detail: "course_gradebook_inconsistent_max_score",
+            expected:
+                "Este curso tiene calificaciones inválidas o inconsistentes. Corrige esos registros antes de abrir el gradebook.",
+        },
+        {
+            detail: "course_gradebook_invalid_max_score",
+            expected:
+                "Este curso tiene calificaciones inválidas o inconsistentes. Corrige esos registros antes de abrir el gradebook.",
+        },
+        {
+            detail: "student_identity_unavailable",
+            expected:
+                "No se pudo recuperar la identidad de uno o más estudiantes del curso. Intenta nuevamente o repara esas cuentas antes de abrir el gradebook.",
+        },
+    ])(
+        "shows a teacher-facing gradebook error for $detail",
+        async ({ detail, expected }) => {
+            vi.mocked(api.teacher.getCourseDetail).mockResolvedValueOnce(
+                createCourseDetailResponse(),
+            );
+            vi.mocked(api.teacher.getCourseStudents).mockRejectedValueOnce(
+                new ApiError(409, "gradebook invariant", detail),
+            );
+
+            renderTeacherCoursePage("/teacher/courses/course-1?tab=estudiantes");
+
+            expect(await screen.findByRole("alert")).toHaveTextContent(expected);
+        },
+    );
+
     it("saves the syllabus with expected_revision and updates the visible revision metadata", async () => {
         const baseDetail = createCourseDetailResponse();
 

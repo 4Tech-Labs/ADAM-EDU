@@ -529,6 +529,34 @@ def get_teacher_course_gradebook(
     if course_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="course_not_found")
 
+    student_row_records = (
+        db.execute(
+            select(
+                CourseMembership.membership_id.label("membership_id"),
+                Membership.user_id.label("user_id"),
+                CourseMembership.created_at.label("enrolled_at"),
+                Profile.full_name.label("profile_full_name"),
+                User.email.label("email"),
+            )
+            .select_from(CourseMembership)
+            .join(
+                Membership,
+                and_(
+                    CourseMembership.membership_id == Membership.id,
+                    Membership.university_id == context.university_id,
+                    Membership.role == "student",
+                    Membership.status == "active",
+                ),
+            )
+            .outerjoin(User, User.id == Membership.user_id)
+            .outerjoin(Profile, Profile.id == Membership.user_id)
+            .where(CourseMembership.course_id == course_id)
+        )
+        .mappings()
+        .all()
+    )
+    student_rows = _repair_gradebook_student_rows(db, context, student_rows=student_row_records)
+
     assignment_target_courses = _build_assignment_target_courses_subquery()
     assignments = (
         db.execute(
@@ -563,34 +591,6 @@ def get_teacher_course_gradebook(
         .scalars()
         .all()
     )
-
-    student_row_records = (
-        db.execute(
-            select(
-                CourseMembership.membership_id.label("membership_id"),
-                Membership.user_id.label("user_id"),
-                CourseMembership.created_at.label("enrolled_at"),
-                Profile.full_name.label("profile_full_name"),
-                User.email.label("email"),
-            )
-            .select_from(CourseMembership)
-            .join(
-                Membership,
-                and_(
-                    CourseMembership.membership_id == Membership.id,
-                    Membership.university_id == context.university_id,
-                    Membership.role == "student",
-                    Membership.status == "active",
-                ),
-            )
-            .outerjoin(User, User.id == Membership.user_id)
-            .outerjoin(Profile, Profile.id == Membership.user_id)
-            .where(CourseMembership.course_id == course_id)
-        )
-        .mappings()
-        .all()
-    )
-    student_rows = _repair_gradebook_student_rows(db, context, student_rows=student_row_records)
 
     student_membership_ids = [row["membership_id"] for row in student_rows]
     assignment_ids = [assignment.id for assignment in assignments]

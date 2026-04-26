@@ -720,6 +720,73 @@ def test_issue205_teacher_course_gradebook_runs_in_bounded_query_count(
     assert query_counter["value"] <= 5
 
 
+def test_issue205_teacher_course_gradebook_keeps_query_budget_when_repairing_student_rows(
+    db,
+    fake_admin_client,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000002062"
+    teacher_user_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email="teacher-query-repair@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Query Repair Budget",
+        code="QRB-205",
+    )
+    fallback_auth_user = fake_admin_client.create_password_user(
+        "query-repair-student@example.edu",
+        "Secure1234!",
+    )
+    repairing_student = seed_identity(
+        user_id=fallback_auth_user.id,
+        email="query-repair-student@example.edu",
+        role="student",
+        university_id=university_id,
+        full_name="Repair Student",
+        create_legacy_user=False,
+    )
+    seed_course_membership(course_id=course.id, membership_id=repairing_student["membership"].id)
+
+    first_assignment = Assignment(
+        teacher_id=teacher_user_id,
+        course_id=course.id,
+        title="Repair Budget One",
+        status="published",
+        available_from=datetime(2026, 5, 7, 12, 0, tzinfo=timezone.utc),
+    )
+    second_assignment = Assignment(
+        teacher_id=teacher_user_id,
+        course_id=course.id,
+        title="Repair Budget Two",
+        status="published",
+        available_from=datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc),
+    )
+    db.add_all([first_assignment, second_assignment])
+    db.flush()
+
+    context = TeacherContext(
+        auth_user_id=teacher_user_id,
+        teacher_membership_id=teacher["membership"].id,
+        university_id=university_id,
+    )
+
+    with _count_queries(db.connection()) as query_counter:
+        response = get_teacher_course_gradebook(db, context, course.id)
+
+    assert response.course.students_count == 1
+    assert response.course.cases_count == 2
+    assert response.students[0].email == "query-repair-student@example.edu"
+    assert query_counter["value"] <= 9
+
+
 def test_issue205_teacher_course_gradebook_orders_cases_by_available_from_then_created_at(
     db,
     seed_identity,

@@ -414,6 +414,11 @@ export function getTeacherCourseStudentsErrorMessage(
     switch (error.detail) {
         case "course_gradebook_cross_enrollment_unsupported":
             return "Este curso tiene un caso compartido entre varios cursos con estudiantes superpuestos. Corrige esa configuración antes de abrir el gradebook.";
+        case "course_gradebook_inconsistent_max_score":
+        case "course_gradebook_invalid_max_score":
+            return "Este curso tiene calificaciones inválidas o inconsistentes. Corrige esos registros antes de abrir el gradebook.";
+        case "student_identity_unavailable":
+            return "No se pudo recuperar la identidad de uno o más estudiantes del curso. Intenta nuevamente o repara esas cuentas antes de abrir el gradebook.";
         case "course_not_found":
             return "El curso ya no existe o no pertenece a tu cuenta docente.";
         case "invalid_token":
