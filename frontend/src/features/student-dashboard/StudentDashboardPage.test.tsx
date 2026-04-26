@@ -114,7 +114,7 @@ describe("StudentDashboardPage", () => {
         expect(screen.getByText("Analitica Predictiva y Riesgo Crediticio")).toBeTruthy();
         expect(screen.getByText("CrediAgil")).toBeTruthy();
         expect(screen.getByRole("link", { name: /Resolver caso/i })).toHaveAttribute("href", "/student/cases/case-1/resolve");
-        expect(screen.getByText(/Aun no disponible/i)).toBeTruthy();
+        expect(screen.getByText(/Aún no disponible/i)).toBeTruthy();
 
         fireEvent.change(
             screen.getByPlaceholderText(/Buscar programa o caso de estudio/i),
