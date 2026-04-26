@@ -729,5 +729,6 @@ def fake_admin_client(monkeypatch: pytest.MonkeyPatch) -> FakeAdminClient:
     monkeypatch.setattr("shared.auth.get_supabase_admin_auth_client", lambda: client)
     monkeypatch.setattr("shared.app.get_supabase_admin_auth_client", lambda: client)
     monkeypatch.setattr("shared.admin_reads.get_supabase_admin_auth_client", lambda: client)
+    monkeypatch.setattr("shared.teacher_reads.get_supabase_admin_auth_client", lambda: client)
     monkeypatch.setattr("shared.auth.get_supabase_admin_auth_client", lambda: client)
     return client

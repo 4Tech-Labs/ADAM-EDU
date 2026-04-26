@@ -11,11 +11,13 @@ import {
     Save,
     Settings2,
     Trash2,
+    Users,
 } from "lucide-react";
 
 import "./teacherCoursePage.css";
 
 import { TeacherLayout } from "@/features/teacher-layout/TeacherLayout";
+import { TeacherCourseStudentsTab } from "@/features/teacher-course/TeacherCourseStudentsTab";
 import type {
     TeacherCourseDraft,
     TeacherCourseTab,
@@ -32,18 +34,21 @@ import {
     formatTeacherCourseTimestamp,
     getTeacherCoursePageErrorMessage,
     getTeacherCourseSaveErrorMessage,
+    getTeacherCourseStudentsErrorMessage,
     getTeacherCourseTab,
     isStaleSyllabusRevisionError,
     useRegenerateTeacherCourseAccessLink,
     useSaveTeacherCourseSyllabus,
     useTeacherCourseAccessLink,
     useTeacherCourseDetail,
+    useTeacherCourseStudents,
     validateTeacherCourseDraft,
 } from "@/features/teacher-course/teacherCourseModel";
 import { copyToClipboard } from "@/shared/clipboard";
 import { useToast } from "@/shared/toast-context";
 
 const SYLLABUS_TAB_ID = "teacher-course-tab-syllabus";
+const STUDENTS_TAB_ID = "teacher-course-tab-estudiantes";
 const CONFIG_TAB_ID = "teacher-course-tab-configuracion";
 
 interface SectionCardProps {
@@ -130,6 +135,7 @@ export function TeacherCoursePage() {
     const activeTab = getTeacherCourseTab(searchParams.get("tab"));
     const courseDetailQuery = useTeacherCourseDetail(courseId);
     const accessLinkQuery = useTeacherCourseAccessLink(courseId);
+    const courseStudentsQuery = useTeacherCourseStudents(courseId, activeTab === "estudiantes");
     const regenerateAccessLinkMutation = useRegenerateTeacherCourseAccessLink(courseId);
     const saveSyllabusMutation = useSaveTeacherCourseSyllabus(courseId);
     const [draft, setDraft] = useState<TeacherCourseDraft>(
@@ -190,6 +196,12 @@ export function TeacherCoursePage() {
             : "Enlace activo y listo para compartir con estudiantes."
         : `Aún no existe un enlace activo. Se usará ${accessLinkState?.join_path ?? detail?.configuration.join_path ?? "/app/join"} cuando regeneres uno nuevo.`;
     const accessLinkErrorMessage = accessLinkActionError;
+    const studentsErrorMessage = activeTab === "estudiantes" && courseStudentsQuery.error
+        ? getTeacherCourseStudentsErrorMessage(
+              courseStudentsQuery.error,
+              "No se pudo cargar el gradebook del curso. Intenta nuevamente.",
+          )
+        : null;
     const isRegeneratingAccessLink = regenerateAccessLinkMutation.isPending;
     const isRefreshingAccessLink = accessLinkQuery.isFetching && !accessLinkQuery.isLoading;
     const canRegenerateAccessLink = detail?.course.status === "active";
@@ -577,6 +589,22 @@ export function TeacherCoursePage() {
                         >
                             <Settings2 className="h-5 w-5" />
                             <span>Configuración</span>
+                        </button>
+                        <button
+                            id={STUDENTS_TAB_ID}
+                            type="button"
+                            role="tab"
+                            aria-selected={activeTab === "estudiantes"}
+                            aria-controls="teacher-course-students-panel"
+                            tabIndex={activeTab === "estudiantes" ? 0 : -1}
+                            className={`course-nav-item ${activeTab === "estudiantes" ? "active" : ""}`}
+                            onClick={() => setTab("estudiantes")}
+                        >
+                            <Users className="h-5 w-5" />
+                            <span>Estudiantes</span>
+                            <span className="ml-auto rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-bold text-[#0144a0]">
+                                {detail.course.students_count}
+                            </span>
                         </button>
                     </nav>
                 </aside>
@@ -1350,6 +1378,16 @@ export function TeacherCoursePage() {
                                 </div>
                             </section>
                         </div>
+                    ) : activeTab === "estudiantes" ? (
+                        <TeacherCourseStudentsTab
+                            gradebook={courseStudentsQuery.data}
+                            isLoading={courseStudentsQuery.isLoading}
+                            isFetching={courseStudentsQuery.isFetching}
+                            errorMessage={studentsErrorMessage}
+                            onRetry={() => {
+                                void courseStudentsQuery.refetch();
+                            }}
+                        />
                     ) : (
                         <div
                             id="teacher-course-config-panel"

@@ -3,7 +3,7 @@
 ADAM EDU es un Teacher Authoring + Preview MVP en transicion a una plataforma multi-rol con autenticacion real. El repositorio incluye:
 
 - Flujo docente completo: sugerencias en formulario, generacion asincrona con LangGraph, progreso en tiempo real via Supabase Realtime (`postgres_changes`) y preview del caso.
-- Shell frontend auth-aware (Issue #5): `AuthProvider`, guards por rol, callback OAuth PKCE, helper `sessionStorage` de activacion con TTL 5 minutos, dashboard docente en `/app/teacher/dashboard` y ruta canonica de authoring en `/app/teacher/case-designer` (con compatibilidad via redirect `/app/teacher` -> `/app/teacher/case-designer`).
+- Shell frontend auth-aware (Issue #5): `AuthProvider`, guards por rol, callback OAuth PKCE, helper `sessionStorage` de activacion con TTL 5 minutos, dashboard docente en `/app/teacher/dashboard`, detalle de curso en `/app/teacher/courses/:courseId` y ruta canonica de authoring en `/app/teacher/case-designer` (con compatibilidad via redirect `/app/teacher` -> `/app/teacher/case-designer`).
 - Auth perimeter backend (Issue #3): verificacion JWT via JWKS, actor resolution por memberships, `GET /api/auth/me`, endpoints de activacion body-only.
 
 Los flujos de negocio completos de teacher activation, student join y admin provisioning siguen en Issues #6, #7 y #8 respectivamente. El shell actual deja listos los placeholders y contratos de routing para esas historias.
@@ -72,6 +72,7 @@ El endpoint interno `/api/internal/tasks/authoring_step` se conserva como seam d
 
 - `frontend/src/app/`: shell del frontend. Aqui viven router, entrypoint, layout base y estilos globales.
 - `frontend/src/features/teacher-authoring/`: flujo docente real. Contiene formulario, submit del job, suscripcion Realtime, timeline y estados del authoring.
+- `frontend/src/features/teacher-course/`: vista de detalle del curso docente, incluyendo tabs de syllabus, estudiantes y configuracion del access link.
 - `frontend/src/features/case-preview/`: preview editorial del caso generado, incluyendo renderers y modulos `M1..M6`.
 - `frontend/src/shared/`: piezas transversales del MVP. Aqui viven cliente API, tipos compartidos, header, toast, utilidades y primitives UI.
 
@@ -94,12 +95,16 @@ En este corte no se renombran carpetas del frontend.
 6. `GET /api/authoring/jobs/{job_id}/result` devuelve el resultado persistido para preview del owner.
 7. `GET /api/auth/me` expone `CurrentActor`, memberships y `must_rotate_password`.
 8. `POST /api/invites/resolve`, `POST /api/invites/redeem`, `POST /api/auth/activate/password` y `POST /api/auth/activate/oauth/complete` consumen `invite_token` por body.
+9. `GET /api/teacher/courses/{course_id}` compone la ficha docente del curso y su syllabus vigente.
+10. `GET /api/teacher/courses/{course_id}/students` devuelve el gradebook de solo lectura del curso con estudiantes activos, casos publicados y overlay de `StudentCaseResponse` + `case_grades`.
+11. `GET /api/teacher/courses/{course_id}/access-link` expone la metadata vigente del enlace de acceso para estudiantes.
 
 El frontend usa ese flujo para renderizar el timeline y el `CasePreview` del profesor.
 
 Rutas funcionales actuales del shell docente (frontend):
 
 - `/app/teacher/dashboard`: dashboard principal del docente.
+- `/app/teacher/courses/:courseId`: detalle del curso con tabs de syllabus, estudiantes y configuracion.
 - `/app/teacher/case-designer`: entrada canonica al Diseñador de Casos.
 - `/app/teacher`: redirect de compatibilidad hacia `/app/teacher/case-designer`.
 

@@ -62,6 +62,7 @@ CREATE POLICY deny_all ON university_sso_configs
 -- This section enables safe client-side SELECT for owned authoring jobs only.
 ALTER TABLE assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE authoring_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE case_grades ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS assignments_teacher_owner_select ON assignments;
 CREATE POLICY assignments_teacher_owner_select ON assignments
@@ -79,6 +80,14 @@ CREATE POLICY authoring_jobs_teacher_owner_select ON authoring_jobs
         AND a.teacher_id = auth.uid()::text
     )
   );
+
+DROP POLICY IF EXISTS case_grades_teacher_select ON case_grades;
+DROP POLICY IF EXISTS case_grades_student_self_select ON case_grades;
+DROP POLICY IF EXISTS case_grades_deny_all ON case_grades;
+CREATE POLICY case_grades_deny_all ON case_grades
+  FOR ALL
+  USING (false)
+  WITH CHECK (false);
 
 DO $$
 BEGIN
