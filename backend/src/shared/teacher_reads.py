@@ -958,13 +958,28 @@ def get_teacher_case_submissions(
         )
     )
 
+    available_from = assignment.available_from
+    deadline = assignment.deadline
+    if available_from is None or deadline is None:
+        latest_task_payload = db.scalar(
+            select(AuthoringJob.task_payload)
+            .where(AuthoringJob.assignment_id == assignment.id)
+            .order_by(AuthoringJob.created_at.desc())
+            .limit(1)
+        )
+        available_from, deadline = _resolve_schedule_values_from_payload(
+            available_from=available_from,
+            deadline=deadline,
+            task_payload=latest_task_payload if isinstance(latest_task_payload, dict) else None,
+        )
+
     return TeacherCaseSubmissionsResponse(
         case=TeacherCourseGradebookCase(
             assignment_id=assignment.id,
             title=_resolve_assignment_title(assignment),
             status="published",
-            available_from=assignment.available_from,
-            deadline=assignment.deadline,
+            available_from=available_from,
+            deadline=deadline,
             max_score=assignment_max_score,
         ),
         submissions=submissions,

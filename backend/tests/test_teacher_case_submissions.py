@@ -8,7 +8,7 @@ import uuid
 
 from sqlalchemy import event
 
-from shared.models import Assignment, AssignmentCourse, CaseGrade, StudentCaseResponse, User
+from shared.models import Assignment, AssignmentCourse, AuthoringJob, CaseGrade, StudentCaseResponse, User
 from shared.teacher_context import TeacherContext
 from shared.teacher_reads import get_teacher_case_submissions
 
@@ -208,6 +208,85 @@ def test_teacher_case_submissions_returns_single_course_rows_and_statuses(
     assert rows["diego@example.edu"]["graded_at"] == _iso_z(reference_now - timedelta(hours=1))
     assert all(row["course_code"] == "CASE-210" for row in payload["submissions"])
 
+def test_teacher_case_submissions_falls_back_to_latest_authoring_payload_schedule(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000002111"
+    teacher_user_id = str(uuid.uuid4())
+    teacher_email = "teacher-legacy-schedule@example.edu"
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email=teacher_email,
+        role="teacher",
+        university_id=university_id,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Legacy Schedule",
+        code="LEG-210",
+    )
+    student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="legacy-student@example.edu",
+        role="student",
+        university_id=university_id,
+        full_name="Legacy Student",
+    )
+    seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
+
+    persisted_available_from = datetime(2026, 6, 1, 15, 0, tzinfo=timezone.utc)
+    latest_deadline = datetime(2026, 6, 10, 18, 30, tzinfo=timezone.utc)
+    assignment = Assignment(
+        teacher_id=teacher_user_id,
+        course_id=course.id,
+        title="Legacy Schedule Assignment",
+        status="published",
+        available_from=persisted_available_from,
+        deadline=None,
+    )
+    db.add(assignment)
+    db.flush()
+    db.add_all(
+        [
+            AuthoringJob(
+                assignment_id=assignment.id,
+                idempotency_key=f"legacy-schedule-old-{assignment.id}",
+                status="completed",
+                created_at=datetime(2026, 5, 20, 12, 0, tzinfo=timezone.utc),
+                task_payload={
+                    "availableFrom": "2026-05-20T10:00:00+00:00",
+                    "dueAt": "2026-06-07T17:00:00+00:00",
+                },
+            ),
+            AuthoringJob(
+                assignment_id=assignment.id,
+                idempotency_key=f"legacy-schedule-new-{assignment.id}",
+                status="completed",
+                created_at=datetime(2026, 5, 21, 12, 0, tzinfo=timezone.utc),
+                task_payload={
+                    "availableFrom": "2026-05-21T10:00:00+00:00",
+                    "dueAt": _iso_z(latest_deadline),
+                },
+            ),
+        ]
+    )
+    db.commit()
+
+    response = client.get(
+        f"/api/teacher/cases/{assignment.id}/submissions",
+        headers=_auth_headers(auth_headers_factory, user_id=teacher_user_id, email=teacher_email),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["case"]["available_from"] == _iso_z(persisted_available_from)
+    assert payload["case"]["deadline"] == _iso_z(latest_deadline)
 
 def test_teacher_case_submissions_returns_multicourse_rows_sorted_deterministically(
     client,
@@ -690,3 +769,74 @@ def test_teacher_case_submissions_runs_in_bounded_query_count(
 
     assert len(response.submissions) == 2
     assert counter["value"] <= 4
+
+
+def test_teacher_case_submissions_legacy_schedule_fallback_adds_only_one_query(
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000002112"
+    teacher_user_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=teacher_user_id,
+        email="teacher-query-legacy@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        code="QL-210",
+    )
+    student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="query-legacy@example.edu",
+        role="student",
+        university_id=university_id,
+        full_name="Query Legacy",
+    )
+    seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
+    assignment = Assignment(
+        teacher_id=teacher_user_id,
+        course_id=course.id,
+        title="Query Budget Legacy",
+        status="published",
+        available_from=None,
+        deadline=None,
+    )
+    db.add(assignment)
+    db.flush()
+    db.add(
+        AuthoringJob(
+            assignment_id=assignment.id,
+            idempotency_key=f"legacy-query-budget-{assignment.id}",
+            status="completed",
+            task_payload={
+                "availableFrom": "2026-06-03T12:00:00+00:00",
+                "dueAt": "2026-06-08T12:00:00+00:00",
+            },
+        )
+    )
+    _seed_student_case_response(
+        db,
+        membership_id=student["membership"].id,
+        assignment_id=assignment.id,
+        status="submitted",
+        opened_at=datetime(2026, 6, 4, 12, 0, tzinfo=timezone.utc),
+    )
+
+    context = TeacherContext(
+        auth_user_id=teacher_user_id,
+        teacher_membership_id=teacher["membership"].id,
+        university_id=university_id,
+    )
+
+    with _count_queries(db.bind) as counter:
+        response = get_teacher_case_submissions(db, context, assignment)
+
+    assert response.case.available_from == datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+    assert response.case.deadline == datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc)
+    assert len(response.submissions) == 1
+    assert counter["value"] <= 5
