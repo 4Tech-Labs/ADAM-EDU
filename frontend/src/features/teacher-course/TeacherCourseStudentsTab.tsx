@@ -1,10 +1,14 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+
 import {
     AlertCircle,
     BarChart3,
     BookOpen,
     LoaderCircle,
     RefreshCcw,
+    Search,
     Users,
+    X,
 } from "lucide-react";
 
 import type {
@@ -82,6 +86,73 @@ export function TeacherCourseStudentsTab({
     const caseById = new Map(gradebook?.cases.map((item) => [item.assignment_id, item]) ?? []);
     const refreshLabel = isFetching && !isLoading ? "Actualizando gradebook" : "Actualizar gradebook";
 
+    const tableRef = useRef<HTMLTableElement | null>(null);
+    const topScrollRef = useRef<HTMLDivElement | null>(null);
+    const bottomScrollRef = useRef<HTMLDivElement | null>(null);
+    const [tableWidth, setTableWidth] = useState(0);
+    const [searchQuery, setSearchQuery] = useState("");
+
+    const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
+    const filteredStudents = useMemo(() => {
+        if (!gradebook) return [];
+        if (!normalizedQuery) return gradebook.students;
+        return gradebook.students.filter((student) => {
+            const name = student.full_name.toLocaleLowerCase();
+            const email = student.email.toLocaleLowerCase();
+            return name.includes(normalizedQuery) || email.includes(normalizedQuery);
+        });
+    }, [gradebook, normalizedQuery]);
+
+    const hasMatrix = Boolean(
+        !isLoading && gradebook && gradebook.students.length > 0 && gradebook.cases.length > 0,
+    );
+    const hasSearchResults = filteredStudents.length > 0;
+
+    useEffect(() => {
+        const node = tableRef.current;
+        if (!node || typeof ResizeObserver === "undefined") {
+            return;
+        }
+        const observer = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                setTableWidth(entry.contentRect.width);
+            }
+        });
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [hasMatrix, gradebook?.cases.length, gradebook?.students.length]);
+
+    useEffect(() => {
+        const top = topScrollRef.current;
+        const bottom = bottomScrollRef.current;
+        if (!top || !bottom) {
+            return;
+        }
+        let lockedBy: "top" | "bottom" | null = null;
+        const handleTop = () => {
+            if (lockedBy === "bottom") return;
+            lockedBy = "top";
+            bottom.scrollLeft = top.scrollLeft;
+            requestAnimationFrame(() => {
+                lockedBy = null;
+            });
+        };
+        const handleBottom = () => {
+            if (lockedBy === "top") return;
+            lockedBy = "bottom";
+            top.scrollLeft = bottom.scrollLeft;
+            requestAnimationFrame(() => {
+                lockedBy = null;
+            });
+        };
+        top.addEventListener("scroll", handleTop, { passive: true });
+        bottom.addEventListener("scroll", handleBottom, { passive: true });
+        return () => {
+            top.removeEventListener("scroll", handleTop);
+            bottom.removeEventListener("scroll", handleBottom);
+        };
+    }, [hasMatrix]);
+
     return (
         <div
             id="teacher-course-students-panel"
@@ -90,35 +161,16 @@ export function TeacherCourseStudentsTab({
             className="space-y-6"
         >
             <section className="rounded-[24px] border border-slate-200 bg-white p-6 shadow-sm md:p-8">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                        <h1 className="text-2xl font-bold tracking-tight text-slate-900 md:text-[32px]">
-                            Estudiantes y calificaciones
-                        </h1>
-                        <p className="mt-2 max-w-3xl text-sm text-slate-500 md:text-base">
-                            Consulta el progreso real por caso publicado sin salir de la vista del curso.
-                        </p>
-                    </div>
-                    <div className="teacher-gradebook-header-actions">
-                        {gradebook ? (
-                            <div className="teacher-gradebook-metrics">
-                                <MetricCard
-                                    icon={<Users className="h-4 w-4" />}
-                                    label="Estudiantes activos"
-                                    value={String(gradebook.course.students_count)}
-                                />
-                                <MetricCard
-                                    icon={<BookOpen className="h-4 w-4" />}
-                                    label="Casos publicados"
-                                    value={String(gradebook.course.cases_count)}
-                                />
-                                <MetricCard
-                                    icon={<BarChart3 className="h-4 w-4" />}
-                                    label="Curso"
-                                    value={gradebook.course.code}
-                                />
-                            </div>
-                        ) : null}
+                <div className="teacher-gradebook-header">
+                    <div className="teacher-gradebook-header-row">
+                        <div className="min-w-0">
+                            <h1 className="text-2xl font-bold tracking-tight text-slate-900 md:text-[32px]">
+                                Estudiantes y calificaciones
+                            </h1>
+                            <p className="mt-2 max-w-3xl text-sm text-slate-500 md:text-base">
+                                Consulta el progreso real por caso publicado sin salir de la vista del curso.
+                            </p>
+                        </div>
                         <div className="teacher-gradebook-refresh-group">
                             <button
                                 type="button"
@@ -137,6 +189,25 @@ export function TeacherCourseStudentsTab({
                             ) : null}
                         </div>
                     </div>
+                    {gradebook ? (
+                        <div className="teacher-gradebook-metrics">
+                            <MetricCard
+                                icon={<Users className="h-4 w-4" />}
+                                label="Estudiantes activos"
+                                value={String(gradebook.course.students_count)}
+                            />
+                            <MetricCard
+                                icon={<BookOpen className="h-4 w-4" />}
+                                label="Casos publicados"
+                                value={String(gradebook.course.cases_count)}
+                            />
+                            <MetricCard
+                                icon={<BarChart3 className="h-4 w-4" />}
+                                label="Curso"
+                                value={gradebook.course.code}
+                            />
+                        </div>
+                    ) : null}
                 </div>
             </section>
 
@@ -185,10 +256,59 @@ export function TeacherCourseStudentsTab({
                 </section>
             ) : null}
 
-            {!isLoading && gradebook && gradebook.students.length > 0 && gradebook.cases.length > 0 ? (
+            {hasMatrix && gradebook ? (
                 <section className="teacher-gradebook-shell" aria-busy={isFetching}>
-                    <div className="teacher-gradebook-scroll">
-                        <table className="teacher-gradebook-table">
+                    <div className="teacher-gradebook-toolbar">
+                        <label
+                            htmlFor="teacher-gradebook-search"
+                            className="teacher-gradebook-search"
+                        >
+                            <Search
+                                className="teacher-gradebook-search-icon"
+                                aria-hidden="true"
+                            />
+                            <input
+                                id="teacher-gradebook-search"
+                                type="search"
+                                value={searchQuery}
+                                onChange={(event) => setSearchQuery(event.target.value)}
+                                placeholder="Buscar estudiante por nombre o correo"
+                                className="teacher-gradebook-search-input"
+                                autoComplete="off"
+                                spellCheck={false}
+                            />
+                            {searchQuery ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setSearchQuery("")}
+                                    className="teacher-gradebook-search-clear"
+                                    aria-label="Limpiar búsqueda"
+                                >
+                                    <X className="h-4 w-4" aria-hidden="true" />
+                                </button>
+                            ) : null}
+                        </label>
+                        <p
+                            className="teacher-gradebook-search-count"
+                            aria-live="polite"
+                        >
+                            {normalizedQuery
+                                ? `${filteredStudents.length} de ${gradebook.students.length} estudiantes`
+                                : `${gradebook.students.length} estudiantes`}
+                        </p>
+                    </div>
+                    <div
+                        ref={topScrollRef}
+                        className="teacher-gradebook-scroll-top"
+                        aria-hidden="true"
+                    >
+                        <div
+                            className="teacher-gradebook-scroll-top-spacer"
+                            style={{ width: tableWidth || "100%" }}
+                        />
+                    </div>
+                    <div ref={bottomScrollRef} className="teacher-gradebook-scroll">
+                        <table ref={tableRef} className="teacher-gradebook-table">
                             <caption className="sr-only">
                                 Gradebook del curso {gradebook.course.title} con {gradebook.course.students_count} estudiantes activos y {gradebook.course.cases_count} casos publicados.
                             </caption>
@@ -197,44 +317,53 @@ export function TeacherCourseStudentsTab({
                                     <th scope="col" className="teacher-gradebook-sticky teacher-gradebook-sticky-name">
                                         Estudiante
                                     </th>
-                                    <th scope="col" className="teacher-gradebook-sticky teacher-gradebook-sticky-email">
+                                    <th scope="col" className="teacher-gradebook-email-col">
                                         Correo
                                     </th>
-                                    <th scope="col" className="teacher-gradebook-sticky teacher-gradebook-sticky-average">
-                                        Promedio / {formatTeacherGradebookScore(gradebook.course.average_score_scale)}
-                                    </th>
                                     {gradebook.cases.map((item) => (
-                                        <th key={item.assignment_id} scope="col">
+                                        <th key={item.assignment_id} scope="col" className="teacher-gradebook-case-col">
                                             <div className="teacher-gradebook-case-heading">
-                                                <span className="teacher-gradebook-case-title">{item.title}</span>
-                                                <span className="teacher-gradebook-case-meta">
-                                                    Fecha límite: {formatTeacherGradebookDeadline(item.deadline)}
+                                                <span
+                                                    className="teacher-gradebook-case-title"
+                                                    title={item.title}
+                                                >
+                                                    {item.title}
                                                 </span>
                                                 <span className="teacher-gradebook-case-meta">
-                                                    Máximo: {formatTeacherGradebookScore(item.max_score)}
+                                                    <span>Vence {formatTeacherGradebookDeadline(item.deadline)}</span>
+                                                    <span aria-hidden="true" className="teacher-gradebook-case-meta-sep">·</span>
+                                                    <span>Máx {formatTeacherGradebookScore(item.max_score)}</span>
                                                 </span>
                                             </div>
                                         </th>
                                     ))}
+                                    <th scope="col" className="teacher-gradebook-average-col">
+                                        Promedio / {formatTeacherGradebookScore(gradebook.course.average_score_scale)}
+                                    </th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {gradebook.students.map((student) => (
+                                {filteredStudents.map((student) => (
                                     <tr key={student.membership_id}>
                                         <th
                                             scope="row"
                                             className="teacher-gradebook-sticky teacher-gradebook-sticky-name teacher-gradebook-student-cell"
                                         >
-                                            <div className="teacher-gradebook-student-name">{student.full_name}</div>
+                                            <div
+                                                className="teacher-gradebook-student-name"
+                                                title={student.full_name}
+                                            >
+                                                {student.full_name}
+                                            </div>
                                             <div className="teacher-gradebook-student-meta">
                                                 Ingresó: {formatTeacherCourseTimestamp(student.enrolled_at)}
                                             </div>
                                         </th>
-                                        <td className="teacher-gradebook-sticky teacher-gradebook-sticky-email teacher-gradebook-email-cell">
+                                        <td
+                                            className="teacher-gradebook-email-cell"
+                                            title={student.email}
+                                        >
                                             {student.email}
-                                        </td>
-                                        <td className="teacher-gradebook-sticky teacher-gradebook-sticky-average teacher-gradebook-average-cell">
-                                            {formatTeacherGradebookAverage(student.average_score)}
                                         </td>
                                         {student.grades.map((cell) => (
                                             <td key={`${student.membership_id}-${cell.assignment_id}`}>
@@ -244,10 +373,30 @@ export function TeacherCourseStudentsTab({
                                                 )}
                                             </td>
                                         ))}
+                                        <td className="teacher-gradebook-average-cell">
+                                            {formatTeacherGradebookAverage(student.average_score)}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
+                        {!hasSearchResults ? (
+                            <div
+                                className="teacher-gradebook-search-empty"
+                                role="status"
+                                aria-live="polite"
+                            >
+                                <AlertCircle className="h-5 w-5 text-slate-400" aria-hidden="true" />
+                                <div>
+                                    <p className="teacher-gradebook-empty-title">
+                                        Sin coincidencias
+                                    </p>
+                                    <p className="teacher-gradebook-empty-copy">
+                                        Ningún estudiante coincide con “{searchQuery}”. Prueba con otro nombre o correo.
+                                    </p>
+                                </div>
+                            </div>
+                        ) : null}
                     </div>
                 </section>
             ) : null}
