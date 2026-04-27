@@ -261,6 +261,22 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
+## TODO-014: Paginación o virtualización para el listado docente de entregas por caso
+
+**What:** Evaluar y aplicar paginación server-side o virtualización de filas en la vista docente `GET /api/teacher/cases/{assignment_id}/submissions` y su tabla en frontend cuando el volumen por caso crezca más allá del rango cómodo del render actual.
+
+**Why:** La implementación de Issue #210 entrega el listado completo en una sola respuesta y lo renderiza íntegro en el cliente. Eso mantiene el diff mínimo y cubre el caso actual, pero en cursos grandes puede degradar tiempo de respuesta, costo de serialización y rendimiento del DOM.
+
+**Pros:** Mejor escalabilidad para cursos grandes, menor costo de render en frontend y un contrato más explícito para navegación incremental del docente.
+
+**Cons:** Añade complejidad de contrato compartido (cursor o page params), estados extra en TanStack Query y decisiones de UX sobre búsqueda local vs remota, ordenamiento y preservación de filtros.
+
+**Context:** Diferido explícitamente durante la implementación de Issue #210 para cerrar primero la vista read-only con el contrato mínimo reutilizando la capa de gradebook de Issue #205. Antes de implementarlo conviene medir tamaños reales por curso y decidir si basta con virtualización en frontend o si hace falta paginación backend.
+
+**Depends on / blocked by:** Señales reales de volumen en producción o staging, decisión de producto sobre búsqueda/ordenamiento cross-page y definición del contrato incremental compartido entre backend y frontend.
+
+---
+
 ## TODO-027: Hardening del `CASE_WRITER_PROMPT` para prohibir exhibits completos en `doc1_narrativa`
 
 **What:** Ajustar `backend/src/case_generator/prompts.py` para que `CASE_WRITER_PROMPT` prohíba explícitamente reproducir tablas completas de `Exhibit 1`, `Exhibit 2` o `Exhibit 3` dentro de `doc1_narrativa`, limitando su uso a citas y referencias narrativas.

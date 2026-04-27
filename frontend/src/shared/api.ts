@@ -46,6 +46,7 @@ import type {
     SuggestRequest,
     SuggestResponse,
     TeacherCaseDetailResponse,
+    TeacherCaseSubmissionsResponse,
     TeacherCourseAccessLinkRegenerateResponse,
     TeacherCourseAccessLinkResponse,
     TeacherCourseDetailResponse,
@@ -1185,6 +1186,11 @@ export const api = {
         async getCaseDetail(assignmentId: string): Promise<TeacherCaseDetailResponse> {
             return parseJsonResponse<TeacherCaseDetailResponse>(
                 `/teacher/cases/${assignmentId}`,
+            );
+        },
+        async getCaseSubmissions(assignmentId: string): Promise<TeacherCaseSubmissionsResponse> {
+            return parseJsonResponse<TeacherCaseSubmissionsResponse>(
+                `/teacher/cases/${assignmentId}/submissions`,
             );
         },
         async publishCase(assignmentId: string): Promise<TeacherCaseDetailResponse> {

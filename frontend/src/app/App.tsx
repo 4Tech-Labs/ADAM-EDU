@@ -28,6 +28,11 @@ const TeacherCaseViewPage = lazy(() =>
         (module) => ({ default: module.TeacherCaseViewPage }),
     ),
 );
+const TeacherCaseSubmissionsPage = lazy(() =>
+    import("@/features/teacher-case-submissions/TeacherCaseSubmissionsPage").then(
+        (module) => ({ default: module.TeacherCaseSubmissionsPage }),
+    ),
+);
 const AuthCallbackPage = lazy(() =>
     import("@/features/auth-callback/AuthCallbackPage").then((module) => ({
         default: module.AuthCallbackPage,
@@ -151,10 +156,18 @@ function App() {
                             path="/teacher/cases/:assignmentId/entregas"
                             element={
                                 <RequireRole role="teacher">
+                                    <TeacherCaseSubmissionsPage />
+                                </RequireRole>
+                            }
+                        />
+                        <Route
+                            path="/teacher/cases/:assignmentId/entregas/:membershipId"
+                            element={
+                                <RequireRole role="teacher">
                                     <div className="flex flex-col items-center justify-center gap-4 px-4 py-24 text-center">
-                                        <h1 className="text-xl font-semibold">Entregas del caso</h1>
+                                        <h1 className="text-xl font-semibold">Ver entrega y calificar</h1>
                                         <p className="max-w-xs text-sm text-muted-foreground">
-                                            El listado de entregas estará disponible en la próxima versión.
+                                            Esta vista estará disponible en la próxima versión.
                                         </p>
                                     </div>
                                 </RequireRole>

@@ -974,6 +974,41 @@ describe("api auth + stream glue", () => {
         expect(new Headers(options.headers).get("Authorization")).toBe("Bearer teacher-token");
     });
 
+    it("fetches teacher case submissions with bearer auth", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+        getSessionMock.mockResolvedValue({
+            data: { session: { access_token: "teacher-token" } },
+            error: null,
+        });
+
+        const payload = {
+            case: {
+                assignment_id: "case-1",
+                title: "Caso Test",
+                status: "published",
+                available_from: null,
+                deadline: null,
+                max_score: 5,
+            },
+            submissions: [],
+        };
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(JSON.stringify(payload), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.teacher.getCaseSubmissions("case-1");
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/teacher/cases/case-1/submissions");
+        const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
+        expect(options.method).toBeUndefined();
+        expect(new Headers(options.headers).get("Authorization")).toBe("Bearer teacher-token");
+    });
+
     it("publishes a teacher case with PATCH and bearer auth", async () => {
         vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
         vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
