@@ -46,6 +46,7 @@ import type {
     SuggestRequest,
     SuggestResponse,
     TeacherCaseDetailResponse,
+    TeacherCaseSubmissionDetailResponse,
     TeacherCaseSubmissionsResponse,
     TeacherCourseAccessLinkRegenerateResponse,
     TeacherCourseAccessLinkResponse,
@@ -79,13 +80,19 @@ type ApiErrorCode =
     | "db_timeout"
     | "assignment_forbidden"
     | "assignment_not_found"
+    | "submission_not_found"
     | "version_conflict"
     | "already_submitted"
     | "deadline_passed"
     | "payload_too_large"
     | "invalid_question_id"
     | "invalid_answer_value"
-    | "too_many_answers";
+    | "too_many_answers"
+    | "course_gradebook_cross_enrollment_unsupported"
+    | "course_gradebook_inconsistent_max_score"
+    | "course_gradebook_invalid_max_score"
+    | "student_identity_unavailable"
+    | "case_canonical_output_invalid";
 
 export interface ProgressEvent {
     event: string;
@@ -1191,6 +1198,14 @@ export const api = {
         async getCaseSubmissions(assignmentId: string): Promise<TeacherCaseSubmissionsResponse> {
             return parseJsonResponse<TeacherCaseSubmissionsResponse>(
                 `/teacher/cases/${assignmentId}/submissions`,
+            );
+        },
+        async getCaseSubmissionDetail(
+            assignmentId: string,
+            membershipId: string,
+        ): Promise<TeacherCaseSubmissionDetailResponse> {
+            return parseJsonResponse<TeacherCaseSubmissionDetailResponse>(
+                `/teacher/cases/${assignmentId}/submissions/${membershipId}`,
             );
         },
         async publishCase(assignmentId: string): Promise<TeacherCaseDetailResponse> {

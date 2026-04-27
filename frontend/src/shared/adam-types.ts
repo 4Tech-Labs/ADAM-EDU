@@ -844,6 +844,66 @@ export interface TeacherCaseSubmissionsResponse {
     submissions: TeacherCaseSubmissionRow[];
 }
 
+export interface TeacherCaseSubmissionDetailQuestion {
+    id: string;
+    order: number;
+    statement: string;
+    context: string | null;
+    expected_solution: string;
+    student_answer: string | null;
+    student_answer_chars: number;
+    is_answer_from_draft: boolean;
+}
+
+export interface TeacherCaseSubmissionDetailModule {
+    id: "M1" | "M2" | "M3" | "M4" | "M5";
+    title: string;
+    questions: TeacherCaseSubmissionDetailQuestion[];
+}
+
+export interface TeacherCaseSubmissionDetailCase {
+    id: string;
+    title: string;
+    deadline: string | null;
+    available_from: string | null;
+    course_id: string;
+    course_code: string;
+    course_name: string;
+    teaching_note: string | null;
+}
+
+export interface TeacherCaseSubmissionDetailStudent {
+    membership_id: string;
+    full_name: string;
+    email: string;
+    enrolled_at: string;
+}
+
+export interface TeacherCaseSubmissionDetailResponseState {
+    status: TeacherCourseGradebookStatus;
+    first_opened_at: string | null;
+    last_autosaved_at: string | null;
+    submitted_at: string | null;
+    snapshot_id: string | null;
+    snapshot_hash: string | null;
+}
+
+export interface TeacherCaseSubmissionDetailGradeSummary {
+    status: "in_progress" | "submitted" | "graded" | null;
+    score: number | null;
+    max_score: number;
+    graded_at: string | null;
+}
+
+export interface TeacherCaseSubmissionDetailResponse {
+    payload_version: 1;
+    case: TeacherCaseSubmissionDetailCase;
+    student: TeacherCaseSubmissionDetailStudent;
+    response_state: TeacherCaseSubmissionDetailResponseState;
+    grade_summary: TeacherCaseSubmissionDetailGradeSummary;
+    modules: TeacherCaseSubmissionDetailModule[];
+}
+
 export interface DeadlineUpdateRequest {
     available_from?: string | null;
     deadline?: string | null;
