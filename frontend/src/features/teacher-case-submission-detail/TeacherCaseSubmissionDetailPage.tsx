@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useEffect, useRef } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
     AlertCircle,
     ArrowLeft,
@@ -31,6 +31,7 @@ import {
     getTeacherCaseSubmissionDetailErrorMessage,
     useTeacherCaseSubmissionDetail,
 } from "./useTeacherCaseSubmissionDetail";
+import { GradingPlaceholderPanel } from "./components/GradingPlaceholderPanel";
 
 import type { TeacherCaseSubmissionDetailModule } from "@/shared/adam-types";
 
@@ -74,68 +75,23 @@ function getSnapshotSummaryLabel(snapshotId: string | null, status: string): str
     return "Borrador vigente";
 }
 
-function ModuleButton({
-    module,
-    isActive,
-    onClick,
-}: {
-    module: TeacherCaseSubmissionDetailModule;
-    isActive: boolean;
-    onClick: () => void;
-}) {
-    const answeredCount = countAnsweredQuestions(module);
-    const draftCount = countDraftQuestions(module);
-
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            aria-label={`Abrir módulo ${module.id}`}
-            className={isActive
-                ? "rounded-[18px] border border-blue-200 bg-blue-50 px-4 py-4 text-left shadow-sm"
-                : "rounded-[18px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:border-slate-300 hover:bg-slate-50"
-            }
-        >
-            <div className="flex items-start justify-between gap-3">
-                <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{module.id}</p>
-                    <p className="mt-1 text-sm font-semibold text-slate-900">{module.title}</p>
-                </div>
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
-                    {answeredCount}/{module.questions.length}
-                </span>
-            </div>
-            <p className="mt-2 text-xs text-slate-500">
-                {draftCount > 0 ? `${draftCount} respuesta(s) en borrador` : "Sin respuestas en borrador"}
-            </p>
-        </button>
-    );
-}
-
 export function TeacherCaseSubmissionDetailPage() {
     const navigate = useNavigate();
     const { assignmentId = "", membershipId = "" } = useParams<{
         assignmentId: string;
         membershipId: string;
     }>();
+    const [searchParams, setSearchParams] = useSearchParams();
     const detailQuery = useTeacherCaseSubmissionDetail(assignmentId, membershipId);
-    const [activeModuleId, setActiveModuleId] = useState<TeacherCaseSubmissionDetailModule["id"] | null>(null);
-
-    useEffect(() => {
-        setActiveModuleId((currentModuleId) => {
-            const modules = detailQuery.data?.modules ?? [];
-            if (modules.length === 0) {
-                return null;
-            }
-            if (currentModuleId && modules.some((module) => module.id === currentModuleId)) {
-                return currentModuleId;
-            }
-            return getDefaultTeacherCaseSubmissionModuleId(detailQuery.data);
-        });
-    }, [detailQuery.data]);
+    const activeModuleHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
     const detail = detailQuery.data;
     const modules = detail?.modules ?? [];
+    const requestedModuleId = searchParams.get("modulo");
+    const defaultModuleId = detail ? getDefaultTeacherCaseSubmissionModuleId(detail) : null;
+    const activeModuleId = modules.some((module) => module.id === requestedModuleId)
+        ? requestedModuleId as TeacherCaseSubmissionDetailModule["id"]
+        : defaultModuleId;
     const activeModule = modules.find((module) => module.id === activeModuleId) ?? modules[0] ?? null;
     const answeredQuestions = countAnsweredSubmissionQuestions(detail);
     const totalQuestions = countSubmissionQuestions(detail);
@@ -148,9 +104,43 @@ export function TeacherCaseSubmissionDetailPage() {
             "No se pudo cargar esta entrega. Intenta nuevamente.",
         )
         : null;
-    const scoreSummary = detail?.grade_summary.score !== null && detail?.grade_summary.score !== undefined
+    const scoreSummary = detail?.grade_summary.status === "graded"
+        && detail.grade_summary.score !== null
+        && detail.grade_summary.score !== undefined
         ? `${formatTeacherGradebookScore(detail.grade_summary.score)} / ${formatTeacherGradebookScore(detail.grade_summary.max_score)}`
         : "Pendiente";
+    const hasDraftFallbackAnswers = detail
+        ? detail.modules.some((module) => module.questions.some((question) => question.is_answer_from_draft))
+        : false;
+    const showNotStartedBanner = detail?.response_state.status === "not_started";
+    const showSubmittedDraftFallbackBanner = Boolean(
+        detail
+        && detail.response_state.snapshot_id === null
+        && (detail.response_state.status === "submitted" || detail.response_state.status === "graded")
+        && hasDraftFallbackAnswers,
+    );
+
+    useEffect(() => {
+        if (!activeModuleId || requestedModuleId === activeModuleId) {
+            return;
+        }
+
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.set("modulo", activeModuleId);
+        setSearchParams(nextParams, { replace: true });
+    }, [activeModuleId, requestedModuleId, searchParams, setSearchParams]);
+
+    useEffect(() => {
+        if (activeModuleId && !detailQuery.isLoading) {
+            activeModuleHeadingRef.current?.focus();
+        }
+    }, [activeModuleId, detailQuery.isLoading]);
+
+    function handleModuleSelect(moduleId: TeacherCaseSubmissionDetailModule["id"]) {
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.set("modulo", moduleId);
+        setSearchParams(nextParams, { replace: true });
+    }
 
     return (
         <TeacherLayout contentClassName="teacher-course-page mx-auto w-full max-w-7xl px-6 py-9" testId="teacher-case-submission-detail-page">
@@ -260,6 +250,27 @@ export function TeacherCaseSubmissionDetailPage() {
                     </div>
                 ) : null}
 
+                {showNotStartedBanner ? (
+                    <div className="alert-strip alert-info" role="status">
+                        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                        <span>Este estudiante todavía no abrió el caso. Las respuestas aparecerán cuando lo entregue.</span>
+                    </div>
+                ) : null}
+
+                {showSubmittedDraftFallbackBanner ? (
+                    <div className="alert-strip alert-warn" role="status">
+                        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                        <span>Mostrando borrador del estudiante; no se encontró snapshot de entrega.</span>
+                    </div>
+                ) : null}
+
+                {detail?.is_truncated ? (
+                    <div className="alert-strip alert-info" role="status">
+                        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                        <span>Parte de la solución esperada fue truncada para mantener esta vista estable.</span>
+                    </div>
+                ) : null}
+
                 {detailQuery.isLoading && !detail ? (
                     <section className="teacher-gradebook-empty-state" aria-live="polite">
                         <LoaderCircle className="h-6 w-6 animate-spin text-[#0144a0]" />
@@ -276,13 +287,22 @@ export function TeacherCaseSubmissionDetailPage() {
                     <div className="grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.85fr)]">
                         <section className="space-y-6">
                             {activeModule ? (
-                                <article className="rounded-[24px] border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+                                <article
+                                    id={`teacher-case-submission-module-panel-${activeModule.id}`}
+                                    role="tabpanel"
+                                    aria-labelledby={`teacher-case-submission-module-tab-${activeModule.id}`}
+                                    className="rounded-[24px] border border-slate-200 bg-white p-6 shadow-sm md:p-8"
+                                >
                                     <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-5">
                                         <div>
                                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
                                                 {activeModule.id}
                                             </p>
-                                            <h2 className="mt-2 text-xl font-semibold text-slate-900">
+                                            <h2
+                                                ref={activeModuleHeadingRef}
+                                                tabIndex={-1}
+                                                className="mt-2 text-xl font-semibold text-slate-900"
+                                            >
                                                 {activeModule.title}
                                             </h2>
                                             <p className="mt-2 text-sm text-slate-500">
@@ -368,14 +388,34 @@ export function TeacherCaseSubmissionDetailPage() {
                                 <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">
                                     Módulos del caso
                                 </h2>
-                                <div className="mt-4 space-y-3">
+                                <div className="mt-4 space-y-3" role="tablist" aria-label="Módulos del caso">
                                     {modules.map((module) => (
-                                        <ModuleButton
+                                        <button
                                             key={module.id}
-                                            module={module}
-                                            isActive={module.id === activeModule?.id}
-                                            onClick={() => setActiveModuleId(module.id)}
-                                        />
+                                            type="button"
+                                            role="tab"
+                                            aria-selected={module.id === activeModule?.id}
+                                            aria-controls={`teacher-case-submission-module-panel-${module.id}`}
+                                            id={`teacher-case-submission-module-tab-${module.id}`}
+                                            onClick={() => handleModuleSelect(module.id)}
+                                            className={module.id === activeModule?.id
+                                                ? "rounded-[18px] border border-blue-200 bg-blue-50 px-4 py-4 text-left shadow-sm"
+                                                : "rounded-[18px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:border-slate-300 hover:bg-slate-50"
+                                            }
+                                        >
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div>
+                                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{module.id}</p>
+                                                    <p className="mt-1 text-sm font-semibold text-slate-900">{module.title}</p>
+                                                </div>
+                                                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                                                    {countAnsweredQuestions(module)}/{module.questions.length}
+                                                </span>
+                                            </div>
+                                            <p className="mt-2 text-xs text-slate-500">
+                                                {countDraftQuestions(module) > 0 ? `${countDraftQuestions(module)} respuesta(s) en borrador` : "Sin respuestas en borrador"}
+                                            </p>
+                                        </button>
                                     ))}
                                 </div>
                             </section>
@@ -445,15 +485,7 @@ export function TeacherCaseSubmissionDetailPage() {
                                 </section>
                             ) : null}
 
-                            <section className="rounded-[24px] bg-slate-900 p-5 text-white shadow-[0_18px_50px_-28px_rgba(15,23,42,0.9)]">
-                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
-                                    Próxima entrega
-                                </p>
-                                <h2 className="mt-2 text-lg font-semibold">Calificación aún en modo lectura</h2>
-                                <p className="mt-3 text-sm leading-6 text-slate-300">
-                                    Esta pantalla ya consolida snapshot, borrador y solución esperada. La edición y publicación de calificaciones llegará en una siguiente issue sin cambiar este contrato de lectura.
-                                </p>
-                            </section>
+                            <GradingPlaceholderPanel />
                         </aside>
                     </div>
                 ) : null}

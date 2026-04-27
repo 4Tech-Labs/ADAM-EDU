@@ -132,6 +132,7 @@ class TeacherCaseSubmissionDetailGradeSummary(StrictModel):
 
 class TeacherCaseSubmissionDetailResponse(StrictModel):
     payload_version: Literal[1] = 1
+    is_truncated: bool = False
     case: TeacherCaseSubmissionDetailCase
     student: TeacherCaseSubmissionDetailStudent
     response_state: TeacherCaseSubmissionDetailResponseState

@@ -33,7 +33,8 @@ function createSubmissionDetailResponse(
     overrides?: Partial<TeacherCaseSubmissionDetailResponse>,
 ): TeacherCaseSubmissionDetailResponse {
     return {
-        payload_version: 1,
+        payload_version: overrides?.payload_version ?? 1,
+        is_truncated: overrides?.is_truncated ?? false,
         case: {
             id: "assignment-1",
             title: "Caso Plataforma",
@@ -144,12 +145,129 @@ describe("TeacherCaseSubmissionDetailPage", () => {
         expect(screen.getByText("Caso Plataforma · A-210 · Analítica Directiva")).toBeTruthy();
         expect(screen.getByText("Describe la situación principal del caso.")).toBeTruthy();
         expect(screen.getByText("Reconoce el cuello de botella operativo.")).toBeTruthy();
-        expect(screen.getByText(/Calificación aún en modo lectura/i)).toBeTruthy();
+        expect(screen.getByTestId("teacher-case-submission-detail-grading-slot")).toBeTruthy();
+        expect(screen.getByText(/La calificación estará disponible en una próxima actualización./i)).toBeTruthy();
 
-        fireEvent.click(screen.getByRole("button", { name: "Abrir módulo M5" }));
+        fireEvent.click(screen.getByRole("tab", { name: /M5/i }));
 
         expect(await screen.findByText("Escribe un memo ejecutivo final.")).toBeTruthy();
         expect(screen.getByText("Borrador vigente")).toBeTruthy();
+    });
+
+    it("selects the requested module from the modulo query param", async () => {
+        vi.mocked(api.teacher.getCaseSubmissionDetail).mockResolvedValue(createSubmissionDetailResponse());
+
+        renderPage(["/teacher/cases/assignment-1/entregas/membership-1?modulo=M5"]);
+
+        expect(await screen.findByText("Escribe un memo ejecutivo final.")).toBeTruthy();
+        expect(screen.queryByText("Describe la situación principal del caso.")).toBeNull();
+    });
+
+    it("shows the not-started banner when the student has not opened the case", async () => {
+        vi.mocked(api.teacher.getCaseSubmissionDetail).mockResolvedValue(
+            createSubmissionDetailResponse({
+                response_state: {
+                    status: "not_started",
+                    first_opened_at: null,
+                    last_autosaved_at: null,
+                    submitted_at: null,
+                    snapshot_id: null,
+                    snapshot_hash: null,
+                },
+                modules: [
+                    {
+                        id: "M1",
+                        title: "Módulo 1 · Comprensión del caso",
+                        questions: [
+                            {
+                                id: "M1-Q1",
+                                order: 1,
+                                statement: "Describe la situación principal del caso.",
+                                context: "Pregunta 1",
+                                expected_solution: "Reconoce el cuello de botella operativo.",
+                                student_answer: null,
+                                student_answer_chars: 0,
+                                is_answer_from_draft: false,
+                            },
+                        ],
+                    },
+                ],
+            }),
+        );
+
+        renderPage();
+
+        expect(await screen.findByText("Este estudiante todavía no abrió el caso. Las respuestas aparecerán cuando lo entregue.")).toBeTruthy();
+    });
+
+    it("shows the draft fallback banner when a submitted response has no snapshot", async () => {
+        vi.mocked(api.teacher.getCaseSubmissionDetail).mockResolvedValue(
+            createSubmissionDetailResponse({
+                response_state: {
+                    status: "submitted",
+                    first_opened_at: "2026-06-02T12:00:00Z",
+                    last_autosaved_at: "2026-06-05T18:15:00Z",
+                    submitted_at: "2026-06-05T19:00:00Z",
+                    snapshot_id: null,
+                    snapshot_hash: null,
+                },
+            }),
+        );
+
+        renderPage();
+
+        expect(await screen.findByText("Mostrando borrador del estudiante; no se encontró snapshot de entrega.")).toBeTruthy();
+    });
+
+    it("renders student answers as plain text without interpreting HTML", async () => {
+        vi.mocked(api.teacher.getCaseSubmissionDetail).mockResolvedValue(
+            createSubmissionDetailResponse({
+                modules: [
+                    {
+                        id: "M1",
+                        title: "Módulo 1 · Comprensión del caso",
+                        questions: [
+                            {
+                                id: "M1-Q1",
+                                order: 1,
+                                statement: "Describe la situación principal del caso.",
+                                context: "Pregunta 1",
+                                expected_solution: "Reconoce el cuello de botella operativo.",
+                                student_answer: "<strong>texto</strong>\nsegunda línea",
+                                student_answer_chars: 37,
+                                is_answer_from_draft: false,
+                            },
+                        ],
+                    },
+                ],
+            }),
+        );
+
+        const view = renderPage();
+
+        expect(await screen.findByText(/<strong>texto<\/strong>/)).toBeTruthy();
+        expect(view.container.querySelector("strong")).toBeNull();
+    });
+
+    it("shows the truncation banner when the backend marks the payload as truncated", async () => {
+        vi.mocked(api.teacher.getCaseSubmissionDetail).mockResolvedValue(
+            createSubmissionDetailResponse({ is_truncated: true }),
+        );
+
+        renderPage();
+
+        expect(await screen.findByText("Parte de la solución esperada fue truncada para mantener esta vista estable.")).toBeTruthy();
+    });
+
+    it("shows the outdated-app banner when the payload version is unsupported", async () => {
+        vi.mocked(api.teacher.getCaseSubmissionDetail).mockResolvedValue({
+            ...createSubmissionDetailResponse(),
+            payload_version: 2,
+        } as unknown as TeacherCaseSubmissionDetailResponse);
+
+        renderPage();
+
+        expect(await screen.findByText("Tu versión de la app está desactualizada. Recarga para continuar.")).toBeTruthy();
     });
 
     it("renders an error state and retries the detail query", async () => {

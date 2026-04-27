@@ -1,13 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { api, ApiError } from "@/shared/api";
+import { ApiError } from "@/shared/api";
 import type { TeacherCaseSubmissionDetailResponse } from "@/shared/adam-types";
 import { queryKeys } from "@/shared/queryKeys";
+
+import {
+    fetchTeacherCaseSubmissionDetail,
+    TEACHER_CASE_SUBMISSION_DETAIL_QUERY_GC_TIME,
+    UnsupportedTeacherCaseSubmissionDetailPayloadVersionError,
+} from "./teacherCaseSubmissionDetailApi";
 
 export function getTeacherCaseSubmissionDetailErrorMessage(
     error: unknown,
     fallback: string,
 ): string {
+    if (error instanceof UnsupportedTeacherCaseSubmissionDetailPayloadVersionError) {
+        return error.message;
+    }
+
     if (!(error instanceof ApiError)) {
         return error instanceof Error ? error.message : fallback;
     }
@@ -40,9 +50,10 @@ export function getTeacherCaseSubmissionDetailErrorMessage(
 export function useTeacherCaseSubmissionDetail(assignmentId: string, membershipId: string) {
     return useQuery<TeacherCaseSubmissionDetailResponse>({
         queryKey: queryKeys.teacher.caseSubmissionDetail(assignmentId, membershipId),
-        queryFn: () => api.teacher.getCaseSubmissionDetail(assignmentId, membershipId),
+        queryFn: () => fetchTeacherCaseSubmissionDetail(assignmentId, membershipId),
         enabled: Boolean(assignmentId) && Boolean(membershipId),
         staleTime: 30_000,
+        gcTime: TEACHER_CASE_SUBMISSION_DETAIL_QUERY_GC_TIME,
         refetchOnMount: true,
         refetchOnWindowFocus: true,
     });

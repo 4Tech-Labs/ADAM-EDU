@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from shared.models import Assignment, AssignmentCourse, CaseGrade, StudentCaseResponse, StudentCaseResponseSubmission
+from shared.models import Assignment, AssignmentCourse, CaseGrade, Profile, StudentCaseResponse, StudentCaseResponseSubmission
 from shared.teacher_context import TeacherContext
 from shared.teacher_reads import get_teacher_case_submission_detail
 
@@ -399,6 +399,112 @@ def test_returns_not_started_payload_when_no_response(
     assert payload["modules"][0]["questions"][0]["is_answer_from_draft"] is False
 
 
+def test_requires_authentication_for_teacher_case_submission_detail(client) -> None:
+    response = client.get(
+        f"/api/teacher/cases/{uuid.uuid4()}/submissions/{uuid.uuid4()}"
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_token"
+
+
+def test_returns_profile_incomplete_before_detail_lookup(
+    client,
+    auth_headers_factory,
+    seed_identity,
+) -> None:
+    user_id = str(uuid.uuid4())
+    email = "teacher-detail-noprofile@example.edu"
+    seed_identity(
+        user_id=user_id,
+        email=email,
+        role="teacher",
+        create_profile=False,
+        create_legacy_user=True,
+    )
+    headers = auth_headers_factory(sub=user_id, email=email)
+
+    response = client.get(
+        f"/api/teacher/cases/{uuid.uuid4()}/submissions/{uuid.uuid4()}",
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "profile_incomplete"
+
+
+def test_returns_membership_required_before_detail_lookup(
+    client,
+    db,
+    auth_headers_factory,
+) -> None:
+    user_id = str(uuid.uuid4())
+    email = "teacher-detail-nomembership@example.edu"
+    db.add(Profile(id=user_id, full_name="No Membership"))
+    db.commit()
+    headers = auth_headers_factory(sub=user_id, email=email)
+
+    response = client.get(
+        f"/api/teacher/cases/{uuid.uuid4()}/submissions/{uuid.uuid4()}",
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "membership_required"
+
+
+def test_returns_password_rotation_required_before_detail_lookup(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000002141"
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher-rotate-detail@example.edu",
+        role="teacher",
+        university_id=university_id,
+        must_rotate_password=True,
+    )
+    student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student-rotate-detail@example.edu",
+        role="student",
+        university_id=university_id,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso rotate",
+        code="CASE-215A",
+    )
+    seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
+    assignment = _seed_assignment(
+        db,
+        teacher_user_id=teacher["legacy_user"].id,
+        course_id=course.id,
+        canonical_output=_build_canonical_output(),
+        available_from=datetime(2026, 6, 1, 15, 0, tzinfo=timezone.utc),
+        deadline=datetime(2026, 6, 8, 15, 0, tzinfo=timezone.utc),
+    )
+    db.commit()
+
+    response = client.get(
+        f"/api/teacher/cases/{assignment.id}/submissions/{student['membership'].id}",
+        headers=_auth_headers(
+            auth_headers_factory,
+            user_id=teacher["legacy_user"].id,
+            email=teacher["legacy_user"].email,
+        ),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "password_rotation_required"
+
+
 def test_404_when_assignment_does_not_belong_to_teacher(
     client,
     db,
@@ -622,6 +728,63 @@ def test_returns_500_when_canonical_output_is_invalid(
     assert response.json()["detail"] == "case_canonical_output_invalid"
 
 
+def test_detail_read_does_not_attempt_identity_repair_side_effects(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000002142"
+    reference_now = datetime(2026, 6, 1, 15, 0, tzinfo=timezone.utc)
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher-readonly@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    student = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="student-readonly@example.edu",
+        role="student",
+        university_id=university_id,
+        create_legacy_user=False,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=teacher["membership"].id,
+        title="Curso readonly",
+        code="CASE-223A",
+    )
+    seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
+    assignment = _seed_assignment(
+        db,
+        teacher_user_id=teacher["legacy_user"].id,
+        course_id=course.id,
+        canonical_output=_build_canonical_output(),
+        available_from=reference_now - timedelta(days=1),
+        deadline=reference_now + timedelta(days=9),
+    )
+    db.commit()
+
+    with patch("shared.teacher_reads.get_supabase_admin_auth_client", side_effect=AssertionError("admin client should not be used")), patch(
+        "shared.teacher_reads.upsert_legacy_user",
+        side_effect=AssertionError("identity repair should not be persisted"),
+    ):
+        response = client.get(
+            f"/api/teacher/cases/{assignment.id}/submissions/{student['membership'].id}",
+            headers=_auth_headers(
+                auth_headers_factory,
+                user_id=teacher["legacy_user"].id,
+                email=teacher["legacy_user"].email,
+            ),
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["student"]["email"].startswith("Correo no disponible")
+
+
 def test_warns_on_snapshot_hash_drift(
     db,
     seed_identity,
@@ -667,6 +830,50 @@ def test_warns_on_snapshot_hash_drift(
 
     assert detail.response_state.snapshot_hash == "stale-hash"
     assert any(call.args and call.args[0] == "teacher_case_submission_detail_hash_drift" for call in warning_mock.call_args_list)
+
+
+def test_sets_is_truncated_when_expected_solution_payload_exceeds_cap(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    auth_headers_factory,
+    monkeypatch,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000002143"
+    reference_now = datetime(2026, 6, 1, 15, 0, tzinfo=timezone.utc)
+    teacher = seed_identity(user_id=str(uuid.uuid4()), email="teacher-truncate@example.edu", role="teacher", university_id=university_id)
+    student = seed_identity(user_id=str(uuid.uuid4()), email="student-truncate@example.edu", role="student", university_id=university_id)
+    course = seed_course(university_id=university_id, teacher_membership_id=teacher["membership"].id, title="Curso truncate", code="CASE-223B")
+    seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
+    canonical_output = _build_canonical_output()
+    canonical_output["content"]["caseQuestions"][0]["solucion_esperada"] = "abcdefghij"
+    assignment = _seed_assignment(
+        db,
+        teacher_user_id=teacher["legacy_user"].id,
+        course_id=course.id,
+        canonical_output=canonical_output,
+        available_from=reference_now - timedelta(days=1),
+        deadline=reference_now + timedelta(days=9),
+    )
+    db.commit()
+    monkeypatch.setattr("shared.teacher_reads._DETAIL_PAYLOAD_MAX_BYTES", 1)
+    monkeypatch.setattr("shared.teacher_reads._DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS", 5)
+
+    response = client.get(
+        f"/api/teacher/cases/{assignment.id}/submissions/{student['membership'].id}",
+        headers=_auth_headers(
+            auth_headers_factory,
+            user_id=teacher["legacy_user"].id,
+            email=teacher["legacy_user"].email,
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["is_truncated"] is True
+    assert payload["modules"][0]["questions"][0]["expected_solution"] == "abcde... [truncado por tamano]"
 
 
 def test_returns_409_for_cross_enrollment_unsupported(

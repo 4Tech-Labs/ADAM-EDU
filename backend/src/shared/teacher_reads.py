@@ -218,13 +218,13 @@ def _truncate_detail_modules_if_needed(
     *,
     assignment_id: str,
     membership_id: str,
-) -> list[TeacherCaseSubmissionDetailModule]:
+) -> tuple[list[TeacherCaseSubmissionDetailModule], bool]:
     serialized_modules = json.dumps(
         [module.model_dump(mode="json") for module in modules],
         ensure_ascii=False,
     )
     if len(serialized_modules) <= _DETAIL_PAYLOAD_MAX_BYTES:
-        return modules
+        return modules, False
 
     for module in modules:
         for question in module.questions:
@@ -242,7 +242,14 @@ def _truncate_detail_modules_if_needed(
             "payload_size": len(serialized_modules),
         },
     )
-    return modules
+    return modules, True
+
+
+def _detail_row_with_fallback_email(detail_row: RowMapping) -> dict[str, Any]:
+    resolved_row = dict(detail_row)
+    if not resolved_row.get("email"):
+        resolved_row["email"] = _missing_gradebook_email(user_id=resolved_row.get("user_id"))
+    return resolved_row
 
 
 def _build_submission_detail_modules(
@@ -252,13 +259,13 @@ def _build_submission_detail_modules(
     is_answer_from_draft: bool,
     assignment_id: str,
     membership_id: str,
-) -> list[TeacherCaseSubmissionDetailModule]:
+) -> tuple[list[TeacherCaseSubmissionDetailModule], bool]:
     from shared.student_reads import QUESTION_FIELD_TO_MODULE
 
     teacher_payload = build_teacher_case_review_payload(canonical_output)
     content = teacher_payload.get("content")
     if not isinstance(content, dict):
-        return []
+        return [], False
 
     m5_solution_lookup = _m5_solution_lookup(content)
     modules: list[TeacherCaseSubmissionDetailModule] = []
@@ -467,7 +474,7 @@ def get_teacher_case_submission_detail(
     if detail_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="submission_not_found")
 
-    repaired_row = _repair_gradebook_student_rows(db, context, student_rows=[detail_row])[0]
+    repaired_row = _detail_row_with_fallback_email(detail_row)
 
     response_id = repaired_row["response_id"]
     latest_submission = None
@@ -546,7 +553,7 @@ def get_teacher_case_submission_detail(
         answer_source = {}
         is_answer_from_draft = False
 
-    modules = _build_submission_detail_modules(
+    modules, is_truncated = _build_submission_detail_modules(
         canonical_output=canonical_output,
         answers=answer_source,
         is_answer_from_draft=is_answer_from_draft,
@@ -561,6 +568,7 @@ def get_teacher_case_submission_detail(
         teaching_note = _stringify_review_value(teacher_content.get("teachingNote")) or None
 
     return TeacherCaseSubmissionDetailResponse(
+        is_truncated=is_truncated,
         case=TeacherCaseSubmissionDetailCase(
             id=assignment.id,
             title=_resolve_assignment_title(assignment),
