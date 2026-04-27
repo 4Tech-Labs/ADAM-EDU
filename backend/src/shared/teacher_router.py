@@ -14,14 +14,16 @@ from shared.auth import CurrentActor, require_current_actor_password_ready
 from shared.course_access_schema import CourseAccessLinkRegenerateResponse, TeacherCourseAccessLinkResponse
 from shared.database import get_db
 from shared.models import Assignment, AssignmentCourse, Course
-from shared.teacher_gradebook_schema import TeacherCourseGradebookResponse
+from shared.teacher_gradebook_schema import TeacherCaseSubmissionsResponse, TeacherCourseGradebookResponse
 from shared.syllabus_schema import TeacherCourseDetailResponse, TeacherSyllabusSaveRequest
 from shared.teacher_context import TeacherContext, require_teacher_context
 from shared.teacher_reads import (
+    _assignment_target_course_metadata,
     TeacherCoursesResponse,
     get_teacher_course_access_link,
     get_teacher_course_detail,
     get_teacher_course_gradebook,
+    get_teacher_case_submissions,
     list_teacher_active_cases,
     list_teacher_courses,
     resolve_assignment_schedule_values,
@@ -164,25 +166,6 @@ def get_teacher_cases(
 # Internal helpers — not endpoints
 # ---------------------------------------------------------------------------
 
-def _assignment_target_course_metadata(assignment: Assignment) -> tuple[list[str], list[str]]:
-    if assignment.assignment_courses:
-        course_pairs = sorted(
-            {
-                (link.course_id, link.course.code if link.course is not None else None)
-                for link in assignment.assignment_courses
-                if link.course_id
-            },
-            key=lambda pair: ((pair[1] or ""), pair[0]),
-        )
-        course_ids = [course_id for course_id, _code in course_pairs]
-        course_codes = [code for _course_id, code in course_pairs if code]
-        if course_ids:
-            return course_ids, course_codes
-
-    course_ids = [assignment.course_id] if assignment.course_id else []
-    course_codes = [assignment.course.code] if assignment.course is not None and assignment.course.code else []
-    return course_ids, course_codes
-
 def _to_case_detail(assignment: Assignment) -> TeacherCaseDetailResponse:
     """Build a TeacherCaseDetailResponse from an Assignment ORM instance."""
     available_from, deadline = resolve_assignment_schedule_values(assignment)
@@ -265,6 +248,17 @@ def get_teacher_case_detail(
 ) -> TeacherCaseDetailResponse:
     assignment = _get_owned_assignment_or_404(db, assignment_id, actor)
     return _to_case_detail(assignment)
+
+
+@router.get("/cases/{assignment_id}/submissions", response_model=TeacherCaseSubmissionsResponse)
+def get_teacher_case_submissions_view(
+    assignment_id: str,
+    context: Annotated[TeacherContext, Depends(require_teacher_context)],
+    actor: CurrentActor = Depends(require_current_actor_password_ready),
+    db: Session = Depends(get_db),
+) -> TeacherCaseSubmissionsResponse:
+    assignment = _get_owned_assignment_or_404(db, assignment_id, actor)
+    return get_teacher_case_submissions(db, context, assignment)
 
 
 @router.patch("/cases/{assignment_id}/publish", response_model=TeacherCaseDetailResponse)

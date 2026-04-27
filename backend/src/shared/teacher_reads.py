@@ -39,10 +39,13 @@ from shared.syllabus_schema import (
 )
 from shared.teacher_context import TeacherContext
 from shared.teacher_gradebook_schema import (
+    TeacherCaseSubmissionRow,
+    TeacherCaseSubmissionsResponse,
     TeacherCourseGradebookCase,
     TeacherCourseGradebookCell,
     TeacherCourseGradebookCourse,
     TeacherCourseGradebookResponse,
+    TeacherCourseGradebookStatus,
     TeacherCourseGradebookStudent,
 )
 
@@ -94,8 +97,21 @@ def _display_name(*, profile_full_name: str | None, email: str) -> str:
     return candidate or email
 
 
+def _derive_grade_cell_status(
+    student_case_status: str | None,
+    case_grade_status: str | None,
+) -> Literal["not_started", "in_progress", "submitted", "graded"]:
+    if case_grade_status == "graded":
+        return "graded"
+    if case_grade_status == "submitted" or student_case_status == "submitted":
+        return "submitted"
+    if case_grade_status == "in_progress" or student_case_status == "draft":
+        return "in_progress"
+    return "not_started"
+
+
 def _map_student_case_status(status_value: str) -> Literal["in_progress", "submitted"]:
-    if status_value == "submitted":
+    if _derive_grade_cell_status(status_value, None) == "submitted":
         return "submitted"
     return "in_progress"
 
@@ -366,6 +382,26 @@ def _assignment_course_codes(assignment: Assignment) -> list[str]:
         return [assignment.course.code]
 
     return []
+
+
+def _assignment_target_course_metadata(assignment: Assignment) -> tuple[list[str], list[str]]:
+    if assignment.assignment_courses:
+        course_pairs = sorted(
+            {
+                (link.course_id, link.course.code if link.course is not None else None)
+                for link in assignment.assignment_courses
+                if link.course_id
+            },
+            key=lambda pair: ((pair[1] or ""), pair[0]),
+        )
+        course_ids = [course_id for course_id, _code in course_pairs]
+        course_codes = [code for _course_id, code in course_pairs if code]
+        if course_ids:
+            return course_ids, course_codes
+
+    course_ids = [assignment.course_id] if assignment.course_id else []
+    course_codes = [assignment.course.code] if assignment.course is not None and assignment.course.code else []
+    return course_ids, course_codes
 
 
 def _serialize_teacher_course_configuration(
@@ -644,7 +680,7 @@ def get_teacher_course_gradebook(
         student_membership_ids=student_membership_ids,
     )
 
-    progress_by_key: dict[tuple[str, str], Literal["in_progress", "submitted"]] = {}
+    progress_by_key: dict[tuple[str, str], str] = {}
     if student_membership_ids and assignment_ids:
         progress_rows = (
             db.execute(
@@ -662,7 +698,7 @@ def get_teacher_course_gradebook(
             .all()
         )
         progress_by_key = {
-            (row["membership_id"], row["assignment_id"]): _map_student_case_status(row["status"])
+            (row["membership_id"], row["assignment_id"]): row["status"]
             for row in progress_rows
         }
 
@@ -737,14 +773,17 @@ def get_teacher_course_gradebook(
                 grades.append(
                     TeacherCourseGradebookCell(
                         assignment_id=assignment.id,
-                        status=grade["status"],
+                        status=_derive_grade_cell_status(None, grade["status"]),
                         score=score,
                         graded_at=grade["graded_at"],
                     )
                 )
                 continue
 
-            progress_status = progress_by_key.get((membership_id, assignment.id), "not_started")
+            progress_status = _derive_grade_cell_status(
+                progress_by_key.get((membership_id, assignment.id)),
+                None,
+            )
             grades.append(
                 TeacherCourseGradebookCell(
                     assignment_id=assignment.id,
@@ -780,6 +819,155 @@ def get_teacher_course_gradebook(
         ),
         cases=cases,
         students=students,
+    )
+
+
+def get_teacher_case_submissions(
+    db: Session,
+    context: TeacherContext,
+    assignment: Assignment,
+) -> TeacherCaseSubmissionsResponse:
+    if assignment.status != "published":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assignment not found",
+        )
+
+    target_course_ids, _course_codes = _assignment_target_course_metadata(assignment)
+    if not target_course_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assignment not found",
+        )
+
+    submission_row_records = (
+        db.execute(
+            select(
+                Membership.id.label("membership_id"),
+                Membership.user_id.label("user_id"),
+                CourseMembership.created_at.label("enrolled_at"),
+                Profile.full_name.label("profile_full_name"),
+                User.email.label("email"),
+                CourseMembership.course_id.label("course_id"),
+                Course.code.label("course_code"),
+                StudentCaseResponse.status.label("student_case_status"),
+                StudentCaseResponse.submitted_at.label("submitted_at"),
+                CaseGrade.status.label("case_grade_status"),
+                CaseGrade.score.label("score"),
+                CaseGrade.max_score.label("max_score"),
+                CaseGrade.graded_at.label("graded_at"),
+            )
+            .select_from(CourseMembership)
+            .join(
+                Membership,
+                and_(
+                    CourseMembership.membership_id == Membership.id,
+                    Membership.university_id == context.university_id,
+                    Membership.role == "student",
+                    Membership.status == "active",
+                ),
+            )
+            .join(
+                Course,
+                and_(
+                    CourseMembership.course_id == Course.id,
+                    Course.university_id == context.university_id,
+                    Course.teacher_membership_id == context.teacher_membership_id,
+                ),
+            )
+            .outerjoin(User, User.id == Membership.user_id)
+            .outerjoin(Profile, Profile.id == Membership.user_id)
+            .outerjoin(
+                StudentCaseResponse,
+                and_(
+                    StudentCaseResponse.membership_id == Membership.id,
+                    StudentCaseResponse.assignment_id == assignment.id,
+                ),
+            )
+            .outerjoin(
+                CaseGrade,
+                and_(
+                    CaseGrade.membership_id == Membership.id,
+                    CaseGrade.assignment_id == assignment.id,
+                ),
+            )
+            .where(CourseMembership.course_id.in_(target_course_ids))
+        )
+        .mappings()
+        .all()
+    )
+
+    submission_rows = _repair_gradebook_student_rows(
+        db,
+        context,
+        student_rows=submission_row_records,
+    )
+
+    student_membership_ids = [row["membership_id"] for row in submission_rows]
+    _ensure_supported_gradebook_topology(
+        db,
+        context,
+        assignments=[assignment],
+        student_membership_ids=student_membership_ids,
+    )
+
+    assignment_max_score = _DEFAULT_CASE_MAX_SCORE
+    for row in submission_rows:
+        max_score = _decimal_to_float(row["max_score"])
+        if max_score is None:
+            continue
+        if assignment_max_score != _DEFAULT_CASE_MAX_SCORE and assignment_max_score != max_score:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="course_gradebook_inconsistent_max_score",
+            )
+        assignment_max_score = max_score
+
+    submissions: list[TeacherCaseSubmissionRow] = []
+    for row in submission_rows:
+        derived_status: TeacherCourseGradebookStatus = _derive_grade_cell_status(
+            row["student_case_status"],
+            row["case_grade_status"],
+        )
+        score = _decimal_to_float(row["score"])
+        submissions.append(
+            TeacherCaseSubmissionRow(
+                membership_id=row["membership_id"],
+                full_name=_display_name(
+                    profile_full_name=row["profile_full_name"],
+                    email=row["email"],
+                ),
+                email=row["email"],
+                course_id=row["course_id"],
+                course_code=row["course_code"],
+                enrolled_at=row["enrolled_at"],
+                status=derived_status,
+                submitted_at=row["submitted_at"],
+                score=score if derived_status == "graded" else None,
+                max_score=assignment_max_score,
+                graded_at=row["graded_at"],
+            )
+        )
+
+    submissions.sort(
+        key=lambda row: (
+            row.course_code.lower(),
+            row.full_name.lower(),
+            row.email.lower(),
+            row.membership_id,
+        )
+    )
+
+    return TeacherCaseSubmissionsResponse(
+        case=TeacherCourseGradebookCase(
+            assignment_id=assignment.id,
+            title=_resolve_assignment_title(assignment),
+            status="published",
+            available_from=assignment.available_from,
+            deadline=assignment.deadline,
+            max_score=assignment_max_score,
+        ),
+        submissions=submissions,
     )
 
 

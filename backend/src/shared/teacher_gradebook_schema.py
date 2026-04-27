@@ -28,9 +28,12 @@ class TeacherCourseGradebookCase(StrictModel):
     max_score: float = Field(ge=0)
 
 
+TeacherCourseGradebookStatus = Literal["not_started", "in_progress", "submitted", "graded"]
+
+
 class TeacherCourseGradebookCell(StrictModel):
     assignment_id: str
-    status: Literal["not_started", "in_progress", "submitted", "graded"]
+    status: TeacherCourseGradebookStatus
     score: float | None = Field(default=None, ge=0)
     graded_at: datetime | None
 
@@ -48,3 +51,22 @@ class TeacherCourseGradebookResponse(StrictModel):
     course: TeacherCourseGradebookCourse
     cases: list[TeacherCourseGradebookCase]
     students: list[TeacherCourseGradebookStudent]
+
+
+class TeacherCaseSubmissionRow(StrictModel):
+    membership_id: str
+    full_name: str
+    email: str
+    course_id: str
+    course_code: str
+    enrolled_at: datetime
+    status: TeacherCourseGradebookStatus
+    submitted_at: datetime | None
+    score: float | None = Field(default=None, ge=0)
+    max_score: float = Field(ge=0)
+    graded_at: datetime | None
+
+
+class TeacherCaseSubmissionsResponse(StrictModel):
+    case: TeacherCourseGradebookCase
+    submissions: list[TeacherCaseSubmissionRow]
