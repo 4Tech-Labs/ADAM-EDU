@@ -832,7 +832,7 @@ def test_warns_on_snapshot_hash_drift(
     assert any(call.args and call.args[0] == "teacher_case_submission_detail_hash_drift" for call in warning_mock.call_args_list)
 
 
-def test_sets_is_truncated_when_expected_solution_payload_exceeds_cap(
+def test_sets_is_truncated_when_expected_solution_payload_exceeds_utf8_byte_cap(
     client,
     db,
     seed_identity,
@@ -848,7 +848,7 @@ def test_sets_is_truncated_when_expected_solution_payload_exceeds_cap(
     course = seed_course(university_id=university_id, teacher_membership_id=teacher["membership"].id, title="Curso truncate", code="CASE-223B")
     seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
     canonical_output = _build_canonical_output()
-    canonical_output["content"]["caseQuestions"][0]["solucion_esperada"] = "abcdefghij"
+    canonical_output["content"]["caseQuestions"][0]["solucion_esperada"] = "á" * 1_200
     assignment = _seed_assignment(
         db,
         teacher_user_id=teacher["legacy_user"].id,
@@ -858,8 +858,7 @@ def test_sets_is_truncated_when_expected_solution_payload_exceeds_cap(
         deadline=reference_now + timedelta(days=9),
     )
     db.commit()
-    monkeypatch.setattr("shared.teacher_reads._DETAIL_PAYLOAD_MAX_BYTES", 1)
-    monkeypatch.setattr("shared.teacher_reads._DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS", 5)
+    monkeypatch.setattr("shared.teacher_reads._DETAIL_PAYLOAD_MAX_BYTES", 1_600)
 
     response = client.get(
         f"/api/teacher/cases/{assignment.id}/submissions/{student['membership'].id}",
@@ -873,7 +872,9 @@ def test_sets_is_truncated_when_expected_solution_payload_exceeds_cap(
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["is_truncated"] is True
-    assert payload["modules"][0]["questions"][0]["expected_solution"] == "abcde... [truncado por tamano]"
+    expected_solution = payload["modules"][0]["questions"][0]["expected_solution"]
+    assert expected_solution.endswith("[truncado por tamano]")
+    assert len(json.dumps(payload["modules"], ensure_ascii=False).encode("utf-8")) <= 1_600
 
 
 def test_returns_409_for_cross_enrollment_unsupported(

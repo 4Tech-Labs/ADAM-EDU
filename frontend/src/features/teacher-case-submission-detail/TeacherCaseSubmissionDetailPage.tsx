@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
     AlertCircle,
@@ -84,6 +84,8 @@ export function TeacherCaseSubmissionDetailPage() {
     const [searchParams, setSearchParams] = useSearchParams();
     const detailQuery = useTeacherCaseSubmissionDetail(assignmentId, membershipId);
     const activeModuleHeadingRef = useRef<HTMLHeadingElement | null>(null);
+    const moduleTabRefs = useRef<Partial<Record<TeacherCaseSubmissionDetailModule["id"], HTMLButtonElement | null>>>({});
+    const moduleFocusTargetRef = useRef<"heading" | "tab">("heading");
 
     const detail = detailQuery.data;
     const modules = detail?.modules ?? [];
@@ -132,14 +134,67 @@ export function TeacherCaseSubmissionDetailPage() {
 
     useEffect(() => {
         if (activeModuleId && !detailQuery.isLoading) {
+            if (moduleFocusTargetRef.current === "tab") {
+                moduleTabRefs.current[activeModuleId]?.focus();
+                moduleFocusTargetRef.current = "heading";
+                return;
+            }
+
             activeModuleHeadingRef.current?.focus();
         }
     }, [activeModuleId, detailQuery.isLoading]);
 
-    function handleModuleSelect(moduleId: TeacherCaseSubmissionDetailModule["id"]) {
+    function handleModuleSelect(
+        moduleId: TeacherCaseSubmissionDetailModule["id"],
+        focusTarget: "heading" | "tab" = "heading",
+    ) {
+        moduleFocusTargetRef.current = focusTarget;
         const nextParams = new URLSearchParams(searchParams);
         nextParams.set("modulo", moduleId);
         setSearchParams(nextParams, { replace: true });
+    }
+
+    function handleModuleTabKeyDown(
+        event: ReactKeyboardEvent<HTMLButtonElement>,
+        moduleId: TeacherCaseSubmissionDetailModule["id"],
+    ) {
+        if (modules.length <= 1) {
+            return;
+        }
+
+        const currentIndex = modules.findIndex((module) => module.id === moduleId);
+        if (currentIndex < 0) {
+            return;
+        }
+
+        let targetIndex: number | null = null;
+        switch (event.key) {
+            case "ArrowDown":
+            case "ArrowRight":
+                targetIndex = (currentIndex + 1) % modules.length;
+                break;
+            case "ArrowUp":
+            case "ArrowLeft":
+                targetIndex = (currentIndex - 1 + modules.length) % modules.length;
+                break;
+            case "Home":
+                targetIndex = 0;
+                break;
+            case "End":
+                targetIndex = modules.length - 1;
+                break;
+            default:
+                return;
+        }
+
+        event.preventDefault();
+
+        const targetModuleId = modules[targetIndex]?.id;
+        if (!targetModuleId || targetModuleId === moduleId) {
+            return;
+        }
+
+        handleModuleSelect(targetModuleId, "tab");
     }
 
     return (
@@ -388,16 +443,21 @@ export function TeacherCaseSubmissionDetailPage() {
                                 <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">
                                     Módulos del caso
                                 </h2>
-                                <div className="mt-4 space-y-3" role="tablist" aria-label="Módulos del caso">
+                                <div className="mt-4 space-y-3" role="tablist" aria-label="Módulos del caso" aria-orientation="vertical">
                                     {modules.map((module) => (
                                         <button
                                             key={module.id}
                                             type="button"
                                             role="tab"
+                                            ref={(button) => {
+                                                moduleTabRefs.current[module.id] = button;
+                                            }}
                                             aria-selected={module.id === activeModule?.id}
                                             aria-controls={`teacher-case-submission-module-panel-${module.id}`}
                                             id={`teacher-case-submission-module-tab-${module.id}`}
+                                            tabIndex={module.id === activeModule?.id ? 0 : -1}
                                             onClick={() => handleModuleSelect(module.id)}
+                                            onKeyDown={(event) => handleModuleTabKeyDown(event, module.id)}
                                             className={module.id === activeModule?.id
                                                 ? "rounded-[18px] border border-blue-200 bg-blue-50 px-4 py-4 text-left shadow-sm"
                                                 : "rounded-[18px] border border-slate-200 bg-white px-4 py-4 text-left transition hover:border-slate-300 hover:bg-slate-50"

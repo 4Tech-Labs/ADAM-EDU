@@ -68,6 +68,7 @@ _DEFAULT_CASE_MAX_SCORE_DECIMAL = Decimal("5.00")
 _logger = logging.getLogger(__name__)
 _DETAIL_PAYLOAD_MAX_BYTES = 1_500_000
 _DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS = 8_000
+_DETAIL_EXPECTED_SOLUTION_TRUNCATION_PLACEHOLDER = "[truncado por tamano]"
 _MODULE_TITLES: Mapping[str, str] = {
     "M1": "Módulo 1 · Comprensión del caso",
     "M2": "Módulo 2 · Análisis de datos",
@@ -219,30 +220,87 @@ def _truncate_detail_modules_if_needed(
     assignment_id: str,
     membership_id: str,
 ) -> tuple[list[TeacherCaseSubmissionDetailModule], bool]:
-    serialized_modules = json.dumps(
-        [module.model_dump(mode="json") for module in modules],
-        ensure_ascii=False,
-    )
-    if len(serialized_modules) <= _DETAIL_PAYLOAD_MAX_BYTES:
+    serialized_modules = _serialize_detail_modules(modules)
+    serialized_size_bytes = len(serialized_modules.encode("utf-8"))
+    if serialized_size_bytes <= _DETAIL_PAYLOAD_MAX_BYTES:
         return modules, False
 
-    for module in modules:
-        for question in module.questions:
-            if len(question.expected_solution) > _DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS:
-                question.expected_solution = (
-                    question.expected_solution[:_DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS]
-                    + "... [truncado por tamano]"
-                )
+    truncatable_questions = [
+        question
+        for module in modules
+        for question in module.questions
+        if question.expected_solution
+    ]
+    if not truncatable_questions:
+        raise ValueError("teacher submission detail exceeds size cap without truncatable expected solutions")
+
+    original_expected_solutions = {
+        id(question): question.expected_solution
+        for question in truncatable_questions
+    }
+
+    def apply_expected_solution_cap(max_chars: int) -> int:
+        for question in truncatable_questions:
+            question.expected_solution = _truncate_expected_solution_for_detail(
+                original_expected_solutions[id(question)],
+                max_chars=max_chars,
+            )
+        return len(_serialize_detail_modules(modules).encode("utf-8"))
+
+    minimum_size_bytes = apply_expected_solution_cap(0)
+    if minimum_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
+        raise ValueError(
+            "teacher submission detail exceeds size cap even after fully truncating expected solutions"
+        )
+
+    max_original_chars = max(len(value) for value in original_expected_solutions.values())
+    best_cap = 0
+    low = 0
+    high = max_original_chars
+
+    while low <= high:
+        candidate_cap = (low + high) // 2
+        candidate_size_bytes = apply_expected_solution_cap(candidate_cap)
+        if candidate_size_bytes <= _DETAIL_PAYLOAD_MAX_BYTES:
+            best_cap = candidate_cap
+            low = candidate_cap + 1
+        else:
+            high = candidate_cap - 1
+
+    final_char_cap = min(best_cap, _DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS)
+    final_size_bytes = apply_expected_solution_cap(final_char_cap)
+    if final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
+        final_size_bytes = apply_expected_solution_cap(best_cap)
+        final_char_cap = best_cap
+    if final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
+        raise ValueError("teacher submission detail still exceeds the size cap after truncation")
 
     _logger.warning(
         "teacher_case_submission_detail_payload_truncated",
         extra={
             "assignment_id": assignment_id,
             "membership_id": membership_id,
-            "payload_size": len(serialized_modules),
+            "payload_size_bytes": serialized_size_bytes,
+            "final_payload_size_bytes": final_size_bytes,
+            "expected_solution_char_cap": final_char_cap,
         },
     )
     return modules, True
+
+
+def _serialize_detail_modules(modules: list[TeacherCaseSubmissionDetailModule]) -> str:
+    return json.dumps(
+        [module.model_dump(mode="json") for module in modules],
+        ensure_ascii=False,
+    )
+
+
+def _truncate_expected_solution_for_detail(value: str, *, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    if max_chars <= 0:
+        return _DETAIL_EXPECTED_SOLUTION_TRUNCATION_PLACEHOLDER
+    return f"{value[:max_chars]}... [truncado por tamano]"
 
 
 def _detail_row_with_fallback_email(detail_row: RowMapping) -> dict[str, Any]:
@@ -553,13 +611,26 @@ def get_teacher_case_submission_detail(
         answer_source = {}
         is_answer_from_draft = False
 
-    modules, is_truncated = _build_submission_detail_modules(
-        canonical_output=canonical_output,
-        answers=answer_source,
-        is_answer_from_draft=is_answer_from_draft,
-        assignment_id=assignment.id,
-        membership_id=membership_id,
-    )
+    try:
+        modules, is_truncated = _build_submission_detail_modules(
+            canonical_output=canonical_output,
+            answers=answer_source,
+            is_answer_from_draft=is_answer_from_draft,
+            assignment_id=assignment.id,
+            membership_id=membership_id,
+        )
+    except ValueError:
+        _logger.exception(
+            "teacher_case_submission_detail_oversized_modules",
+            extra={
+                "assignment_id": assignment.id,
+                "membership_id": membership_id,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="case_canonical_output_invalid",
+        )
 
     available_from, deadline = resolve_assignment_schedule_values(assignment)
     teacher_content = teacher_payload.get("content") if isinstance(teacher_payload, dict) else None

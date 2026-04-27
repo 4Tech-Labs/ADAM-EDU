@@ -154,6 +154,94 @@ describe("TeacherCaseSubmissionDetailPage", () => {
         expect(screen.getByText("Borrador vigente")).toBeTruthy();
     });
 
+    it("supports keyboard navigation across module tabs", async () => {
+        vi.mocked(api.teacher.getCaseSubmissionDetail).mockResolvedValue(
+            createSubmissionDetailResponse({
+                modules: [
+                    {
+                        id: "M1",
+                        title: "Módulo 1 · Comprensión del caso",
+                        questions: [
+                            {
+                                id: "M1-Q1",
+                                order: 1,
+                                statement: "Describe la situación principal del caso.",
+                                context: "Pregunta 1",
+                                expected_solution: "Reconoce el cuello de botella operativo.",
+                                student_answer: "La empresa tiene un cuello de botella en onboarding.",
+                                student_answer_chars: 58,
+                                is_answer_from_draft: false,
+                            },
+                        ],
+                    },
+                    {
+                        id: "M3",
+                        title: "Módulo 3 · Diagnóstico",
+                        questions: [
+                            {
+                                id: "M3-Q1",
+                                order: 1,
+                                statement: "Formula el diagnóstico central.",
+                                context: "Relaciona evidencia y causa raíz.",
+                                expected_solution: "Diagnóstico priorizado con evidencia.",
+                                student_answer: "El diagnóstico central es fragmentación de procesos.",
+                                student_answer_chars: 55,
+                                is_answer_from_draft: false,
+                            },
+                        ],
+                    },
+                    {
+                        id: "M5",
+                        title: "Módulo 5 · Reflexión",
+                        questions: [
+                            {
+                                id: "M5-Q5",
+                                order: 1,
+                                statement: "Escribe un memo ejecutivo final.",
+                                context: "Integra: M1, M2, M3",
+                                expected_solution: "Memo estructurado con recomendación y riesgos.",
+                                student_answer: "Borrador del memo ejecutivo.",
+                                student_answer_chars: 27,
+                                is_answer_from_draft: true,
+                            },
+                        ],
+                    },
+                ],
+            }),
+        );
+
+        renderPage();
+
+        const moduleOneTab = await screen.findByRole("tab", { name: /M1/i });
+        moduleOneTab.focus();
+
+        fireEvent.keyDown(moduleOneTab, { key: "End" });
+
+        const moduleFiveTab = screen.getByRole("tab", { name: /M5/i });
+        await waitFor(() => {
+            expect(moduleFiveTab).toHaveFocus();
+            expect(moduleFiveTab).toHaveAttribute("aria-selected", "true");
+        });
+        expect(await screen.findByText("Escribe un memo ejecutivo final.")).toBeTruthy();
+
+        fireEvent.keyDown(moduleFiveTab, { key: "ArrowLeft" });
+
+        const moduleThreeTab = screen.getByRole("tab", { name: /M3/i });
+        await waitFor(() => {
+            expect(moduleThreeTab).toHaveFocus();
+            expect(moduleThreeTab).toHaveAttribute("aria-selected", "true");
+        });
+        expect(await screen.findByText("Formula el diagnóstico central.")).toBeTruthy();
+
+        fireEvent.keyDown(moduleThreeTab, { key: "Home" });
+
+        await waitFor(() => {
+            expect(moduleOneTab).toHaveFocus();
+            expect(moduleOneTab).toHaveAttribute("aria-selected", "true");
+        });
+        expect(await screen.findByText("Describe la situación principal del caso.")).toBeTruthy();
+    });
+
     it("selects the requested module from the modulo query param", async () => {
         vi.mocked(api.teacher.getCaseSubmissionDetail).mockResolvedValue(createSubmissionDetailResponse());
 
