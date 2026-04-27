@@ -110,7 +110,7 @@ export function TeacherCaseSubmissionsPage() {
                                 {caseDetail ? (
                                     <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-500">
                                         <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
-                                            Deadline: {caseDetail.deadline ? formatTeacherCourseTimestamp(caseDetail.deadline) : "Sin fecha"}
+                                            Fecha límite: {caseDetail.deadline ? formatTeacherCourseTimestamp(caseDetail.deadline) : "Sin fecha"}
                                         </span>
                                         <span className="rounded-full bg-blue-50 px-3 py-1 font-semibold text-blue-700">
                                             Puntaje máximo: {formatTeacherGradebookScore(caseDetail.max_score)}

@@ -122,6 +122,7 @@ describe("TeacherCaseSubmissionsPage", () => {
         renderPage();
 
         expect(await screen.findByRole("table", { name: /Listado de entregas del caso Caso Plataforma/i })).toBeTruthy();
+        expect(screen.getByText(/Fecha límite:/i)).toBeTruthy();
         expect(screen.getByText("Ana Student")).toBeTruthy();
         expect(screen.getByText("Bruno Student")).toBeTruthy();
         expect(screen.getByText("Carla Student")).toBeTruthy();
