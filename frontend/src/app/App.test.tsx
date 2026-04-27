@@ -24,6 +24,11 @@ vi.mock("@/features/teacher-case-submissions/TeacherCaseSubmissionsPage", () => 
         <div data-testid="teacher-case-submissions-page">Teacher case submissions page</div>
     ),
 }));
+vi.mock("@/features/teacher-case-submission-detail/TeacherCaseSubmissionDetailPage", () => ({
+    TeacherCaseSubmissionDetailPage: () => (
+        <div data-testid="teacher-case-submission-detail-page">Teacher case submission detail page</div>
+    ),
+}));
 vi.mock("@/features/admin-dashboard/AdminDashboardPage", () => ({
     AdminDashboardPage: () => <div data-testid="admin-dashboard-page">Dashboard admin</div>,
 }));
@@ -281,7 +286,7 @@ describe("App admin shell layout", () => {
         expect(screen.queryByTestId("site-header")).toBeNull();
     });
 
-    it("resolves the teacher submission detail placeholder route without a SPA 404", async () => {
+    it("resolves the teacher submission detail route without a SPA 404", async () => {
         vi.mocked(useAuth).mockReturnValue({
             ...baseContext,
             session: { access_token: "jwt" } as never,
@@ -292,7 +297,7 @@ describe("App admin shell layout", () => {
             initialEntries: ["/teacher/cases/case-1/entregas/membership-1"],
         });
 
-        expect(await screen.findByRole("heading", { name: /Ver entrega y calificar/i })).toBeTruthy();
+        expect(await screen.findByTestId("teacher-case-submission-detail-page")).toBeTruthy();
         expect(screen.queryByTestId("site-header")).toBeNull();
     });
 
