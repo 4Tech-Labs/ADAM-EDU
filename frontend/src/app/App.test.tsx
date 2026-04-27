@@ -19,6 +19,11 @@ vi.mock("@/features/teacher-course/TeacherCoursePage", () => ({
         <div data-testid="teacher-course-page">Teacher course page</div>
     ),
 }));
+vi.mock("@/features/teacher-case-submissions/TeacherCaseSubmissionsPage", () => ({
+    TeacherCaseSubmissionsPage: () => (
+        <div data-testid="teacher-case-submissions-page">Teacher case submissions page</div>
+    ),
+}));
 vi.mock("@/features/admin-dashboard/AdminDashboardPage", () => ({
     AdminDashboardPage: () => <div data-testid="admin-dashboard-page">Dashboard admin</div>,
 }));
@@ -257,6 +262,37 @@ describe("App admin shell layout", () => {
         });
 
         expect(await screen.findByTestId("teacher-course-page")).toBeTruthy();
+        expect(screen.queryByTestId("site-header")).toBeNull();
+    });
+
+    it("resolves the teacher case submissions route before the authoring catch-all", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: teacherActor,
+        });
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/teacher/cases/case-1/entregas"],
+        });
+
+        expect(await screen.findByTestId("teacher-case-submissions-page")).toBeTruthy();
+        expect(screen.queryByTestId("teacher-authoring-page")).toBeNull();
+        expect(screen.queryByTestId("site-header")).toBeNull();
+    });
+
+    it("resolves the teacher submission detail placeholder route without a SPA 404", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: teacherActor,
+        });
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/teacher/cases/case-1/entregas/membership-1"],
+        });
+
+        expect(await screen.findByRole("heading", { name: /Ver entrega y calificar/i })).toBeTruthy();
         expect(screen.queryByTestId("site-header")).toBeNull();
     });
 

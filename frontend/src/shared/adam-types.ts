@@ -825,6 +825,25 @@ export interface TeacherCaseDetailResponse {
     canonical_output: CanonicalCaseOutput | null;
 }
 
+export interface TeacherCaseSubmissionRow {
+    membership_id: string;
+    full_name: string;
+    email: string;
+    course_id: string;
+    course_code: string;
+    enrolled_at: string;
+    status: TeacherCourseGradebookStatus;
+    submitted_at: string | null;
+    score: number | null;
+    max_score: number;
+    graded_at: string | null;
+}
+
+export interface TeacherCaseSubmissionsResponse {
+    case: TeacherCourseGradebookCase;
+    submissions: TeacherCaseSubmissionRow[];
+}
+
 export interface DeadlineUpdateRequest {
     available_from?: string | null;
     deadline?: string | null;

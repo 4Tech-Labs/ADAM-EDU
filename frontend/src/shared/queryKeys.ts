@@ -88,5 +88,7 @@ export const queryKeys = {
         cases: () => ["teacher", "cases"] as const,
         /** ["teacher", "case", id] — detalle de un caso del docente */
         case: (id: string) => ["teacher", "case", id] as const,
+        /** ["teacher", "case-submissions", id] — entregas por caso del docente */
+        caseSubmissions: (id: string) => ["teacher", "case-submissions", id] as const,
     },
 } as const;
