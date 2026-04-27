@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+import json
 import logging
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
@@ -14,6 +15,10 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session, joinedload, load_only
 
 from shared.auth import CurrentActor, ensure_legacy_teacher_bridge, get_supabase_admin_auth_client
+from shared.case_sanitization import (
+    build_teacher_case_review_payload,
+    sanitize_canonical_output_for_student,
+)
 from shared.course_access_schema import TeacherCourseAccessLinkResponse
 from shared.identity_activation import upsert_legacy_user
 from shared.models import (
@@ -27,6 +32,7 @@ from shared.models import (
     Membership,
     Profile,
     StudentCaseResponse,
+    StudentCaseResponseSubmission,
     Syllabus,
     User,
 )
@@ -39,6 +45,13 @@ from shared.syllabus_schema import (
 )
 from shared.teacher_context import TeacherContext
 from shared.teacher_gradebook_schema import (
+    TeacherCaseSubmissionDetailCase,
+    TeacherCaseSubmissionDetailGradeSummary,
+    TeacherCaseSubmissionDetailModule,
+    TeacherCaseSubmissionDetailQuestion,
+    TeacherCaseSubmissionDetailResponse,
+    TeacherCaseSubmissionDetailResponseState,
+    TeacherCaseSubmissionDetailStudent,
     TeacherCaseSubmissionRow,
     TeacherCaseSubmissionsResponse,
     TeacherCourseGradebookCase,
@@ -51,7 +64,17 @@ from shared.teacher_gradebook_schema import (
 
 _BOGOTA_TZ = ZoneInfo("America/Bogota")
 _DEFAULT_CASE_MAX_SCORE = 5.0
+_DEFAULT_CASE_MAX_SCORE_DECIMAL = Decimal("5.00")
 _logger = logging.getLogger(__name__)
+_DETAIL_PAYLOAD_MAX_BYTES = 1_500_000
+_DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS = 8_000
+_MODULE_TITLES: Mapping[str, str] = {
+    "M1": "Módulo 1 · Comprensión del caso",
+    "M2": "Módulo 2 · Análisis de datos",
+    "M3": "Módulo 3 · Diagnóstico",
+    "M4": "Módulo 4 · Recomendación",
+    "M5": "Módulo 5 · Reflexión",
+}
 
 
 class TeacherCourseItemResponse(BaseModel):
@@ -95,6 +118,492 @@ def _decimal_to_float(value: Decimal | None) -> float | None:
 def _display_name(*, profile_full_name: str | None, email: str) -> str:
     candidate = profile_full_name.strip() if profile_full_name is not None else ""
     return candidate or email
+
+
+def _stringify_review_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+    return str(value)
+
+
+def _question_context(question: dict[str, Any]) -> str | None:
+    context_parts: list[str] = []
+
+    title = question.get("titulo")
+    if isinstance(title, str) and title.strip():
+        context_parts.append(title.strip())
+
+    bloom_level = question.get("bloom_level")
+    if isinstance(bloom_level, str) and bloom_level.strip():
+        context_parts.append(f"Bloom: {bloom_level.strip()}")
+
+    exhibit_ref = question.get("exhibit_ref")
+    if isinstance(exhibit_ref, str) and exhibit_ref.strip():
+        context_parts.append(f"Exhibito: {exhibit_ref.strip()}")
+
+    chart_ref = question.get("chart_ref")
+    if isinstance(chart_ref, str) and chart_ref.strip():
+        context_parts.append(f"Grafico: {chart_ref.strip()}")
+
+    task_type = question.get("task_type")
+    if isinstance(task_type, str) and task_type.strip():
+        context_parts.append(f"Tipo: {task_type.strip()}")
+
+    modules_integrated = question.get("modules_integrated")
+    if isinstance(modules_integrated, list):
+        normalized_modules = [str(module).strip() for module in modules_integrated if str(module).strip()]
+        if normalized_modules:
+            context_parts.append(f"Integra: {', '.join(normalized_modules)}")
+
+    if not context_parts:
+        return None
+    return "\n".join(context_parts)
+
+
+def _detail_question_id(module_id: str, question: dict[str, Any], order: int) -> str:
+    numero = question.get("numero")
+    if numero is not None:
+        normalized_numero = str(numero).strip()
+        if normalized_numero:
+            return f"{module_id}-Q{normalized_numero}"
+    return f"{module_id}.{order}"
+
+
+def _lookup_student_answer(
+    answers: dict[str, str],
+    *,
+    module_id: str,
+    question: dict[str, Any],
+    order: int,
+) -> str | None:
+    question_id = _detail_question_id(module_id, question, order)
+    answer = answers.get(question_id)
+    if answer is not None:
+        return answer
+
+    numero = question.get("numero")
+    if numero is not None:
+        legacy_answer = answers.get(f"q{str(numero).strip()}")
+        if legacy_answer is not None:
+            return legacy_answer
+
+    return None
+
+
+def _m5_solution_lookup(content: dict[str, Any]) -> dict[str, str]:
+    raw_solutions = content.get("m5QuestionsSolutions")
+    if not isinstance(raw_solutions, list):
+        return {}
+
+    solutions: dict[str, str] = {}
+    for item in raw_solutions:
+        if not isinstance(item, dict):
+            continue
+        numero = item.get("numero")
+        if numero is None:
+            continue
+        normalized_numero = str(numero).strip()
+        if not normalized_numero:
+            continue
+        solutions[normalized_numero] = _stringify_review_value(item.get("solucion_esperada"))
+    return solutions
+
+
+def _truncate_detail_modules_if_needed(
+    modules: list[TeacherCaseSubmissionDetailModule],
+    *,
+    assignment_id: str,
+    membership_id: str,
+) -> list[TeacherCaseSubmissionDetailModule]:
+    serialized_modules = json.dumps(
+        [module.model_dump(mode="json") for module in modules],
+        ensure_ascii=False,
+    )
+    if len(serialized_modules) <= _DETAIL_PAYLOAD_MAX_BYTES:
+        return modules
+
+    for module in modules:
+        for question in module.questions:
+            if len(question.expected_solution) > _DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS:
+                question.expected_solution = (
+                    question.expected_solution[:_DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS]
+                    + "... [truncado por tamano]"
+                )
+
+    _logger.warning(
+        "teacher_case_submission_detail_payload_truncated",
+        extra={
+            "assignment_id": assignment_id,
+            "membership_id": membership_id,
+            "payload_size": len(serialized_modules),
+        },
+    )
+    return modules
+
+
+def _build_submission_detail_modules(
+    *,
+    canonical_output: dict[str, Any],
+    answers: dict[str, str],
+    is_answer_from_draft: bool,
+    assignment_id: str,
+    membership_id: str,
+) -> list[TeacherCaseSubmissionDetailModule]:
+    from shared.student_reads import QUESTION_FIELD_TO_MODULE
+
+    teacher_payload = build_teacher_case_review_payload(canonical_output)
+    content = teacher_payload.get("content")
+    if not isinstance(content, dict):
+        return []
+
+    m5_solution_lookup = _m5_solution_lookup(content)
+    modules: list[TeacherCaseSubmissionDetailModule] = []
+    for field_name, module_id in QUESTION_FIELD_TO_MODULE.items():
+        raw_questions = content.get(field_name)
+        if not isinstance(raw_questions, list) or not raw_questions:
+            continue
+
+        questions: list[TeacherCaseSubmissionDetailQuestion] = []
+        for order, raw_question in enumerate(raw_questions, start=1):
+            if not isinstance(raw_question, dict):
+                continue
+
+            question_id = _detail_question_id(module_id, raw_question, order)
+            student_answer = _lookup_student_answer(
+                answers,
+                module_id=module_id,
+                question=raw_question,
+                order=order,
+            )
+            expected_solution = _stringify_review_value(raw_question.get("solucion_esperada"))
+            if not expected_solution and module_id == "M5":
+                numero = raw_question.get("numero")
+                if numero is not None:
+                    expected_solution = m5_solution_lookup.get(str(numero).strip(), "")
+
+            questions.append(
+                TeacherCaseSubmissionDetailQuestion(
+                    id=question_id,
+                    order=order,
+                    statement=_stringify_review_value(raw_question.get("enunciado")),
+                    context=_question_context(raw_question),
+                    expected_solution=expected_solution,
+                    student_answer=student_answer,
+                    student_answer_chars=len(student_answer) if student_answer is not None else 0,
+                    is_answer_from_draft=is_answer_from_draft,
+                )
+            )
+
+        if questions:
+            modules.append(
+                TeacherCaseSubmissionDetailModule(
+                    id=module_id,
+                    title=_MODULE_TITLES[module_id],
+                    questions=questions,
+                )
+            )
+
+    return _truncate_detail_modules_if_needed(
+        modules,
+        assignment_id=assignment_id,
+        membership_id=membership_id,
+    )
+
+
+def _load_teacher_submission_assignment(
+    db: Session,
+    context: TeacherContext,
+    *,
+    assignment_id: str,
+) -> Assignment | None:
+    assignment_target_courses = _build_assignment_target_courses_subquery()
+    return (
+        db.execute(
+            select(Assignment)
+            .options(
+                load_only(
+                    Assignment.id,
+                    Assignment.course_id,
+                    Assignment.title,
+                    Assignment.status,
+                    Assignment.available_from,
+                    Assignment.deadline,
+                    Assignment.canonical_output,
+                ),
+                joinedload(Assignment.course).load_only(
+                    Course.id,
+                    Course.code,
+                    Course.title,
+                    Course.university_id,
+                    Course.teacher_membership_id,
+                ),
+                joinedload(Assignment.assignment_courses)
+                .joinedload(AssignmentCourse.course)
+                .load_only(
+                    Course.id,
+                    Course.code,
+                    Course.title,
+                    Course.university_id,
+                    Course.teacher_membership_id,
+                ),
+            )
+            .where(
+                Assignment.id == assignment_id,
+                Assignment.status == "published",
+                exists(
+                    select(1)
+                    .select_from(assignment_target_courses)
+                    .join(
+                        Course,
+                        and_(
+                            assignment_target_courses.c.course_id == Course.id,
+                            Course.university_id == context.university_id,
+                            Course.teacher_membership_id == context.teacher_membership_id,
+                        ),
+                    )
+                    .where(assignment_target_courses.c.assignment_id == Assignment.id)
+                ),
+            )
+        )
+        .unique()
+        .scalar_one_or_none()
+    )
+
+
+def get_teacher_case_submission_detail(
+    db: Session,
+    context: TeacherContext,
+    assignment_id: str,
+    membership_id: str,
+) -> TeacherCaseSubmissionDetailResponse:
+    assignment = _load_teacher_submission_assignment(
+        db,
+        context,
+        assignment_id=assignment_id,
+    )
+    if assignment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assignment_not_found")
+
+    target_course_ids, _course_codes = _assignment_target_course_metadata(assignment)
+    if not target_course_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="assignment_not_found")
+
+    _ensure_supported_gradebook_topology(
+        db,
+        context,
+        assignments=[assignment],
+        student_membership_ids=[membership_id],
+    )
+
+    detail_row = (
+        db.execute(
+            select(
+                Membership.id.label("membership_id"),
+                Membership.user_id.label("user_id"),
+                CourseMembership.created_at.label("enrolled_at"),
+                Profile.full_name.label("profile_full_name"),
+                User.email.label("email"),
+                Course.id.label("course_id"),
+                Course.code.label("course_code"),
+                Course.title.label("course_name"),
+                StudentCaseResponse.id.label("response_id"),
+                StudentCaseResponse.status.label("student_case_status"),
+                StudentCaseResponse.answers.label("student_answers"),
+                StudentCaseResponse.first_opened_at.label("first_opened_at"),
+                StudentCaseResponse.last_autosaved_at.label("last_autosaved_at"),
+                StudentCaseResponse.submitted_at.label("submitted_at"),
+                CaseGrade.status.label("case_grade_status"),
+                CaseGrade.score.label("score"),
+                CaseGrade.max_score.label("max_score"),
+                CaseGrade.graded_at.label("graded_at"),
+            )
+            .select_from(CourseMembership)
+            .join(
+                Membership,
+                and_(
+                    CourseMembership.membership_id == Membership.id,
+                    Membership.university_id == context.university_id,
+                    Membership.role == "student",
+                    Membership.status == "active",
+                ),
+            )
+            .join(
+                Course,
+                and_(
+                    CourseMembership.course_id == Course.id,
+                    Course.university_id == context.university_id,
+                    Course.teacher_membership_id == context.teacher_membership_id,
+                ),
+            )
+            .outerjoin(User, User.id == Membership.user_id)
+            .outerjoin(Profile, Profile.id == Membership.user_id)
+            .outerjoin(
+                StudentCaseResponse,
+                and_(
+                    StudentCaseResponse.membership_id == Membership.id,
+                    StudentCaseResponse.assignment_id == assignment.id,
+                ),
+            )
+            .outerjoin(
+                CaseGrade,
+                and_(
+                    CaseGrade.membership_id == Membership.id,
+                    CaseGrade.assignment_id == assignment.id,
+                    CaseGrade.course_id == Course.id,
+                ),
+            )
+            .where(
+                Membership.id == membership_id,
+                CourseMembership.course_id.in_(target_course_ids),
+            )
+        )
+        .mappings()
+        .first()
+    )
+    if detail_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="submission_not_found")
+
+    repaired_row = _repair_gradebook_student_rows(db, context, student_rows=[detail_row])[0]
+
+    response_id = repaired_row["response_id"]
+    latest_submission = None
+    if response_id is not None:
+        latest_submission = db.execute(
+            select(StudentCaseResponseSubmission)
+            .where(StudentCaseResponseSubmission.response_id == response_id)
+            .order_by(
+                StudentCaseResponseSubmission.submitted_at.desc(),
+                StudentCaseResponseSubmission.id.desc(),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+
+    canonical_output = assignment.canonical_output
+    try:
+        if not isinstance(canonical_output, dict):
+            raise TypeError("assignment canonical_output must be a dict")
+        student_safe_payload = sanitize_canonical_output_for_student(canonical_output)
+        teacher_payload = build_teacher_case_review_payload(canonical_output)
+    except Exception:
+        _logger.exception(
+            "teacher_case_submission_detail_invalid_canonical_output",
+            extra={
+                "assignment_id": assignment.id,
+                "membership_id": membership_id,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="case_canonical_output_invalid",
+        )
+
+    if latest_submission is not None:
+        from shared.student_reads import _canonical_output_hash
+
+        current_hash = _canonical_output_hash(student_safe_payload)
+        if latest_submission.canonical_output_hash != current_hash:
+            _logger.warning(
+                "teacher_case_submission_detail_hash_drift",
+                extra={
+                    "assignment_id": assignment.id,
+                    "membership_id": membership_id,
+                    "snapshot_hash": latest_submission.canonical_output_hash,
+                    "current_hash": current_hash,
+                },
+            )
+
+    derived_status: TeacherCourseGradebookStatus = _derive_grade_cell_status(
+        repaired_row["student_case_status"],
+        repaired_row["case_grade_status"],
+    )
+
+    response_answers = (
+        dict(repaired_row["student_answers"])
+        if isinstance(repaired_row["student_answers"], dict)
+        else {}
+    )
+    if latest_submission is not None:
+        answer_source = dict(latest_submission.answers_snapshot or {})
+        is_answer_from_draft = False
+    elif response_id is not None:
+        answer_source = response_answers
+        is_answer_from_draft = True
+        if derived_status in {"submitted", "graded"}:
+            _logger.warning(
+                "teacher_case_submission_detail_missing_snapshot",
+                extra={
+                    "assignment_id": assignment.id,
+                    "membership_id": membership_id,
+                    "response_id": response_id,
+                    "derived_status": derived_status,
+                },
+            )
+    else:
+        answer_source = {}
+        is_answer_from_draft = False
+
+    modules = _build_submission_detail_modules(
+        canonical_output=canonical_output,
+        answers=answer_source,
+        is_answer_from_draft=is_answer_from_draft,
+        assignment_id=assignment.id,
+        membership_id=membership_id,
+    )
+
+    available_from, deadline = resolve_assignment_schedule_values(assignment)
+    teacher_content = teacher_payload.get("content") if isinstance(teacher_payload, dict) else None
+    teaching_note = None
+    if isinstance(teacher_content, dict) and teacher_content.get("teachingNote") is not None:
+        teaching_note = _stringify_review_value(teacher_content.get("teachingNote")) or None
+
+    return TeacherCaseSubmissionDetailResponse(
+        case=TeacherCaseSubmissionDetailCase(
+            id=assignment.id,
+            title=_resolve_assignment_title(assignment),
+            deadline=deadline,
+            available_from=available_from,
+            course_id=repaired_row["course_id"],
+            course_code=repaired_row["course_code"],
+            course_name=repaired_row["course_name"],
+            teaching_note=teaching_note,
+        ),
+        student=TeacherCaseSubmissionDetailStudent(
+            membership_id=repaired_row["membership_id"],
+            full_name=_display_name(
+                profile_full_name=repaired_row["profile_full_name"],
+                email=repaired_row["email"],
+            ),
+            email=repaired_row["email"],
+            enrolled_at=repaired_row["enrolled_at"],
+        ),
+        response_state=TeacherCaseSubmissionDetailResponseState(
+            status=derived_status,
+            first_opened_at=repaired_row["first_opened_at"],
+            last_autosaved_at=repaired_row["last_autosaved_at"],
+            submitted_at=(
+                latest_submission.submitted_at
+                if latest_submission is not None
+                else repaired_row["submitted_at"]
+            ),
+            snapshot_id=latest_submission.id if latest_submission is not None else None,
+            snapshot_hash=(
+                latest_submission.canonical_output_hash
+                if latest_submission is not None
+                else None
+            ),
+        ),
+        grade_summary=TeacherCaseSubmissionDetailGradeSummary(
+            status=repaired_row["case_grade_status"],
+            score=repaired_row["score"],
+            max_score=repaired_row["max_score"] or _DEFAULT_CASE_MAX_SCORE_DECIMAL,
+            graded_at=repaired_row["graded_at"],
+        ),
+        modules=modules,
+    )
 
 
 def _derive_grade_cell_status(

@@ -5,7 +5,7 @@ import math
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -14,7 +14,11 @@ from shared.auth import CurrentActor, require_current_actor_password_ready
 from shared.course_access_schema import CourseAccessLinkRegenerateResponse, TeacherCourseAccessLinkResponse
 from shared.database import get_db
 from shared.models import Assignment, AssignmentCourse, Course
-from shared.teacher_gradebook_schema import TeacherCaseSubmissionsResponse, TeacherCourseGradebookResponse
+from shared.teacher_gradebook_schema import (
+    TeacherCaseSubmissionDetailResponse,
+    TeacherCaseSubmissionsResponse,
+    TeacherCourseGradebookResponse,
+)
 from shared.syllabus_schema import TeacherCourseDetailResponse, TeacherSyllabusSaveRequest
 from shared.teacher_context import TeacherContext, require_teacher_context
 from shared.teacher_reads import (
@@ -24,6 +28,7 @@ from shared.teacher_reads import (
     get_teacher_course_detail,
     get_teacher_course_gradebook,
     get_teacher_case_submissions,
+    get_teacher_case_submission_detail,
     list_teacher_active_cases,
     list_teacher_courses,
     resolve_assignment_schedule_values,
@@ -259,6 +264,26 @@ def get_teacher_case_submissions_view(
 ) -> TeacherCaseSubmissionsResponse:
     assignment = _get_owned_assignment_or_404(db, assignment_id, actor)
     return get_teacher_case_submissions(db, context, assignment)
+
+
+@router.get(
+    "/cases/{assignment_id}/submissions/{membership_id}",
+    response_model=TeacherCaseSubmissionDetailResponse,
+)
+def get_teacher_case_submission_detail_view(
+    assignment_id: str,
+    membership_id: str,
+    response: Response,
+    context: Annotated[TeacherContext, Depends(require_teacher_context)],
+    db: Session = Depends(get_db),
+) -> TeacherCaseSubmissionDetailResponse:
+    """Read-only teacher submission detail view.
+
+    Mutations de calificación (`POST/PUT /api/teacher/cases/.../grade`) se entregarán
+    en una issue posterior. Este endpoint es solo de lectura.
+    """
+    response.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
+    return get_teacher_case_submission_detail(db, context, assignment_id, membership_id)
 
 
 @router.patch("/cases/{assignment_id}/publish", response_model=TeacherCaseDetailResponse)
