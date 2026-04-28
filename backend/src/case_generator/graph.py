@@ -1706,31 +1706,40 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
     })
     prompt = SCHEMA_DESIGNER_PROMPT.format(**context)
 
-    # Dos intentos: architect (Pro) → writer (Flash thinking OFF)
-    # gemini-3.1-pro-preview con thinking_level="medium" para mayor calidad de schema.
-    # max_output_tokens=16384: "medium" consume ~3-8k tokens de reasoning interno;
-    # con 16384 quedan ≥8k para el JSON de salida de 14 columnas (~4500-6000 tokens).
-    # .with_fallbacks() añade resiliencia: si el modelo está con 503, el fallback
-    # reintenta con el mismo modelo (max_retries=2 en cada nivel de la cadena).
-    _schema_llm_kwargs = dict(
+    # Cadena de fallback resiliente alineada con el patrón del case_architect (M1):
+    #   1) Pro thinking_level="medium" — primario (mantiene thinking; subir a "high"
+    #      arriesga truncar el JSON estructurado de 14 columnas por consumo de
+    #      reasoning interno).
+    #   2) Pro thinking_level="low"    — fallback transitorio sin degradar de modelo.
+    #   3) Flash                       — red de seguridad final ante incidente global
+    #      del Pro (sin response_mime_type estructurado, parser tolerante downstream).
+    # max_output_tokens=24576 da margen extra para el JSON (~5-6k tokens) sobre el
+    # reasoning de "medium" (~3-8k), reduciendo riesgo de truncamiento.
+    _common_kwargs = dict(
         model="gemini-3.1-pro-preview",
         temperature=0.2,
-        thinking_level="medium",
         max_retries=2,
-        max_output_tokens=16384,
+        max_output_tokens=24576,
         api_key=os.getenv("GEMINI_API_KEY"),
         rate_limiter=_rate_limiter,
         response_mime_type="application/json",
     )
-    candidates = [
-        ChatGoogleGenerativeAI(**_schema_llm_kwargs)
-            .with_fallbacks([ChatGoogleGenerativeAI(**_schema_llm_kwargs)]),
-        ChatGoogleGenerativeAI(**_schema_llm_kwargs)
-            .with_fallbacks([ChatGoogleGenerativeAI(**_schema_llm_kwargs)]),
-    ]
+    primary = ChatGoogleGenerativeAI(thinking_level="medium", **_common_kwargs)
+    pro_low_fallback = ChatGoogleGenerativeAI(thinking_level="low", **_common_kwargs)
+    flash_fallback = ChatGoogleGenerativeAI(
+        model="gemini-3-flash-preview",
+        temperature=0.2,
+        max_retries=2,
+        max_output_tokens=24576,
+        api_key=os.getenv("GEMINI_API_KEY"),
+        rate_limiter=_rate_limiter,
+    )
+    candidates = [primary.with_fallbacks([pro_low_fallback, flash_fallback])]
 
     for i, llm in enumerate(candidates):
-        model_label = "architect" if i == 0 else "writer-fallback"
+        # Solo 1 candidato compuesto; el fallback chain (Pro-medium → Pro-low → Flash)
+        # se resuelve internamente vía .with_fallbacks().
+        model_label = "pro-medium-chain" if i == 0 else f"candidate-{i}"
         try:
             response = llm.invoke(prompt)
             raw = _extract_text(response)
