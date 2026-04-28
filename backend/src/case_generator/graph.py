@@ -2730,16 +2730,30 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
         # Build familias_meta: deterministic registry data per family so the LLM
         # doesn't need to recall visualization specs or fragment hints from its weights.
-        familias_meta = [
-            {
+        # `algoritmos`: lista de los algoritmos crudos del caso que activaron esta familia.
+        # El prompt ALGO renderiza UN bloque por algoritmo dentro de cada familia, así un
+        # caso que pide "Logistic + RF + SHAP" y "XGBoost con tuning" en clasificacion_tabular
+        # produce DOS bloques visuales y no uno colapsado.
+        familias_meta = []
+        for f in familias:
+            if f not in ALGORITHM_REGISTRY:
+                continue
+            keywords = ALGORITHM_REGISTRY[f]["keywords"]
+            algos_de_familia = [
+                a for a in algoritmos_raw
+                if any(kw in a.lower() for kw in keywords)
+            ]
+            # Si no se pudo mapear ningún algo crudo (caso "unsupported" mezclado), conserva
+            # al menos el nombre de la familia para que el prompt pueda renderizar 1 bloque.
+            if not algos_de_familia:
+                algos_de_familia = [f]
+            familias_meta.append({
                 "familia": f,
+                "algoritmos": algos_de_familia,
                 "visualizacion": ALGORITHM_REGISTRY[f]["visualization"],
                 "prerequisito": ALGORITHM_REGISTRY[f]["prerequisite_note"],
                 "fragments_hint": ALGORITHM_REGISTRY[f]["fragments_hint"],
-            }
-            for f in familias
-            if f in ALGORITHM_REGISTRY
-        ]
+            })
 
         algo_section = ""
         try:

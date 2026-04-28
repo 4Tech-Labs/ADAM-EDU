@@ -879,6 +879,14 @@ Lema: "Correlación no implica causalidad."
 # GUARDRAILS ANTI-ALUCINACIÓN (obligatorios)
 - PROHIBIDO inventar columnas, scores, distribuciones, labels o resultados del dataset.
 - Toda referencia a datos DEBE derivarse del reporte EDA M2 o la narrativa M1.
+- En CADA "Hipótesis experimental" y "Variable / resultado objetivo" DEBES citar al menos
+  una columna real entre comillas inversas tomada literalmente del reporte EDA M2 que
+  recibes en la sección "Context" más abajo. PROHIBIDO referirte a variables genéricas
+  como "tiempos", "demoras", "costos operativos" si esa columna NO aparece textualmente
+  en el EDA M2.
+- Si la columna que necesitarías para probar la hipótesis NO existe en M2, declarar
+  explícitamente: "Variable objetivo pendiente — el dataset no contiene la columna
+  requerida (`<nombre_esperado>`); se recomienda enriquecer el dataset antes del experimento."
 - Si no hay evidencia suficiente para diseñar un módulo, declarar:
   "Evidencia insuficiente en M1/M2 para diseñar este módulo con certeza."
 - PROHIBIDO asumir nombres de columnas, sector específico ni tipo de datos no mencionados.
@@ -2014,18 +2022,82 @@ F. Toda llamada a `.fit()` debe ir precedida por dropna/imputación: usa
    `df_X.dropna()` o `df_X.fillna(df_X.median(numeric_only=True))` antes del fit.
 G. NO importes nada que no esté en el set: numpy, pandas, matplotlib, seaborn, sklearn.*,
    networkx, scipy.stats. Cualquier otra librería va dentro de try/except ImportError.
+H. Métricas OBLIGATORIAS por tipo de problema (imprímelas SIEMPRE, sin excepciones):
+   - Clasificación: `from sklearn.metrics import classification_report, f1_score, confusion_matrix`
+     y `print(classification_report(y_test, y_pred, zero_division=0))` +
+     `print("F1 macro:", f1_score(y_test, y_pred, average="macro", zero_division=0))`.
+   - Regresión: `from sklearn.metrics import mean_squared_error, r2_score` y
+     `print("RMSE:", float(np.sqrt(mean_squared_error(y_test, y_pred))))` +
+     `print("R2:", r2_score(y_test, y_pred))`.
+   - Clustering: `from sklearn.metrics import silhouette_score` y
+     `print("Silhouette:", silhouette_score(X, labels))` cuando hay >=2 clusters formados.
+I. Split anti-leakage para clasificación/regresión:
+   - Detecta columna temporal con `find_first_matching_column(df.columns, date_aliases)`.
+   - Si existe y `is_datetime_like(df, col)` o se puede convertir con `pd.to_datetime(..., errors="coerce")`:
+     ordena `df = df.sort_values(col)`, calcula `cut = int(len(df) * 0.8)` y haz split
+     cronológico: `X_train, X_test = X.iloc[:cut], X.iloc[cut:]` (idem `y`).
+     Imprime: `print("Split temporal por", col, "→ train hasta", df[col].iloc[cut-1])`.
+   - Si NO hay columna temporal: usa `train_test_split(X, y, test_size=0.2, random_state=42,
+     stratify=y if y.nunique() >= 2 and y.value_counts().min() >= 2 else None)`.
+   - Justifica en comentario por qué elegiste cada estrategia.
+J. SHAP es OPCIONAL y SIEMPRE en try/except:
+   - Si el nombre del algoritmo en `algoritmos` contiene "shap": intenta
+     `import shap; explainer = shap.TreeExplainer(model); shap.summary_plot(...)` con
+     `except ImportError: print("SHAP no disponible — usando feature_importances_ como fallback")`
+     y fallback a `pd.Series(model.feature_importances_, index=X.columns).nlargest(15).plot.barh()`.
+   - Si NO contiene "shap": ignora SHAP completamente, usa feature_importances_ directo.
+K. EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo:
+   - Distribución del target (si fue detectado): `target_col.value_counts(normalize=True)`.
+   - % missing por columna ordenado desc: `df.isna().mean().sort_values(ascending=False).head(10)`.
+   - Flag de outliers por IQR para columnas numéricas (sin imputar, solo reportar conteo):
+     `q1, q3 = df[c].quantile([0.25, 0.75]); iqr = q3 - q1; outliers = ((df[c] < q1 - 1.5*iqr) | (df[c] > q3 + 1.5*iqr)).sum()`
+     y print en formato tabular para top-5 columnas con más outliers.
 
-# Estructura OBLIGATORIA: exactamente 3 celdas por familia (siempre las 3)
+# Estructura OBLIGATORIA
 
-## Celda 1 — Concepto (markdown)
+## Sección 3.0 — EDA Express (UNA sola vez, antes del primer algoritmo)
 # %% [markdown]
-# ### [nombre de la familia]
-# **Algoritmos representados:** [solo los de esta familia, de {algoritmos}]
+# ## Sección 3 — Diseño Experimental
+# Antes de entrenar, validamos calidad y forma del dataset (regla K).
+
+# %%
+try:
+    # Distribución del target detectado por alias (label_aliases / churn_aliases) o último categórico.
+    target_col = find_first_matching_column(df.columns, label_aliases) or \
+                 find_first_matching_column(df.columns, churn_aliases)
+    if target_col is None:
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        target_col = cat_cols[-1] if cat_cols else None
+    if target_col is not None:
+        print("Target candidato:", target_col)
+        print(df[target_col].value_counts(normalize=True).round(3))
+    print("\\nTop 10 columnas por % missing:")
+    print(df.isna().mean().sort_values(ascending=False).head(10).round(3))
+    print("\\nTop 5 columnas numéricas con más outliers (IQR 1.5x — solo reporte, no se imputan):")
+    num_cols = df.select_dtypes(include=np.number).columns.tolist()
+    out_counts = {{}}
+    for c in num_cols:
+        q1, q3 = df[c].quantile([0.25, 0.75])
+        iqr = q3 - q1
+        if iqr > 0:
+            out_counts[c] = int(((df[c] < q1 - 1.5*iqr) | (df[c] > q3 + 1.5*iqr)).sum())
+    for c, n in sorted(out_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]:
+        print(f"  {{c}}: {{n}} outliers")
+except Exception as e:
+    print(f"⚠️ EDA Express falló: {{e}}")
+
+## Para CADA familia en {familias_meta}, y para CADA algoritmo dentro del campo
+## "algoritmos" de esa familia, emite EXACTAMENTE 3 celdas (no colapses dos algoritmos
+## en un solo bloque):
+
+## Celda 1 — Concepto (markdown) [una por algoritmo]
+# %% [markdown]
+# ### [familia] — [nombre exacto del algoritmo, tal como aparece en el campo "algoritmos"]
 # **Concepto:** [teoría en 2 líneas, sin jerga]
-# **Hipótesis experimental:** [extraída de {m3_content}, 1-2 líneas]
+# **Hipótesis experimental:** [extraída de {m3_content}, 1-2 líneas — NO inventes columnas]
 # **Prerequisitos:** [campo "prerequisito" del entry correspondiente en {familias_meta}]
 
-## Celda 2 — Gráfico Conceptual (código)
+## Celda 2 — Entrenamiento + Métricas (código) [una por algoritmo]
 # %%
 try:
     # 1. INTENTO PRIMARIO: Buscar por alias semántico usando helpers del base template
@@ -2046,16 +2118,19 @@ try:
     #     print("⚠️ REQUISITO FALTANTE — [descripción exacta de qué tipo de columna falta]")
     #     print_similar_columns(df.columns, <fragments_hint del entry en {familias_meta}>)
     #     # La celda TERMINA aquí
-    # 4. Si hay datos (por alias o por fallback): implementar la visualización del campo
-    #    "visualizacion" en {familias_meta}.
-    #    plt.tight_layout()
-    #    plt.show()
+    # 4. Si hay datos: implementa el algoritmo concreto del nombre (no genérico de la familia).
+    # 5. Para clasificación/regresión: aplica REGLA I (split temporal si hay fecha; si no,
+    #    train_test_split con stratify=y).
+    # 6. Imprime SIEMPRE las métricas obligatorias (REGLA H) para el tipo de problema.
+    # 7. Cierra con la visualización del campo "visualizacion" en {familias_meta}.
+    #    Para clasificación/regresión: feature_importances_ (o REGLA J si hay "shap" en el nombre).
+    #    plt.tight_layout(); plt.show()
 except Exception as e:
     print(f"⚠️ Error: {{e}}")
 
-## Celda 3 — Acción de Negocio (markdown)
+## Celda 3 — Acción de Negocio (markdown) [una por algoritmo]
 # %% [markdown]
-# **Explicación pedagógica:** [qué muestra el gráfico o la limitación detectada, 2 líneas]
+# **Explicación pedagógica:** [qué muestran las métricas y el gráfico, 2 líneas]
 # **Acción de negocio:** [próximo paso concreto basado en el resultado, 1 línea]
 
 # Helpers disponibles (del base template — NO los redefinas)
