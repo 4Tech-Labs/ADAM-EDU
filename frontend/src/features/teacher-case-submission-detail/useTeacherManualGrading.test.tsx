@@ -28,6 +28,18 @@ import {
 } from "./teacherCaseSubmissionGradeApi";
 import { useTeacherManualGrading } from "./useTeacherManualGrading";
 
+function createDeferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+
+    const promise = new Promise<T>((innerResolve, innerReject) => {
+        resolve = innerResolve;
+        reject = innerReject;
+    });
+
+    return { promise, resolve, reject };
+}
+
 function renderTeacherManualGradingHook() {
     const detail = createSubmissionDetailResponse();
     const queryClient = createTestQueryClient();
@@ -150,7 +162,7 @@ describe("useTeacherManualGrading", () => {
         expect(result.current.loadErrorMessage).toBe("La calificación manual todavía no está habilitada en este entorno.");
     });
 
-    it("opens a blocking snapshot conflict state and clears it after refresh", async () => {
+    it("keeps snapshot conflict open after a grade refetch until it is cleared explicitly", async () => {
         vi.mocked(saveTeacherCaseSubmissionGrade).mockRejectedValueOnce(
             new ApiError(409, "Conflict", {
                 code: "snapshot_changed",
@@ -178,9 +190,124 @@ describe("useTeacherManualGrading", () => {
             await result.current.refresh();
         });
 
-        await waitFor(() => expect(result.current.isSnapshotConflictOpen).toBe(false));
-        expect(result.current.requiresRefresh).toBe(false);
+        await waitFor(() => expect(result.current.grade?.snapshot_hash).toBe("hash-456"));
+        expect(result.current.isSnapshotConflictOpen).toBe(true);
+        expect(result.current.requiresRefresh).toBe(true);
         expect(result.current.grade?.snapshot_hash).toBe("hash-456");
         expect(result.current.autosaveState).toBe("idle");
+
+        act(() => {
+            result.current.clearSnapshotConflict();
+        });
+
+        expect(result.current.isSnapshotConflictOpen).toBe(false);
+        expect(result.current.requiresRefresh).toBe(false);
+        expect(result.current.isLocked).toBe(false);
     });
+
+    it("ignores local updates while publish is in flight", async () => {
+        const deferredSave = createDeferred<ReturnType<typeof createSubmissionGradeResponse>>();
+        vi.mocked(saveTeacherCaseSubmissionGrade).mockReturnValueOnce(deferredSave.promise);
+
+        const { result } = renderTeacherManualGradingHook();
+
+        await waitFor(() => expect(result.current.mode).toBe("ready"));
+
+        const initialRubric = result.current.grade?.modules[0].questions[0].rubric_level ?? null;
+        let publishPromise!: Promise<boolean>;
+
+        act(() => {
+            publishPromise = result.current.publish();
+        });
+
+        await waitFor(() => expect(result.current.isPublishing).toBe(true));
+        expect(result.current.isLocked).toBe(true);
+
+        act(() => {
+            result.current.setQuestionRubric("M1-Q1", "excelente");
+        });
+
+        expect(result.current.grade?.modules[0].questions[0].rubric_level ?? null).toBe(initialRubric);
+        expect(result.current.autosaveState).toBe("idle");
+
+        deferredSave.resolve(createSubmissionGradeResponse({
+            publication_state: "published",
+            published_at: "2026-06-05T19:10:00Z",
+            graded_at: "2026-06-05T19:10:00Z",
+        }));
+
+        await act(async () => {
+            await publishPromise;
+        });
+    });
+
+    it("ignores local updates while snapshot conflict is open", async () => {
+        vi.mocked(saveTeacherCaseSubmissionGrade).mockRejectedValueOnce(
+            new ApiError(409, "Conflict", {
+                code: "snapshot_changed",
+                message: "El estudiante modificó su entrega. Recarga para ver cambios.",
+            }),
+        );
+
+        const { result } = renderTeacherManualGradingHook();
+
+        await waitFor(() => expect(result.current.mode).toBe("ready"));
+
+        await act(async () => {
+            await result.current.publish();
+        });
+
+        await waitFor(() => expect(result.current.isLocked).toBe(true));
+        const initialFeedback = result.current.grade?.modules[0].questions[0].feedback_question ?? null;
+
+        act(() => {
+            result.current.setQuestionFeedback("M1-Q1", "Nuevo feedback bloqueado");
+        });
+
+        expect(result.current.grade?.modules[0].questions[0].feedback_question ?? null).toBe(initialFeedback);
+        expect(result.current.autosaveState).toBe("error");
+    });
+
+    it("derives isLocked from publishing and snapshot conflict states", async () => {
+        const deferredSave = createDeferred<ReturnType<typeof createSubmissionGradeResponse>>();
+        vi.mocked(saveTeacherCaseSubmissionGrade).mockReturnValueOnce(deferredSave.promise);
+
+        const { result } = renderTeacherManualGradingHook();
+
+        await waitFor(() => expect(result.current.mode).toBe("ready"));
+        expect(result.current.isLocked).toBe(false);
+
+        let publishPromise!: Promise<boolean>;
+        act(() => {
+            publishPromise = result.current.publish();
+        });
+
+        await waitFor(() => expect(result.current.isLocked).toBe(true));
+
+        deferredSave.resolve(createSubmissionGradeResponse({
+            publication_state: "published",
+            published_at: "2026-06-05T19:10:00Z",
+            graded_at: "2026-06-05T19:10:00Z",
+        }));
+
+        await act(async () => {
+            await publishPromise;
+        });
+
+        await waitFor(() => expect(result.current.isLocked).toBe(false));
+
+        vi.mocked(saveTeacherCaseSubmissionGrade).mockRejectedValueOnce(
+            new ApiError(409, "Conflict", {
+                code: "snapshot_changed",
+                message: "El estudiante modificó su entrega. Recarga para ver cambios.",
+            }),
+        );
+
+        await act(async () => {
+            await result.current.publish();
+        });
+
+        expect(result.current.isLocked).toBe(true);
+    });
+
 });

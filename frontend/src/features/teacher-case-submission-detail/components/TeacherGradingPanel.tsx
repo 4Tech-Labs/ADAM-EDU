@@ -23,6 +23,7 @@ interface TeacherGradingPanelProps {
     banner: TeacherManualGradingBannerState | null;
     isDirty: boolean;
     isGradingMode: boolean;
+    isLocked: boolean;
     isPublishing: boolean;
     missingQuestionCount: number;
     hasPublishedVersion: boolean;
@@ -37,8 +38,13 @@ interface TeacherGradingPanelProps {
 function buildAutosaveLabel(
     autosaveState: TeacherManualGradingAutosaveState,
     grade: TeacherCaseSubmissionGradeResponse | null,
+    isPublishing: boolean,
     requiresRefresh: boolean,
 ): string {
+    if (isPublishing) {
+        return "Publicando calificación...";
+    }
+
     if (requiresRefresh) {
         return "Recarga requerida";
     }
@@ -150,6 +156,7 @@ export function TeacherGradingPanel({
     banner,
     isDirty,
     isGradingMode,
+    isLocked,
     isPublishing,
     missingQuestionCount,
     hasPublishedVersion,
@@ -201,15 +208,15 @@ export function TeacherGradingPanel({
     const activeModule = activeModuleId
         ? grade.modules.find((module) => module.module_id === activeModuleId) ?? null
         : null;
-    const editingDisabled = requiresRefresh || isPublishing;
-    const publishDisabled = isPublishing || autosaveState === "saving" || missingQuestionCount > 0 || requiresRefresh;
+    const editingDisabled = isLocked;
+    const publishDisabled = isLocked || autosaveState === "saving" || missingQuestionCount > 0;
     const publicationLabel = getTeacherGradePublicationLabel(grade);
     const scoreLabel = grade.score_display === null
         ? "Pendiente"
         : `${formatTeacherGradebookScore(grade.score_display)} / ${formatTeacherGradebookScore(grade.max_score_display)}`;
 
     return (
-        <section className="rounded-[24px] border border-slate-200 bg-white p-5 text-slate-900 shadow-sm" data-testid="teacher-grading-panel">
+        <section className="rounded-[24px] border border-slate-200 bg-white p-5 text-slate-900 shadow-sm" data-testid="teacher-grading-panel" aria-busy={isPublishing}>
             <div className="flex items-start justify-between gap-3">
                 <div>
                     <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Calificación</p>
@@ -219,7 +226,7 @@ export function TeacherGradingPanel({
                 <button
                     type="button"
                     onClick={onToggleMode}
-                    disabled={requiresRefresh}
+                    disabled={isLocked}
                     className="inline-flex items-center rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                     data-testid="teacher-grading-mode-toggle"
                 >
@@ -229,8 +236,14 @@ export function TeacherGradingPanel({
 
             <div className="mt-4 flex items-center gap-2 text-xs font-medium text-slate-600">
                 <AutosaveIcon autosaveState={autosaveState} isPublishing={isPublishing} requiresRefresh={requiresRefresh} />
-                <span>{buildAutosaveLabel(autosaveState, grade, requiresRefresh)}</span>
+                <span>{buildAutosaveLabel(autosaveState, grade, isPublishing, requiresRefresh)}</span>
             </div>
+
+            {isPublishing ? (
+                <p className="mt-2 text-xs text-slate-500" aria-live="polite">
+                    Publicando calificación, edición temporalmente deshabilitada.
+                </p>
+            ) : null}
 
             {banner ? <div className="mt-4"><Banner banner={banner} /></div> : null}
 
@@ -239,7 +252,7 @@ export function TeacherGradingPanel({
                     Revisa la entrega completa y entra a modo calificar cuando quieras dejar feedback por módulo, por pregunta y publicar una versión nueva.
                 </div>
             ) : (
-                <div className="mt-4 space-y-4">
+                <div className={`mt-4 space-y-4 ${isLocked ? "opacity-80" : ""}`}>
                     {activeModule ? (
                         <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                             Feedback del módulo {activeModule.module_id}
@@ -248,7 +261,7 @@ export function TeacherGradingPanel({
                                 onChange={(event) => onModuleFeedbackChange(activeModule.module_id, event.target.value)}
                                 disabled={editingDisabled}
                                 placeholder={`Resume cómo se sostuvo el desempeño del estudiante en ${activeModule.module_id}.`}
-                                className="mt-2 min-h-[96px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 shadow-sm outline-none transition focus:border-[#0144a0] focus:ring-2 focus:ring-[#0144a0]/10"
+                                className="mt-2 min-h-[96px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 shadow-sm outline-none transition focus:border-[#0144a0] focus:ring-2 focus:ring-[#0144a0]/10 disabled:cursor-not-allowed disabled:opacity-70"
                                 data-testid="teacher-grading-module-feedback"
                             />
                         </label>
@@ -261,7 +274,7 @@ export function TeacherGradingPanel({
                             onChange={(event) => onGlobalFeedbackChange(event.target.value)}
                             disabled={editingDisabled}
                             placeholder="Sintetiza qué debe sostener o corregir el estudiante para su siguiente iteración."
-                            className="mt-2 min-h-[120px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 shadow-sm outline-none transition focus:border-[#0144a0] focus:ring-2 focus:ring-[#0144a0]/10"
+                            className="mt-2 min-h-[120px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 shadow-sm outline-none transition focus:border-[#0144a0] focus:ring-2 focus:ring-[#0144a0]/10 disabled:cursor-not-allowed disabled:opacity-70"
                             data-testid="teacher-grading-global-feedback"
                         />
                     </label>

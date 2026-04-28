@@ -78,10 +78,10 @@ function renderPreview(options?: {
     initialEntries?: string[];
     isRefreshing?: boolean;
     detail?: ReturnType<typeof createSubmissionDetailResponse>;
-    onRefresh?: () => void;
+    onRefresh?: () => Promise<void> | void;
 }) {
     const detail = options?.detail ?? createSubmissionDetailResponse();
-    const onRefresh = options?.onRefresh ?? vi.fn();
+    const onRefresh = options?.onRefresh ?? vi.fn().mockResolvedValue(undefined);
 
     const view = renderWithProviders(
         <Routes>
@@ -93,8 +93,8 @@ function renderPreview(options?: {
                         assignmentId="assignment-1"
                         detail={detail}
                         isRefreshing={options?.isRefreshing ?? false}
-                        onRefresh={() => {
-                            onRefresh();
+                        onRefresh={async () => {
+                            await onRefresh();
                         }}
                     />
                 )}
@@ -118,6 +118,8 @@ function buildManualGradingHookState(
         autosaveState: "saved",
         banner: null,
         isDirty: false,
+        refreshError: null,
+        isLocked: false,
         isPublishing: false,
         isRefreshing: false,
         isSnapshotConflictOpen: false,
@@ -125,6 +127,8 @@ function buildManualGradingHookState(
         hasPublishedVersion: false,
         requiresRefresh: false,
         refresh: vi.fn().mockResolvedValue(undefined),
+        clearSnapshotConflict: vi.fn(),
+        setRefreshError: vi.fn(),
         publish: vi.fn().mockResolvedValue(true),
         setGlobalFeedback: vi.fn(),
         setModuleFeedback: vi.fn(),
@@ -225,7 +229,7 @@ describe("TeacherSubmissionPreview", () => {
     });
 
     it("forwards the refresh action", async () => {
-        const onRefresh = vi.fn();
+        const onRefresh = vi.fn().mockResolvedValue(undefined);
         const gradingRefresh = vi.fn().mockResolvedValue(undefined);
         vi.mocked(useTeacherManualGrading).mockReturnValue(buildManualGradingHookState({ refresh: gradingRefresh }));
         renderPreview({ onRefresh });

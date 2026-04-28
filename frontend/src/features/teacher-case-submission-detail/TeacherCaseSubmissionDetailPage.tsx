@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { AlertCircle, LoaderCircle, RefreshCcw } from "lucide-react";
 import { useParams } from "react-router-dom";
 
@@ -16,6 +17,9 @@ export function TeacherCaseSubmissionDetailPage() {
     }>();
     const detailQuery = useTeacherCaseSubmissionDetail(assignmentId, membershipId);
     const detail = detailQuery.data;
+    const refreshDetail = useCallback(async () => {
+        await detailQuery.refetch({ throwOnError: true });
+    }, [detailQuery]);
     const errorMessage = detailQuery.error
         ? getTeacherCaseSubmissionDetailErrorMessage(
             detailQuery.error,
@@ -33,7 +37,9 @@ export function TeacherCaseSubmissionDetailPage() {
                             <span>{errorMessage}</span>
                             <button
                                 type="button"
-                                onClick={() => void detailQuery.refetch()}
+                                onClick={() => {
+                                    void refreshDetail().catch(() => undefined);
+                                }}
                                 className="inline-flex items-center gap-2 self-start rounded-full border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-100"
                             >
                                 <RefreshCcw className="h-4 w-4" />
@@ -63,9 +69,7 @@ export function TeacherCaseSubmissionDetailPage() {
                     assignmentId={assignmentId}
                     detail={detail}
                     isRefreshing={detailQuery.isFetching && !detailQuery.isLoading}
-                    onRefresh={() => {
-                        void detailQuery.refetch();
-                    }}
+                    onRefresh={refreshDetail}
                 />
             ) : null}
         </TeacherLayout>

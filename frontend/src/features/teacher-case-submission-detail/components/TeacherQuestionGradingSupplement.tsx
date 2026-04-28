@@ -35,13 +35,17 @@ export function TeacherQuestionGradingSupplement({
     }
 
     function selectOption(nextIndex: number) {
+        if (disabled) {
+            return;
+        }
+
         onRubricChange(TEACHER_GRADE_RUBRIC_OPTIONS[nextIndex].value);
         focusOption(nextIndex);
     }
 
     return (
         <section
-            className="rounded-[18px] border border-slate-200 bg-slate-50/90 p-4 shadow-sm"
+            className={`rounded-[18px] border border-slate-200 bg-slate-50/90 p-4 shadow-sm ${disabled ? "opacity-80" : ""}`}
             data-testid={`teacher-question-grading-${questionId}`}
         >
             <div className="flex items-center justify-between gap-3">
@@ -57,13 +61,13 @@ export function TeacherQuestionGradingSupplement({
                     type="button"
                     onClick={() => onRubricChange(null)}
                     disabled={disabled}
-                    className="rounded-full border border-slate-200 px-3 py-1.5 text-[11px] font-semibold text-slate-500 transition hover:bg-white"
+                    className="rounded-full border border-slate-200 px-3 py-1.5 text-[11px] font-semibold text-slate-500 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                     Limpiar
                 </button>
             </div>
 
-            <div className="mt-4 flex flex-wrap gap-2" role="radiogroup" aria-label="Nivel de rúbrica">
+            <div className="mt-4 flex flex-wrap gap-2" role="radiogroup" aria-label="Nivel de rúbrica" aria-disabled={disabled}>
                 {TEACHER_GRADE_RUBRIC_OPTIONS.map((option) => {
                     const optionIndex = TEACHER_GRADE_RUBRIC_OPTIONS.findIndex((currentOption) => currentOption.value === option.value);
                     const isActive = rubricLevel === option.value;
@@ -76,6 +80,7 @@ export function TeacherQuestionGradingSupplement({
                             type="button"
                             role="radio"
                             aria-checked={isActive}
+                            aria-disabled={disabled}
                             disabled={disabled}
                             tabIndex={disabled ? -1 : focusedIndex === optionIndex ? 0 : -1}
                             onClick={() => selectOption(optionIndex)}
@@ -113,8 +118,8 @@ export function TeacherQuestionGradingSupplement({
                                 }
                             }}
                             className={isActive
-                                ? `rounded-full border px-3 py-2 text-[11px] font-semibold shadow-sm ${option.tone}`
-                                : "rounded-full border border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                                ? `rounded-full border px-3 py-2 text-[11px] font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-60 ${option.tone}`
+                                : "rounded-full border border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
                             }
                         >
                             {option.label}
@@ -129,8 +134,9 @@ export function TeacherQuestionGradingSupplement({
                     value={feedbackQuestion ?? ""}
                     onChange={(event) => onFeedbackChange(event.target.value)}
                     disabled={disabled}
+                    aria-disabled={disabled}
                     placeholder="Explica qué sostuvo o debilitó la respuesta del estudiante."
-                    className="mt-2 min-h-[104px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm outline-none transition focus:border-[#0144a0] focus:ring-2 focus:ring-[#0144a0]/10"
+                    className="mt-2 min-h-[104px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm outline-none transition focus:border-[#0144a0] focus:ring-2 focus:ring-[#0144a0]/10 disabled:cursor-not-allowed disabled:opacity-70"
                 />
             </label>
         </section>

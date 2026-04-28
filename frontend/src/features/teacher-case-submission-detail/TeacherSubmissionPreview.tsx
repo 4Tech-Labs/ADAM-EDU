@@ -34,7 +34,7 @@ interface TeacherSubmissionPreviewProps {
     assignmentId: string;
     detail: TeacherCaseSubmissionDetailResponse;
     isRefreshing: boolean;
-    onRefresh: () => void;
+    onRefresh: () => Promise<void>;
 }
 
 function toTeacherGradeModuleId(moduleId: ModuleId): "M1" | "M2" | "M3" | "M4" | "M5" {
@@ -139,12 +139,24 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
         : null;
     const gradingMode = grading.mode;
     const gradingGrade = grading.grade;
-    const gradingRequiresRefresh = grading.requiresRefresh;
+    const gradingIsLocked = grading.isLocked;
     const setQuestionFeedback = grading.setQuestionFeedback;
     const setQuestionRubric = grading.setQuestionRubric;
     const handleRefresh = useCallback(async () => {
-        onRefresh();
-        await grading.refresh();
+        try {
+            await Promise.all([onRefresh(), grading.refresh()]);
+        } catch {
+            // The page-level error surface already renders the failure state.
+        }
+    }, [grading, onRefresh]);
+    const handleSnapshotConflictRefresh = useCallback(async () => {
+        grading.setRefreshError(null);
+        try {
+            await Promise.all([onRefresh(), grading.refresh()]);
+            grading.clearSnapshotConflict();
+        } catch (error) {
+            grading.setRefreshError(error);
+        }
     }, [grading, onRefresh]);
     const handlePublishConfirm = useCallback(async () => {
         const published = await grading.publish();
@@ -170,7 +182,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                         questionId={questionId}
                         rubricLevel={question.rubric_level}
                         feedbackQuestion={question.feedback_question}
-                        disabled={gradingRequiresRefresh}
+                        disabled={gradingIsLocked}
                         onRubricChange={(value) => setQuestionRubric(questionId, value)}
                         onFeedbackChange={(value) => setQuestionFeedback(questionId, value)}
                     />
@@ -182,7 +194,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
     }, [
         gradingGrade,
         gradingMode,
-        gradingRequiresRefresh,
+        gradingIsLocked,
         setQuestionFeedback,
         setQuestionRubric,
         isGradingMode,
@@ -200,6 +212,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                 banner={grading.banner}
                 isDirty={grading.isDirty}
                 isGradingMode={isGradingMode}
+                isLocked={grading.isLocked}
                 isPublishing={grading.isPublishing}
                 missingQuestionCount={grading.missingQuestionCount}
                 hasPublishedVersion={grading.hasPublishedVersion}
@@ -342,8 +355,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                             <button
                                 type="button"
                                 onClick={() => {
-                                    onRefresh();
-                                    void grading.refresh();
+                                    void handleRefresh();
                                 }}
                                 disabled={isRefreshing}
                                 className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
@@ -419,7 +431,8 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
             <TeacherSnapshotConflictModal
                 isOpen={grading.isSnapshotConflictOpen}
                 isReloading={isRefreshing || grading.isRefreshing}
-                onReload={() => handleRefresh()}
+                refreshError={grading.refreshError}
+                onReload={() => handleSnapshotConflictRefresh()}
             />
         </>
     );

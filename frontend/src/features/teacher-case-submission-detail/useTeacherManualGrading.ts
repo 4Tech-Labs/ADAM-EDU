@@ -36,7 +36,9 @@ interface UseTeacherManualGradingResult {
     loadErrorMessage: string | null;
     autosaveState: TeacherManualGradingAutosaveState;
     banner: TeacherManualGradingBannerState | null;
+    refreshError: string | null;
     isDirty: boolean;
+    isLocked: boolean;
     isPublishing: boolean;
     isRefreshing: boolean;
     isSnapshotConflictOpen: boolean;
@@ -44,6 +46,8 @@ interface UseTeacherManualGradingResult {
     hasPublishedVersion: boolean;
     requiresRefresh: boolean;
     refresh: () => Promise<void>;
+    clearSnapshotConflict: () => void;
+    setRefreshError: (error: unknown | null) => void;
     publish: () => Promise<boolean>;
     setGlobalFeedback: (value: string) => void;
     setModuleFeedback: (moduleId: string, value: string) => void;
@@ -113,11 +117,13 @@ export function useTeacherManualGrading(
     const [grade, setGrade] = useState<TeacherCaseSubmissionGradeResponse | null>(null);
     const [autosaveState, setAutosaveState] = useState<TeacherManualGradingAutosaveState>("idle");
     const [banner, setBanner] = useState<TeacherManualGradingBannerState | null>(null);
+    const [refreshError, setRefreshErrorState] = useState<string | null>(null);
     const [isDirty, setIsDirty] = useState(false);
     const [isPublishing, setIsPublishing] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [isSnapshotConflictOpen, setIsSnapshotConflictOpen] = useState(false);
     const [requiresRefresh, setRequiresRefresh] = useState(false);
+    const isLocked = isPublishing || isSnapshotConflictOpen;
 
     const gradeRef = useRef<TeacherCaseSubmissionGradeResponse | null>(grade);
     const dirtyRef = useRef(isDirty);
@@ -158,6 +164,23 @@ export function useTeacherManualGrading(
         }
     }, []);
 
+    const setRefreshError = useCallback((error: unknown | null) => {
+        if (error === null) {
+            setRefreshErrorState(null);
+            return;
+        }
+
+        setRefreshErrorState(
+            getTeacherManualGradingErrorMessage(error, "No se pudo recargar la entrega."),
+        );
+    }, []);
+
+    const clearSnapshotConflict = useCallback(() => {
+        setIsSnapshotConflictOpen(false);
+        setRequiresRefresh(false);
+        setRefreshErrorState(null);
+    }, []);
+
     const syncFromServer = useCallback(
         (
             nextGrade: TeacherCaseSubmissionGradeResponse,
@@ -168,8 +191,6 @@ export function useTeacherManualGrading(
             gradeRef.current = cloned;
             setIsDirty(false);
             dirtyRef.current = false;
-            setIsSnapshotConflictOpen(false);
-            setRequiresRefresh(false);
             setAutosaveState(nextAutosaveState);
         },
         [],
@@ -179,6 +200,7 @@ export function useTeacherManualGrading(
         if (getApiErrorCode(error) === "snapshot_changed") {
             setAutosaveState("error");
             setBanner(null);
+            setRefreshErrorState(null);
             setRequiresRefresh(true);
             setIsSnapshotConflictOpen(true);
             return;
@@ -190,7 +212,7 @@ export function useTeacherManualGrading(
     }, []);
 
     const flushDraft = useCallback(async () => {
-        if (!canLoad || !gradeRef.current || !dirtyRef.current || requiresRefresh || isPublishing) {
+        if (!canLoad || !gradeRef.current || !dirtyRef.current || isLocked) {
             return;
         }
 
@@ -206,6 +228,7 @@ export function useTeacherManualGrading(
                 nextGrade: gradeRef.current,
                 intent: "save_draft",
             });
+
             if (unmountedRef.current) {
                 return;
             }
@@ -228,7 +251,7 @@ export function useTeacherManualGrading(
                 void flushDraft();
             }
         }
-    }, [assignmentId, canLoad, courseId, handleMutationError, isPublishing, membershipId, queryClient, requiresRefresh, saveMutation, syncFromServer]);
+    }, [assignmentId, canLoad, courseId, handleMutationError, isLocked, membershipId, queryClient, saveMutation, syncFromServer]);
 
     useEffect(() => {
         if (!gradeQuery.data) {
@@ -244,7 +267,7 @@ export function useTeacherManualGrading(
     }, [gradeQuery.data, syncFromServer]);
 
     useEffect(() => {
-        if (!canLoad || !grade || !isDirty || requiresRefresh || isPublishing) {
+        if (!canLoad || !grade || !isDirty || isLocked) {
             return;
         }
 
@@ -256,9 +279,11 @@ export function useTeacherManualGrading(
         return () => {
             clearAutosaveTimer();
         };
-    }, [canLoad, clearAutosaveTimer, flushDraft, grade, isDirty, isPublishing, requiresRefresh]);
+    }, [canLoad, clearAutosaveTimer, flushDraft, grade, isDirty, isLocked]);
 
     useEffect(() => {
+        unmountedRef.current = false;
+
         return () => {
             unmountedRef.current = true;
             clearAutosaveTimer();
@@ -266,7 +291,7 @@ export function useTeacherManualGrading(
     }, [clearAutosaveTimer]);
 
     const applyLocalUpdate = useCallback((recipe: (nextGrade: TeacherCaseSubmissionGradeResponse) => void) => {
-        if (requiresRefresh) {
+        if (isLocked) {
             return;
         }
 
@@ -290,14 +315,15 @@ export function useTeacherManualGrading(
         setIsDirty(true);
         dirtyRef.current = true;
         setAutosaveState("dirty");
-    }, [requiresRefresh]);
+    }, [isLocked]);
 
     const publish = useCallback(async () => {
-        if (!gradeRef.current || saveInFlightRef.current || requiresRefresh) {
+        if (!gradeRef.current || saveInFlightRef.current || isLocked) {
             return false;
         }
 
         clearAutosaveTimer();
+        setRefreshErrorState(null);
         setIsPublishing(true);
         try {
             const response = await saveMutation.mutateAsync({
@@ -339,17 +365,17 @@ export function useTeacherManualGrading(
                 setIsPublishing(false);
             }
         }
-    }, [assignmentId, clearAutosaveTimer, courseId, handleMutationError, membershipId, queryClient, requiresRefresh, saveMutation, syncFromServer]);
+    }, [assignmentId, clearAutosaveTimer, courseId, handleMutationError, isLocked, membershipId, queryClient, saveMutation, syncFromServer]);
 
     const refresh = useCallback(async () => {
         clearAutosaveTimer();
         setBanner(null);
+        setRefreshErrorState(null);
         setIsRefreshing(true);
         try {
             const response = await gradeQuery.refetch();
-            if (!response.error) {
-                setRequiresRefresh(false);
-                setIsSnapshotConflictOpen(false);
+            if (response.error) {
+                throw response.error;
             }
         } finally {
             if (!unmountedRef.current) {
@@ -385,7 +411,9 @@ export function useTeacherManualGrading(
             : null,
         autosaveState,
         banner,
+        refreshError,
         isDirty,
+        isLocked,
         isPublishing,
         isRefreshing,
         isSnapshotConflictOpen,
@@ -393,6 +421,8 @@ export function useTeacherManualGrading(
         hasPublishedVersion: hasPublishedTeacherGrade(grade),
         requiresRefresh,
         refresh,
+        clearSnapshotConflict,
+        setRefreshError,
         publish,
         setGlobalFeedback: (value: string) => {
             applyLocalUpdate((nextGrade) => {

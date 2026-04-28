@@ -1,4 +1,5 @@
 import { fireEvent, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "@/shared/test-utils";
@@ -32,5 +33,36 @@ describe("TeacherQuestionGradingSupplement", () => {
         expect(onRubricChange).toHaveBeenCalledWith("bien");
         expect(goodOption).toHaveFocus();
         expect(goodOption).toHaveAttribute("tabindex", "0");
+    });
+
+    it("exposes aria-disabled and blocks interactions when disabled", async () => {
+        const onRubricChange = vi.fn();
+        const onFeedbackChange = vi.fn();
+        const user = userEvent.setup();
+
+        renderWithProviders(
+            <TeacherQuestionGradingSupplement
+                questionId="M1-Q1"
+                rubricLevel="excelente"
+                feedbackQuestion={null}
+                disabled={true}
+                onFeedbackChange={onFeedbackChange}
+                onRubricChange={onRubricChange}
+            />,
+        );
+
+        const radiogroup = screen.getByRole("radiogroup", { name: "Nivel de rúbrica" });
+        const excellentOption = screen.getByRole("radio", { name: "Excelente" });
+        const feedbackTextarea = screen.getByPlaceholderText(/Explica qué sostuvo o debilitó/i);
+
+        expect(radiogroup).toHaveAttribute("aria-disabled", "true");
+        expect(excellentOption).toHaveAttribute("aria-disabled", "true");
+        expect(feedbackTextarea).toHaveAttribute("aria-disabled", "true");
+
+        await user.click(excellentOption);
+        await user.type(feedbackTextarea, "Nuevo feedback");
+
+        expect(onRubricChange).not.toHaveBeenCalled();
+        expect(onFeedbackChange).not.toHaveBeenCalled();
     });
 });
