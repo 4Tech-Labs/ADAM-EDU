@@ -899,6 +899,7 @@ export interface TeacherCaseSubmissionDetailResponse {
     payload_version: 1;
     is_truncated: boolean;
     case: TeacherCaseSubmissionDetailCase;
+    case_view?: CanonicalCaseOutput | null;
     student: TeacherCaseSubmissionDetailStudent;
     response_state: TeacherCaseSubmissionDetailResponseState;
     grade_summary: TeacherCaseSubmissionDetailGradeSummary;
