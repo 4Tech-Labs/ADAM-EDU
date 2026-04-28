@@ -71,6 +71,18 @@ function getGradeSummary(detail: TeacherCaseSubmissionDetailResponse): string {
     return `${formatTeacherGradebookScore(detail.grade_summary.score)} / ${formatTeacherGradebookScore(detail.grade_summary.max_score)}`;
 }
 
+function getStatusBadgeClasses(status: string): string {
+    switch (status) {
+        case "submitted":
+        case "graded":
+            return "bg-emerald-100 text-emerald-800 ring-1 ring-inset ring-emerald-200";
+        case "in_progress":
+            return "bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-200";
+        default:
+            return "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200";
+    }
+}
+
 function getVisibleModules(detail: TeacherCaseSubmissionDetailResponse): ModuleId[] {
     const canonicalOutput = toCanonicalCaseOutput(detail);
     return getModuleConfig(canonicalOutput.studentProfile ?? "business", canonicalOutput.caseType)
@@ -89,6 +101,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
     const refreshLabel = isRefreshing ? "Actualizando entrega" : "Actualizar entrega";
     const snapshotLabel = getSnapshotLabel(detail);
     const statusLabel = formatTeacherGradebookCellStatus(detail.response_state.status).toUpperCase();
+    const statusBadgeClasses = getStatusBadgeClasses(detail.response_state.status);
 
     useEffect(() => {
         if (visibleModules.length === 0) {
@@ -120,49 +133,43 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                     className="hidden h-full w-[280px] shrink-0 flex-col border-r border-slate-900/60 bg-slate-950 text-slate-100 md:flex"
                     data-testid="teacher-submission-preview-sidebar"
                 >
-                    <div className="border-b border-slate-800 px-5 py-5">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    <div className="shrink-0 border-b border-slate-800 px-5 py-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
                             Revisión docente
                         </p>
-                        <h1 className="mt-2 text-lg font-semibold text-white">{detail.student.full_name}</h1>
-                        <p className="mt-1 text-sm text-slate-400">{detail.case.title}</p>
+                        <h1 className="mt-1.5 text-base font-semibold leading-snug text-white">{detail.student.full_name}</h1>
+                        <p className="mt-0.5 line-clamp-2 text-xs text-slate-400">{detail.case.title}</p>
                     </div>
 
-                    <ModulesSidebar
-                        visibleModules={visibleModules}
-                        activeModule={activeModule}
-                        onActiveModuleChange={setActiveModule}
-                        studentProfile={canonicalOutput.studentProfile ?? "business"}
-                        caseType={canonicalOutput.caseType}
-                    />
+                    <div className="flex min-h-0 flex-1 flex-col">
+                        <ModulesSidebar
+                            visibleModules={visibleModules}
+                            activeModule={activeModule}
+                            onActiveModuleChange={setActiveModule}
+                            studentProfile={canonicalOutput.studentProfile ?? "business"}
+                            caseType={canonicalOutput.caseType}
+                        />
+                    </div>
 
-                    <div className="border-t border-slate-800 px-5 py-5 text-sm text-slate-200">
-                        <dl className="space-y-3" data-testid="teacher-submission-preview-summary">
-                            <div className="flex items-start justify-between gap-3">
-                                <dt className="text-slate-400">Estado</dt>
-                                <dd className="text-right font-semibold text-white">{statusLabel}</dd>
-                            </div>
-                            <div className="flex items-start justify-between gap-3">
-                                <dt className="text-slate-400">Snapshot</dt>
-                                <dd className="text-right">{snapshotLabel}</dd>
-                            </div>
-                            <div className="flex items-start justify-between gap-3">
-                                <dt className="text-slate-400">Respondidas</dt>
-                                <dd className="text-right">{answeredQuestions}/{totalQuestions}</dd>
-                            </div>
-                            <div className="flex items-start justify-between gap-3">
-                                <dt className="text-slate-400">Calificación</dt>
-                                <dd className="text-right">{getGradeSummary(detail)}</dd>
-                            </div>
-                            <div className="flex items-start justify-between gap-3">
-                                <dt className="text-slate-400">Entrega</dt>
-                                <dd className="max-w-[150px] text-right">{formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}</dd>
-                            </div>
+                    <div className="shrink-0 border-t border-slate-800 px-5 py-3 text-xs text-slate-200">
+                        <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5" data-testid="teacher-submission-preview-summary">
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Estado</dt>
+                            <dd className="text-right text-[11px] font-semibold text-white">{statusLabel}</dd>
+
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Versión</dt>
+                            <dd className="text-right text-[11px]">{snapshotLabel}</dd>
+
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Respondidas</dt>
+                            <dd className="text-right text-[11px]">{answeredQuestions}/{totalQuestions}</dd>
+
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Calificación</dt>
+                            <dd className="text-right text-[11px]">{getGradeSummary(detail)}</dd>
+
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Entrega</dt>
+                            <dd className="truncate text-right text-[11px]" title={formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}>
+                                {formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}
+                            </dd>
                         </dl>
-
-                        <div className="mt-5">
-                            <GradingPlaceholderSlot />
-                        </div>
                     </div>
                 </aside>
 
@@ -191,7 +198,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                         </div>
 
                         <div className="flex items-center gap-3">
-                            <span className="hidden rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 lg:inline-flex">
+                            <span className={`hidden rounded-full px-3 py-1 text-xs font-semibold lg:inline-flex ${statusBadgeClasses}`}>
                                 {statusLabel}
                             </span>
                             <button
@@ -225,38 +232,19 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                         </div>
                     </div>
 
-                    <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 md:px-4 md:py-4">
-                        <CaseContentRenderer
-                            result={canonicalOutput}
-                            visibleModules={visibleModules}
-                            activeModule={activeModule}
-                            onActiveModuleChange={setActiveModule}
-                            answers={answers}
-                            onAnswersChange={() => undefined}
-                            readOnly={true}
-                            showExpectedSolutions={true}
-                        />
+                    <CaseContentRenderer
+                        result={canonicalOutput}
+                        visibleModules={visibleModules}
+                        activeModule={activeModule}
+                        onActiveModuleChange={setActiveModule}
+                        answers={answers}
+                        onAnswersChange={() => undefined}
+                        readOnly={true}
+                        showExpectedSolutions={true}
+                    />
 
-                        <div className="mt-4 rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm md:hidden">
-                            <dl className="space-y-2 text-sm text-slate-700">
-                                <div className="flex items-start justify-between gap-3">
-                                    <dt className="text-slate-500">Snapshot</dt>
-                                    <dd className="text-right">{snapshotLabel}</dd>
-                                </div>
-                                <div className="flex items-start justify-between gap-3">
-                                    <dt className="text-slate-500">Respondidas</dt>
-                                    <dd className="text-right">{answeredQuestions}/{totalQuestions}</dd>
-                                </div>
-                                <div className="flex items-start justify-between gap-3">
-                                    <dt className="text-slate-500">Calificación</dt>
-                                    <dd className="text-right">{getGradeSummary(detail)}</dd>
-                                </div>
-                            </dl>
-
-                            <div className="mt-4">
-                                <GradingPlaceholderSlot />
-                            </div>
-                        </div>
+                    <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 md:hidden">
+                        <GradingPlaceholderSlot />
                     </div>
                 </div>
             </div>
