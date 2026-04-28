@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -69,6 +70,48 @@ _logger = logging.getLogger(__name__)
 _DETAIL_PAYLOAD_MAX_BYTES = 1_500_000
 _DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS = 8_000
 _DETAIL_EXPECTED_SOLUTION_TRUNCATION_PLACEHOLDER = "[truncado por tamano]"
+_DETAIL_QUESTION_ARRAY_FIELDS: Sequence[str] = (
+    "caseQuestions",
+    "edaQuestions",
+    "m3Questions",
+    "m4Questions",
+    "m5Questions",
+)
+_DETAIL_CASE_VIEW_ROOT_FIELDS: Sequence[str] = (
+    "caseId",
+    "title",
+    "subject",
+    "syllabusModule",
+    "guidingQuestion",
+    "industry",
+    "academicLevel",
+    "caseType",
+    "edaDepth",
+    "studentProfile",
+    "generatedAt",
+    "outputDepth",
+)
+_DETAIL_PREVIEW_TEXT_FIELDS: Sequence[str] = (
+    "instructions",
+    "narrative",
+    "financialExhibit",
+    "operatingExhibit",
+    "stakeholdersExhibit",
+    "edaReport",
+    "teachingNote",
+    "notebookCode",
+    "m3Content",
+    "m3NotebookCode",
+    "m4Content",
+    "m5Content",
+)
+_DETAIL_PREVIEW_COLLECTION_FIELDS: Sequence[str] = (
+    "datasetRows",
+    "doc7Dataset",
+    "edaCharts",
+    "m3Charts",
+    "m4Charts",
+)
 _MODULE_TITLES: Mapping[str, str] = {
     "M1": "Módulo 1 · Comprensión del caso",
     "M2": "Módulo 2 · Análisis de datos",
@@ -214,85 +257,131 @@ def _m5_solution_lookup(content: dict[str, Any]) -> dict[str, str]:
     return solutions
 
 
-def _truncate_detail_modules_if_needed(
-    modules: list[TeacherCaseSubmissionDetailModule],
+def _serialize_detail_response(response: TeacherCaseSubmissionDetailResponse) -> str:
+    return json.dumps(response.model_dump(mode="json"), ensure_ascii=False)
+
+
+def _truncate_teacher_payload_solution_value(value: Any, *, max_chars: int) -> Any:
+    if isinstance(value, str):
+        return _truncate_expected_solution_for_detail(value, max_chars=max_chars)
+    if isinstance(value, dict):
+        truncated: dict[str, Any] = {}
+        for key, item in value.items():
+            if isinstance(item, str):
+                truncated[key] = _truncate_expected_solution_for_detail(item, max_chars=max_chars)
+            else:
+                truncated[key] = item
+        return truncated
+    return value
+
+
+def _collect_teacher_payload_solution_lengths(teacher_payload: dict[str, Any]) -> list[int]:
+    content = teacher_payload.get("content")
+    if not isinstance(content, dict):
+        return []
+
+    lengths: list[int] = []
+    for field_name in _DETAIL_QUESTION_ARRAY_FIELDS:
+        raw_questions = content.get(field_name)
+        if not isinstance(raw_questions, list):
+            continue
+        for raw_question in raw_questions:
+            if not isinstance(raw_question, dict):
+                continue
+            raw_solution = raw_question.get("solucion_esperada")
+            if isinstance(raw_solution, str):
+                lengths.append(len(raw_solution))
+            elif isinstance(raw_solution, dict):
+                for value in raw_solution.values():
+                    if isinstance(value, str):
+                        lengths.append(len(value))
+
+    raw_m5_solutions = content.get("m5QuestionsSolutions")
+    if isinstance(raw_m5_solutions, list):
+        for item in raw_m5_solutions:
+            if not isinstance(item, dict):
+                continue
+            raw_solution = item.get("solucion_esperada")
+            if isinstance(raw_solution, str):
+                lengths.append(len(raw_solution))
+
+    return lengths
+
+
+def _truncate_teacher_payload_expected_solutions(
+    teacher_payload: dict[str, Any],
     *,
-    assignment_id: str,
-    membership_id: str,
-) -> tuple[list[TeacherCaseSubmissionDetailModule], bool]:
-    serialized_modules = _serialize_detail_modules(modules)
-    serialized_size_bytes = len(serialized_modules.encode("utf-8"))
-    if serialized_size_bytes <= _DETAIL_PAYLOAD_MAX_BYTES:
-        return modules, False
+    max_chars: int,
+) -> None:
+    content = teacher_payload.get("content")
+    if not isinstance(content, dict):
+        return
 
-    truncatable_questions = [
-        question
-        for module in modules
-        for question in module.questions
-        if question.expected_solution
-    ]
-    if not truncatable_questions:
-        raise ValueError("teacher submission detail exceeds size cap without truncatable expected solutions")
-
-    original_expected_solutions = {
-        id(question): question.expected_solution
-        for question in truncatable_questions
-    }
-
-    def apply_expected_solution_cap(max_chars: int) -> int:
-        for question in truncatable_questions:
-            question.expected_solution = _truncate_expected_solution_for_detail(
-                original_expected_solutions[id(question)],
+    for field_name in _DETAIL_QUESTION_ARRAY_FIELDS:
+        raw_questions = content.get(field_name)
+        if not isinstance(raw_questions, list):
+            continue
+        for raw_question in raw_questions:
+            if not isinstance(raw_question, dict) or "solucion_esperada" not in raw_question:
+                continue
+            raw_question["solucion_esperada"] = _truncate_teacher_payload_solution_value(
+                raw_question.get("solucion_esperada"),
                 max_chars=max_chars,
             )
-        return len(_serialize_detail_modules(modules).encode("utf-8"))
 
-    minimum_size_bytes = apply_expected_solution_cap(0)
-    if minimum_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
-        raise ValueError(
-            "teacher submission detail exceeds size cap even after fully truncating expected solutions"
+    raw_m5_solutions = content.get("m5QuestionsSolutions")
+    if not isinstance(raw_m5_solutions, list):
+        return
+
+    for item in raw_m5_solutions:
+        if not isinstance(item, dict) or "solucion_esperada" not in item:
+            continue
+        item["solucion_esperada"] = _truncate_teacher_payload_solution_value(
+            item.get("solucion_esperada"),
+            max_chars=max_chars,
         )
 
-    max_original_chars = max(len(value) for value in original_expected_solutions.values())
-    best_cap = 0
-    low = 0
-    high = max_original_chars
 
-    while low <= high:
-        candidate_cap = (low + high) // 2
-        candidate_size_bytes = apply_expected_solution_cap(candidate_cap)
-        if candidate_size_bytes <= _DETAIL_PAYLOAD_MAX_BYTES:
-            best_cap = candidate_cap
-            low = candidate_cap + 1
-        else:
-            high = candidate_cap - 1
+def _collect_teacher_payload_preview_text_lengths(teacher_payload: dict[str, Any]) -> list[int]:
+    content = teacher_payload.get("content")
+    if not isinstance(content, dict):
+        return []
 
-    final_char_cap = min(best_cap, _DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS)
-    final_size_bytes = apply_expected_solution_cap(final_char_cap)
-    if final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
-        final_size_bytes = apply_expected_solution_cap(best_cap)
-        final_char_cap = best_cap
-    if final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
-        raise ValueError("teacher submission detail still exceeds the size cap after truncation")
-
-    _logger.warning(
-        "teacher_case_submission_detail_payload_truncated",
-        extra={
-            "assignment_id": assignment_id,
-            "membership_id": membership_id,
-            "payload_size_bytes": serialized_size_bytes,
-            "final_payload_size_bytes": final_size_bytes,
-            "expected_solution_char_cap": final_char_cap,
-        },
-    )
-    return modules, True
+    lengths: list[int] = []
+    for field_name in _DETAIL_PREVIEW_TEXT_FIELDS:
+        value = content.get(field_name)
+        if isinstance(value, str):
+            lengths.append(len(value))
+    return lengths
 
 
-def _serialize_detail_modules(modules: list[TeacherCaseSubmissionDetailModule]) -> str:
-    return json.dumps(
-        [module.model_dump(mode="json") for module in modules],
-        ensure_ascii=False,
-    )
+def _truncate_teacher_payload_preview_content(
+    teacher_payload: dict[str, Any],
+    *,
+    max_chars: int,
+) -> None:
+    content = teacher_payload.get("content")
+    if not isinstance(content, dict):
+        return
+
+    for field_name in _DETAIL_PREVIEW_TEXT_FIELDS:
+        value = content.get(field_name)
+        if isinstance(value, str):
+            content[field_name] = _truncate_expected_solution_for_detail(value, max_chars=max_chars)
+
+    for field_name in _DETAIL_PREVIEW_COLLECTION_FIELDS:
+        if field_name in content:
+            content[field_name] = []
+
+
+def _build_minimal_teacher_case_view(teacher_payload: dict[str, Any]) -> dict[str, Any]:
+    minimal_case_view = {
+        field_name: deepcopy(teacher_payload[field_name])
+        for field_name in _DETAIL_CASE_VIEW_ROOT_FIELDS
+        if field_name in teacher_payload
+    }
+    minimal_case_view["content"] = {}
+    return minimal_case_view
 
 
 def _truncate_expected_solution_for_detail(value: str, *, max_chars: int) -> str:
@@ -312,18 +401,15 @@ def _detail_row_with_fallback_email(detail_row: RowMapping) -> dict[str, Any]:
 
 def _build_submission_detail_modules(
     *,
-    canonical_output: dict[str, Any],
+    teacher_payload: dict[str, Any],
     answers: dict[str, str],
     is_answer_from_draft: bool,
-    assignment_id: str,
-    membership_id: str,
-) -> tuple[list[TeacherCaseSubmissionDetailModule], bool]:
+) -> list[TeacherCaseSubmissionDetailModule]:
     from shared.student_reads import QUESTION_FIELD_TO_MODULE
 
-    teacher_payload = build_teacher_case_review_payload(canonical_output)
     content = teacher_payload.get("content")
     if not isinstance(content, dict):
-        return [], False
+        return []
 
     m5_solution_lookup = _m5_solution_lookup(content)
     modules: list[TeacherCaseSubmissionDetailModule] = []
@@ -372,11 +458,158 @@ def _build_submission_detail_modules(
                 )
             )
 
-    return _truncate_detail_modules_if_needed(
-        modules,
-        assignment_id=assignment_id,
-        membership_id=membership_id,
+    return modules
+
+
+def _truncate_detail_payload_if_needed(
+    *,
+    teacher_payload: dict[str, Any],
+    answers: dict[str, str],
+    is_answer_from_draft: bool,
+    assignment_id: str,
+    membership_id: str,
+    case: TeacherCaseSubmissionDetailCase,
+    student: TeacherCaseSubmissionDetailStudent,
+    response_state: TeacherCaseSubmissionDetailResponseState,
+    grade_summary: TeacherCaseSubmissionDetailGradeSummary,
+) -> tuple[dict[str, Any], list[TeacherCaseSubmissionDetailModule], bool]:
+    def build_response_payload(
+        candidate_payload: dict[str, Any],
+        *,
+        is_truncated: bool,
+        case_view_payload: dict[str, Any] | None = None,
+    ) -> tuple[TeacherCaseSubmissionDetailResponse, int]:
+        candidate_modules = _build_submission_detail_modules(
+            teacher_payload=candidate_payload,
+            answers=answers,
+            is_answer_from_draft=is_answer_from_draft,
+        )
+        response = TeacherCaseSubmissionDetailResponse(
+            is_truncated=is_truncated,
+            case=case,
+            case_view=deepcopy(case_view_payload if case_view_payload is not None else candidate_payload),
+            student=student,
+            response_state=response_state,
+            grade_summary=grade_summary,
+            modules=candidate_modules,
+        )
+        serialized_size_bytes = len(_serialize_detail_response(response).encode("utf-8"))
+        return response, serialized_size_bytes
+
+    response, serialized_size_bytes = build_response_payload(teacher_payload, is_truncated=False)
+    if serialized_size_bytes <= _DETAIL_PAYLOAD_MAX_BYTES:
+        return response.case_view or {}, response.modules, False
+
+    original_teacher_payload = deepcopy(teacher_payload)
+    solution_lengths = _collect_teacher_payload_solution_lengths(teacher_payload)
+    final_response = response
+    final_size_bytes = serialized_size_bytes
+    final_char_cap = 0
+
+    if solution_lengths:
+        def build_candidate(max_chars: int) -> tuple[TeacherCaseSubmissionDetailResponse, int]:
+            candidate_payload = deepcopy(original_teacher_payload)
+            _truncate_teacher_payload_expected_solutions(candidate_payload, max_chars=max_chars)
+            return build_response_payload(candidate_payload, is_truncated=True)
+
+        max_original_chars = max(solution_lengths)
+        best_cap = 0
+        minimum_response, minimum_size_bytes = build_candidate(0)
+        best_response = minimum_response
+        best_size_bytes = minimum_size_bytes
+        low = 0
+        high = max_original_chars
+
+        while low <= high:
+            candidate_cap = (low + high) // 2
+            candidate_response, candidate_size_bytes = build_candidate(candidate_cap)
+            if candidate_size_bytes <= _DETAIL_PAYLOAD_MAX_BYTES:
+                best_cap = candidate_cap
+                best_response = candidate_response
+                best_size_bytes = candidate_size_bytes
+                low = candidate_cap + 1
+            else:
+                high = candidate_cap - 1
+
+        final_char_cap = min(best_cap, _DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS)
+        final_response, final_size_bytes = build_candidate(final_char_cap)
+        if final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
+            final_response = best_response
+            final_size_bytes = best_size_bytes
+            final_char_cap = best_cap
+    if final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
+        preview_lengths = _collect_teacher_payload_preview_text_lengths(original_teacher_payload)
+
+        def build_preview_candidate(max_chars: int) -> tuple[TeacherCaseSubmissionDetailResponse, int]:
+            candidate_payload = deepcopy(original_teacher_payload)
+            _truncate_teacher_payload_expected_solutions(candidate_payload, max_chars=0)
+            _truncate_teacher_payload_preview_content(candidate_payload, max_chars=max_chars)
+            return build_response_payload(candidate_payload, is_truncated=True)
+
+        preview_min_response, preview_min_size_bytes = build_preview_candidate(0)
+        if preview_lengths:
+            preview_best_cap = 0
+            preview_best_response = preview_min_response
+            preview_best_size_bytes = preview_min_size_bytes
+            preview_low = 0
+            preview_high = max(preview_lengths)
+
+            while preview_low <= preview_high:
+                preview_candidate_cap = (preview_low + preview_high) // 2
+                preview_candidate_response, preview_candidate_size_bytes = build_preview_candidate(preview_candidate_cap)
+                if preview_candidate_size_bytes <= _DETAIL_PAYLOAD_MAX_BYTES:
+                    preview_best_cap = preview_candidate_cap
+                    preview_best_response = preview_candidate_response
+                    preview_best_size_bytes = preview_candidate_size_bytes
+                    preview_low = preview_candidate_cap + 1
+                else:
+                    preview_high = preview_candidate_cap - 1
+
+            preview_final_cap = min(preview_best_cap, _DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS)
+            preview_final_response, preview_final_size_bytes = build_preview_candidate(preview_final_cap)
+            if preview_final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
+                preview_final_response = preview_best_response
+                preview_final_size_bytes = preview_best_size_bytes
+                preview_final_cap = preview_best_cap
+            final_response = preview_final_response
+            final_size_bytes = preview_final_size_bytes
+            final_char_cap = preview_final_cap
+        else:
+            final_response = preview_min_response
+            final_size_bytes = preview_min_size_bytes
+            final_char_cap = 0
+    if final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
+        minimal_payload = deepcopy(original_teacher_payload)
+        _truncate_teacher_payload_expected_solutions(minimal_payload, max_chars=0)
+        minimal_case_view = _build_minimal_teacher_case_view(minimal_payload)
+        final_response, final_size_bytes = build_response_payload(
+            minimal_payload,
+            is_truncated=True,
+            case_view_payload=minimal_case_view,
+        )
+        final_char_cap = 0
+    if final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
+        _logger.warning(
+            "teacher_case_submission_detail_payload_over_cap_after_case_view_fallback",
+            extra={
+                "assignment_id": assignment_id,
+                "membership_id": membership_id,
+                "payload_size_bytes": final_size_bytes,
+                "payload_cap_bytes": _DETAIL_PAYLOAD_MAX_BYTES,
+            },
+        )
+
+    _logger.warning(
+        "teacher_case_submission_detail_payload_truncated",
+        extra={
+            "assignment_id": assignment_id,
+            "membership_id": membership_id,
+            "payload_size_bytes": serialized_size_bytes,
+            "final_payload_size_bytes": final_size_bytes,
+            "expected_solution_char_cap": final_char_cap,
+        },
     )
+    return final_response.case_view or {}, final_response.modules, True
 
 
 def _load_teacher_submission_assignment(
@@ -611,13 +844,66 @@ def get_teacher_case_submission_detail(
         answer_source = {}
         is_answer_from_draft = False
 
+    available_from, deadline = resolve_assignment_schedule_values(assignment)
+    teacher_content = teacher_payload.get("content") if isinstance(teacher_payload, dict) else None
+    teaching_note = None
+    if isinstance(teacher_content, dict) and teacher_content.get("teachingNote") is not None:
+        teaching_note = _stringify_review_value(teacher_content.get("teachingNote")) or None
+
+    case_detail = TeacherCaseSubmissionDetailCase(
+        id=assignment.id,
+        title=_resolve_assignment_title(assignment),
+        deadline=deadline,
+        available_from=available_from,
+        course_id=repaired_row["course_id"],
+        course_code=repaired_row["course_code"],
+        course_name=repaired_row["course_name"],
+        teaching_note=teaching_note,
+    )
+    student_detail = TeacherCaseSubmissionDetailStudent(
+        membership_id=repaired_row["membership_id"],
+        full_name=_display_name(
+            profile_full_name=repaired_row["profile_full_name"],
+            email=repaired_row["email"],
+        ),
+        email=repaired_row["email"],
+        enrolled_at=repaired_row["enrolled_at"],
+    )
+    response_state = TeacherCaseSubmissionDetailResponseState(
+        status=derived_status,
+        first_opened_at=repaired_row["first_opened_at"],
+        last_autosaved_at=repaired_row["last_autosaved_at"],
+        submitted_at=(
+            latest_submission.submitted_at
+            if latest_submission is not None
+            else repaired_row["submitted_at"]
+        ),
+        snapshot_id=latest_submission.id if latest_submission is not None else None,
+        snapshot_hash=(
+            latest_submission.canonical_output_hash
+            if latest_submission is not None
+            else None
+        ),
+    )
+    grade_summary = TeacherCaseSubmissionDetailGradeSummary(
+        status=repaired_row["case_grade_status"],
+        score=repaired_row["score"],
+        max_score=repaired_row["max_score"] or _DEFAULT_CASE_MAX_SCORE_DECIMAL,
+        graded_at=repaired_row["graded_at"],
+    )
+
     try:
-        modules, is_truncated = _build_submission_detail_modules(
-            canonical_output=canonical_output,
+        # canonical_output -> teacher_payload -> {case_view, modules} -> response
+        case_view, modules, is_truncated = _truncate_detail_payload_if_needed(
+            teacher_payload=teacher_payload,
             answers=answer_source,
             is_answer_from_draft=is_answer_from_draft,
             assignment_id=assignment.id,
             membership_id=membership_id,
+            case=case_detail,
+            student=student_detail,
+            response_state=response_state,
+            grade_summary=grade_summary,
         )
     except ValueError:
         _logger.exception(
@@ -632,55 +918,13 @@ def get_teacher_case_submission_detail(
             detail="case_canonical_output_invalid",
         )
 
-    available_from, deadline = resolve_assignment_schedule_values(assignment)
-    teacher_content = teacher_payload.get("content") if isinstance(teacher_payload, dict) else None
-    teaching_note = None
-    if isinstance(teacher_content, dict) and teacher_content.get("teachingNote") is not None:
-        teaching_note = _stringify_review_value(teacher_content.get("teachingNote")) or None
-
     return TeacherCaseSubmissionDetailResponse(
         is_truncated=is_truncated,
-        case=TeacherCaseSubmissionDetailCase(
-            id=assignment.id,
-            title=_resolve_assignment_title(assignment),
-            deadline=deadline,
-            available_from=available_from,
-            course_id=repaired_row["course_id"],
-            course_code=repaired_row["course_code"],
-            course_name=repaired_row["course_name"],
-            teaching_note=teaching_note,
-        ),
-        student=TeacherCaseSubmissionDetailStudent(
-            membership_id=repaired_row["membership_id"],
-            full_name=_display_name(
-                profile_full_name=repaired_row["profile_full_name"],
-                email=repaired_row["email"],
-            ),
-            email=repaired_row["email"],
-            enrolled_at=repaired_row["enrolled_at"],
-        ),
-        response_state=TeacherCaseSubmissionDetailResponseState(
-            status=derived_status,
-            first_opened_at=repaired_row["first_opened_at"],
-            last_autosaved_at=repaired_row["last_autosaved_at"],
-            submitted_at=(
-                latest_submission.submitted_at
-                if latest_submission is not None
-                else repaired_row["submitted_at"]
-            ),
-            snapshot_id=latest_submission.id if latest_submission is not None else None,
-            snapshot_hash=(
-                latest_submission.canonical_output_hash
-                if latest_submission is not None
-                else None
-            ),
-        ),
-        grade_summary=TeacherCaseSubmissionDetailGradeSummary(
-            status=repaired_row["case_grade_status"],
-            score=repaired_row["score"],
-            max_score=repaired_row["max_score"] or _DEFAULT_CASE_MAX_SCORE_DECIMAL,
-            graded_at=repaired_row["graded_at"],
-        ),
+        case=case_detail,
+        case_view=case_view,
+        student=student_detail,
+        response_state=response_state,
+        grade_summary=grade_summary,
         modules=modules,
     )
 

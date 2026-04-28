@@ -1,16 +1,25 @@
-export function GradingPlaceholderPanel() {
+export function GradingPlaceholderSlot() {
     return (
         <section
-            className="rounded-[24px] bg-slate-900 p-5 text-white shadow-[0_18px_50px_-28px_rgba(15,23,42,0.9)]"
+            className="rounded-[20px] border border-slate-200 bg-white p-4 text-slate-900 shadow-sm"
             data-testid="teacher-case-submission-detail-grading-slot"
         >
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
-                Próxima iteración
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Calificación
             </p>
-            <h2 className="mt-2 text-lg font-semibold">Calificación</h2>
-            <p className="mt-3 text-sm leading-6 text-slate-300">
-                La calificación estará disponible en una próxima actualización.
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+                La revisión por criterio se activará en un siguiente despliegue sin cambiar esta vista.
             </p>
+            <button
+                type="button"
+                disabled
+                title="Próximamente"
+                className="mt-4 inline-flex items-center rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-500 opacity-80"
+            >
+                Próximamente
+            </button>
         </section>
     );
 }
+
+export const GradingPlaceholderPanel = GradingPlaceholderSlot;

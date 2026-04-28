@@ -877,6 +877,195 @@ def test_sets_is_truncated_when_expected_solution_payload_exceeds_utf8_byte_cap(
     assert len(json.dumps(payload["modules"], ensure_ascii=False).encode("utf-8")) <= 1_600
 
 
+def test_case_view_is_present_and_whitelisted_for_preview_reuse(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000002144"
+    reference_now = datetime(2026, 6, 1, 15, 0, tzinfo=timezone.utc)
+    teacher = seed_identity(user_id=str(uuid.uuid4()), email="teacher-case-view@example.edu", role="teacher", university_id=university_id)
+    student = seed_identity(user_id=str(uuid.uuid4()), email="student-case-view@example.edu", role="student", university_id=university_id)
+    course = seed_course(university_id=university_id, teacher_membership_id=teacher["membership"].id, title="Curso case view", code="CASE-223C")
+    seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
+    canonical_output = _build_canonical_output()
+    canonical_output["secret"] = "root-secret"
+    canonical_output["content"]["secret"] = "content-secret"
+    canonical_output["content"]["prompt_trace"] = "never expose"
+    canonical_output["content"]["caseQuestions"][0]["__proto__"] = "pollution"
+    canonical_output["content"]["caseQuestions"][0]["authoring_job_id"] = "nested-job"
+    assignment = _seed_assignment(
+        db,
+        teacher_user_id=teacher["legacy_user"].id,
+        course_id=course.id,
+        canonical_output=canonical_output,
+        available_from=reference_now - timedelta(days=1),
+        deadline=reference_now + timedelta(days=9),
+    )
+    db.commit()
+
+    response = client.get(
+        f"/api/teacher/cases/{assignment.id}/submissions/{student['membership'].id}",
+        headers=_auth_headers(
+            auth_headers_factory,
+            user_id=teacher["legacy_user"].id,
+            email=teacher["legacy_user"].email,
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    case_view = payload["case_view"]
+    assert case_view is not None
+    assert case_view["title"] == "Caso 213"
+    assert case_view["content"]["instructions"] == "Lee y responde."
+    assert case_view["content"]["caseQuestions"][0]["solucion_esperada"] == "Solucion docente M1"
+    assert case_view["content"]["m5QuestionsSolutions"][0]["solucion_esperada"] == "Solucion separada M5"
+
+    serialized_case_view = json.dumps(case_view, ensure_ascii=False)
+    assert '"secret"' not in serialized_case_view
+    assert '"__proto__"' not in serialized_case_view
+    assert '"prompt_trace"' not in serialized_case_view
+    assert '"authoring_job_id"' not in serialized_case_view
+
+
+def test_teacher_case_submission_detail_sets_private_cache_control_header(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    auth_headers_factory,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000002145"
+    reference_now = datetime(2026, 6, 1, 15, 0, tzinfo=timezone.utc)
+    teacher = seed_identity(user_id=str(uuid.uuid4()), email="teacher-cache@example.edu", role="teacher", university_id=university_id)
+    student = seed_identity(user_id=str(uuid.uuid4()), email="student-cache@example.edu", role="student", university_id=university_id)
+    course = seed_course(university_id=university_id, teacher_membership_id=teacher["membership"].id, title="Curso cache", code="CASE-223D")
+    seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
+    assignment = _seed_assignment(
+        db,
+        teacher_user_id=teacher["legacy_user"].id,
+        course_id=course.id,
+        canonical_output=_build_canonical_output(),
+        available_from=reference_now - timedelta(days=1),
+        deadline=reference_now + timedelta(days=9),
+    )
+    db.commit()
+
+    response = client.get(
+        f"/api/teacher/cases/{assignment.id}/submissions/{student['membership'].id}",
+        headers=_auth_headers(
+            auth_headers_factory,
+            user_id=teacher["legacy_user"].id,
+            email=teacher["legacy_user"].email,
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["Cache-Control"] == "private, max-age=0, must-revalidate"
+
+
+def test_case_view_full_response_respects_budget_when_truncated(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    auth_headers_factory,
+    monkeypatch,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000002146"
+    reference_now = datetime(2026, 6, 1, 15, 0, tzinfo=timezone.utc)
+    teacher = seed_identity(user_id=str(uuid.uuid4()), email="teacher-budget@example.edu", role="teacher", university_id=university_id)
+    student = seed_identity(user_id=str(uuid.uuid4()), email="student-budget@example.edu", role="student", university_id=university_id)
+    course = seed_course(university_id=university_id, teacher_membership_id=teacher["membership"].id, title="Curso budget", code="CASE-223E")
+    seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
+    canonical_output = _build_canonical_output()
+    canonical_output["content"]["narrative"] = "á" * 2_800
+    canonical_output["content"]["caseQuestions"][0]["solucion_esperada"] = "á" * 2_800
+    assignment = _seed_assignment(
+        db,
+        teacher_user_id=teacher["legacy_user"].id,
+        course_id=course.id,
+        canonical_output=canonical_output,
+        available_from=reference_now - timedelta(days=1),
+        deadline=reference_now + timedelta(days=9),
+    )
+    db.commit()
+    monkeypatch.setattr("shared.teacher_reads._DETAIL_PAYLOAD_MAX_BYTES", 12_000)
+
+    response = client.get(
+        f"/api/teacher/cases/{assignment.id}/submissions/{student['membership'].id}",
+        headers=_auth_headers(
+            auth_headers_factory,
+            user_id=teacher["legacy_user"].id,
+            email=teacher["legacy_user"].email,
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["is_truncated"] is True
+    assert len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) <= 12_000
+
+
+def test_case_view_falls_back_without_expected_solutions_when_payload_exceeds_budget(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_membership,
+    auth_headers_factory,
+    monkeypatch,
+) -> None:
+    university_id = "10000000-0000-0000-0000-000000002147"
+    reference_now = datetime(2026, 6, 1, 15, 0, tzinfo=timezone.utc)
+    teacher = seed_identity(user_id=str(uuid.uuid4()), email="teacher-budget-no-solutions@example.edu", role="teacher", university_id=university_id)
+    student = seed_identity(user_id=str(uuid.uuid4()), email="student-budget-no-solutions@example.edu", role="student", university_id=university_id)
+    course = seed_course(university_id=university_id, teacher_membership_id=teacher["membership"].id, title="Curso budget sin soluciones", code="CASE-223F")
+    seed_course_membership(course_id=course.id, membership_id=student["membership"].id)
+    canonical_output = _build_canonical_output()
+    content = canonical_output["content"]
+    assert isinstance(content, dict)
+    content["narrative"] = "á" * 8_000
+    content["m5QuestionsSolutions"] = []
+    for question_field in ("caseQuestions", "edaQuestions", "m3Questions", "m4Questions", "m5Questions"):
+        questions = content.get(question_field)
+        if not isinstance(questions, list):
+            continue
+        for question in questions:
+            if isinstance(question, dict):
+                question.pop("solucion_esperada", None)
+    assignment = _seed_assignment(
+        db,
+        teacher_user_id=teacher["legacy_user"].id,
+        course_id=course.id,
+        canonical_output=canonical_output,
+        available_from=reference_now - timedelta(days=1),
+        deadline=reference_now + timedelta(days=9),
+    )
+    db.commit()
+    monkeypatch.setattr("shared.teacher_reads._DETAIL_PAYLOAD_MAX_BYTES", 4_000)
+
+    response = client.get(
+        f"/api/teacher/cases/{assignment.id}/submissions/{student['membership'].id}",
+        headers=_auth_headers(
+            auth_headers_factory,
+            user_id=teacher["legacy_user"].id,
+            email=teacher["legacy_user"].email,
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["is_truncated"] is True
+    assert len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) <= 4_000
+
+
 def test_returns_409_for_cross_enrollment_unsupported(
     client,
     db,

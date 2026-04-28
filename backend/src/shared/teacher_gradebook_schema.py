@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
@@ -134,6 +135,7 @@ class TeacherCaseSubmissionDetailResponse(StrictModel):
     payload_version: Literal[1] = 1
     is_truncated: bool = False
     case: TeacherCaseSubmissionDetailCase
+    case_view: dict[str, Any] | None = None
     student: TeacherCaseSubmissionDetailStudent
     response_state: TeacherCaseSubmissionDetailResponseState
     grade_summary: TeacherCaseSubmissionDetailGradeSummary
