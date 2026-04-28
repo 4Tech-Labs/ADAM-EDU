@@ -1785,17 +1785,27 @@ M3_NOTEBOOK_BASE_TEMPLATE = """\
 
 # %%
 import io
+import platform
 import warnings
 import numpy as np
 import pandas as pd
+import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
+import sklearn
 
 warnings.filterwarnings("ignore")
 plt.style.use("default")
 sns.set_theme(style="whitegrid")
 
 print("✅ Librerías base cargadas.")
+print(f"   Python      : {platform.python_version()}")
+print(f"   pandas      : {pd.__version__}")
+print(f"   numpy       : {np.__version__}")
+print(f"   scikit-learn: {sklearn.__version__}")
+print(f"   matplotlib  : {matplotlib.__version__}")
+print(f"   seaborn     : {sns.__version__}")
+print("ℹ️  Si algún bloque falla por API de librería, verifica versiones arriba.")
 
 # %%
 def normalize_colname(col):
@@ -1980,6 +1990,30 @@ Genera SOLO la continuación del notebook, empezando después de la Sección 3 d
    una columna por alias. Siempre debes implementar un Fallback Heurístico por tipo de dato
    (df.select_dtypes) antes de rendirte. Solo imprime REQUISITO FALTANTE si df.select_dtypes()
    devuelve vacío para el tipo de dato estrictamente necesario.
+
+# Reglas de API ESTABLE (anti-alucinación de librerías)
+A. Usa SOLO API documentada y estable de scikit-learn ≥ 1.0:
+   - sklearn.cluster.KMeans(n_clusters=k, n_init=10, random_state=42)
+   - sklearn.preprocessing.StandardScaler()
+   - sklearn.decomposition.PCA(n_components=2)
+   - sklearn.ensemble.RandomForestClassifier(n_estimators=100, random_state=42)
+   - sklearn.ensemble.IsolationForest(contamination=0.05, random_state=42)
+   - sklearn.linear_model.LogisticRegression(max_iter=1000)
+   - sklearn.linear_model.LinearRegression()
+   - sklearn.feature_extraction.text.TfidfVectorizer(max_features=200, stop_words=None)
+   - sklearn.model_selection.train_test_split(..., test_size=0.2, random_state=42)
+   - sklearn.metrics: accuracy_score, confusion_matrix, mean_squared_error, r2_score
+B. Para RMSE usa: `np.sqrt(mean_squared_error(y_true, y_pred))`. NO inventes
+   `RootMeanSquaredError`, `root_mean_squared_error` ni `squared=False`.
+C. Para grafos: `import networkx as nx` dentro del try; usa nx.Graph(), nx.spring_layout(),
+   nx.draw(). Si networkx no está disponible, captura ImportError y degrada a print explicativo.
+D. NO uses argumentos experimentales (nada de `n_jobs=-1` salvo en RandomForest), nada de
+   APIs deprecated (`sklearn.cross_validation`, `from sklearn.externals import joblib`).
+E. Para matrices grandes, limita SIEMPRE: `df.sample(min(len(df), 5000), random_state=42)`.
+F. Toda llamada a `.fit()` debe ir precedida por dropna/imputación: usa
+   `df_X.dropna()` o `df_X.fillna(df_X.median(numeric_only=True))` antes del fit.
+G. NO importes nada que no esté en el set: numpy, pandas, matplotlib, seaborn, sklearn.*,
+   networkx, scipy.stats. Cualquier otra librería va dentro de try/except ImportError.
 
 # Estructura OBLIGATORIA: exactamente 3 celdas por familia (siempre las 3)
 

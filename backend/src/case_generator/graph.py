@@ -25,7 +25,8 @@ Total nodos LLM por path:
 
 Modelos:
   architect_model (Pro): case_architect, schema_designer
-  writer_model (Flash): todos los demás nodos LLM
+  m3 (Pro chain) : m3_content_generator (ml_ds), m3_notebook_generator
+  writer_model (Flash): m3_content_generator (business), demás nodos LLM
   chart_llm (Flash, 16K tokens): chart generators (M2, M3, M4)
   fallback: gemini-2.5-flash (activado automáticamente si primary falla)
   Python puro (0 tokens): data_generator, data_validator, barriers sync
@@ -2553,7 +2554,6 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """
     try:
         cfg = Configuration.from_runnable_config(config)
-        llm = _get_writer_llm(cfg.writer_model, temperature=0.6, thinking_level="medium")
 
         context = _build_base_context(state)
         context.update({
@@ -2566,10 +2566,36 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             prompt = M3_EXPERIMENT_PROMPT
             tag = "m3_experiment_engineer"
             m3_mode = "experiment"
+            # ml_ds: el m3_content alimenta directamente el prompt del notebook
+            # generator. Calidad de razonamiento aquí ⇒ menos ambigüedad en la
+            # sección 3 (hipótesis, criterio de descarte, sesgos). Por eso Pro-
+            # medium con cadena de fallback (Pro-low → Flash-medium).
+            _m3_common = dict(
+                model="gemini-3.1-pro-preview",
+                temperature=0.6,
+                max_retries=2,
+                max_output_tokens=16384,
+                api_key=os.getenv("GEMINI_API_KEY"),
+                rate_limiter=_rate_limiter,
+            )
+            primary = ChatGoogleGenerativeAI(thinking_level="medium", **_m3_common)
+            pro_low = ChatGoogleGenerativeAI(thinking_level="low", **_m3_common)
+            flash_fb = ChatGoogleGenerativeAI(
+                model="gemini-3-flash-preview",
+                temperature=0.6,
+                max_retries=2,
+                max_output_tokens=16384,
+                api_key=os.getenv("GEMINI_API_KEY"),
+                rate_limiter=_rate_limiter,
+            )
+            llm = primary.with_fallbacks([pro_low, flash_fb])
         else:
             prompt = M3_AUDIT_PROMPT
             tag = "m3_audit"
             m3_mode = "audit"
+            # business: contenido narrativo de auditoría sin notebook downstream;
+            # Flash-medium con fallback a 2.5-flash (ya en _get_writer_llm) basta.
+            llm = _get_writer_llm(cfg.writer_model, temperature=0.6, thinking_level="medium")
 
         response = llm.invoke(prompt.format(**context))
         m3 = sanitize_markdown(_extract_text(response))
@@ -2641,7 +2667,38 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
     try:
         cfg = Configuration.from_runnable_config(config)
-        llm = _get_writer_llm(cfg.writer_model, temperature=0.3, thinking_level="low")
+
+        # Notebook generator es el ÚNICO nodo del sistema que emite código Python
+        # ejecutable en Colab. Cualquier alucinación o truncamiento se traduce en
+        # un error visible al estudiante. Por eso usa cadena Pro resiliente:
+        #   1) Pro thinking_level="medium" — primario. Subir a "high" arriesga
+        #      truncar el Jupytext (muchas llaves, varios bloques try/except por
+        #      familia algorítmica) por consumo de reasoning interno.
+        #   2) Pro thinking_level="low"    — fallback transitorio sin degradar de
+        #      modelo (cubre rate-limit, 5xx puntual, parser error de una vuelta).
+        #   3) Flash-medium                — red de seguridad final ante incidente
+        #      global de Pro. Mantiene thinking="medium" porque el output es código.
+        # max_output_tokens=24576 da margen para reasoning (~3-8k) + Jupytext de
+        # 3 celdas × N familias (~6-12k chars) sin truncamiento silencioso.
+        _nb_common = dict(
+            model="gemini-3.1-pro-preview",
+            temperature=0.3,
+            max_retries=2,
+            max_output_tokens=24576,
+            api_key=os.getenv("GEMINI_API_KEY"),
+            rate_limiter=_rate_limiter,
+        )
+        nb_primary = ChatGoogleGenerativeAI(thinking_level="medium", **_nb_common)
+        nb_pro_low = ChatGoogleGenerativeAI(thinking_level="low", **_nb_common)
+        nb_flash = ChatGoogleGenerativeAI(
+            model="gemini-3-flash-preview",
+            temperature=0.3,
+            max_retries=2,
+            max_output_tokens=24576,
+            api_key=os.getenv("GEMINI_API_KEY"),
+            rate_limiter=_rate_limiter,
+        )
+        llm = nb_primary.with_fallbacks([nb_pro_low, nb_flash])
 
         context = _build_base_context(state)
         case_title = state.get("titulo", "Caso de Estudio") or "Caso de Estudio"
