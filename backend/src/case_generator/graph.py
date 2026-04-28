@@ -28,7 +28,13 @@ Modelos:
   m3 (Pro chain) : m3_content_generator (ml_ds), m3_notebook_generator
   writer_model (Flash): m3_content_generator (business), demás nodos LLM
   chart_llm (Flash, 16K tokens): chart generators (M2, M3, M4)
-  fallback: gemini-2.5-flash (activado automáticamente si primary falla)
+  Cadenas de fallback (depende del nodo, no es global):
+    - _get_writer_llm  / _get_chart_llm    : primary -> gemini-2.5-flash
+    - _get_architect_llm                   : Pro-high -> Pro-medium -> gemini-3-flash-preview
+    - _get_m5_llm                          : Pro -> gemini-3-flash-preview -> gemini-2.5-flash
+    - schema_designer (M2 inline)          : Pro-medium -> Pro-low -> gemini-3-flash-preview
+    - m3_content_generator (ml_ds inline)  : Pro-medium -> Pro-low -> gemini-3-flash-preview
+    - m3_notebook_generator (inline)       : Pro-medium -> Pro-low -> gemini-3-flash-preview
   Python puro (0 tokens): data_generator, data_validator, barriers sync
 
 Resiliencia (v9):
@@ -2569,9 +2575,11 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             # ml_ds: el m3_content alimenta directamente el prompt del notebook
             # generator. Calidad de razonamiento aquí ⇒ menos ambigüedad en la
             # sección 3 (hipótesis, criterio de descarte, sesgos). Por eso Pro-
-            # medium con cadena de fallback (Pro-low → Flash-medium).
+            # medium con cadena de fallback (Pro-low → Flash-low).
+            # Modelos vía Configuration para respetar overrides por env var
+            # (ARCHITECT_MODEL / WRITER_MODEL) — útil para rollouts y tests.
             _m3_common = dict(
-                model="gemini-3.1-pro-preview",
+                model=cfg.architect_model,
                 temperature=0.6,
                 max_retries=2,
                 max_output_tokens=16384,
@@ -2580,9 +2588,13 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             )
             primary = ChatGoogleGenerativeAI(thinking_level="medium", **_m3_common)
             pro_low = ChatGoogleGenerativeAI(thinking_level="low", **_m3_common)
+            # Flash fallback: thinking_level="low" explícito (no dependemos del
+            # default del SDK). "low" basta porque ya estamos en modo degradado
+            # por incidente global de Pro y queremos minimizar latencia extra.
             flash_fb = ChatGoogleGenerativeAI(
-                model="gemini-3-flash-preview",
+                model=cfg.writer_model,
                 temperature=0.6,
+                thinking_level="low",
                 max_retries=2,
                 max_output_tokens=16384,
                 api_key=os.getenv("GEMINI_API_KEY"),
@@ -2676,12 +2688,16 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
         #      familia algorítmica) por consumo de reasoning interno.
         #   2) Pro thinking_level="low"    — fallback transitorio sin degradar de
         #      modelo (cubre rate-limit, 5xx puntual, parser error de una vuelta).
-        #   3) Flash-medium                — red de seguridad final ante incidente
-        #      global de Pro. Mantiene thinking="medium" porque el output es código.
+        #   3) Flash thinking_level="medium" — red de seguridad final ante
+        #      incidente global de Pro. Mantenemos "medium" en Flash porque el
+        #      output es código y la consistencia importa más que la latencia.
+        # Modelos vía Configuration para respetar overrides por env var
+        # (ARCHITECT_MODEL / WRITER_MODEL) — el path notebook es el más sensible,
+        # imprescindible que los rollouts/canaries lleguen también aquí.
         # max_output_tokens=24576 da margen para reasoning (~3-8k) + Jupytext de
         # 3 celdas × N familias (~6-12k chars) sin truncamiento silencioso.
         _nb_common = dict(
-            model="gemini-3.1-pro-preview",
+            model=cfg.architect_model,
             temperature=0.3,
             max_retries=2,
             max_output_tokens=24576,
@@ -2691,8 +2707,9 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
         nb_primary = ChatGoogleGenerativeAI(thinking_level="medium", **_nb_common)
         nb_pro_low = ChatGoogleGenerativeAI(thinking_level="low", **_nb_common)
         nb_flash = ChatGoogleGenerativeAI(
-            model="gemini-3-flash-preview",
+            model=cfg.writer_model,
             temperature=0.3,
+            thinking_level="medium",
             max_retries=2,
             max_output_tokens=24576,
             api_key=os.getenv("GEMINI_API_KEY"),
