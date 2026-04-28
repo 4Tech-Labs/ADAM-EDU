@@ -87,9 +87,6 @@ interface CaseContentRendererProps {
     onAnswersChange: (nextAnswers: Record<string, string>) => void;
     readOnly: boolean;
     showExpectedSolutions: boolean;
-    headerSlot?: ReactNode;
-    rightPanelSlot?: ReactNode;
-    supplementalRightPanelSlot?: ReactNode;
     questionSupplement?: (questionId: string) => ReactNode;
 }
 
@@ -252,9 +249,6 @@ export function CaseContentRenderer({
     onAnswersChange,
     readOnly,
     showExpectedSolutions,
-    headerSlot,
-    rightPanelSlot,
-    supplementalRightPanelSlot,
     questionSupplement,
 }: CaseContentRendererProps) {
     const content = result.content;
@@ -452,7 +446,7 @@ export function CaseContentRenderer({
         }
     }, [commonProps, resolvedActiveModule]);
 
-    const defaultRightPanel = navSections.length > 0 ? (
+    const rightPanel = navSections.length > 0 ? (
         <SectionRail
             sections={navSections}
             activeSection={activeSection}
@@ -460,25 +454,10 @@ export function CaseContentRenderer({
         />
     ) : null;
 
-    const rightPanel = supplementalRightPanelSlot
-        ? (
-            <div className="flex h-full min-h-0 flex-col gap-4">
-                {defaultRightPanel ? (
-                    <div className="min-h-0 flex-1 overflow-y-auto">
-                        {defaultRightPanel}
-                    </div>
-                ) : null}
-                <div className="shrink-0">{supplementalRightPanelSlot}</div>
-            </div>
-        )
-        : rightPanelSlot ?? defaultRightPanel;
-    const rightPanelWidthClassName = supplementalRightPanelSlot ? "w-80" : "w-44";
-
     return (
         <div className="flex flex-1 overflow-hidden">
             <div ref={paperRef} className="flex-1 overflow-y-auto overscroll-contain custom-scroll px-6 py-8 bg-[#F0F4F8]">
                 <div className="w-full">
-                    {headerSlot ? <div className="mb-6">{headerSlot}</div> : null}
                     <div className="paper-shadow bg-white rounded-xl overflow-hidden mb-8">
                         <div ref={caseContentRef} id="module-content-panel" className="px-14 py-12 fade-in">
                             <Suspense fallback={<PreviewModuleFallback />}>
@@ -490,7 +469,7 @@ export function CaseContentRenderer({
             </div>
 
             {rightPanel ? (
-                <div className={`${rightPanelWidthClassName} flex-shrink-0 hidden xl:flex flex-col py-8 pl-6 pr-4 border-l border-slate-200 bg-[#F0F4F8]`}>
+                <div className="w-44 flex-shrink-0 hidden xl:flex flex-col py-8 pl-6 pr-4 border-l border-slate-200 bg-[#F0F4F8]">
                     {rightPanel}
                 </div>
             ) : null}

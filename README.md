@@ -309,6 +309,9 @@ Eso significa:
   `npm --prefix frontend run build`
 - Frontend tests:
   `npm --prefix frontend run test`
+- Frontend bundle isolation:
+  `npm --prefix frontend run assert:bundle-isolation`
+  Opcional en entornos con `make`: `make validate-frontend-bundle`
 - Live LLM:
   `RUN_LIVE_LLM_TESTS=1 uv run --directory backend pytest -m live_llm -q`
 

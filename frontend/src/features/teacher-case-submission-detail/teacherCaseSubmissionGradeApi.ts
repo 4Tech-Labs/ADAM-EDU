@@ -1,4 +1,4 @@
-import { api } from "@/shared/api";
+import { ApiError, api, getApiErrorCode } from "@/shared/api";
 import type {
     TeacherCaseSubmissionGradeRequest,
     TeacherCaseSubmissionGradeResponse,
@@ -18,6 +18,16 @@ export class UnsupportedTeacherCaseSubmissionGradePayloadVersionError extends Er
         super("Tu versión de la app está desactualizada. Recarga para continuar.");
         this.name = "UnsupportedTeacherCaseSubmissionGradePayloadVersionError";
         this.payloadVersion = payloadVersion;
+    }
+}
+
+export class IncompleteGradeError extends Error {
+    missingQuestionIds: string[];
+
+    constructor(missingQuestionIds: string[]) {
+        super("Debes calificar todas las preguntas antes de publicar.");
+        this.name = "IncompleteGradeError";
+        this.missingQuestionIds = missingQuestionIds;
     }
 }
 
@@ -51,12 +61,32 @@ export async function saveTeacherCaseSubmissionGrade(
     membershipId: string,
     request: TeacherCaseSubmissionGradeRequest,
 ): Promise<TeacherCaseSubmissionGradeResponse> {
-    const response = await api.teacher.saveCaseSubmissionGrade(
-        courseId,
-        assignmentId,
-        membershipId,
-        request,
-    ) as TeacherCaseSubmissionGradeRuntimeResponse;
+    try {
+        const response = await api.teacher.saveCaseSubmissionGrade(
+            courseId,
+            assignmentId,
+            membershipId,
+            request,
+        ) as TeacherCaseSubmissionGradeRuntimeResponse;
 
-    return assertSupportedPayloadVersion(response);
+        return assertSupportedPayloadVersion(response);
+    } catch (error) {
+        if (
+            error instanceof ApiError
+            && error.status === 422
+            && getApiErrorCode(error) === "incomplete_grade"
+            && error.detail
+            && typeof error.detail === "object"
+            && !Array.isArray(error.detail)
+            && Array.isArray(error.detail.missing_question_ids)
+        ) {
+            throw new IncompleteGradeError(
+                error.detail.missing_question_ids.filter(
+                    (questionId): questionId is string => typeof questionId === "string" && questionId.length > 0,
+                ),
+            );
+        }
+
+        throw error;
+    }
 }

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import uuid
 
+import pytest
 from sqlalchemy import select
 
 from shared.database import settings
@@ -15,6 +16,11 @@ from shared.models import (
     StudentCaseResponse,
     StudentCaseResponseSubmission,
 )
+
+
+@pytest.fixture(autouse=True)
+def _enable_teacher_manual_grading(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "teacher_manual_grading_enabled", True)
 
 
 def _auth_headers(auth_headers_factory, *, user_id: str, email: str) -> dict[str, str]:
@@ -619,10 +625,11 @@ def test_put_teacher_case_grade_rejects_incomplete_publish(
         ),
     )
 
-    assert response.status_code == 409, response.text
+    assert response.status_code == 422, response.text
     detail = response.json()["detail"]
+    assert detail["payload_version"] == 1
     assert detail["code"] == "incomplete_grade"
-    assert detail["missing_count"] == 1
+    assert detail["missing_question_ids"] == ["M5-Q5"]
 
 
 def test_put_teacher_case_grade_rejects_non_human_payloads(

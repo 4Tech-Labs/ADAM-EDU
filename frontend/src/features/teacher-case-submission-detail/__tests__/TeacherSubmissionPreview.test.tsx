@@ -119,6 +119,8 @@ function buildManualGradingHookState(
         banner: null,
         isDirty: false,
         isPublishing: false,
+        isRefreshing: false,
+        isSnapshotConflictOpen: false,
         missingQuestionCount: 0,
         hasPublishedVersion: false,
         requiresRefresh: false,
@@ -242,6 +244,46 @@ describe("TeacherSubmissionPreview", () => {
         fireEvent.click(await screen.findByTestId("teacher-grading-header-toggle"));
 
         expect(await screen.findByTestId("teacher-question-grading-M1-Q1")).toBeTruthy();
+    });
+
+    it("requires an explicit confirmation before publishing", async () => {
+        const publish = vi.fn().mockResolvedValue(true);
+        vi.mocked(useTeacherManualGrading).mockReturnValue(buildManualGradingHookState({ publish }));
+
+        renderPreview();
+
+        fireEvent.click(await screen.findByTestId("teacher-grading-header-toggle"));
+        const [publishButton] = await screen.findAllByTestId("teacher-grading-publish-button");
+        fireEvent.click(publishButton);
+
+        expect(publish).not.toHaveBeenCalled();
+        expect(await screen.findByTestId("teacher-publish-confirm-modal")).toBeTruthy();
+
+        fireEvent.click(screen.getByRole("button", { name: /Confirmar publicación/i }));
+
+        await waitFor(() => {
+            expect(publish).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    it("shows a blocking snapshot conflict modal when the hook requests it", async () => {
+        vi.mocked(useTeacherManualGrading).mockReturnValue(buildManualGradingHookState({
+            isSnapshotConflictOpen: true,
+        }));
+
+        renderPreview();
+
+        expect(await screen.findByTestId("teacher-snapshot-conflict-modal")).toBeTruthy();
+        expect(screen.getByText(/El estudiante modificó su entrega/i)).toBeTruthy();
+    });
+
+    it("does not render the grading panel when the feature is disabled", async () => {
+        vi.mocked(useTeacherManualGrading).mockReturnValue(buildManualGradingHookState({ mode: "disabled" }));
+
+        renderPreview();
+
+        expect(await screen.findByTestId("teacher-submission-preview")).toBeTruthy();
+        expect(screen.queryByTestId("teacher-grading-panel")).toBeNull();
     });
 
     it("locks and restores body overflow while mounted", async () => {

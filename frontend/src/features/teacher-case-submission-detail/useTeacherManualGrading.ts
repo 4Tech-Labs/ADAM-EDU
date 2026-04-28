@@ -11,6 +11,7 @@ import { queryKeys } from "@/shared/queryKeys";
 
 import {
     fetchTeacherCaseSubmissionGrade,
+    IncompleteGradeError,
     saveTeacherCaseSubmissionGrade,
     TEACHER_CASE_SUBMISSION_GRADE_QUERY_GC_TIME,
     UnsupportedTeacherCaseSubmissionGradePayloadVersionError,
@@ -37,6 +38,8 @@ interface UseTeacherManualGradingResult {
     banner: TeacherManualGradingBannerState | null;
     isDirty: boolean;
     isPublishing: boolean;
+    isRefreshing: boolean;
+    isSnapshotConflictOpen: boolean;
     missingQuestionCount: number;
     hasPublishedVersion: boolean;
     requiresRefresh: boolean;
@@ -53,13 +56,15 @@ function isFeatureDisabledError(error: unknown): boolean {
 }
 
 function buildBanner(error: unknown, intent: "draft" | "publish"): TeacherManualGradingBannerState {
-    const code = getApiErrorCode(error);
+    if (error instanceof IncompleteGradeError) {
+        const missingQuestionCount = error.missingQuestionIds.length;
 
-    if (code === "snapshot_changed") {
         return {
-            tone: "amber",
-            title: "La entrega cambió",
-            message: getApiErrorMessage(error),
+            tone: "red",
+            title: "Calificación incompleta",
+            message: missingQuestionCount === 1
+                ? "Falta calificar 1 pregunta antes de publicar."
+                : `Faltan calificar ${missingQuestionCount} preguntas antes de publicar.`,
         };
     }
 
@@ -71,6 +76,10 @@ function buildBanner(error: unknown, intent: "draft" | "publish"): TeacherManual
 }
 
 export function getTeacherManualGradingErrorMessage(error: unknown, fallback: string): string {
+    if (error instanceof IncompleteGradeError) {
+        return error.message;
+    }
+
     if (error instanceof UnsupportedTeacherCaseSubmissionGradePayloadVersionError) {
         return error.message;
     }
@@ -106,6 +115,8 @@ export function useTeacherManualGrading(
     const [banner, setBanner] = useState<TeacherManualGradingBannerState | null>(null);
     const [isDirty, setIsDirty] = useState(false);
     const [isPublishing, setIsPublishing] = useState(false);
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [isSnapshotConflictOpen, setIsSnapshotConflictOpen] = useState(false);
     const [requiresRefresh, setRequiresRefresh] = useState(false);
 
     const gradeRef = useRef<TeacherCaseSubmissionGradeResponse | null>(grade);
@@ -152,14 +163,23 @@ export function useTeacherManualGrading(
         gradeRef.current = cloned;
         setIsDirty(false);
         dirtyRef.current = false;
+        setIsSnapshotConflictOpen(false);
         setRequiresRefresh(false);
         setAutosaveState("saved");
     }, []);
 
     const handleMutationError = useCallback((error: unknown, intent: "draft" | "publish") => {
+        if (getApiErrorCode(error) === "snapshot_changed") {
+            setAutosaveState("error");
+            setBanner(null);
+            setRequiresRefresh(true);
+            setIsSnapshotConflictOpen(true);
+            return;
+        }
+
         setAutosaveState("error");
         setBanner(buildBanner(error, intent));
-        setRequiresRefresh(getApiErrorCode(error) === "snapshot_changed");
+        setRequiresRefresh(false);
     }, []);
 
     const flushDraft = useCallback(async () => {
@@ -233,6 +253,10 @@ export function useTeacherManualGrading(
     }, [clearAutosaveTimer]);
 
     const applyLocalUpdate = useCallback((recipe: (nextGrade: TeacherCaseSubmissionGradeResponse) => void) => {
+        if (requiresRefresh) {
+            return;
+        }
+
         setGrade((currentGrade) => {
             if (!currentGrade) {
                 return currentGrade;
@@ -253,7 +277,7 @@ export function useTeacherManualGrading(
         setIsDirty(true);
         dirtyRef.current = true;
         setAutosaveState("dirty");
-    }, []);
+    }, [requiresRefresh]);
 
     const publish = useCallback(async () => {
         if (!gradeRef.current || saveInFlightRef.current || requiresRefresh) {
@@ -306,8 +330,18 @@ export function useTeacherManualGrading(
     const refresh = useCallback(async () => {
         clearAutosaveTimer();
         setBanner(null);
-        setRequiresRefresh(false);
-        await gradeQuery.refetch();
+        setIsRefreshing(true);
+        try {
+            const response = await gradeQuery.refetch();
+            if (!response.error) {
+                setRequiresRefresh(false);
+                setIsSnapshotConflictOpen(false);
+            }
+        } finally {
+            if (!unmountedRef.current) {
+                setIsRefreshing(false);
+            }
+        }
     }, [clearAutosaveTimer, gradeQuery]);
 
     const mode: TeacherManualGradingMode = (() => {
@@ -339,6 +373,8 @@ export function useTeacherManualGrading(
         banner,
         isDirty,
         isPublishing,
+        isRefreshing,
+        isSnapshotConflictOpen,
         missingQuestionCount: grade ? countUngradedTeacherQuestions(grade) : 0,
         hasPublishedVersion: hasPublishedTeacherGrade(grade),
         requiresRefresh,

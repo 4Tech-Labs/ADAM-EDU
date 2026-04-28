@@ -48,6 +48,19 @@ npm --prefix frontend run build
 npm --prefix frontend run test
 ```
 
+Cuando el cambio toque imports pesados, renderer compartido, Plotly o fronteras de bundle
+del frontend, corre ademas desde la raiz:
+
+```powershell
+npm --prefix frontend run assert:bundle-isolation
+```
+
+Si trabajas en un entorno con `make`, el repo tambien expone el atajo:
+
+```powershell
+make validate-frontend-bundle
+```
+
 La suite backend actual debe correr en serie. No uses `pytest-xdist` ni `pytest -n ...`
 mientras el harness siga compartiendo una sola base de datos local.
 

@@ -1,5 +1,5 @@
 # Optional local development shortcuts. In Windows, prefer the documented direct commands.
-.PHONY: help dev-frontend dev-backend dev-langgraph dev
+.PHONY: help dev-frontend dev-backend dev-langgraph dev validate-frontend-bundle
 
 help:
 	@echo "Available commands:"
@@ -19,6 +19,10 @@ dev-backend:
 dev-langgraph:
 	@echo "Starting LangGraph development server..."
 	@cd backend && uv run langgraph dev
+
+validate-frontend-bundle:
+	@echo "Validating frontend bundle isolation..."
+	@cd frontend && npm run assert:bundle-isolation
 
 # Run frontend and backend concurrently
 dev:

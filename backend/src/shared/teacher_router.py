@@ -396,11 +396,12 @@ async def put_teacher_case_grade_view(
         ) from exc
     except IncompleteGradeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
+                "payload_version": 1,
                 "code": "incomplete_grade",
                 "message": "All questions must be graded before publishing.",
-                "missing_count": exc.missing_count,
+                "missing_question_ids": exc.missing_question_ids,
             },
             headers=_private_revalidate_headers(),
         ) from exc

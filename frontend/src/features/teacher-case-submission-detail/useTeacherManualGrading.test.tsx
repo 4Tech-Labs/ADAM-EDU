@@ -3,6 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./teacherCaseSubmissionGradeApi", () => ({
     TEACHER_CASE_SUBMISSION_GRADE_QUERY_GC_TIME: 5 * 60_000,
+    IncompleteGradeError: class IncompleteGradeError extends Error {
+        missingQuestionIds: string[];
+
+        constructor(missingQuestionIds: string[]) {
+            super("Debes calificar todas las preguntas antes de publicar.");
+            this.name = "IncompleteGradeError";
+            this.missingQuestionIds = missingQuestionIds;
+        }
+    },
     UnsupportedTeacherCaseSubmissionGradePayloadVersionError: class UnsupportedTeacherCaseSubmissionGradePayloadVersionError extends Error {},
     fetchTeacherCaseSubmissionGrade: vi.fn(),
     saveTeacherCaseSubmissionGrade: vi.fn(),
@@ -122,5 +131,38 @@ describe("useTeacherManualGrading", () => {
 
         await waitFor(() => expect(result.current.mode).toBe("disabled"));
         expect(result.current.loadErrorMessage).toBe("La calificación manual todavía no está habilitada en este entorno.");
+    });
+
+    it("opens a blocking snapshot conflict state and clears it after refresh", async () => {
+        vi.mocked(saveTeacherCaseSubmissionGrade).mockRejectedValueOnce(
+            new ApiError(409, "Conflict", {
+                code: "snapshot_changed",
+                message: "El estudiante modificó su entrega. Recarga para ver cambios.",
+            }),
+        );
+
+        const { result } = renderTeacherManualGradingHook();
+
+        await waitFor(() => expect(result.current.mode).toBe("ready"));
+
+        await act(async () => {
+            await result.current.publish();
+        });
+
+        expect(result.current.isSnapshotConflictOpen).toBe(true);
+        expect(result.current.requiresRefresh).toBe(true);
+        expect(result.current.banner).toBeNull();
+
+        vi.mocked(fetchTeacherCaseSubmissionGrade).mockResolvedValueOnce(createSubmissionGradeResponse({
+            snapshot_hash: "hash-456",
+        }));
+
+        await act(async () => {
+            await result.current.refresh();
+        });
+
+        await waitFor(() => expect(result.current.isSnapshotConflictOpen).toBe(false));
+        expect(result.current.requiresRefresh).toBe(false);
+        expect(result.current.grade?.snapshot_hash).toBe("hash-456");
     });
 });

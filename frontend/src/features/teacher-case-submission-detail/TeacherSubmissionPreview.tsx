@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ClipboardCheck, RefreshCcw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -8,7 +8,9 @@ import {
 } from "./teacherCaseSubmissionDetailModel";
 import { toCanonicalCaseOutput } from "./toCanonicalCaseOutput";
 import { TeacherGradingPanel } from "./components/TeacherGradingPanel";
+import { TeacherPublishConfirmModal } from "./components/TeacherPublishConfirmModal";
 import { TeacherQuestionGradingSupplement } from "./components/TeacherQuestionGradingSupplement";
+import { TeacherSnapshotConflictModal } from "./components/TeacherSnapshotConflictModal";
 import { useTeacherManualGrading } from "./useTeacherManualGrading";
 
 import {
@@ -110,6 +112,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
     const visibleModules = useMemo(() => getVisibleModules(detail), [detail]);
     const [activeModule, setActiveModule] = useState<ModuleId>(visibleModules[0] ?? "m1");
     const [isGradingMode, setIsGradingMode] = useState(false);
+    const [isPublishConfirmOpen, setIsPublishConfirmOpen] = useState(false);
     const answeredQuestions = countAnsweredSubmissionQuestions(detail);
     const totalQuestions = countSubmissionQuestions(detail);
     const refreshLabel = isRefreshing ? "Actualizando entrega" : "Actualizar entrega";
@@ -134,15 +137,29 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
             max_score_display: grading.grade.max_score_display,
         }
         : null;
+    const gradingMode = grading.mode;
+    const gradingGrade = grading.grade;
+    const gradingRequiresRefresh = grading.requiresRefresh;
+    const setQuestionFeedback = grading.setQuestionFeedback;
+    const setQuestionRubric = grading.setQuestionRubric;
+    const handleRefresh = useCallback(async () => {
+        onRefresh();
+        await grading.refresh();
+    }, [grading, onRefresh]);
+    const handlePublishConfirm = useCallback(async () => {
+        const published = await grading.publish();
+        if (published) {
+            setIsPublishConfirmOpen(false);
+        }
+    }, [grading]);
 
     const questionSupplement = useMemo(() => {
-        const currentGrade = grading.grade;
-        if (grading.mode !== "ready" || !currentGrade || !isGradingMode) {
+        if (gradingMode !== "ready" || !gradingGrade || !isGradingMode) {
             return undefined;
         }
 
         return (questionId: string) => {
-            for (const module of currentGrade.modules) {
+            for (const module of gradingGrade.modules) {
                 const question = module.questions.find((currentQuestion) => currentQuestion.question_id === questionId);
                 if (!question) {
                     continue;
@@ -153,44 +170,53 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                         questionId={questionId}
                         rubricLevel={question.rubric_level}
                         feedbackQuestion={question.feedback_question}
-                        onRubricChange={(value) => grading.setQuestionRubric(questionId, value)}
-                        onFeedbackChange={(value) => grading.setQuestionFeedback(questionId, value)}
+                        disabled={gradingRequiresRefresh}
+                        onRubricChange={(value) => setQuestionRubric(questionId, value)}
+                        onFeedbackChange={(value) => setQuestionFeedback(questionId, value)}
                     />
                 );
             }
 
             return null;
         };
-    }, [grading.grade, grading.mode, grading.setQuestionFeedback, grading.setQuestionRubric, isGradingMode]);
+    }, [
+        gradingGrade,
+        gradingMode,
+        gradingRequiresRefresh,
+        setQuestionFeedback,
+        setQuestionRubric,
+        isGradingMode,
+    ]);
 
-    const gradingPanel = (
-        <TeacherGradingPanel
-            mode={grading.mode}
-            grade={grading.grade}
-            loadErrorMessage={grading.loadErrorMessage}
-            activeModuleId={activeGradingModuleId}
-            autosaveState={grading.autosaveState}
-            banner={grading.banner}
-            isDirty={grading.isDirty}
-            isGradingMode={isGradingMode}
-            isPublishing={grading.isPublishing}
-            missingQuestionCount={grading.missingQuestionCount}
-            hasPublishedVersion={grading.hasPublishedVersion}
-            requiresRefresh={grading.requiresRefresh}
-            onGlobalFeedbackChange={grading.setGlobalFeedback}
-            onModuleFeedbackChange={grading.setModuleFeedback}
-            onPublish={() => {
-                void grading.publish();
-            }}
-            onRefresh={() => {
-                onRefresh();
-                void grading.refresh();
-            }}
-            onToggleMode={() => {
-                setIsGradingMode((currentValue) => !currentValue);
-            }}
-        />
-    );
+    const gradingPanel = grading.mode === "disabled"
+        ? null
+        : (
+            <TeacherGradingPanel
+                mode={grading.mode}
+                grade={grading.grade}
+                loadErrorMessage={grading.loadErrorMessage}
+                activeModuleId={activeGradingModuleId}
+                autosaveState={grading.autosaveState}
+                banner={grading.banner}
+                isDirty={grading.isDirty}
+                isGradingMode={isGradingMode}
+                isPublishing={grading.isPublishing}
+                missingQuestionCount={grading.missingQuestionCount}
+                hasPublishedVersion={grading.hasPublishedVersion}
+                requiresRefresh={grading.requiresRefresh}
+                onGlobalFeedbackChange={grading.setGlobalFeedback}
+                onModuleFeedbackChange={grading.setModuleFeedback}
+                onPublishRequest={() => {
+                    setIsPublishConfirmOpen(true);
+                }}
+                onRefresh={() => {
+                    void handleRefresh();
+                }}
+                onToggleMode={() => {
+                    setIsGradingMode((currentValue) => !currentValue);
+                }}
+            />
+        );
 
     useEffect(() => {
         if (visibleModules.length === 0) {
@@ -216,6 +242,12 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
             setIsGradingMode(false);
         }
     }, [grading.mode]);
+
+    useEffect(() => {
+        if (grading.mode !== "ready" || !isGradingMode || grading.requiresRefresh) {
+            setIsPublishConfirmOpen(false);
+        }
+    }, [grading.mode, grading.requiresRefresh, isGradingMode]);
 
     return (
         <>
@@ -341,24 +373,54 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                         </div>
                     </div>
 
-                    <CaseContentRenderer
-                        result={canonicalOutput}
-                        visibleModules={visibleModules}
-                        activeModule={activeModule}
-                        onActiveModuleChange={setActiveModule}
-                        answers={answers}
-                        onAnswersChange={() => undefined}
-                        readOnly={true}
-                        showExpectedSolutions={true}
-                        questionSupplement={questionSupplement}
-                        supplementalRightPanelSlot={gradingPanel}
-                    />
+                    <div className="flex min-h-0 flex-1 overflow-hidden">
+                        <div className="min-w-0 flex-1 overflow-hidden">
+                            <CaseContentRenderer
+                                result={canonicalOutput}
+                                visibleModules={visibleModules}
+                                activeModule={activeModule}
+                                onActiveModuleChange={setActiveModule}
+                                answers={answers}
+                                onAnswersChange={() => undefined}
+                                readOnly={true}
+                                showExpectedSolutions={true}
+                                questionSupplement={questionSupplement}
+                            />
+                        </div>
 
-                    <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 md:hidden">
-                        {gradingPanel}
+                        {gradingPanel ? (
+                            <aside className="hidden w-80 shrink-0 border-l border-slate-200 bg-white xl:flex xl:flex-col">
+                                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
+                                    {gradingPanel}
+                                </div>
+                            </aside>
+                        ) : null}
                     </div>
+
+                    {gradingPanel ? (
+                        <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 md:hidden">
+                            {gradingPanel}
+                        </div>
+                    ) : null}
                 </div>
             </div>
+
+            <TeacherPublishConfirmModal
+                isOpen={isPublishConfirmOpen}
+                hasPublishedVersion={grading.hasPublishedVersion}
+                isSubmitting={grading.isPublishing}
+                scoreLabel={getGradeSummary(detail, currentGradeSummary)}
+                onClose={() => setIsPublishConfirmOpen(false)}
+                onConfirm={() => {
+                    void handlePublishConfirm();
+                }}
+            />
+
+            <TeacherSnapshotConflictModal
+                isOpen={grading.isSnapshotConflictOpen}
+                isReloading={isRefreshing || grading.isRefreshing}
+                onReload={() => handleRefresh()}
+            />
         </>
     );
 }

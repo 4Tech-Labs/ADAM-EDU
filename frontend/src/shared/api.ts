@@ -273,7 +273,7 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
         return structuredMessage || "La entrega cambio mientras calificabas. Recarga para continuar.";
     }
 
-    if (status === 409 && code === "incomplete_grade") {
+    if (status === 422 && code === "incomplete_grade") {
         return structuredMessage || "Debes calificar todas las preguntas antes de publicar.";
     }
 

@@ -29,7 +29,7 @@ interface TeacherGradingPanelProps {
     requiresRefresh: boolean;
     onGlobalFeedbackChange: (value: string) => void;
     onModuleFeedbackChange: (moduleId: string, value: string) => void;
-    onPublish: () => void;
+    onPublishRequest: () => void;
     onRefresh: () => void;
     onToggleMode: () => void;
 }
@@ -156,25 +156,20 @@ export function TeacherGradingPanel({
     requiresRefresh,
     onGlobalFeedbackChange,
     onModuleFeedbackChange,
-    onPublish,
+    onPublishRequest,
     onRefresh,
     onToggleMode,
 }: TeacherGradingPanelProps) {
+    if (mode === "disabled") {
+        return null;
+    }
+
     if (mode === "loading") {
         return (
             <FallbackPanel
                 title="Preparando la calificación manual"
                 message="ADAM está cargando el borrador docente y la versión publicada de esta entrega."
                 loading={true}
-            />
-        );
-    }
-
-    if (mode === "disabled") {
-        return (
-            <FallbackPanel
-                title="Calificación manual deshabilitada"
-                message="Esta capacidad está apagada en el entorno actual. La vista de revisión se mantiene disponible sin perder compatibilidad."
             />
         );
     }
@@ -206,6 +201,7 @@ export function TeacherGradingPanel({
     const activeModule = activeModuleId
         ? grade.modules.find((module) => module.module_id === activeModuleId) ?? null
         : null;
+    const editingDisabled = requiresRefresh || isPublishing;
     const publishDisabled = isPublishing || autosaveState === "saving" || missingQuestionCount > 0 || requiresRefresh;
     const publicationLabel = getTeacherGradePublicationLabel(grade);
     const scoreLabel = grade.score_display === null
@@ -223,6 +219,7 @@ export function TeacherGradingPanel({
                 <button
                     type="button"
                     onClick={onToggleMode}
+                    disabled={requiresRefresh}
                     className="inline-flex items-center rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                     data-testid="teacher-grading-mode-toggle"
                 >
@@ -249,6 +246,7 @@ export function TeacherGradingPanel({
                             <textarea
                                 value={activeModule.feedback_module ?? ""}
                                 onChange={(event) => onModuleFeedbackChange(activeModule.module_id, event.target.value)}
+                                disabled={editingDisabled}
                                 placeholder={`Resume cómo se sostuvo el desempeño del estudiante en ${activeModule.module_id}.`}
                                 className="mt-2 min-h-[96px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 shadow-sm outline-none transition focus:border-[#0144a0] focus:ring-2 focus:ring-[#0144a0]/10"
                                 data-testid="teacher-grading-module-feedback"
@@ -261,6 +259,7 @@ export function TeacherGradingPanel({
                         <textarea
                             value={grade.feedback_global ?? ""}
                             onChange={(event) => onGlobalFeedbackChange(event.target.value)}
+                            disabled={editingDisabled}
                             placeholder="Sintetiza qué debe sostener o corregir el estudiante para su siguiente iteración."
                             className="mt-2 min-h-[120px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 shadow-sm outline-none transition focus:border-[#0144a0] focus:ring-2 focus:ring-[#0144a0]/10"
                             data-testid="teacher-grading-global-feedback"
@@ -279,20 +278,9 @@ export function TeacherGradingPanel({
                         </p>
                     ) : null}
 
-                    {requiresRefresh ? (
-                        <button
-                            type="button"
-                            onClick={onRefresh}
-                            className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-100"
-                        >
-                            <RefreshCcw className="h-4 w-4" />
-                            Recargar entrega
-                        </button>
-                    ) : null}
-
                     <button
                         type="button"
-                        onClick={onPublish}
+                        onClick={onPublishRequest}
                         disabled={publishDisabled}
                         className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-900 disabled:cursor-not-allowed disabled:bg-slate-300"
                         data-testid="teacher-grading-publish-button"

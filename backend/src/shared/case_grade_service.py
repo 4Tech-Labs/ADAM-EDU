@@ -48,7 +48,7 @@ class SnapshotConflictError(Exception):
 
 @dataclass(slots=True)
 class IncompleteGradeError(Exception):
-    missing_count: int
+    missing_question_ids: list[str]
 
 
 @dataclass(slots=True)
@@ -109,9 +109,9 @@ def save_teacher_case_grade(
     if payload.snapshot_hash != current_snapshot_hash:
         raise SnapshotConflictError(current_snapshot_hash=current_snapshot_hash)
 
-    missing_count = _count_ungraded_questions(payload.modules)
-    if payload.intent == "publish" and missing_count > 0:
-        raise IncompleteGradeError(missing_count=missing_count)
+    missing_question_ids = _list_ungraded_question_ids(payload.modules)
+    if payload.intent == "publish" and missing_question_ids:
+        raise IncompleteGradeError(missing_question_ids=missing_question_ids)
 
     now = utc_now()
     sanitized_global_feedback = _sanitize_optional_text(payload.feedback_global, _GLOBAL_FEEDBACK_MAX_CHARS)
@@ -461,13 +461,13 @@ def _validate_payload_structure(
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid_question_id")
 
 
-def _count_ungraded_questions(modules: list[TeacherGradeModulePayload]) -> int:
-    missing_count = 0
+def _list_ungraded_question_ids(modules: list[TeacherGradeModulePayload]) -> list[str]:
+    missing_question_ids: list[str] = []
     for module in modules:
         for question in module.questions:
             if question.rubric_level is None:
-                missing_count += 1
-    return missing_count
+                missing_question_ids.append(question.question_id)
+    return missing_question_ids
 
 
 def _replace_grade_state_entries(
