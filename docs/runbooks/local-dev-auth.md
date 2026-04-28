@@ -121,6 +121,10 @@ Frontend:
 
 Nunca lleves `SUPABASE_SERVICE_ROLE_KEY` al browser ni a ejemplos frontend.
 
+Si vas a probar la calificacion manual docente localmente, habilita ademas en `backend/.env`:
+
+- `TEACHER_MANUAL_GRADING_ENABLED=true`
+
 ## Smoke minimo
 
 - `GET /health` responde `200`
@@ -130,6 +134,26 @@ Nunca lleves `SUPABASE_SERVICE_ROLE_KEY` al browser ni a ejemplos frontend.
 - `http://localhost:5173/app/teacher/dashboard` sin sesion redirige a `http://localhost:5173/app/teacher/login`
 - `http://localhost:5173/app/teacher/case-designer` sin sesion redirige a `http://localhost:5173/app/teacher/login`
 - `http://localhost:5173/app/auth/callback` muestra spinner de "Completando inicio de sesion"
+
+## Fixture reproducible para calificacion manual
+
+Para levantar una entrega lista para revisar desde la UI docente, usa el seed local idempotente:
+
+```powershell
+uv run --directory backend python scripts/seed_manual_grading_fixture.py `
+  --teacher-password "<elige-un-password-local-docente>" `
+  --student-password "<elige-un-password-local-estudiante>"
+```
+
+Que hace este script:
+
+- crea o reutiliza un docente y un estudiante en Supabase Auth local
+- actualiza las passwords si las pasas por CLI
+- upserta `profile`, `membership`, bridge `users`, curso, assignment publicado y una `student_case_response` en estado `submitted`
+- elimina cualquier `case_grade` existente para esa misma entrega y deja el borrador docente limpio
+- imprime la URL exacta de `submissions` y la de `submission detail` para abrir el caso ya seedado
+
+Si no pasas `--teacher-password` o `--student-password` y la cuenta ya existia, el script reutiliza la cuenta sin cambiar la password actual.
 
 ## Prerequisito manual para produccion
 

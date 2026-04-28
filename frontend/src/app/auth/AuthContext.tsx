@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { queryKeys } from "@/shared/queryKeys";
 import { getSupabaseClient } from "@/shared/supabaseClient";
-import { apiFetch } from "@/shared/api";
+import { ApiError, apiFetch } from "@/shared/api";
 
 import type { AuthMeActor, Session } from "./auth-types";
 import { AuthContext } from "./auth-context";
@@ -19,8 +19,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [actorQueryEnabled, setActorQueryEnabled] = useState(false);
 
     const fetchActorOrThrow = useCallback(async (): Promise<AuthMeActor> => {
-        const res = await apiFetch("/auth/me");
-        return (await res.json()) as AuthMeActor;
+        try {
+            const res = await apiFetch("/auth/me");
+            return (await res.json()) as AuthMeActor;
+        } catch (error) {
+            if (error instanceof ApiError && error.status === 401) {
+                setSession(null);
+                setBootstrapError(null);
+                setActorQueryEnabled(false);
+
+                const supabase = getSupabaseClient();
+                if (supabase) {
+                    void supabase.auth.signOut();
+                }
+            }
+
+            throw error;
+        }
     }, []);
 
     const actorQuery = useQuery({

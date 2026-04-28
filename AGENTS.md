@@ -65,6 +65,7 @@ This repository does not currently include a student runtime, full authenticatio
 
 - `backend/src/case_generator/` owns authoring business logic, prompts, schemas, and graph execution.
 - `backend/src/shared/` owns FastAPI app composition, DB, ORM, shared contracts, and progress snapshot endpoints.
+- Teacher manual grading runtime lives in `backend/src/shared/case_grade_service.py`, `backend/src/shared/teacher_grading_schema.py`, and the `case_grade_*_entries` tables; do not move that workflow into `case_generator` or hide it in routers.
 - `frontend/src/` follows the stable top-level split `app / features / shared`.
 - `shared/` must not become a catch-all for new product logic.
 - Use absolute imports by domain. Do not reintroduce `sys.path` hacks or deep relative import chains.

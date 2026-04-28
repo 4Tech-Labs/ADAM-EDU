@@ -1,6 +1,7 @@
 import type {
     CaseContent,
     CanonicalCaseOutput,
+    TeacherCaseSubmissionGradeResponse,
     TeacherCaseSubmissionDetailResponse,
 } from "@/shared/adam-types";
 
@@ -139,5 +140,51 @@ export function createSubmissionDetailResponse(
                 ],
             },
         ],
+    };
+}
+
+export function createSubmissionGradeResponse(
+    overrides: Partial<TeacherCaseSubmissionGradeResponse> = {},
+): TeacherCaseSubmissionGradeResponse {
+    return {
+        payload_version: 1,
+        snapshot_hash: "hash-123",
+        publication_state: "draft",
+        version: 1,
+        score_normalized: null,
+        score_display: null,
+        max_score_display: 5,
+        modules: [
+            {
+                module_id: "M1",
+                weight: 0.5,
+                feedback_module: null,
+                questions: [
+                    {
+                        question_id: "M1-Q1",
+                        rubric_level: null,
+                        feedback_question: null,
+                    },
+                ],
+            },
+            {
+                module_id: "M5",
+                weight: 0.5,
+                feedback_module: null,
+                questions: [
+                    {
+                        question_id: "M5-Q1",
+                        rubric_level: null,
+                        feedback_question: null,
+                    },
+                ],
+            },
+        ],
+        feedback_global: null,
+        graded_at: null,
+        published_at: null,
+        last_modified_at: "2026-06-05T19:00:00Z",
+        graded_by: "human",
+        ...overrides,
     };
 }

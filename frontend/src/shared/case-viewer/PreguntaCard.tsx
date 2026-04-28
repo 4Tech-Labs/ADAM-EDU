@@ -1,5 +1,5 @@
 import { marked } from "marked";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type { EDASocraticQuestion, ModuleId, PreguntaMinimalista } from "@/shared/adam-types";
 
@@ -18,6 +18,7 @@ export function PreguntaCard({
     onAnswerChange,
     readOnly,
     showExpectedSolutions,
+    supplement,
 }: {
     p: QuestionRenderable;
     questionId: string;
@@ -26,6 +27,7 @@ export function PreguntaCard({
     readOnly: boolean;
     showExpectedSolutions: boolean;
     moduleId?: ModuleId;
+    supplement?: ReactNode;
 }) {
     const [showSolucion, setShowSolucion] = useState(showExpectedSolutions);
     const formattedEnunciado = marked(p.enunciado) as string;
@@ -70,6 +72,7 @@ export function PreguntaCard({
                     value={answer}
                     onChange={(event) => onAnswerChange(event.target.value)}
                 />
+                {supplement ? <div className="mt-4">{supplement}</div> : null}
                 {showExpectedSolutions && hasSolution && (
                     <div className="mt-5 flex justify-end">
                         <button

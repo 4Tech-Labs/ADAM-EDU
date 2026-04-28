@@ -631,6 +631,7 @@ def _load_teacher_submission_assignment(
                     Assignment.available_from,
                     Assignment.deadline,
                     Assignment.canonical_output,
+                    Assignment.weight_per_module,
                 ),
                 joinedload(Assignment.course).load_only(
                     Course.id,

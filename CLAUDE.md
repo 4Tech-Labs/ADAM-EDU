@@ -63,6 +63,7 @@ Use the repo-driven gstack runtime materialized from the pinned lock in `scripts
 
 - `backend/src/case_generator/`: authoring business logic, LangGraph orchestration, prompts, schemas, and downstream generation services.
 - `backend/src/shared/`: FastAPI composition root, database access, ORM models, shared contracts, sanitization, and progress snapshot endpoints.
+- Teacher manual grading runtime stays in `backend/src/shared/case_grade_service.py`, `backend/src/shared/teacher_grading_schema.py`, and the `case_grade_*_entries` tables; do not push that workflow into `case_generator` or bury it inside routers.
 - `frontend/src/app/`: application shell, router, entrypoint, and global styles.
 - `frontend/src/features/teacher-authoring/`: teacher-facing authoring workflow.
 - `frontend/src/features/case-preview/`: generated case preview and `M1..M6` rendering surface.

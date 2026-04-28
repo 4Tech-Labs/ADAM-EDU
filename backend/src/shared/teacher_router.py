@@ -2,23 +2,30 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import math
-from typing import Annotated, Any
+from typing import Annotated, Any, Never
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from shared.auth import CurrentActor, require_current_actor_password_ready
+from shared.case_grade_service import (
+    IncompleteGradeError,
+    SnapshotConflictError,
+    get_teacher_case_grade,
+    save_teacher_case_grade,
+)
 from shared.course_access_schema import CourseAccessLinkRegenerateResponse, TeacherCourseAccessLinkResponse
-from shared.database import get_db
+from shared.database import get_db, settings
 from shared.models import Assignment, AssignmentCourse, Course
 from shared.teacher_gradebook_schema import (
     TeacherCaseSubmissionDetailResponse,
     TeacherCaseSubmissionsResponse,
     TeacherCourseGradebookResponse,
 )
+from shared.teacher_grading_schema import TeacherGradeRequestBody, TeacherGradeResponse
 from shared.syllabus_schema import TeacherCourseDetailResponse, TeacherSyllabusSaveRequest
 from shared.teacher_context import TeacherContext, require_teacher_context
 from shared.teacher_reads import (
@@ -37,6 +44,8 @@ from shared.teacher_writes import regenerate_teacher_course_access_link, save_te
 
 router = APIRouter(prefix="/api/teacher", tags=["teacher"])
 _BOGOTA_TZ = ZoneInfo("America/Bogota")
+_PRIVATE_REVALIDATE_CACHE_CONTROL = "private, max-age=0, must-revalidate"
+_TEACHER_GRADE_MAX_BODY_BYTES = 1_500_000
 
 
 class TeacherCaseItemResponse(BaseModel):
@@ -85,6 +94,29 @@ def _days_remaining(deadline: datetime | None, now: datetime) -> int | None:
     if remaining_days <= 0:
         return 0
     return remaining_days
+
+
+def _private_revalidate_headers() -> dict[str, str]:
+    return {"Cache-Control": _PRIVATE_REVALIDATE_CACHE_CONTROL}
+
+
+def _raise_with_private_cache(exc: HTTPException) -> Never:
+    headers = dict(exc.headers or {})
+    headers.update(_private_revalidate_headers())
+    raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=headers) from exc
+
+
+def _ensure_teacher_manual_grading_enabled() -> None:
+    if settings.teacher_manual_grading_enabled:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "code": "feature_disabled",
+            "message": "Teacher manual grading is disabled.",
+        },
+        headers=_private_revalidate_headers(),
+    )
 
 
 @router.get("/courses", response_model=TeacherCoursesResponse)
@@ -277,13 +309,104 @@ def get_teacher_case_submission_detail_view(
     context: Annotated[TeacherContext, Depends(require_teacher_context)],
     db: Session = Depends(get_db),
 ) -> TeacherCaseSubmissionDetailResponse:
-    """Read-only teacher submission detail view.
-
-    Mutations de calificación (`POST/PUT /api/teacher/cases/.../grade`) se entregarán
-    en una issue posterior. Este endpoint es solo de lectura.
-    """
-    response.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
+    response.headers["Cache-Control"] = _PRIVATE_REVALIDATE_CACHE_CONTROL
     return get_teacher_case_submission_detail(db, context, assignment_id, membership_id)
+
+
+@router.get(
+    "/courses/{course_id}/cases/{assignment_id}/submissions/{membership_id}/grade",
+    response_model=TeacherGradeResponse,
+)
+def get_teacher_case_grade_view(
+    course_id: str,
+    assignment_id: str,
+    membership_id: str,
+    response: Response,
+    context: Annotated[TeacherContext, Depends(require_teacher_context)],
+    db: Session = Depends(get_db),
+) -> TeacherGradeResponse:
+    response.headers["Cache-Control"] = _PRIVATE_REVALIDATE_CACHE_CONTROL
+    _ensure_teacher_manual_grading_enabled()
+    try:
+        return get_teacher_case_grade(
+            db=db,
+            context=context,
+            course_id=course_id,
+            assignment_id=assignment_id,
+            membership_id=membership_id,
+        )
+    except HTTPException as exc:
+        _raise_with_private_cache(exc)
+
+
+@router.put(
+    "/courses/{course_id}/cases/{assignment_id}/submissions/{membership_id}/grade",
+    response_model=TeacherGradeResponse,
+)
+async def put_teacher_case_grade_view(
+    course_id: str,
+    assignment_id: str,
+    membership_id: str,
+    request: Request,
+    response: Response,
+    context: Annotated[TeacherContext, Depends(require_teacher_context)],
+    db: Session = Depends(get_db),
+) -> TeacherGradeResponse:
+    response.headers["Cache-Control"] = _PRIVATE_REVALIDATE_CACHE_CONTROL
+    _ensure_teacher_manual_grading_enabled()
+
+    raw_body = await request.body()
+    if len(raw_body) > _TEACHER_GRADE_MAX_BODY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={
+                "code": "payload_too_large",
+                "message": "Teacher manual grading payload exceeds the 1.5 MB limit.",
+            },
+            headers=_private_revalidate_headers(),
+        )
+
+    try:
+        payload = TeacherGradeRequestBody.model_validate_json(raw_body or b"{}")
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.errors(),
+            headers=_private_revalidate_headers(),
+        ) from exc
+
+    try:
+        return save_teacher_case_grade(
+            db=db,
+            context=context,
+            course_id=course_id,
+            assignment_id=assignment_id,
+            membership_id=membership_id,
+            payload=payload,
+        )
+    except SnapshotConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "snapshot_changed",
+                "message": "The submission snapshot changed. Reload the latest submission before saving.",
+                "current_snapshot_hash": exc.current_snapshot_hash,
+            },
+            headers=_private_revalidate_headers(),
+        ) from exc
+    except IncompleteGradeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "payload_version": 1,
+                "code": "incomplete_grade",
+                "message": "All questions must be graded before publishing.",
+                "missing_question_ids": exc.missing_question_ids,
+            },
+            headers=_private_revalidate_headers(),
+        ) from exc
+    except HTTPException as exc:
+        _raise_with_private_cache(exc)
 
 
 @router.patch("/cases/{assignment_id}/publish", response_model=TeacherCaseDetailResponse)

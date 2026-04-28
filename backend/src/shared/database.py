@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     db_retry_after_seconds: int = 3
     db_critical_endpoint_budget: int = 64
     authoring_bootstrap_timeout_seconds: int | None = None
+    teacher_manual_grading_enabled: bool = False
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

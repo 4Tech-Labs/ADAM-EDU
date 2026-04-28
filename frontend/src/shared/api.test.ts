@@ -835,6 +835,12 @@ describe("api auth + stream glue", () => {
         }])).toBe("Value error, semester must use YYYY-I or YYYY-II");
     });
 
+    it("maps payload_too_large consistently for 413 responses", () => {
+        expect(formatHttpError(413, "payload_too_large")).toBe(
+            "Tus respuestas exceden el tamano permitido.",
+        );
+    });
+
     it("serializes admin course filters into the expected query string", async () => {
         const fetchMock = vi.fn().mockResolvedValue(
             new Response(JSON.stringify({ items: [], page: 1, page_size: 8, total: 0, total_pages: 0 }), {

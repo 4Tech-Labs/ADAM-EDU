@@ -52,6 +52,7 @@ uv run pytest -m live_llm -q
 
 - `src/case_generator/` owns teacher authoring business logic.
 - `src/shared/` owns app composition, DB, ORM, sanitization, progress snapshot endpoints, and shared contracts.
+- Teacher manual grading runtime stays in `src/shared/case_grade_service.py`, `src/shared/teacher_grading_schema.py`, and the `case_grade_*_entries` tables.
 - `shared/` must not absorb new product domains.
 - Use absolute imports. Do not add `sys.path` mutations.
 - Keep application schema changes in Alembic migrations under `alembic/versions/`.

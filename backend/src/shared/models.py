@@ -336,6 +336,9 @@ class Assignment(Base):
     # Canonical teacher preview output stored separately from the internal blueprint.
     canonical_output: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
+    # Optional manual grading weights by module, e.g. {"M1": 0.2, "M2": 0.2, ...}.
+    weight_per_module: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     status: Mapped[str] = mapped_column(String(50), default="draft")
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     available_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -408,6 +411,14 @@ class CaseGrade(Base):
             name="ck_case_grades_score_range",
         ),
         CheckConstraint(
+            "graded_by IN ('human', 'ai', 'hybrid')",
+            name="ck_case_grades_graded_by",
+        ),
+        CheckConstraint(
+            "version >= 1",
+            name="ck_case_grades_version_positive",
+        ),
+        CheckConstraint(
             "((status = 'graded' AND score IS NOT NULL AND graded_at IS NOT NULL) OR "
             "(status IN ('in_progress', 'submitted') AND score IS NULL AND graded_at IS NULL))",
             name="ck_case_grades_state_consistency",
@@ -440,11 +451,34 @@ class CaseGrade(Base):
         server_default=sql_text("5.00"),
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    graded_by: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="human",
+        server_default=sql_text("'human'"),
+    )
     graded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     graded_by_membership_id: Mapped[str | None] = mapped_column(
         Text,
         ForeignKey("memberships.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    ai_model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ai_suggested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    human_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=sql_text("1"),
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    draft_feedback_global: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_modified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=sql_text("CURRENT_TIMESTAMP"),
     )
     feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -463,6 +497,169 @@ class CaseGrade(Base):
     graded_by_membership: Mapped["Membership | None"] = relationship(
         foreign_keys=[graded_by_membership_id],
     )
+    module_entries: Mapped[list["CaseGradeModuleEntry"]] = relationship(
+        back_populates="case_grade",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    question_entries: Mapped[list["CaseGradeQuestionEntry"]] = relationship(
+        back_populates="case_grade",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class CaseGradeModuleEntry(Base):
+    """Per-module grading draft/published entry attached to a case grade."""
+
+    __tablename__ = "case_grade_module_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_grade_id",
+            "module_id",
+            "state",
+            name="uix_case_grade_module_entries_case_grade_module_state",
+        ),
+        CheckConstraint(
+            "module_id IN ('M1', 'M2', 'M3', 'M4', 'M5')",
+            name="ck_case_grade_module_entries_module_id",
+        ),
+        CheckConstraint(
+            "weight >= 0 AND weight <= 1",
+            name="ck_case_grade_module_entries_weight_range",
+        ),
+        CheckConstraint(
+            "state IN ('draft', 'published')",
+            name="ck_case_grade_module_entries_state",
+        ),
+        CheckConstraint(
+            "source IN ('human', 'ai_suggested', 'ai_edited_by_human')",
+            name="ck_case_grade_module_entries_source",
+        ),
+        CheckConstraint(
+            "ai_confidence IS NULL OR (ai_confidence >= 0 AND ai_confidence <= 1)",
+            name="ck_case_grade_module_entries_ai_confidence_range",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    case_grade_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("case_grades.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    module_id: Mapped[str] = mapped_column(String(2), nullable=False)
+    weight: Mapped[Decimal] = mapped_column(
+        Numeric(4, 3),
+        nullable=False,
+        default=Decimal("0.200"),
+        server_default=sql_text("0.200"),
+    )
+    feedback_module: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="draft",
+        server_default=sql_text("'draft'"),
+    )
+    source: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default="human",
+        server_default=sql_text("'human'"),
+    )
+    ai_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    case_grade: Mapped["CaseGrade"] = relationship(back_populates="module_entries")
+
+
+class CaseGradeQuestionEntry(Base):
+    """Per-question grading draft/published entry attached to a case grade."""
+
+    __tablename__ = "case_grade_question_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_grade_id",
+            "question_id",
+            "state",
+            name="uix_case_grade_question_entries_case_grade_question_state",
+        ),
+        CheckConstraint(
+            "module_id IN ('M1', 'M2', 'M3', 'M4', 'M5')",
+            name="ck_case_grade_question_entries_module_id",
+        ),
+        CheckConstraint(
+            "rubric_level IS NULL OR rubric_level IN ('excelente', 'bien', 'aceptable', 'insuficiente', 'no_responde')",
+            name="ck_case_grade_question_entries_rubric_level",
+        ),
+        CheckConstraint(
+            "score_normalized IS NULL OR (score_normalized >= 0 AND score_normalized <= 1)",
+            name="ck_case_grade_question_entries_score_normalized_range",
+        ),
+        CheckConstraint(
+            "state IN ('draft', 'published')",
+            name="ck_case_grade_question_entries_state",
+        ),
+        CheckConstraint(
+            "source IN ('human', 'ai_suggested', 'ai_edited_by_human')",
+            name="ck_case_grade_question_entries_source",
+        ),
+        CheckConstraint(
+            "ai_confidence IS NULL OR (ai_confidence >= 0 AND ai_confidence <= 1)",
+            name="ck_case_grade_question_entries_ai_confidence_range",
+        ),
+        Index(
+            "ix_case_grade_question_entries_case_grade_module",
+            "case_grade_id",
+            "module_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    case_grade_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("case_grades.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    question_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    module_id: Mapped[str] = mapped_column(String(2), nullable=False)
+    rubric_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    score_normalized: Mapped[float | None] = mapped_column(Float, nullable=True)
+    feedback_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="draft",
+        server_default=sql_text("'draft'"),
+    )
+    source: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default="human",
+        server_default=sql_text("'human'"),
+    )
+    ai_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    case_grade: Mapped["CaseGrade"] = relationship(back_populates="question_entries")
 
 
 class StudentCaseResponse(Base):

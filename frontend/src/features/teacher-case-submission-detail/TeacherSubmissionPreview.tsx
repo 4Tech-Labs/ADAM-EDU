@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, RefreshCcw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeft, ClipboardCheck, RefreshCcw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -7,7 +7,11 @@ import {
     countSubmissionQuestions,
 } from "./teacherCaseSubmissionDetailModel";
 import { toCanonicalCaseOutput } from "./toCanonicalCaseOutput";
-import { GradingPlaceholderSlot } from "./components/GradingPlaceholderPanel";
+import { TeacherGradingPanel } from "./components/TeacherGradingPanel";
+import { TeacherPublishConfirmModal } from "./components/TeacherPublishConfirmModal";
+import { TeacherQuestionGradingSupplement } from "./components/TeacherQuestionGradingSupplement";
+import { TeacherSnapshotConflictModal } from "./components/TeacherSnapshotConflictModal";
+import { useTeacherManualGrading } from "./useTeacherManualGrading";
 
 import {
     formatTeacherCourseTimestamp,
@@ -30,7 +34,11 @@ interface TeacherSubmissionPreviewProps {
     assignmentId: string;
     detail: TeacherCaseSubmissionDetailResponse;
     isRefreshing: boolean;
-    onRefresh: () => void;
+    onRefresh: () => Promise<void>;
+}
+
+function toTeacherGradeModuleId(moduleId: ModuleId): "M1" | "M2" | "M3" | "M4" | "M5" {
+    return moduleId.toUpperCase() as "M1" | "M2" | "M3" | "M4" | "M5";
 }
 
 function buildAnswersMap(detail: TeacherCaseSubmissionDetailResponse): Record<string, string> {
@@ -59,7 +67,14 @@ function getSnapshotLabel(detail: TeacherCaseSubmissionDetailResponse): string {
         : "Enviado";
 }
 
-function getGradeSummary(detail: TeacherCaseSubmissionDetailResponse): string {
+function getGradeSummary(
+    detail: TeacherCaseSubmissionDetailResponse,
+    currentGrade: { score_display: number | null; max_score_display: number } | null,
+): string {
+    if (currentGrade && currentGrade.score_display !== null) {
+        return `${formatTeacherGradebookScore(currentGrade.score_display)} / ${formatTeacherGradebookScore(currentGrade.max_score_display)}`;
+    }
+
     if (
         detail.grade_summary.status !== "graded"
         || detail.grade_summary.score === null
@@ -96,12 +111,125 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
     const answers = useMemo(() => buildAnswersMap(detail), [detail]);
     const visibleModules = useMemo(() => getVisibleModules(detail), [detail]);
     const [activeModule, setActiveModule] = useState<ModuleId>(visibleModules[0] ?? "m1");
+    const [isGradingMode, setIsGradingMode] = useState(false);
+    const [isPublishConfirmOpen, setIsPublishConfirmOpen] = useState(false);
     const answeredQuestions = countAnsweredSubmissionQuestions(detail);
     const totalQuestions = countSubmissionQuestions(detail);
     const refreshLabel = isRefreshing ? "Actualizando entrega" : "Actualizar entrega";
     const snapshotLabel = getSnapshotLabel(detail);
     const statusLabel = formatTeacherGradebookCellStatus(detail.response_state.status).toUpperCase();
     const statusBadgeClasses = getStatusBadgeClasses(detail.response_state.status);
+    const grading = useTeacherManualGrading(
+        detail.case.course_id,
+        assignmentId,
+        detail.student.membership_id,
+        detail,
+    );
+    const activeGradingModuleId = toTeacherGradeModuleId(activeModule);
+    const gradingModeLabel = isGradingMode
+        ? "Vista previa"
+        : grading.hasPublishedVersion
+            ? "Editar y republicar"
+            : "Modo calificar";
+    const currentGradeSummary = grading.grade
+        ? {
+            score_display: grading.grade.score_display,
+            max_score_display: grading.grade.max_score_display,
+        }
+        : null;
+    const gradingMode = grading.mode;
+    const gradingGrade = grading.grade;
+    const gradingIsLocked = grading.isLocked;
+    const setQuestionFeedback = grading.setQuestionFeedback;
+    const setQuestionRubric = grading.setQuestionRubric;
+    const handleRefresh = useCallback(async () => {
+        try {
+            await Promise.all([onRefresh(), grading.refresh()]);
+        } catch {
+            // The page-level error surface already renders the failure state.
+        }
+    }, [grading, onRefresh]);
+    const handleSnapshotConflictRefresh = useCallback(async () => {
+        grading.setRefreshError(null);
+        try {
+            await Promise.all([onRefresh(), grading.refresh()]);
+            grading.clearSnapshotConflict();
+        } catch (error) {
+            grading.setRefreshError(error);
+        }
+    }, [grading, onRefresh]);
+    const handlePublishConfirm = useCallback(async () => {
+        const published = await grading.publish();
+        if (published) {
+            setIsPublishConfirmOpen(false);
+        }
+    }, [grading]);
+
+    const questionSupplement = useMemo(() => {
+        if (gradingMode !== "ready" || !gradingGrade || !isGradingMode) {
+            return undefined;
+        }
+
+        return (questionId: string) => {
+            for (const module of gradingGrade.modules) {
+                const question = module.questions.find((currentQuestion) => currentQuestion.question_id === questionId);
+                if (!question) {
+                    continue;
+                }
+
+                return (
+                    <TeacherQuestionGradingSupplement
+                        questionId={questionId}
+                        rubricLevel={question.rubric_level}
+                        feedbackQuestion={question.feedback_question}
+                        disabled={gradingIsLocked}
+                        onRubricChange={(value) => setQuestionRubric(questionId, value)}
+                        onFeedbackChange={(value) => setQuestionFeedback(questionId, value)}
+                    />
+                );
+            }
+
+            return null;
+        };
+    }, [
+        gradingGrade,
+        gradingMode,
+        gradingIsLocked,
+        setQuestionFeedback,
+        setQuestionRubric,
+        isGradingMode,
+    ]);
+
+    const gradingPanel = grading.mode === "disabled"
+        ? null
+        : (
+            <TeacherGradingPanel
+                mode={grading.mode}
+                grade={grading.grade}
+                loadErrorMessage={grading.loadErrorMessage}
+                activeModuleId={activeGradingModuleId}
+                autosaveState={grading.autosaveState}
+                banner={grading.banner}
+                isDirty={grading.isDirty}
+                isGradingMode={isGradingMode}
+                isLocked={grading.isLocked}
+                isPublishing={grading.isPublishing}
+                missingQuestionCount={grading.missingQuestionCount}
+                hasPublishedVersion={grading.hasPublishedVersion}
+                requiresRefresh={grading.requiresRefresh}
+                onGlobalFeedbackChange={grading.setGlobalFeedback}
+                onModuleFeedbackChange={grading.setModuleFeedback}
+                onPublishRequest={() => {
+                    setIsPublishConfirmOpen(true);
+                }}
+                onRefresh={() => {
+                    void handleRefresh();
+                }}
+                onToggleMode={() => {
+                    setIsGradingMode((currentValue) => !currentValue);
+                }}
+            />
+        );
 
     useEffect(() => {
         if (visibleModules.length === 0) {
@@ -121,6 +249,18 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
             document.body.style.overflow = previousOverflow;
         };
     }, []);
+
+    useEffect(() => {
+        if (grading.mode !== "ready") {
+            setIsGradingMode(false);
+        }
+    }, [grading.mode]);
+
+    useEffect(() => {
+        if (grading.mode !== "ready" || !isGradingMode || grading.requiresRefresh) {
+            setIsPublishConfirmOpen(false);
+        }
+    }, [grading.mode, grading.requiresRefresh, isGradingMode]);
 
     return (
         <>
@@ -163,7 +303,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                             <dd className="text-right text-[11px]">{answeredQuestions}/{totalQuestions}</dd>
 
                             <dt className="text-[10px] uppercase tracking-wider text-slate-500">Calificación</dt>
-                            <dd className="text-right text-[11px]">{getGradeSummary(detail)}</dd>
+                            <dd className="text-right text-[11px]">{getGradeSummary(detail, currentGradeSummary)}</dd>
 
                             <dt className="text-[10px] uppercase tracking-wider text-slate-500">Entrega</dt>
                             <dd className="truncate text-right text-[11px]" title={formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}>
@@ -198,12 +338,25 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                         </div>
 
                         <div className="flex items-center gap-3">
+                            {grading.mode === "ready" ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setIsGradingMode((currentValue) => !currentValue)}
+                                    className="hidden items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 lg:inline-flex"
+                                    data-testid="teacher-grading-header-toggle"
+                                >
+                                    <ClipboardCheck className="h-4 w-4" />
+                                    {gradingModeLabel}
+                                </button>
+                            ) : null}
                             <span className={`hidden rounded-full px-3 py-1 text-xs font-semibold lg:inline-flex ${statusBadgeClasses}`}>
                                 {statusLabel}
                             </span>
                             <button
                                 type="button"
-                                onClick={onRefresh}
+                                onClick={() => {
+                                    void handleRefresh();
+                                }}
                                 disabled={isRefreshing}
                                 className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
                                 aria-label={refreshLabel}
@@ -232,22 +385,55 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                         </div>
                     </div>
 
-                    <CaseContentRenderer
-                        result={canonicalOutput}
-                        visibleModules={visibleModules}
-                        activeModule={activeModule}
-                        onActiveModuleChange={setActiveModule}
-                        answers={answers}
-                        onAnswersChange={() => undefined}
-                        readOnly={true}
-                        showExpectedSolutions={true}
-                    />
+                    <div className="flex min-h-0 flex-1 overflow-hidden">
+                        <div className="min-w-0 flex-1 overflow-hidden">
+                            <CaseContentRenderer
+                                result={canonicalOutput}
+                                visibleModules={visibleModules}
+                                activeModule={activeModule}
+                                onActiveModuleChange={setActiveModule}
+                                answers={answers}
+                                onAnswersChange={() => undefined}
+                                readOnly={true}
+                                showExpectedSolutions={true}
+                                questionSupplement={questionSupplement}
+                            />
+                        </div>
 
-                    <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 md:hidden">
-                        <GradingPlaceholderSlot />
+                        {gradingPanel ? (
+                            <aside className="hidden w-80 shrink-0 border-l border-slate-200 bg-white xl:flex xl:flex-col">
+                                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
+                                    {gradingPanel}
+                                </div>
+                            </aside>
+                        ) : null}
                     </div>
+
+                    {gradingPanel ? (
+                        <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 md:hidden">
+                            {gradingPanel}
+                        </div>
+                    ) : null}
                 </div>
             </div>
+
+            <TeacherPublishConfirmModal
+                isOpen={isPublishConfirmOpen}
+                hasPublishedVersion={grading.hasPublishedVersion}
+                isSubmitting={grading.isPublishing}
+                scoreLabel={getGradeSummary(detail, currentGradeSummary)}
+                onClose={() => setIsPublishConfirmOpen(false)}
+                onConfirm={() => {
+                    void handlePublishConfirm();
+                }}
+            />
+
+            <TeacherSnapshotConflictModal
+                isOpen={grading.isSnapshotConflictOpen}
+                isReloading={isRefreshing || grading.isRefreshing}
+                refreshError={grading.refreshError}
+                onReload={() => handleSnapshotConflictRefresh()}
+            />
         </>
     );
 }

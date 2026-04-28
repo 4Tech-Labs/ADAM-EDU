@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryCache, QueryClient } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestQueryClient, createWrapper } from "@/shared/test-utils";
@@ -12,6 +13,7 @@ const {
     mockSignOut,
     mockOnAuthStateChange,
     mockApiFetch,
+    MockApiError,
 } = vi.hoisted(() => ({
     mockGetSession: vi.fn(),
     mockSignOut: vi.fn(),
@@ -19,6 +21,15 @@ const {
         data: { subscription: { unsubscribe: vi.fn() } },
     })),
     mockApiFetch: vi.fn(),
+    MockApiError: class MockApiError extends Error {
+        status: number;
+
+        constructor(status: number, message = "api error") {
+            super(message);
+            this.name = "ApiError";
+            this.status = status;
+        }
+    },
 }));
 
 vi.mock("@/shared/supabaseClient", () => ({
@@ -33,6 +44,7 @@ vi.mock("@/shared/supabaseClient", () => ({
 
 vi.mock("@/shared/api", () => ({
     apiFetch: mockApiFetch,
+    ApiError: MockApiError,
 }));
 
 const mockActor: AuthMeActor = {
@@ -73,6 +85,7 @@ describe("AuthProvider", () => {
         vi.useRealTimers();
         vi.clearAllMocks();
         mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
+        mockSignOut.mockResolvedValue(undefined);
         mockOnAuthStateChange.mockReturnValue({
             data: { subscription: { unsubscribe: vi.fn() } },
         });
@@ -145,6 +158,80 @@ describe("AuthProvider", () => {
         expect(screen.getByTestId("error").textContent).toBe(
             "No se pudo cargar tu perfil. Intenta iniciar sesión de nuevo.",
         );
+    });
+
+    it("clears the local session when /api/auth/me returns 401", async () => {
+        const fakeSession = { access_token: "jwt-abc" };
+        mockGetSession.mockResolvedValue({
+            data: { session: fakeSession },
+            error: null,
+        });
+        mockApiFetch.mockRejectedValue(new MockApiError(401, "unauthorized"));
+
+        renderWithAuthProvider();
+
+        await waitFor(() =>
+            expect(screen.getByTestId("loading").textContent).toBe("false"),
+        );
+
+        await waitFor(() =>
+            expect(screen.getByTestId("session").textContent).toBe("no"),
+        );
+        expect(screen.getByTestId("actor").textContent).toBe("none");
+        expect(screen.getByTestId("error").textContent).toBe("none");
+        expect(mockSignOut).toHaveBeenCalledTimes(1);
+    });
+
+    it("breaks the production-style 401 clear loop for /api/auth/me", async () => {
+        const fakeSession = { access_token: "jwt-abc" };
+        mockGetSession.mockResolvedValue({
+            data: { session: fakeSession },
+            error: null,
+        });
+        mockApiFetch.mockRejectedValue(new MockApiError(401, "unauthorized"));
+
+        let loopQueryClient!: QueryClient;
+        loopQueryClient = new QueryClient({
+            queryCache: new QueryCache({
+                onError: (error) => {
+                    if (error instanceof MockApiError && error.status === 401) {
+                        loopQueryClient.cancelQueries();
+                        loopQueryClient.clear();
+                    }
+                },
+            }),
+            defaultOptions: {
+                queries: {
+                    retry: false,
+                    gcTime: 0,
+                    staleTime: 0,
+                },
+                mutations: {
+                    retry: false,
+                },
+            },
+        });
+
+        render(
+            <AuthProvider>
+                <Probe />
+            </AuthProvider>,
+            {
+                wrapper: createWrapper({ queryClient: loopQueryClient }),
+            },
+        );
+
+        await waitFor(() =>
+            expect(screen.getByTestId("session").textContent).toBe("no"),
+        );
+
+        await act(async () => {
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+
+        expect(mockApiFetch).toHaveBeenCalledTimes(1);
+        expect(mockSignOut).toHaveBeenCalledTimes(1);
     });
 
     it("clears actor on SIGNED_OUT event", async () => {

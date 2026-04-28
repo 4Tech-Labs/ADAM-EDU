@@ -6,10 +6,15 @@ import { formatTeacherGradebookScore } from "@/features/teacher-course/teacherCo
 import { renderWithProviders } from "@/shared/test-utils";
 
 import { TeacherSubmissionPreview } from "../TeacherSubmissionPreview";
+import { useTeacherManualGrading } from "../useTeacherManualGrading";
 
-import { createSubmissionDetailResponse } from "./testData";
+import { createSubmissionDetailResponse, createSubmissionGradeResponse } from "./testData";
 
 const caseContentRendererSpy = vi.fn();
+
+vi.mock("../useTeacherManualGrading", () => ({
+    useTeacherManualGrading: vi.fn(),
+}));
 
 vi.mock("@/shared/case-viewer", async () => {
     const actual = await vi.importActual<typeof import("@/shared/case-viewer")>("@/shared/case-viewer");
@@ -48,7 +53,9 @@ vi.mock("@/shared/case-viewer", async () => {
                 showExpectedSolutions: boolean;
                 answers: Record<string, string>;
                 result: { studentProfile?: string | null };
+                questionSupplement?: (questionId: string) => React.ReactNode;
             };
+            const supplement = rendererProps.questionSupplement?.("M1-Q1") ?? null;
 
             return (
                 <div
@@ -59,7 +66,9 @@ vi.mock("@/shared/case-viewer", async () => {
                     data-show-expected-solutions={String(rendererProps.showExpectedSolutions)}
                     data-answer-keys={Object.keys(rendererProps.answers).sort().join(",")}
                     data-student-profile={rendererProps.result.studentProfile ?? "null"}
-                />
+                >
+                    {supplement}
+                </div>
             );
         },
     };
@@ -69,10 +78,10 @@ function renderPreview(options?: {
     initialEntries?: string[];
     isRefreshing?: boolean;
     detail?: ReturnType<typeof createSubmissionDetailResponse>;
-    onRefresh?: () => void;
+    onRefresh?: () => Promise<void> | void;
 }) {
     const detail = options?.detail ?? createSubmissionDetailResponse();
-    const onRefresh = options?.onRefresh ?? vi.fn();
+    const onRefresh = options?.onRefresh ?? vi.fn().mockResolvedValue(undefined);
 
     const view = renderWithProviders(
         <Routes>
@@ -84,8 +93,8 @@ function renderPreview(options?: {
                         assignmentId="assignment-1"
                         detail={detail}
                         isRefreshing={options?.isRefreshing ?? false}
-                        onRefresh={() => {
-                            onRefresh();
+                        onRefresh={async () => {
+                            await onRefresh();
                         }}
                     />
                 )}
@@ -99,9 +108,40 @@ function renderPreview(options?: {
     return { ...view, detail, onRefresh };
 }
 
+function buildManualGradingHookState(
+    overrides: Partial<ReturnType<typeof useTeacherManualGrading>> = {},
+): ReturnType<typeof useTeacherManualGrading> {
+    return {
+        mode: "ready",
+        grade: createSubmissionGradeResponse(),
+        loadErrorMessage: null,
+        autosaveState: "saved",
+        banner: null,
+        isDirty: false,
+        refreshError: null,
+        isLocked: false,
+        isPublishing: false,
+        isRefreshing: false,
+        isSnapshotConflictOpen: false,
+        missingQuestionCount: 0,
+        hasPublishedVersion: false,
+        requiresRefresh: false,
+        refresh: vi.fn().mockResolvedValue(undefined),
+        clearSnapshotConflict: vi.fn(),
+        setRefreshError: vi.fn(),
+        publish: vi.fn().mockResolvedValue(true),
+        setGlobalFeedback: vi.fn(),
+        setModuleFeedback: vi.fn(),
+        setQuestionFeedback: vi.fn(),
+        setQuestionRubric: vi.fn(),
+        ...overrides,
+    };
+}
+
 describe("TeacherSubmissionPreview", () => {
     beforeEach(() => {
         caseContentRendererSpy.mockReset();
+        vi.mocked(useTeacherManualGrading).mockReturnValue(buildManualGradingHookState());
     });
 
     it("renders header and sidebar summary metadata", async () => {
@@ -120,7 +160,7 @@ describe("TeacherSubmissionPreview", () => {
         expect(within(summary).getByText("2/2")).toBeTruthy();
         expect(within(summary).getByText("Pendiente")).toBeTruthy();
         expect(within(header).getByText("Caso Plataforma")).toBeTruthy();
-        expect(screen.getAllByTestId("teacher-case-submission-detail-grading-slot").length).toBeGreaterThan(0);
+        expect(screen.getAllByTestId("teacher-grading-panel").length).toBeGreaterThan(0);
     });
 
     it("passes canonical output, answers and read-only flags to the renderer", async () => {
@@ -189,12 +229,65 @@ describe("TeacherSubmissionPreview", () => {
     });
 
     it("forwards the refresh action", async () => {
-        const onRefresh = vi.fn();
+        const onRefresh = vi.fn().mockResolvedValue(undefined);
+        const gradingRefresh = vi.fn().mockResolvedValue(undefined);
+        vi.mocked(useTeacherManualGrading).mockReturnValue(buildManualGradingHookState({ refresh: gradingRefresh }));
         renderPreview({ onRefresh });
 
         fireEvent.click(await screen.findByRole("button", { name: /Actualizar entrega/i }));
 
         expect(onRefresh).toHaveBeenCalledTimes(1);
+        expect(gradingRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("toggles grading mode and renders the per-question grading supplement", async () => {
+        renderPreview();
+
+        expect(screen.queryByTestId("teacher-question-grading-M1-Q1")).toBeNull();
+
+        fireEvent.click(await screen.findByTestId("teacher-grading-header-toggle"));
+
+        expect(await screen.findByTestId("teacher-question-grading-M1-Q1")).toBeTruthy();
+    });
+
+    it("requires an explicit confirmation before publishing", async () => {
+        const publish = vi.fn().mockResolvedValue(true);
+        vi.mocked(useTeacherManualGrading).mockReturnValue(buildManualGradingHookState({ publish }));
+
+        renderPreview();
+
+        fireEvent.click(await screen.findByTestId("teacher-grading-header-toggle"));
+        const [publishButton] = await screen.findAllByTestId("teacher-grading-publish-button");
+        fireEvent.click(publishButton);
+
+        expect(publish).not.toHaveBeenCalled();
+        expect(await screen.findByTestId("teacher-publish-confirm-modal")).toBeTruthy();
+
+        fireEvent.click(screen.getByRole("button", { name: /Confirmar publicación/i }));
+
+        await waitFor(() => {
+            expect(publish).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    it("shows a blocking snapshot conflict modal when the hook requests it", async () => {
+        vi.mocked(useTeacherManualGrading).mockReturnValue(buildManualGradingHookState({
+            isSnapshotConflictOpen: true,
+        }));
+
+        renderPreview();
+
+        expect(await screen.findByTestId("teacher-snapshot-conflict-modal")).toBeTruthy();
+        expect(screen.getByText(/El estudiante modificó su entrega/i)).toBeTruthy();
+    });
+
+    it("does not render the grading panel when the feature is disabled", async () => {
+        vi.mocked(useTeacherManualGrading).mockReturnValue(buildManualGradingHookState({ mode: "disabled" }));
+
+        renderPreview();
+
+        expect(await screen.findByTestId("teacher-submission-preview")).toBeTruthy();
+        expect(screen.queryByTestId("teacher-grading-panel")).toBeNull();
     });
 
     it("locks and restores body overflow while mounted", async () => {

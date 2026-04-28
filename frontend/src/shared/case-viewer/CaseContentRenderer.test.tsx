@@ -98,12 +98,16 @@ describe("CaseContentRenderer", () => {
         expect(screen.getByPlaceholderText(/Escriba su respuesta aquí/i)).toHaveAttribute("readonly");
     });
 
-    it("renders a custom right panel in place of the default section rail", () => {
+    it("renders question supplements without reopening layout seams", () => {
         renderRenderer({
-            rightPanelSlot: <div data-testid="custom-right-panel">Custom panel</div>,
+            questionSupplement: (questionId) => (
+                questionId === "M1-Q1"
+                    ? <div data-testid="custom-question-supplement">Custom supplement</div>
+                    : null
+            ),
         });
 
-        expect(screen.getByTestId("custom-right-panel")).toBeTruthy();
-        expect(screen.queryByText(/En esta sección/i)).toBeNull();
+        expect(screen.getByTestId("custom-question-supplement")).toBeTruthy();
+        expect(screen.getByText(/En esta sección/i)).toBeTruthy();
     });
 });

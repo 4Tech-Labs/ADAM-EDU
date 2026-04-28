@@ -87,8 +87,7 @@ interface CaseContentRendererProps {
     onAnswersChange: (nextAnswers: Record<string, string>) => void;
     readOnly: boolean;
     showExpectedSolutions: boolean;
-    headerSlot?: ReactNode;
-    rightPanelSlot?: ReactNode;
+    questionSupplement?: (questionId: string) => ReactNode;
 }
 
 interface MarkdownMap extends Record<string, string | null> {
@@ -250,8 +249,7 @@ export function CaseContentRenderer({
     onAnswersChange,
     readOnly,
     showExpectedSolutions,
-    headerSlot,
-    rightPanelSlot,
+    questionSupplement,
 }: CaseContentRendererProps) {
     const content = result.content;
     const isEDA = result.caseType === "harvard_with_eda";
@@ -412,12 +410,13 @@ export function CaseContentRenderer({
                             onAnswerChange={(value) => onAnswersChange({ ...answers, [questionId]: value })}
                             readOnly={readOnly}
                             showExpectedSolutions={showExpectedSolutions}
+                            supplement={questionSupplement?.(questionId)}
                         />
                     );
                 })}
             </div>
         );
-    }, [answers, onAnswersChange, readOnly, showExpectedSolutions]);
+    }, [answers, onAnswersChange, questionSupplement, readOnly, showExpectedSolutions]);
 
     const commonProps = useMemo(() => ({
         result,
@@ -447,7 +446,7 @@ export function CaseContentRenderer({
         }
     }, [commonProps, resolvedActiveModule]);
 
-    const defaultRightPanel = navSections.length > 0 ? (
+    const rightPanel = navSections.length > 0 ? (
         <SectionRail
             sections={navSections}
             activeSection={activeSection}
@@ -455,13 +454,10 @@ export function CaseContentRenderer({
         />
     ) : null;
 
-    const rightPanel = rightPanelSlot ?? defaultRightPanel;
-
     return (
         <div className="flex flex-1 overflow-hidden">
             <div ref={paperRef} className="flex-1 overflow-y-auto overscroll-contain custom-scroll px-6 py-8 bg-[#F0F4F8]">
                 <div className="w-full">
-                    {headerSlot ? <div className="mb-6">{headerSlot}</div> : null}
                     <div className="paper-shadow bg-white rounded-xl overflow-hidden mb-8">
                         <div ref={caseContentRef} id="module-content-panel" className="px-14 py-12 fade-in">
                             <Suspense fallback={<PreviewModuleFallback />}>
