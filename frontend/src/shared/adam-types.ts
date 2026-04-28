@@ -62,6 +62,8 @@ export type EDADepth = "charts_only" | "charts_plus_explanation" | "charts_plus_
 export type IntentType = "scenario" | "techniques" | "both";
 export type StudentProfile = "business" | "ml_ds";
 export type ModuleId = "m1" | "m2" | "m3" | "m4" | "m5" | "m6";
+export type TeacherGradeRubricLevel = "excelente" | "bien" | "aceptable" | "insuficiente" | "no_responde";
+export type TeacherGradePublicationState = "draft" | "published";
 export interface CaseFormData {
     courseId: string;
     subject: string;
@@ -904,6 +906,55 @@ export interface TeacherCaseSubmissionDetailResponse {
     response_state: TeacherCaseSubmissionDetailResponseState;
     grade_summary: TeacherCaseSubmissionDetailGradeSummary;
     modules: TeacherCaseSubmissionDetailModule[];
+}
+
+export interface TeacherCaseSubmissionGradeQuestion {
+    question_id: string;
+    rubric_level: TeacherGradeRubricLevel | null;
+    feedback_question: string | null;
+}
+
+export interface TeacherCaseSubmissionGradeModule {
+    module_id: "M1" | "M2" | "M3" | "M4" | "M5";
+    weight: number;
+    feedback_module: string | null;
+    questions: TeacherCaseSubmissionGradeQuestion[];
+}
+
+export interface TeacherCaseSubmissionGradeResponse {
+    payload_version: 1;
+    snapshot_hash: string;
+    publication_state: TeacherGradePublicationState;
+    version: number;
+    score_normalized: number | null;
+    score_display: number | null;
+    max_score_display: number;
+    modules: TeacherCaseSubmissionGradeModule[];
+    feedback_global: string | null;
+    graded_at: string | null;
+    published_at: string | null;
+    last_modified_at: string;
+    graded_by: "human" | "ai" | "hybrid";
+}
+
+export interface TeacherCaseSubmissionGradeRequest {
+    payload_version: 1;
+    snapshot_hash: string;
+    intent: "save_draft" | "publish";
+    graded_by: "human";
+    feedback_global: string | null;
+    modules: Array<{
+        module_id: "M1" | "M2" | "M3" | "M4" | "M5";
+        weight: number;
+        feedback_module: string | null;
+        source: "human";
+        questions: Array<{
+            question_id: string;
+            rubric_level: TeacherGradeRubricLevel | null;
+            feedback_question: string | null;
+            source: "human";
+        }>;
+    }>;
 }
 
 export interface DeadlineUpdateRequest {

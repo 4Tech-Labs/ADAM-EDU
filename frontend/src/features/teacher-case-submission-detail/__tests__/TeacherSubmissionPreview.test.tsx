@@ -6,10 +6,15 @@ import { formatTeacherGradebookScore } from "@/features/teacher-course/teacherCo
 import { renderWithProviders } from "@/shared/test-utils";
 
 import { TeacherSubmissionPreview } from "../TeacherSubmissionPreview";
+import { useTeacherManualGrading } from "../useTeacherManualGrading";
 
-import { createSubmissionDetailResponse } from "./testData";
+import { createSubmissionDetailResponse, createSubmissionGradeResponse } from "./testData";
 
 const caseContentRendererSpy = vi.fn();
+
+vi.mock("../useTeacherManualGrading", () => ({
+    useTeacherManualGrading: vi.fn(),
+}));
 
 vi.mock("@/shared/case-viewer", async () => {
     const actual = await vi.importActual<typeof import("@/shared/case-viewer")>("@/shared/case-viewer");
@@ -48,7 +53,9 @@ vi.mock("@/shared/case-viewer", async () => {
                 showExpectedSolutions: boolean;
                 answers: Record<string, string>;
                 result: { studentProfile?: string | null };
+                questionSupplement?: (questionId: string) => React.ReactNode;
             };
+            const supplement = rendererProps.questionSupplement?.("M1-Q1") ?? null;
 
             return (
                 <div
@@ -59,7 +66,9 @@ vi.mock("@/shared/case-viewer", async () => {
                     data-show-expected-solutions={String(rendererProps.showExpectedSolutions)}
                     data-answer-keys={Object.keys(rendererProps.answers).sort().join(",")}
                     data-student-profile={rendererProps.result.studentProfile ?? "null"}
-                />
+                >
+                    {supplement}
+                </div>
             );
         },
     };
@@ -99,9 +108,34 @@ function renderPreview(options?: {
     return { ...view, detail, onRefresh };
 }
 
+function buildManualGradingHookState(
+    overrides: Partial<ReturnType<typeof useTeacherManualGrading>> = {},
+): ReturnType<typeof useTeacherManualGrading> {
+    return {
+        mode: "ready",
+        grade: createSubmissionGradeResponse(),
+        loadErrorMessage: null,
+        autosaveState: "saved",
+        banner: null,
+        isDirty: false,
+        isPublishing: false,
+        missingQuestionCount: 0,
+        hasPublishedVersion: false,
+        requiresRefresh: false,
+        refresh: vi.fn().mockResolvedValue(undefined),
+        publish: vi.fn().mockResolvedValue(true),
+        setGlobalFeedback: vi.fn(),
+        setModuleFeedback: vi.fn(),
+        setQuestionFeedback: vi.fn(),
+        setQuestionRubric: vi.fn(),
+        ...overrides,
+    };
+}
+
 describe("TeacherSubmissionPreview", () => {
     beforeEach(() => {
         caseContentRendererSpy.mockReset();
+        vi.mocked(useTeacherManualGrading).mockReturnValue(buildManualGradingHookState());
     });
 
     it("renders header and sidebar summary metadata", async () => {
@@ -120,7 +154,7 @@ describe("TeacherSubmissionPreview", () => {
         expect(within(summary).getByText("2/2")).toBeTruthy();
         expect(within(summary).getByText("Pendiente")).toBeTruthy();
         expect(within(header).getByText("Caso Plataforma")).toBeTruthy();
-        expect(screen.getAllByTestId("teacher-case-submission-detail-grading-slot").length).toBeGreaterThan(0);
+        expect(screen.getAllByTestId("teacher-grading-panel").length).toBeGreaterThan(0);
     });
 
     it("passes canonical output, answers and read-only flags to the renderer", async () => {
@@ -190,11 +224,24 @@ describe("TeacherSubmissionPreview", () => {
 
     it("forwards the refresh action", async () => {
         const onRefresh = vi.fn();
+        const gradingRefresh = vi.fn().mockResolvedValue(undefined);
+        vi.mocked(useTeacherManualGrading).mockReturnValue(buildManualGradingHookState({ refresh: gradingRefresh }));
         renderPreview({ onRefresh });
 
         fireEvent.click(await screen.findByRole("button", { name: /Actualizar entrega/i }));
 
         expect(onRefresh).toHaveBeenCalledTimes(1);
+        expect(gradingRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("toggles grading mode and renders the per-question grading supplement", async () => {
+        renderPreview();
+
+        expect(screen.queryByTestId("teacher-question-grading-M1-Q1")).toBeNull();
+
+        fireEvent.click(await screen.findByTestId("teacher-grading-header-toggle"));
+
+        expect(await screen.findByTestId("teacher-question-grading-M1-Q1")).toBeTruthy();
     });
 
     it("locks and restores body overflow while mounted", async () => {

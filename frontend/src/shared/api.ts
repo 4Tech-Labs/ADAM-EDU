@@ -46,6 +46,8 @@ import type {
     SuggestRequest,
     SuggestResponse,
     TeacherCaseDetailResponse,
+    TeacherCaseSubmissionGradeRequest,
+    TeacherCaseSubmissionGradeResponse,
     TeacherCaseSubmissionDetailResponse,
     TeacherCaseSubmissionsResponse,
     TeacherCourseAccessLinkRegenerateResponse,
@@ -92,7 +94,12 @@ type ApiErrorCode =
     | "course_gradebook_inconsistent_max_score"
     | "course_gradebook_invalid_max_score"
     | "student_identity_unavailable"
-    | "case_canonical_output_invalid";
+    | "case_canonical_output_invalid"
+    | "snapshot_changed"
+    | "incomplete_grade"
+    | "feature_disabled"
+    | "graded_by_not_supported"
+    | "feedback_source_not_supported";
 
 export interface ProgressEvent {
     event: string;
@@ -219,6 +226,10 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
         return structuredMessage || "El caso no esta disponible o no existe.";
     }
 
+    if (status === 404 && code === "feature_disabled") {
+        return structuredMessage || "La calificacion manual no esta disponible en este entorno.";
+    }
+
     if (status === 403) {
         switch (code) {
             case "profile_incomplete":
@@ -256,6 +267,14 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
 
     if (status === 409 && code === "version_conflict") {
         return structuredMessage || "Tu borrador esta desactualizado frente a la version guardada.";
+    }
+
+    if (status === 409 && code === "snapshot_changed") {
+        return structuredMessage || "La entrega cambio mientras calificabas. Recarga para continuar.";
+    }
+
+    if (status === 409 && code === "incomplete_grade") {
+        return structuredMessage || "Debes calificar todas las preguntas antes de publicar.";
     }
 
     if (status === 422) {
@@ -1206,6 +1225,30 @@ export const api = {
         ): Promise<TeacherCaseSubmissionDetailResponse> {
             return parseJsonResponse<TeacherCaseSubmissionDetailResponse>(
                 `/teacher/cases/${assignmentId}/submissions/${membershipId}`,
+            );
+        },
+        async getCaseSubmissionGrade(
+            courseId: string,
+            assignmentId: string,
+            membershipId: string,
+        ): Promise<TeacherCaseSubmissionGradeResponse> {
+            return parseJsonResponse<TeacherCaseSubmissionGradeResponse>(
+                `/teacher/courses/${courseId}/cases/${assignmentId}/submissions/${membershipId}/grade`,
+            );
+        },
+        async saveCaseSubmissionGrade(
+            courseId: string,
+            assignmentId: string,
+            membershipId: string,
+            body: TeacherCaseSubmissionGradeRequest,
+        ): Promise<TeacherCaseSubmissionGradeResponse> {
+            return parseJsonResponse<TeacherCaseSubmissionGradeResponse>(
+                `/teacher/courses/${courseId}/cases/${assignmentId}/submissions/${membershipId}/grade`,
+                {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body),
+                },
             );
         },
         async publishCase(assignmentId: string): Promise<TeacherCaseDetailResponse> {

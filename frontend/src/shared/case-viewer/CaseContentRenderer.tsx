@@ -89,6 +89,8 @@ interface CaseContentRendererProps {
     showExpectedSolutions: boolean;
     headerSlot?: ReactNode;
     rightPanelSlot?: ReactNode;
+    supplementalRightPanelSlot?: ReactNode;
+    questionSupplement?: (questionId: string) => ReactNode;
 }
 
 interface MarkdownMap extends Record<string, string | null> {
@@ -252,6 +254,8 @@ export function CaseContentRenderer({
     showExpectedSolutions,
     headerSlot,
     rightPanelSlot,
+    supplementalRightPanelSlot,
+    questionSupplement,
 }: CaseContentRendererProps) {
     const content = result.content;
     const isEDA = result.caseType === "harvard_with_eda";
@@ -412,12 +416,13 @@ export function CaseContentRenderer({
                             onAnswerChange={(value) => onAnswersChange({ ...answers, [questionId]: value })}
                             readOnly={readOnly}
                             showExpectedSolutions={showExpectedSolutions}
+                            supplement={questionSupplement?.(questionId)}
                         />
                     );
                 })}
             </div>
         );
-    }, [answers, onAnswersChange, readOnly, showExpectedSolutions]);
+    }, [answers, onAnswersChange, questionSupplement, readOnly, showExpectedSolutions]);
 
     const commonProps = useMemo(() => ({
         result,
@@ -455,7 +460,19 @@ export function CaseContentRenderer({
         />
     ) : null;
 
-    const rightPanel = rightPanelSlot ?? defaultRightPanel;
+    const rightPanel = supplementalRightPanelSlot
+        ? (
+            <div className="flex h-full min-h-0 flex-col gap-4">
+                {defaultRightPanel ? (
+                    <div className="min-h-0 flex-1 overflow-y-auto">
+                        {defaultRightPanel}
+                    </div>
+                ) : null}
+                <div className="shrink-0">{supplementalRightPanelSlot}</div>
+            </div>
+        )
+        : rightPanelSlot ?? defaultRightPanel;
+    const rightPanelWidthClassName = supplementalRightPanelSlot ? "w-80" : "w-44";
 
     return (
         <div className="flex flex-1 overflow-hidden">
@@ -473,7 +490,7 @@ export function CaseContentRenderer({
             </div>
 
             {rightPanel ? (
-                <div className="w-44 flex-shrink-0 hidden xl:flex flex-col py-8 pl-6 pr-4 border-l border-slate-200 bg-[#F0F4F8]">
+                <div className={`${rightPanelWidthClassName} flex-shrink-0 hidden xl:flex flex-col py-8 pl-6 pr-4 border-l border-slate-200 bg-[#F0F4F8]`}>
                     {rightPanel}
                 </div>
             ) : null}

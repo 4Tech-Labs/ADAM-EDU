@@ -63,6 +63,8 @@ CREATE POLICY deny_all ON university_sso_configs
 ALTER TABLE assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE authoring_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE case_grades ENABLE ROW LEVEL SECURITY;
+ALTER TABLE case_grade_module_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE case_grade_question_entries ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS assignments_teacher_owner_select ON assignments;
 CREATE POLICY assignments_teacher_owner_select ON assignments
@@ -85,6 +87,18 @@ DROP POLICY IF EXISTS case_grades_teacher_select ON case_grades;
 DROP POLICY IF EXISTS case_grades_student_self_select ON case_grades;
 DROP POLICY IF EXISTS case_grades_deny_all ON case_grades;
 CREATE POLICY case_grades_deny_all ON case_grades
+  FOR ALL
+  USING (false)
+  WITH CHECK (false);
+
+DROP POLICY IF EXISTS case_grade_module_entries_deny_all ON case_grade_module_entries;
+CREATE POLICY case_grade_module_entries_deny_all ON case_grade_module_entries
+  FOR ALL
+  USING (false)
+  WITH CHECK (false);
+
+DROP POLICY IF EXISTS case_grade_question_entries_deny_all ON case_grade_question_entries;
+CREATE POLICY case_grade_question_entries_deny_all ON case_grade_question_entries
   FOR ALL
   USING (false)
   WITH CHECK (false);
