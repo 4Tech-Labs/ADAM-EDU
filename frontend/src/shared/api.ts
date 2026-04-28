@@ -277,10 +277,12 @@ export function formatHttpError(status: number, detail?: ApiErrorDetail) {
         return structuredMessage || "Debes calificar todas las preguntas antes de publicar.";
     }
 
+    if ((status === 413 || status === 422) && code === "payload_too_large") {
+        return structuredMessage || "Tus respuestas exceden el tamano permitido.";
+    }
+
     if (status === 422) {
         switch (code) {
-            case "payload_too_large":
-                return structuredMessage || "Tus respuestas exceden el tamano permitido.";
             case "invalid_question_id":
                 return structuredMessage || "Se detecto una pregunta invalida en el borrador.";
             case "invalid_answer_value":

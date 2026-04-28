@@ -84,6 +84,23 @@ describe("useTeacherManualGrading", () => {
         vi.useRealTimers();
     });
 
+    it("keeps hydration idle and still detects published grades without published_at", async () => {
+        vi.mocked(fetchTeacherCaseSubmissionGrade).mockResolvedValueOnce(createSubmissionGradeResponse({
+            publication_state: "published",
+            published_at: null,
+            score_normalized: 0.9,
+            score_display: 4.5,
+            graded_at: "2026-06-05T19:10:00Z",
+        }));
+
+        const { result } = renderTeacherManualGradingHook();
+
+        await waitFor(() => expect(result.current.mode).toBe("ready"));
+
+        expect(result.current.autosaveState).toBe("idle");
+        expect(result.current.hasPublishedVersion).toBe(true);
+    });
+
     it("debounces draft autosave after rubric changes", async () => {
         const { result } = renderTeacherManualGradingHook();
 
@@ -164,5 +181,6 @@ describe("useTeacherManualGrading", () => {
         await waitFor(() => expect(result.current.isSnapshotConflictOpen).toBe(false));
         expect(result.current.requiresRefresh).toBe(false);
         expect(result.current.grade?.snapshot_hash).toBe("hash-456");
+        expect(result.current.autosaveState).toBe("idle");
     });
 });

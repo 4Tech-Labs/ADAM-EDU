@@ -149,7 +149,7 @@ export function buildTeacherCaseSubmissionGradeRequest(
 }
 
 export function hasPublishedTeacherGrade(grade: TeacherCaseSubmissionGradeResponse | null): boolean {
-    return Boolean(grade?.published_at);
+    return grade?.publication_state === "published" || Boolean(grade?.published_at);
 }
 
 export function getTeacherGradePublicationLabel(

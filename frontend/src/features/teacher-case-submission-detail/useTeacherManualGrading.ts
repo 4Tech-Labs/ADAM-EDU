@@ -125,6 +125,7 @@ export function useTeacherManualGrading(
     const queuedSaveRef = useRef(false);
     const autosaveTimerRef = useRef<number | null>(null);
     const unmountedRef = useRef(false);
+    const skipNextQueryHydrationRef = useRef(false);
 
     gradeRef.current = grade;
     dirtyRef.current = isDirty;
@@ -157,16 +158,22 @@ export function useTeacherManualGrading(
         }
     }, []);
 
-    const syncFromServer = useCallback((nextGrade: TeacherCaseSubmissionGradeResponse) => {
-        const cloned = cloneTeacherCaseSubmissionGrade(nextGrade);
-        setGrade(cloned);
-        gradeRef.current = cloned;
-        setIsDirty(false);
-        dirtyRef.current = false;
-        setIsSnapshotConflictOpen(false);
-        setRequiresRefresh(false);
-        setAutosaveState("saved");
-    }, []);
+    const syncFromServer = useCallback(
+        (
+            nextGrade: TeacherCaseSubmissionGradeResponse,
+            nextAutosaveState: TeacherManualGradingAutosaveState,
+        ) => {
+            const cloned = cloneTeacherCaseSubmissionGrade(nextGrade);
+            setGrade(cloned);
+            gradeRef.current = cloned;
+            setIsDirty(false);
+            dirtyRef.current = false;
+            setIsSnapshotConflictOpen(false);
+            setRequiresRefresh(false);
+            setAutosaveState(nextAutosaveState);
+        },
+        [],
+    );
 
     const handleMutationError = useCallback((error: unknown, intent: "draft" | "publish") => {
         if (getApiErrorCode(error) === "snapshot_changed") {
@@ -207,7 +214,8 @@ export function useTeacherManualGrading(
                 queryKeys.teacher.caseSubmissionGrade(courseId, assignmentId, membershipId),
                 response,
             );
-            syncFromServer(response);
+            skipNextQueryHydrationRef.current = true;
+            syncFromServer(response, response.publication_state === "published" ? "idle" : "saved");
             setBanner(null);
         } catch (error) {
             if (!unmountedRef.current) {
@@ -227,7 +235,12 @@ export function useTeacherManualGrading(
             return;
         }
 
-        syncFromServer(gradeQuery.data);
+        if (skipNextQueryHydrationRef.current) {
+            skipNextQueryHydrationRef.current = false;
+            return;
+        }
+
+        syncFromServer(gradeQuery.data, "idle");
     }, [gradeQuery.data, syncFromServer]);
 
     useEffect(() => {
@@ -299,7 +312,8 @@ export function useTeacherManualGrading(
                 queryKeys.teacher.caseSubmissionGrade(courseId, assignmentId, membershipId),
                 response,
             );
-            syncFromServer(response);
+            skipNextQueryHydrationRef.current = true;
+            syncFromServer(response, response.publication_state === "published" ? "idle" : "saved");
             setBanner({
                 tone: "emerald",
                 title: "Calificación publicada",
