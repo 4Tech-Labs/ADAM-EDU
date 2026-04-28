@@ -227,7 +227,22 @@ def _get_architect_llm(
         rate_limiter=_rate_limiter,
         model_kwargs={"tools": [{"code_execution": {}}]},
     )
-    fallback = ChatGoogleGenerativeAI(
+    # Cadena de fallbacks ordenada:
+    #   1) Pro con thinking_level="medium": misma calidad de modelo, menos
+    #      reasoning tokens. Cubre fallos transitorios (rate limit, 5xx puntual,
+    #      parser error en una respuesta).
+    #   2) Flash: red de seguridad final por si Pro está caído globalmente.
+    pro_fallback_medium = ChatGoogleGenerativeAI(
+        model=model,
+        temperature=temperature,
+        thinking_level="medium",
+        max_retries=2,
+        max_output_tokens=16384,
+        api_key=os.getenv("GEMINI_API_KEY"),
+        rate_limiter=_rate_limiter,
+        model_kwargs={"tools": [{"code_execution": {}}]},
+    )
+    flash_fallback = ChatGoogleGenerativeAI(
         model="gemini-3-flash-preview",
         temperature=temperature,
         max_output_tokens=16384,
@@ -235,7 +250,7 @@ def _get_architect_llm(
         api_key=os.getenv("GEMINI_API_KEY"),
         rate_limiter=_rate_limiter,
     )
-    return primary.with_fallbacks([fallback])
+    return primary.with_fallbacks([pro_fallback_medium, flash_fallback])
 
 
 def _get_chart_llm(
@@ -721,7 +736,7 @@ def _build_base_context(state: ADAMState) -> dict:
 def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
     """Diseña los cimientos del caso: empresa, dilema, exhibits e instrucciones."""
     cfg = Configuration.from_runnable_config(config)
-    llm = _get_architect_llm(cfg.architect_model, temperature=0.3, thinking_level="medium")
+    llm = _get_architect_llm(cfg.architect_model, temperature=0.3, thinking_level="high")
 
     context = _build_base_context(state)
     context.update({
