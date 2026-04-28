@@ -936,7 +936,11 @@ class AuthoringService:
                     "configurable": {
                         "thread_id": job_id,
                         "writer_model": "gemini-3-flash-preview",
-                        "architect_model": "gemini-3-flash-preview",
+                        # architect_model: usar el default Pro de Configuration
+                        # (gemini-3.1-pro-preview) para case_architect / schema_designer.
+                        # Es un nodo crítico (Exhibits + code_execution) y el costo extra
+                        # se acepta por calidad pedagógica.
+                        "architect_model": "gemini-3.1-pro-preview",
                         "job_id": job_id,
                         "assignment_id": assignment_id,
                         "owner_id": owner_id,
