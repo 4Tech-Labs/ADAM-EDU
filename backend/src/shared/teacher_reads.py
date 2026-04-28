@@ -500,42 +500,43 @@ def _truncate_detail_payload_if_needed(
     if serialized_size_bytes <= _DETAIL_PAYLOAD_MAX_BYTES:
         return response.case_view or {}, response.modules, False
 
-    solution_lengths = _collect_teacher_payload_solution_lengths(teacher_payload)
-    if not solution_lengths:
-        raise ValueError("teacher submission detail exceeds size cap without truncatable expected solutions")
-
     original_teacher_payload = deepcopy(teacher_payload)
+    solution_lengths = _collect_teacher_payload_solution_lengths(teacher_payload)
+    final_response = response
+    final_size_bytes = serialized_size_bytes
+    final_char_cap = 0
 
-    def build_candidate(max_chars: int) -> tuple[TeacherCaseSubmissionDetailResponse, int]:
-        candidate_payload = deepcopy(original_teacher_payload)
-        _truncate_teacher_payload_expected_solutions(candidate_payload, max_chars=max_chars)
-        return build_response_payload(candidate_payload, is_truncated=True)
+    if solution_lengths:
+        def build_candidate(max_chars: int) -> tuple[TeacherCaseSubmissionDetailResponse, int]:
+            candidate_payload = deepcopy(original_teacher_payload)
+            _truncate_teacher_payload_expected_solutions(candidate_payload, max_chars=max_chars)
+            return build_response_payload(candidate_payload, is_truncated=True)
 
-    max_original_chars = max(solution_lengths)
-    best_cap = 0
-    minimum_response, minimum_size_bytes = build_candidate(0)
-    best_response = minimum_response
-    best_size_bytes = minimum_size_bytes
-    low = 0
-    high = max_original_chars
+        max_original_chars = max(solution_lengths)
+        best_cap = 0
+        minimum_response, minimum_size_bytes = build_candidate(0)
+        best_response = minimum_response
+        best_size_bytes = minimum_size_bytes
+        low = 0
+        high = max_original_chars
 
-    while low <= high:
-        candidate_cap = (low + high) // 2
-        candidate_response, candidate_size_bytes = build_candidate(candidate_cap)
-        if candidate_size_bytes <= _DETAIL_PAYLOAD_MAX_BYTES:
-            best_cap = candidate_cap
-            best_response = candidate_response
-            best_size_bytes = candidate_size_bytes
-            low = candidate_cap + 1
-        else:
-            high = candidate_cap - 1
+        while low <= high:
+            candidate_cap = (low + high) // 2
+            candidate_response, candidate_size_bytes = build_candidate(candidate_cap)
+            if candidate_size_bytes <= _DETAIL_PAYLOAD_MAX_BYTES:
+                best_cap = candidate_cap
+                best_response = candidate_response
+                best_size_bytes = candidate_size_bytes
+                low = candidate_cap + 1
+            else:
+                high = candidate_cap - 1
 
-    final_char_cap = min(best_cap, _DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS)
-    final_response, final_size_bytes = build_candidate(final_char_cap)
-    if final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
-        final_response = best_response
-        final_size_bytes = best_size_bytes
-        final_char_cap = best_cap
+        final_char_cap = min(best_cap, _DETAIL_EXPECTED_SOLUTION_TRUNCATION_CHARS)
+        final_response, final_size_bytes = build_candidate(final_char_cap)
+        if final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
+            final_response = best_response
+            final_size_bytes = best_size_bytes
+            final_char_cap = best_cap
     if final_size_bytes > _DETAIL_PAYLOAD_MAX_BYTES:
         preview_lengths = _collect_teacher_payload_preview_text_lengths(original_teacher_payload)
 

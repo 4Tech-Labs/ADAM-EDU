@@ -16,7 +16,7 @@ describe("toCanonicalCaseOutput", () => {
                             titulo: "Pregunta segura",
                             enunciado: "Describe la situación principal del caso.",
                             solucion_esperada: "Reconoce el cuello de botella operativo.",
-                            feedback: "never",
+                            prompt_trace: "never",
                             secret: "hidden",
                             __proto__: "pollution",
                         } as unknown as never,
@@ -29,7 +29,7 @@ describe("toCanonicalCaseOutput", () => {
         const result = toCanonicalCaseOutput(detail);
 
         expect(result.title).toBe("Caso seguro");
-        expect(JSON.stringify(result)).not.toContain("feedback");
+        expect(JSON.stringify(result)).not.toContain("prompt_trace");
         expect(JSON.stringify(result)).not.toContain("secret");
         expect(JSON.stringify(result)).not.toContain("__proto__");
     });
