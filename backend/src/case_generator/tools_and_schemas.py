@@ -10,6 +10,129 @@ from pydantic import BaseModel, Field
 
 
 # ═══════════════════════════════════════════════════════
+# ISSUE #225 — Dataset Schema Required Contract
+# Emitido por case_architect, consumido por schema_designer + data_validator
+# + m3_notebook_generator + EDA prompts. Garantiza que el dilema declarado en
+# M1 esté soportado por columnas reales del dataset y que las features con
+# riesgo de leakage temporal queden señaladas explícitamente.
+# Ver: https://github.com/4Tech-Labs/ADAM-EDU/issues/225
+# ═══════════════════════════════════════════════════════
+
+
+class DatasetTargetSpec(BaseModel):
+    """Variable objetivo declarada por case_architect para el dilema del caso.
+
+    name: snake_case en inglés (ej: 'churn_flag', 'delivery_delay_minutes').
+    role: tipo de problema ML que el dilema plantea.
+    dtype: tipo de dato esperado en el dataset.
+    description: qué representa la columna en negocio (1 línea).
+    """
+
+    name: str = Field(description="Nombre snake_case en inglés de la columna objetivo")
+    role: Literal[
+        "classification_target",
+        "regression_target",
+        "clustering_target",
+        "anomaly_target",
+        "ranking_target",
+        "forecasting_target",
+    ] = Field(description="Rol pedagógico/ML de la columna objetivo")
+    # Issue #225 follow-up: "date" añadido para alinear con ColumnDefinition.type
+    # (forecasting con índice temporal, targets de horizonte fechado).
+    dtype: Literal["int", "float", "str", "date"] = Field(
+        description="Tipo de dato Python esperado (alineado con ColumnDefinition.type)"
+    )
+    description: str = Field(description="Qué representa esta columna en negocio")
+
+
+class DatasetFeatureSpec(BaseModel):
+    """Feature declarada por case_architect como necesaria para resolver el dilema.
+
+    temporal_offset_months: 0 = mismo período que el target, <0 = pasado (válida),
+    >0 = futuro respecto al target → LEAKAGE por construcción.
+    is_leakage_risk: marca explícita por nombre semántico (ej: 'retention_m12'
+    cuando se predice churn del mes 0 es leakage aunque el offset no se conozca).
+    """
+
+    name: str = Field(description="Nombre snake_case en inglés de la columna feature")
+    role: Literal["feature", "weak_feature", "control"] = Field(
+        default="feature", description="Rol pedagógico de la feature"
+    )
+    # Issue #225 follow-up: "date" añadido para features temporales reales
+    # (índice de tiempo en split temporal, lag features fechados).
+    dtype: Literal["int", "float", "str", "date"] = Field(
+        description="Tipo de dato Python esperado (alineado con ColumnDefinition.type)"
+    )
+    description: str = Field(description="Qué representa la feature y por qué importa al dilema")
+    temporal_offset_months: Optional[int] = Field(
+        default=None,
+        description=(
+            "Offset temporal vs período del target: 0=mismo período, <0=pasado (válida), "
+            ">0=futuro (LEAKAGE)."
+        ),
+    )
+    is_leakage_risk: bool = Field(
+        default=False,
+        description=(
+            "Marca explícita: True si la feature es proxy del target o se mide después "
+            "de que se conoce el target en producción."
+        ),
+    )
+
+
+class DatasetSchemaRequired(BaseModel):
+    """Contrato emitido por case_architect: declara qué dataset necesita el caso.
+
+    Este contrato es la única fuente de verdad para el alineamiento dilema↔dataset:
+      * schema_designer lo consume al diseñar columns/constraints.
+      * Un validador Python (post-schema_designer) verifica cobertura y aumenta
+        el schema con columnas faltantes de forma determinista (cero tokens LLM).
+      * data_validator usa target_column.name como variable objetivo canónica
+        (en lugar de heurística por palabras clave).
+      * m3_notebook_generator pasa target + leakage flags al prompt ALGO para
+        evitar fallback silencioso al elegir target/features.
+      * EDA prompts incorporan data_gap_warnings emitidos por el validador.
+
+    Para perfil 'business' este campo es opcional. Para 'ml_ds' es obligatorio:
+    sin contrato no hay garantía de que las preguntas socráticas y el notebook
+    M3 puedan ejecutarse sobre el dataset generado.
+    """
+
+    target_column: DatasetTargetSpec = Field(
+        description="Variable objetivo única que el dilema obliga a predecir/explicar"
+    )
+    feature_columns: list[DatasetFeatureSpec] = Field(
+        default_factory=list,
+        description=(
+            "3-8 features que el dilema referencia explícitamente. Marcar "
+            "is_leakage_risk=True para columnas que en producción se conocen "
+            "después del target (ej: retention_m12 al predecir churn del mes 0)."
+        ),
+    )
+    domain_features_required: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Categorías semánticas de features que deben existir aunque sus nombres "
+            "exactos los decida schema_designer (ej: 'delivery_time', 'customer_segment'). "
+            "Permite cobertura por significado, no solo por nombre."
+        ),
+    )
+    min_signal_strength: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Umbral mínimo aceptable de |correlación| entre target y mejor feature "
+            "no-leakage. Usado por validador para detectar targets sintéticos sin señal."
+        ),
+    )
+    notes: Optional[str] = Field(
+        default=None,
+        description="Notas opcionales del architect sobre el diseño del contrato",
+    )
+
+
+# ═══════════════════════════════════════════════════════
 # DOCUMENTO 1 — Caso de Negocio (3 agentes)
 # ═══════════════════════════════════════════════════════
 
@@ -71,6 +194,18 @@ class CaseArchitectOutput(BaseModel):
             "Columnas: Actor | Interés | Incentivo | Riesgo | Postura (A/B/C). "
             "Mínimo 6 actores."
         )
+    )
+    # Issue #225 — Contrato dataset↔dilema. Optional para no romper perfil
+    # 'business' ni casos legados. Para ml_ds, schema_designer + validador
+    # garantizan cobertura cuando está presente; cuando es None, el pipeline
+    # opera con el comportamiento heurístico previo.
+    dataset_schema_required: Optional[DatasetSchemaRequired] = Field(
+        default=None,
+        description=(
+            "Contrato que declara variable objetivo y features que el dilema requiere "
+            "del dataset. Obligatorio para perfil 'ml_ds'. Consumido por schema_designer, "
+            "data_validator, m3_notebook_generator y prompts EDA."
+        ),
     )
 
 
