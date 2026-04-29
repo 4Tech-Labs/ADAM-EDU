@@ -37,7 +37,11 @@ class DatasetTargetSpec(BaseModel):
         "ranking_target",
         "forecasting_target",
     ] = Field(description="Rol pedagógico/ML de la columna objetivo")
-    dtype: Literal["int", "float", "str"] = Field(description="Tipo de dato Python esperado")
+    # Issue #225 follow-up: "date" añadido para alinear con ColumnDefinition.type
+    # (forecasting con índice temporal, targets de horizonte fechado).
+    dtype: Literal["int", "float", "str", "date"] = Field(
+        description="Tipo de dato Python esperado (alineado con ColumnDefinition.type)"
+    )
     description: str = Field(description="Qué representa esta columna en negocio")
 
 
@@ -54,7 +58,11 @@ class DatasetFeatureSpec(BaseModel):
     role: Literal["feature", "weak_feature", "control"] = Field(
         default="feature", description="Rol pedagógico de la feature"
     )
-    dtype: Literal["int", "float", "str"] = Field(description="Tipo de dato Python esperado")
+    # Issue #225 follow-up: "date" añadido para features temporales reales
+    # (índice de tiempo en split temporal, lag features fechados).
+    dtype: Literal["int", "float", "str", "date"] = Field(
+        description="Tipo de dato Python esperado (alineado con ColumnDefinition.type)"
+    )
     description: str = Field(description="Qué representa la feature y por qué importa al dilema")
     temporal_offset_months: Optional[int] = Field(
         default=None,

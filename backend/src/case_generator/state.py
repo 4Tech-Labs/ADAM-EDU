@@ -174,7 +174,7 @@ class ADAMState(CanonicalInputState):
     # data_validator (target canónico), m3_notebook_generator (prompt),
     # eda_text_analyst (prompt: data_gap_warnings). None para perfil business
     # legado o cuando architect lo omite — pipeline mantiene comportamiento previo.
-    dataset_schema_required: NotRequired[dict]
+    dataset_schema_required: NotRequired[dict | None]
     # Emitido por _validate_schema_against_contract tras schema_designer +
     # augmenter. Lista de strings legibles (1 por gap) que se inyectan en M2 EDA
     # como notas metodológicas y se exponen al docente para auditoría.

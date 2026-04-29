@@ -257,6 +257,35 @@ def test_augment_respects_dtype_mapping() -> None:
     assert by_name["amount"]["type"] == "int"
 
 
+def test_augment_supports_date_dtype_with_null_ranges() -> None:
+    """Issue #225 review follow-up: date debe alinearse con ColumnDefinition.type
+    y respetar la regla "no range_min/range_max en columnas no numéricas"."""
+    contract = DatasetSchemaRequired(
+        target_column=DatasetTargetSpec(
+            name="forecast_horizon",
+            role="forecasting_target",
+            dtype="date",
+            description="fecha objetivo del forecast",
+        ),
+        feature_columns=[
+            DatasetFeatureSpec(
+                name="event_ts",
+                dtype="date",
+                description="timestamp del evento",
+            ),
+        ],
+    ).model_dump()
+    schema = _schema_with("revenue")
+    out = _augment_schema_with_contract(schema, contract)
+    by_name = {c["name"]: c for c in out["columns"]}
+    assert by_name["forecast_horizon"]["type"] == "date"
+    assert by_name["forecast_horizon"]["range_min"] is None
+    assert by_name["forecast_horizon"]["range_max"] is None
+    assert by_name["event_ts"]["type"] == "date"
+    assert by_name["event_ts"]["range_min"] is None
+    assert by_name["event_ts"]["range_max"] is None
+
+
 def test_augment_does_not_mutate_input() -> None:
     contract = _make_minimal_contract().model_dump()
     schema = _schema_with("revenue")

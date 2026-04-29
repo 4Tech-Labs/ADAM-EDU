@@ -1703,7 +1703,13 @@ def _normalize_ml_ds_columns(schema_result: dict, profile: str) -> dict:
 # ─────────────────────────────────────────────────────────
 
 # Tipos válidos según ColumnDefinition.type — mantener sincronizado.
-_CONTRACT_TYPE_TO_SCHEMA_TYPE = {"int": "int", "float": "float", "str": "str"}
+# "date" alineado con ColumnDefinition.type (Issue #225 review follow-up).
+_CONTRACT_TYPE_TO_SCHEMA_TYPE = {
+    "int": "int",
+    "float": "float",
+    "str": "str",
+    "date": "date",
+}
 
 
 def _format_dataset_contract_block(contract: dict | None) -> str:
@@ -1808,6 +1814,8 @@ def _augment_schema_with_contract(schema: dict, contract: dict | None) -> dict:
         elif col_type == "int":
             col["range_min"] = 0
             col["range_max"] = 100
+        # "date" y "str" mantienen range_min/range_max=None (regla de
+        # SCHEMA_DESIGNER_PROMPT para columnas no numéricas).
         return col
 
     target = contract.get("target_column") or {}

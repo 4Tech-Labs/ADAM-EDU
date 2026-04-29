@@ -148,14 +148,14 @@ Forma exacta del objeto (snake_case en inglés en todos los `name`):
   "target_column": {{
     "name": "<columna objetivo del dilema>",
     "role": "classification_target|regression_target|clustering_target|anomaly_target|ranking_target|forecasting_target",
-    "dtype": "int|float|str",
+    "dtype": "int|float|str|date",
     "description": "qué representa la columna en negocio"
   }},
   "feature_columns": [
     {{
       "name": "<feature snake_case>",
       "role": "feature|weak_feature|control",
-      "dtype": "int|float|str",
+      "dtype": "int|float|str|date",
       "description": "por qué importa al dilema",
       "temporal_offset_months": 0,
       "is_leakage_risk": false
