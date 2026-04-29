@@ -38,7 +38,8 @@ Generar los CIMIENTOS estructurales y numéricos del caso (Pre-M1 / Narrativa Ma
 #   "instrucciones_estudiante": str,
 #   "anexo_financiero": str,
 #   "anexo_operativo": str,
-#   "anexo_stakeholders": str
+#   "anexo_stakeholders": str,
+#   "dataset_schema_required": object|null  ← Issue #225 — contrato dataset↔dilema
 # }}
 # Si graph.py añade o elimina un campo, actualizar este bloque.
 
@@ -135,6 +136,55 @@ Si {student_profile}="ml_ds": incluir 2 métricas de calidad de datos como filas
 Encabezado: `### Exhibit 3 — Mapa de Stakeholders`
 Tabla: Actor | Interés | Incentivo | Riesgo | Postura (A/B/C)
 Mín 6 actores (mín 4 para "undergrad").
+
+## dataset_schema_required (Issue #225 — contrato dataset↔dilema)
+Objeto que declara qué dataset necesita el caso para que el dilema sea respondible
+con datos. **Obligatorio cuando {student_profile}="ml_ds"**. Para "business" puedes
+emitir `null` (el pipeline mantiene el comportamiento heurístico previo).
+
+Forma exacta del objeto (snake_case en inglés en todos los `name`):
+
+{{
+  "target_column": {{
+    "name": "<columna objetivo del dilema>",
+    "role": "classification_target|regression_target|clustering_target|anomaly_target|ranking_target|forecasting_target",
+    "dtype": "int|float|str",
+    "description": "qué representa la columna en negocio"
+  }},
+  "feature_columns": [
+    {{
+      "name": "<feature snake_case>",
+      "role": "feature|weak_feature|control",
+      "dtype": "int|float|str",
+      "description": "por qué importa al dilema",
+      "temporal_offset_months": 0,
+      "is_leakage_risk": false
+    }}
+    // 3-8 features que el dilema referencia explícitamente
+  ],
+  "domain_features_required": ["<categoria_semantica_1>", "<categoria_semantica_2>"],
+  "min_signal_strength": 0.15,
+  "notes": null
+}}
+
+Reglas duras:
+1. `target_column.name` DEBE coincidir conceptualmente con la decisión del `dilema_brief`.
+   Ej: si el dilema es "decidir cómo retener clientes", el target NO puede ser un
+   código aleatorio sin relación causal. Debe ser una variable medible y observable
+   en producción (ej: `churn_flag`, `delivery_delay_minutes`, `default_60d`).
+2. **Anti-leakage**: marca `is_leakage_risk=true` y/o `temporal_offset_months>0`
+   en cualquier feature que en operación real se conoce DESPUÉS del target.
+   Ej: al predecir `churn_flag` del mes 0, las columnas `retention_m3`, `retention_m6`,
+   `retention_m12` son leakage por construcción → marcarlas siempre.
+3. `feature_columns` debe contener entre 3 y 8 entradas. Mínimo 2 features con
+   `is_leakage_risk=false` para garantizar señal aprendible.
+4. `domain_features_required` lista categorías semánticas que `schema_designer` debe
+   cubrir aunque elija nombres específicos (ej: "delivery_time", "customer_segment",
+   "transaction_volume"). 0-5 entradas.
+5. `min_signal_strength` queda en 0.15 salvo justificación pedagógica explícita.
+6. NUNCA incluyas en `feature_columns` la misma `name` que `target_column.name`.
+7. Para "business" perfil puedes emitir `null` o un contrato simple con un único
+   target gerencial (ej: `revenue`, `margin_pct`).
 
 # Context — Datos del profesor
 {teacher_input}
@@ -319,6 +369,20 @@ SCHEMA_DESIGNER_PROMPT = """\
 Diseña el schema de un dataset sintético para el caso de negocio dado.
 Perfil: {student_profile} | Industria: {industria}
 
+## Contrato dataset_schema_required (Issue #225 — fuente de verdad)
+{dataset_contract_block}
+
+REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
+- Tu `columns` DEBE incluir, con el mismo `name` exacto, la `target_column.name`
+  del contrato y TODAS las `feature_columns[*].name`.
+- El `type` de cada columna debe coincidir con el `dtype` del contrato.
+- Si una feature del contrato tiene `is_leakage_risk=true` o
+  `temporal_offset_months>0`, igual debes incluirla con su nombre exacto:
+  el bloqueo de leakage se gestiona downstream en M3 (no la omitas aquí).
+- Las categorías de `domain_features_required` deben estar cubiertas por al menos
+  una columna semánticamente alineada (puedes elegir su nombre concreto).
+- Si el contrato es `null` o `{{}}`, opera con las reglas heurísticas de abajo.
+
 ## ESTRUCTURA DE OUTPUT OBLIGATORIA (JSON puro, sin markdown, sin claves extra)
 {{
   "columns": [
@@ -497,6 +561,17 @@ usando exclusivamente los datos del dataset y los Exhibits provistos.
 - {dataset_instruction}
 - Si una métrica no muestra tendencia clara o anomalía: repórtala como ESTABLE.
   NO fuerces un hallazgo donde los datos no lo soportan.
+
+## Brechas dilema↔dataset (Issue #225 — data_gap_warnings)
+{data_gap_warnings_block}
+
+REGLAS para brechas:
+- Si la lista NO está vacía, debes incluir en la sección 1 (Contexto) un bullet
+  con el título **"Brechas de datos detectadas"** y listar cada warning como un
+  ítem separado, en lenguaje accesible. Esto evita que las preguntas socráticas
+  o el M3 silenciosamente operen sobre columnas faltantes/leakage.
+- Si la lista está vacía o dice "(sin brechas detectadas...)", NO inventes
+  brechas: significa que el dataset cubre el contrato del Módulo 1.
 
 # Your Boundaries
 - **CERO ALUCINACIÓN MATEMÁTICA.** Prohibido inventar tendencias, montos o porcentajes.
@@ -1987,6 +2062,27 @@ M3_NOTEBOOK_ALGO_PROMPT = """\
 Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para Google Colab.
 El notebook sigue la estructura pedagógica ADAM M3: Concepto → Gráfico Conceptual → Acción de Negocio.
 Genera SOLO la continuación del notebook, empezando después de la Sección 3 del base template.
+
+# Contrato dataset_schema_required (Issue #225 — fuente canónica del target)
+{dataset_contract_block}
+
+# Brechas de datos detectadas por el validador (data_gap_warnings)
+{data_gap_warnings_block}
+
+# Reglas CONTRACT-FIRST (Issue #225 — prioridad máxima sobre toda heurística posterior)
+* Si el contrato declara `target_column.name`, USA ESE NOMBRE EXACTO como variable
+  objetivo en TODO el notebook. NO uses alias-matching, NO uses "último categórico"
+  ni ningún fallback heurístico para elegir el target.
+* Si el target del contrato NO está en `df.columns`, emite UNA línea
+  `print("⚠️ REQUISITO FALTANTE: target '<contract_target_name>' del contrato "
+  "no está presente en el dataset")` y SALTA el entrenamiento de ese bloque
+  (no entrenes contra una columna distinta).
+* Para cada feature con `is_leakage_risk=true` o `temporal_offset_months>0`:
+  EXCLÚYELA de `X` en clasificación/regresión y comenta brevemente por qué
+  (`# Excluida: feature de leakage según contrato`). Puedes mantenerla en
+  exploraciones de auditoría/EDA pero NUNCA en entrenamiento supervisado.
+* Si NO hay contrato (bloque vacío o "(sin contrato ...)"), aplica la lógica
+  alias-first heredada (label_aliases → churn_aliases → último categórico).
 
 # Reglas absolutas
 1. NUNCA uses np.random, pd.DataFrame() fabricado, columnas inventadas ni placeholders.

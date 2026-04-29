@@ -786,6 +786,14 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             "doc1_anexo_financiero": result.anexo_financiero,
             "doc1_anexo_operativo": result.anexo_operativo,
             "doc1_anexo_stakeholders": result.anexo_stakeholders,
+            # Issue #225 — persiste contrato dataset↔dilema (None-safe).
+            # downstream nodes leen state["dataset_schema_required"] y degradan
+            # gracefully al comportamiento previo si es None.
+            "dataset_schema_required": (
+                result.dataset_schema_required.model_dump()
+                if result.dataset_schema_required is not None
+                else None
+            ),
         }
     except Exception as e:
         logger.error("[case_architect] ERROR: %s", e, exc_info=True)
@@ -973,6 +981,13 @@ def eda_text_analyst(state: ADAMState, config: RunnableConfig) -> dict:
             "dataset_total_rows": dataset_total_rows,
             "financial_exhibit": state.get("doc1_anexo_financiero", ""),
             "operational_exhibit": state.get("doc1_anexo_operativo", ""),
+            # Issue #225 — brechas dilema↔dataset detectadas por validador.
+            # Si está vacío, el bloque indica al LLM que el dataset cubre el
+            # contrato y no debe inventar advertencias metodológicas.
+            "data_gap_warnings_block": (
+                "\n".join(f"- {w}" for w in (state.get("data_gap_warnings") or []))
+                or "(sin brechas detectadas — el dataset cubre el contrato dilema↔datos)"
+            ),
         })
 
         prompt = EDA_TEXT_ANALYST_PROMPT.format(**context)
@@ -1681,6 +1696,155 @@ def _normalize_ml_ds_columns(schema_result: dict, profile: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────
+# Issue #225 — Dataset Schema Required Contract: validator + augmenter
+# Funciones Python puras (cero tokens LLM, deterministas, sin I/O).
+# Mantienen el contrato dilema↔dataset alineado entre case_architect,
+# schema_designer, data_validator y m3_notebook_generator.
+# ─────────────────────────────────────────────────────────
+
+# Tipos válidos según ColumnDefinition.type — mantener sincronizado.
+_CONTRACT_TYPE_TO_SCHEMA_TYPE = {"int": "int", "float": "float", "str": "str"}
+
+
+def _format_dataset_contract_block(contract: dict | None) -> str:
+    """Renderiza el contrato como bloque legible para inyectar en SCHEMA_DESIGNER_PROMPT.
+
+    Devuelve un string vacío informativo cuando no hay contrato — el prompt
+    explica al LLM que en ese caso aplica las reglas heurísticas legacy.
+    """
+    if not contract:
+        return "(sin contrato — aplica las reglas heurísticas de columnas obligatorias por perfil)"
+    try:
+        return json.dumps(contract, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError) as exc:
+        # Defensivo: si el contrato persistido no es JSON-serializable, no rompemos
+        # el grafo — degradamos al modo legacy con una advertencia visible.
+        logger.warning("[contract] no serializable, modo legacy: %s", exc)
+        return "(contrato corrupto — aplica las reglas heurísticas)"
+
+
+def _validate_schema_against_contract(
+    schema: dict, contract: dict | None
+) -> tuple[list[str], list[str]]:
+    """Compara columns del schema_designer contra el contrato del case_architect.
+
+    Returns:
+        (missing_required, leakage_warnings)
+        - missing_required: nombres de target/feature del contrato ausentes en columns.
+        - leakage_warnings: notas en español listas para inyectar en M2 EDA.
+
+    No muta el schema. La inyección de columnas faltantes la hace
+    `_augment_schema_with_contract`. Esta función es para reporting/observabilidad.
+    """
+    if not contract:
+        return [], []
+
+    schema_columns = {c.get("name", "") for c in schema.get("columns", [])}
+    missing: list[str] = []
+
+    target = contract.get("target_column") or {}
+    target_name = (target.get("name") or "").strip()
+    if target_name and target_name not in schema_columns:
+        missing.append(
+            f"target '{target_name}' (rol={target.get('role')}, dtype={target.get('dtype')}) "
+            "no fue producido por schema_designer"
+        )
+
+    for feat in contract.get("feature_columns") or []:
+        fname = (feat.get("name") or "").strip()
+        if fname and fname not in schema_columns:
+            missing.append(
+                f"feature '{fname}' (dtype={feat.get('dtype')}) no fue producido por schema_designer"
+            )
+
+    leakage: list[str] = []
+    for feat in contract.get("feature_columns") or []:
+        fname = (feat.get("name") or "").strip()
+        if not fname:
+            continue
+        offset = feat.get("temporal_offset_months")
+        if feat.get("is_leakage_risk") or (isinstance(offset, int) and offset > 0):
+            leakage.append(
+                f"feature '{fname}' marcada con riesgo de leakage "
+                f"(temporal_offset_months={offset}, is_leakage_risk={bool(feat.get('is_leakage_risk'))}). "
+                "El notebook M3 debe excluirla del entrenamiento o tratarla como variable de auditoría."
+            )
+
+    return missing, leakage
+
+
+def _augment_schema_with_contract(schema: dict, contract: dict | None) -> dict:
+    """Inyecta de forma determinista las columnas del contrato ausentes en el schema.
+
+    Cero tokens LLM. Idempotente. No muta el dict de entrada.
+    Estrategia conservadora:
+      - Si el contrato declara una columna que el schema NO tiene, se añade al final
+        de `columns` con rangos por defecto seguros según dtype.
+      - NUNCA renombra ni elimina columnas existentes — preserva el output del LLM.
+      - NUNCA toca constraints (revenue_annual_total, etc.).
+    """
+    if not contract:
+        return schema
+
+    new_schema = dict(schema)
+    columns = list(new_schema.get("columns", []))
+    existing_names = {c.get("name", "") for c in columns}
+
+    def _default_column(name: str, dtype: str, description: str, nullable: bool = False) -> dict:
+        col_type = _CONTRACT_TYPE_TO_SCHEMA_TYPE.get(dtype, "float")
+        col: dict = {
+            "name": name,
+            "type": col_type,
+            "description": description or f"Columna inyectada por contrato ({name})",
+            "range_min": None,
+            "range_max": None,
+            "nullable": nullable,
+            "trend": None,
+            "dependency": None,
+        }
+        if col_type == "float":
+            col["range_min"] = 0.0
+            col["range_max"] = 1.0
+        elif col_type == "int":
+            col["range_min"] = 0
+            col["range_max"] = 100
+        return col
+
+    target = contract.get("target_column") or {}
+    target_name = (target.get("name") or "").strip()
+    if target_name and target_name not in existing_names:
+        columns.append(_default_column(
+            name=target_name,
+            dtype=target.get("dtype", "float"),
+            description=target.get("description", "Variable objetivo declarada por contrato"),
+        ))
+        existing_names.add(target_name)
+        logger.warning(
+            "[contract.augment] target '%s' faltante — inyectado con defaults seguros",
+            target_name,
+        )
+
+    for feat in contract.get("feature_columns") or []:
+        fname = (feat.get("name") or "").strip()
+        if not fname or fname in existing_names:
+            continue
+        columns.append(_default_column(
+            name=fname,
+            dtype=feat.get("dtype", "float"),
+            description=feat.get("description", "Feature declarada por contrato"),
+            nullable=False,
+        ))
+        existing_names.add(fname)
+        logger.warning(
+            "[contract.augment] feature '%s' faltante — inyectada con defaults seguros",
+            fname,
+        )
+
+    new_schema["columns"] = columns
+    return new_schema
+
+
+# ─────────────────────────────────────────────────────────
 # NODO 1 — SCHEMA DESIGNER (Pro, thinking activo, output pequeño)
 # ─────────────────────────────────────────────────────────
 
@@ -1710,6 +1874,12 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
         "operational_data": state.get("doc1_anexo_operativo", ""),
         "max_rows": max_rows,
         "ml_required_families": ml_required_families,
+        # Issue #225 — inyecta contrato dilema↔dataset emitido por case_architect.
+        # Si es None (perfil business legado o architect no lo emitió), el bloque
+        # contiene un mensaje que activa las reglas heurísticas en el LLM.
+        "dataset_contract_block": _format_dataset_contract_block(
+            state.get("dataset_schema_required")
+        ),
     })
     prompt = SCHEMA_DESIGNER_PROMPT.format(**context)
 
@@ -1786,12 +1956,41 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
                 f"[schema_designer] OK ({model_label}) — {len(validated.columns)} columnas, "
                 f"{validated.n_rows} filas, granularidad={validated.time_granularity}"
             )
-            return {"dataset_schema": schema_result}
+            # Issue #225 — Aplica contrato del case_architect:
+            #   1) augmenter Python puro: añade columnas faltantes con defaults seguros
+            #      (idempotente, cero tokens, evita un retry LLM costoso).
+            #   2) validator: registra residuales (vacío post-augment) + leakage flags
+            #      como data_gap_warnings que M2 EDA y M3 notebook leerán.
+            contract = state.get("dataset_schema_required")
+            schema_result = _augment_schema_with_contract(schema_result, contract)
+            missing, leakage = _validate_schema_against_contract(schema_result, contract)
+            warnings_payload: list[str] = []
+            if missing:
+                warnings_payload.extend(missing)
+            if leakage:
+                warnings_payload.extend(leakage)
+            return {
+                "dataset_schema": schema_result,
+                "data_gap_warnings": warnings_payload,
+            }
         except (ValidationError, Exception) as e:
             logger.error("[schema_designer] %s ERROR: %s", model_label, e, exc_info=True)
 
     print("[schema_designer] todos los intentos fallaron — usando fallback schema")
-    return {"dataset_schema": _build_fallback_schema(state, max_rows, profile)}
+    fallback_schema = _build_fallback_schema(state, max_rows, profile)
+    # Issue #225 — incluso en fallback respetamos el contrato del architect.
+    contract = state.get("dataset_schema_required")
+    fallback_schema = _augment_schema_with_contract(fallback_schema, contract)
+    missing, leakage = _validate_schema_against_contract(fallback_schema, contract)
+    warnings_payload = []
+    if missing:
+        warnings_payload.extend(missing)
+    if leakage:
+        warnings_payload.extend(leakage)
+    return {
+        "dataset_schema": fallback_schema,
+        "data_gap_warnings": warnings_payload,
+    }
 
 
 # ─────────────────────────────────────────────────────────
@@ -2168,7 +2367,17 @@ def data_validator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
     # Construir dataset_metadata para downstream (eda_text_analyst, eda_chart_generator)
     def _build_metadata(r: list) -> dict:
         columns = schema.get("columns", [])
-        target_var = next(
+        # Issue #225 — Prioridad para target_variable:
+        #   1) Contrato del case_architect (fuente canónica del dilema).
+        #   2) Heurística por descripción/nombre (legacy, casos sin contrato).
+        #   3) Fallback a revenue_column.
+        contract = state.get("dataset_schema_required") or {}
+        contract_target = (
+            (contract.get("target_column") or {}).get("name")
+            if isinstance(contract, dict)
+            else None
+        )
+        target_var = contract_target or next(
             (col["name"] for col in columns
              if "target" in col.get("description", "").lower()
              or "churn" in col["name"].lower()
@@ -2759,12 +2968,26 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
         algo_section = ""
         try:
+            # Issue #225 — pasa contrato + brechas al prompt para CONTRACT-FIRST
+            # target resolution. Si no hay contrato/brechas, los bloques quedan
+            # con texto neutro y el LLM aplica la lógica alias-first heredada.
+            contract_block = _format_dataset_contract_block(
+                state.get("dataset_schema_required")
+            )
+            gap_warnings = state.get("data_gap_warnings") or []
+            gaps_block = (
+                "\n".join(f"- {w}" for w in gap_warnings)
+                if gap_warnings
+                else "(sin brechas detectadas — schema cubre el contrato)"
+            )
             prompt = M3_NOTEBOOK_ALGO_PROMPT.format(
                 m3_content=(state.get("m3_content", "") or "")[:2000],
                 algoritmos=json.dumps(algoritmos_raw, ensure_ascii=False),
                 familias_meta=json.dumps(familias_meta, ensure_ascii=False),
                 case_title=case_title,
                 output_language=context.get("output_language", "es"),
+                dataset_contract_block=contract_block,
+                data_gap_warnings_block=gaps_block,
             )
             response = llm.invoke(prompt)
             algo_section = sanitize_markdown(_extract_text(response))
