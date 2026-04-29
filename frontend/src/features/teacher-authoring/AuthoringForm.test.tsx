@@ -184,6 +184,16 @@ describe("AuthoringForm", () => {
                     },
                 });
             }),
+            http.get("/api/authoring/algorithm-catalog", () =>
+                HttpResponse.json({
+                    profile: "business",
+                    case_type: "harvard_with_eda",
+                    items: [
+                        { name: "Regresión Lineal", family: "regresion", family_label: "Regresión", tier: "baseline" },
+                        { name: "Árboles de decisión", family: "clasificacion", family_label: "Clasificación", tier: "baseline" },
+                    ],
+                }),
+            ),
         );
     });
 
@@ -217,7 +227,7 @@ describe("AuthoringForm", () => {
         expect(screen.getByDisplayValue("Pregunta sugerida")).toBeInTheDocument();
     }, 20_000);
 
-    it("fills suggested techniques from the techniques mutation and clears the stale warning", async () => {
+    it("fills algorithm picks from the techniques mutation (Issue #230)", async () => {
         const user = userEvent.setup();
         const deferred = createDeferredResponse();
 
@@ -234,13 +244,23 @@ describe("AuthoringForm", () => {
                     suggestedTechniques: [],
                 });
             }),
+            http.get("/api/authoring/algorithm-catalog", () =>
+                HttpResponse.json({
+                    profile: "business",
+                    case_type: "harvard_with_eda",
+                    items: [
+                        { name: "Regresión Lineal", family: "regresion", family_label: "Regresión", tier: "baseline" },
+                        { name: "Árboles de decisión", family: "clasificacion", family_label: "Clasificación", tier: "baseline" },
+                    ],
+                }),
+            ),
         );
 
         renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
         await enableSuggestions(user);
         await showTechniquesSection(user);
 
-        const button = screen.getByRole("button", { name: /sugerir t[ée]cnicas de an[aá]lisis/i });
+        const button = await screen.findByRole("button", { name: /sugerir algoritmos con adam/i });
         await user.click(button);
 
         await waitFor(() => {
@@ -251,15 +271,16 @@ describe("AuthoringForm", () => {
             HttpResponse.json({
                 scenarioDescription: "",
                 guidingQuestion: "",
-                suggestedTechniques: ["Árboles de decisión", "Clustering"],
+                suggestedTechniques: ["Árboles de decisión"],
+                algorithmPrimary: "Árboles de decisión",
+                algorithmChallenger: null,
             }),
         );
 
-        expect(await screen.findByText("Árboles de decisión")).toBeInTheDocument();
-        expect(screen.getByText("Clustering")).toBeInTheDocument();
-        expect(
-            screen.queryByText(/podr[ií]an estar desactualizadas/i),
-        ).not.toBeInTheDocument();
+        // Baseline dropdown trigger should reflect the chosen primary.
+        await waitFor(() => {
+            expect(screen.getByLabelText(/algoritmo principal/i)).toHaveTextContent(/árboles de decisión/i);
+        });
     }, 20_000);
 
     it("prevents duplicate scenario requests on rapid double click", async () => {
@@ -796,8 +817,9 @@ describe("Task 3 — sessionStorage persistence", () => {
                 industry: "fintech",
                 caseType: "harvard_with_eda",
                 notebookToggle: false,
-                suggestedTechniques: [],
-                algoInput: "",
+                algorithmMode: "single",
+                algorithmPrimary: null,
+                algorithmChallenger: null,
                 availableFrom: "",
                 dueAt: "",
             }),

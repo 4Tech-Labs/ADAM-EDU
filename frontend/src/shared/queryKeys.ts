@@ -72,6 +72,12 @@ export const queryKeys = {
          */
         suggest: (intent: IntentType, payload: SuggestRequest) =>
             ["authoring", "suggest", intent, payload] as const,
+        /**
+         * ["authoring", "algorithmCatalog", profile, caseType] — catálogo canónico de
+         * algoritmos (Issue #230). Cache estable por (perfil, caseType).
+         */
+        algorithmCatalog: (profile: string, caseType: string) =>
+            ["authoring", "algorithmCatalog", profile, caseType] as const,
     },
     teacher: {
         /** ["teacher"] — key raíz para invalidación masiva */

@@ -20,7 +20,9 @@ describe("buildAuthoringJobCreateRequest", () => {
             topicUnit: "Unit",
             targetGroups: ["Grupo A"],
                 targetCourseIds: ["course-1"],
-            suggestedTechniques: ["SWOT"],
+            algorithmMode: "single",
+            algorithmPrimary: "Regresión Lineal",
+            algorithmChallenger: null,
         });
 
         expect("teacher_id" in request).toBe(false);
@@ -40,7 +42,9 @@ describe("buildAuthoringJobCreateRequest", () => {
             target_groups: ["Grupo A"],
             eda_depth: null,
             include_python_code: false,
-            suggested_techniques: ["SWOT"],
+            algorithm_mode: "single",
+            algorithm_primary: "Regresión Lineal",
+            algorithm_challenger: null,
             available_from: null,
             due_at: null,
         });

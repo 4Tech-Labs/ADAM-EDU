@@ -140,7 +140,10 @@ export function buildAuthoringJobCreateRequest(formData: CaseFormData): Authorin
         target_groups: formData.targetGroups,
         eda_depth: formData.edaDepth ?? null,
         include_python_code: formData.includePythonCode,
-        suggested_techniques: formData.suggestedTechniques,
+        algorithm_mode: formData.algorithmMode,
+        algorithm_primary: formData.algorithmPrimary ?? null,
+        algorithm_challenger:
+            formData.algorithmMode === "contrast" ? (formData.algorithmChallenger ?? null) : null,
         available_from: formData.availableFrom || null,
         due_at: formData.dueAt || null,
     };
