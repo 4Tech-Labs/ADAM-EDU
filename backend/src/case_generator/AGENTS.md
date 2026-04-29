@@ -26,6 +26,19 @@ This directory contains the core teacher authoring logic: prompts, graph executi
 
 These files require extra caution because small edits can change generated output quality, safety posture, and job execution behavior.
 
+## Algorithm Catalog (Issue #233)
+
+- `suggest_service.ALGORITHM_CATALOG` is the single source of truth for the 4×2 algorithm taxonomy: `clasificacion`, `regresion`, `clustering`, `serie_temporal` (8 entries total: 1 baseline + 1 challenger per family for `ml_ds`; baselines only for `business`).
+- Public helpers exposed for downstream consumers: `family_of(name)`, `resolve_legacy_family(name)`, `get_dispatch_meta(family)`, `FAMILY_LABELS`, `FAMILY_META`.
+- The legacy `ALGORITHM_REGISTRY` dict in `graph.py` has been removed. Do not reintroduce a parallel registry — extend the catalog instead.
+- Adding a new family or breaking the 4×2 invariant requires an ADR.
+
+## M3 Notebook Per-Family Dispatch (Issue #233)
+
+- `m3_notebook_generator` resolves a single family from the algorithm picks and dispatches to `prompts.PROMPT_BY_FAMILY[family]`. There is exactly one specialized prompt per canonical family.
+- Post-LLM, `_validate_notebook_family_consistency(family, code)` enforces the per-family forbidden-token list (`_FAMILY_PROHIBITED_PATTERNS`). On violation: reprompt ONCE with the explicit list; on second violation: raise `RuntimeError` to fail the job. Never ship a notebook that mixes families.
+- Legacy algorithm names (XGBoost, Ridge, NLP, etc.) in historical `task_payload` rows are mapped via `resolve_legacy_family`. Unknown names fall back to `clasificacion` and emit a warning into the data-gap block.
+
 ## Validation Expectations
 
 After changing this area, at minimum run:

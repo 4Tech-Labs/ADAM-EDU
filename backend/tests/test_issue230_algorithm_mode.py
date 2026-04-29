@@ -92,11 +92,57 @@ def test_catalog_ml_ds_excludes_lstm() -> None:
 
 def test_catalog_items_are_grouped_by_family() -> None:
     families = {it["family"] for it in _items("ml_ds")}
-    # All declared families show up at least once for ml_ds.
-    assert {"clustering", "clasificacion", "regresion", "serie_temporal", "recomendacion", "nlp"} <= families
+    # Issue #233 — canonical 4-family taxonomy. nlp/recomendacion deprecated.
+    assert families == {"clasificacion", "regresion", "clustering", "serie_temporal"}
     # family_label is non-empty and human-readable.
     for it in _items("ml_ds"):
         assert it["family_label"] and isinstance(it["family_label"], str)
+
+
+# Issue #233 — 4×2 catalog invariants.
+def test_catalog_has_exactly_4_families() -> None:
+    families = {it["family"] for it in _items("ml_ds")}
+    assert families == {"clasificacion", "regresion", "clustering", "serie_temporal"}
+
+
+def test_catalog_each_family_has_max_2_algorithms() -> None:
+    items = _items("ml_ds")
+    by_family: dict[str, list[dict]] = {}
+    for it in items:
+        by_family.setdefault(it["family"], []).append(it)
+    for fam, members in by_family.items():
+        assert len(members) <= 2, f"familia {fam} excede el cap de 2: {members}"
+
+
+def test_catalog_each_family_has_exactly_one_baseline() -> None:
+    items = _items("ml_ds")
+    by_family: dict[str, list[dict]] = {}
+    for it in items:
+        by_family.setdefault(it["family"], []).append(it)
+    for fam, members in by_family.items():
+        baselines = [m for m in members if m["tier"] == "baseline"]
+        assert len(baselines) == 1, f"familia {fam} debe tener 1 baseline: {members}"
+
+
+def test_catalog_business_only_baselines() -> None:
+    items = _items("business")
+    assert items, "business debe exponer al menos los baselines"
+    for it in items:
+        assert it["tier"] == "baseline", f"business no debe ver challengers: {it}"
+    families = {it["family"] for it in items}
+    assert families == {"clasificacion", "regresion", "clustering", "serie_temporal"}
+
+
+def test_catalog_ml_ds_has_8_algorithms() -> None:
+    # 4 families × 2 tiers (baseline + challenger) = 8 entries for ml_ds.
+    assert len(_items("ml_ds")) == 8
+
+
+def test_catalog_no_legacy_algorithms_exposed() -> None:
+    # Issue #233 — these names were removed from the canonical catalog.
+    forbidden = {"xgboost", "ridge", "lasso", "lstm", "svm", "naive bayes"}
+    names = {it["name"].lower() for it in _items("ml_ds")}
+    assert names.isdisjoint(forbidden), f"algoritmos legacy reaparecieron: {names & forbidden}"
 
 
 def test_catalog_invalid_profile_raises() -> None:
