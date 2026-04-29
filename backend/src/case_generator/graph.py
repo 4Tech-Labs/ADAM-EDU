@@ -2978,8 +2978,10 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
 # Substrings whose presence in the generated notebook proves a family violation.
 # Kept narrow on purpose (only API tokens unique to other families) to minimize
-# false positives. Comments inside try/except blocks do NOT count — we look for
-# import statements and call sites only.
+# false positives. The validator strips Jupytext markdown cells and code-comment
+# lines before scanning (see ``_strip_jupytext_for_validation``), so pedagogical
+# echoes of these tokens in markdown/comments do NOT count — only executable
+# import statements and call sites do.
 _FAMILY_PROHIBITED_PATTERNS: dict[str, tuple[str, ...]] = {
     "clustering": (
         "train_test_split(",
@@ -3022,15 +3024,67 @@ _FAMILY_PROHIBITED_PATTERNS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _strip_jupytext_for_validation(notebook_text: str) -> str:
+    """Return only the executable Python from a Jupytext Percent notebook.
+
+    The per-family prompts enumerate forbidden tokens in their ``Lista NEGRA``
+    sections, so an obedient LLM frequently echoes those names back as
+    pedagogical markdown or as ``#``-prefixed code comments. Scanning the
+    raw notebook would treat such pedagogy as a violation and trigger a
+    false-positive reprompt → potential job failure on a clean notebook.
+
+    Strategy:
+      * Drop every ``# %% [markdown]`` cell (everything until the next ``# %%``
+        header or EOF).
+      * Inside ``# %%`` code cells, drop pure comment lines (``^\\s*#``) and
+        strip ``#``-suffix inline comments from non-empty code lines.
+      * Keep string literals untouched — they can still smuggle a forbidden
+        call (e.g. ``eval("roc_auc_score(...)")``) and the validator should
+        catch that.
+
+    Returns the stripped text, ready for substring scanning.
+    """
+    lines = notebook_text.splitlines()
+    out: list[str] = []
+    in_markdown = False
+    for raw in lines:
+        stripped = raw.lstrip()
+        if stripped.startswith("# %% [markdown]"):
+            in_markdown = True
+            continue
+        if stripped.startswith("# %%"):
+            in_markdown = False
+            continue
+        if in_markdown:
+            continue
+        # Skip pure-comment lines inside code cells.
+        if stripped.startswith("#"):
+            continue
+        # Strip trailing inline comments (``code  # comment``) — naive split
+        # on " #" is enough; we don't try to preserve "#" inside strings
+        # because the inline-comment heuristic is intentionally conservative.
+        if " #" in raw:
+            raw = raw.split(" #", 1)[0]
+        out.append(raw)
+    return "\n".join(out)
+
+
 def _validate_notebook_family_consistency(family: str, code: str) -> list[str]:
-    """Return a list of prohibited tokens found in ``code`` for ``family``.
+    """Return a list of prohibited tokens found in executable code for ``family``.
+
+    Strips Jupytext markdown cells and code-comment lines first, then runs a
+    substring scan against ``_FAMILY_PROHIBITED_PATTERNS[family]``. This avoids
+    flagging the prompt's own ``Lista NEGRA`` echoes that the LLM may legitimately
+    include as documentation.
 
     Empty list = pass. Non-empty = the LLM strayed; caller should reprompt
-    once with the explicit list, then fail-job if the second attempt also
-    contains forbidden tokens.
+    once and fail-job if the second attempt also contains forbidden tokens.
     """
     patterns = _FAMILY_PROHIBITED_PATTERNS.get(family, ())
-    return [p for p in patterns if p in code]
+    if not patterns:
+        return []
+    scannable = _strip_jupytext_for_validation(code)
+    return [p for p in patterns if p in scannable]
 
 
 def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
@@ -3197,12 +3251,19 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
                     f"[m3_notebook_generator] Violación de familia detectada (familia={family}, "
                     f"tokens={violations}). Reprompt explícito (1/1)."
                 )
+                # Belt-and-suspenders against reprompt amplification: we do NOT
+                # echo the offending token strings in the corrective message
+                # (the LLM might politely repeat them in its acknowledgement,
+                # which would re-trip the validator and fail the job). Instead
+                # we reference the prompt's own ``Lista NEGRA`` section.
                 reprompt = (
                     prompt
                     + "\n\n# CORRECCIÓN OBLIGATORIA\n"
-                    + f"# Tu salida anterior contenía tokens de OTRAS familias prohibidos para '{family}': "
-                    + ", ".join(violations)
-                    + "\n# Reescribe la salida COMPLETA respetando estrictamente la lista NEGRA del prompt."
+                    + f"# Tu salida anterior emitió código ejecutable de OTRAS familias prohibidas para '{family}'.\n"
+                    + "# Releé la sección 'Lista NEGRA' del prompt y reescribe la salida COMPLETA\n"
+                    + "# usando EXCLUSIVAMENTE la API estable declarada para esta familia.\n"
+                    + "# Los nombres prohibidos pueden aparecer en celdas markdown como advertencia pedagógica,\n"
+                    + "# pero NUNCA como import, call site, ni dentro de un string ejecutable."
                 )
                 response2 = llm.invoke(reprompt)
                 algo_section = sanitize_markdown(_extract_text(response2))
