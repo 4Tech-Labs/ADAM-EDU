@@ -2086,7 +2086,7 @@ print("🔢 Numéricas:", numeric_candidates[:20] if numeric_candidates else "No
 
 
 
-M3_NOTEBOOK_ALGO_PROMPT = """\
+M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION = """\
 Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para Google Colab.
 El notebook sigue la estructura pedagógica ADAM M3: Concepto → Gráfico Conceptual → Acción de Negocio.
 Genera SOLO la continuación del notebook, empezando después de la Sección 3 del base template.
@@ -2488,3 +2488,631 @@ Familias con metadata (visualizacion, prerequisito, fragments_hint): {familias_m
 Algoritmos detectados: {algoritmos}
 Contexto M3 (extracto): {m3_content}
 """
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# Issue #233 — Per-family M3 notebook prompts
+#
+# The classification prompt above is the canonical home of all PR #232 hygiene
+# fixes (anti-leakage naming, AUC-ROC + class_weight, post-split degeneracy
+# guard, feature_cols hygiene) and Issue #228 atomic charting. The 3 prompts
+# below mirror that structure but specialize the algorithm-specific contract:
+#
+#   - REGRESSION: RMSE/MAE/R², residuals scatter, np.isfinite guard, no AUC.
+#   - CLUSTERING: StandardScaler obligatorio, no train_test_split, silhouette
+#                 + davies_bouldin, elbow/k-distance + PCA scatter.
+#   - TIMESERIES: split por corte temporal (último 20%), nunca random;
+#                 MAPE/sMAPE/RMSE; ARIMA(1,1,1) default; Prophet en try/except.
+#
+# .format() contract (idéntico en los 4 prompts, no romper este shape):
+#   m3_content, algoritmos, familias_meta, case_title, output_language,
+#   dataset_contract_block, data_gap_warnings_block.
+# ════════════════════════════════════════════════════════════════════════════════
+
+
+M3_NOTEBOOK_ALGO_PROMPT_REGRESSION = """\
+Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para Google Colab.
+El notebook resuelve un problema de REGRESIÓN (target numérico continuo).
+Genera SOLO la continuación del notebook después de la Sección 3 del base template.
+
+# Contrato dataset_schema_required (Issue #225 — fuente canónica del target)
+{dataset_contract_block}
+
+# Brechas de datos detectadas por el validador (data_gap_warnings)
+{data_gap_warnings_block}
+
+# Reglas CONTRACT-FIRST (Issue #225 — prioridad máxima)
+* Si el contrato declara `target_column.name`, usa ese nombre EXACTO. NO uses alias-matching.
+* Si el target del contrato no está en `df.columns`, imprime
+  `print("⚠️ REQUISITO FALTANTE: target '<name>' del contrato no está en el dataset")` y SALTA el bloque.
+* Excluye features con `is_leakage_risk=true` o `temporal_offset_months>0` de `X`.
+* Sin contrato: aplica fallback heurístico (último numérico continuo NO-id).
+* Defensa extra anti-leakage (siempre): excluye columnas con patrones temporal-posteriores
+  (`retention_m`, `churn_date`, `churned_at`, `cancellation`, `days_to_churn`, `days_to_cancel`,
+  `_post_`, `_after_`, `m3_`, `m6_`, `m12_`) salvo que sean el target del contrato.
+
+# Reglas absolutas
+1. NUNCA uses np.random, pd.DataFrame() fabricado, columnas inventadas ni placeholders.
+2. SOLO trabaja con columnas reales de `df`. Resuelve por alias con helpers del base template.
+3. Formato SOLO Jupytext Percent: `# %%` y `# %% [markdown]`. Sin fences ```python.
+4. NO redefinas funciones del base template.
+5. Idioma de salida: {output_language}.
+6. Cada bloque falla de forma aislada — encapsula en try/except local.
+   EXCEPCIÓN al try/except (anti-silenciamiento): las guardas explícitas
+   (target ausente del contrato, target no finito, feature_cols vacío) NO deben
+   quedar tragadas por un `except Exception`. Su `print("⚠️ ...")` debe ser visible.
+
+# Reglas de API estable (anti-alucinación de librerías)
+A. Usa SOLO API documentada y estable de scikit-learn ≥ 1.0:
+   - sklearn.linear_model.LinearRegression()
+   - sklearn.ensemble.GradientBoostingRegressor(n_estimators=100, random_state=42)
+   - sklearn.preprocessing.StandardScaler() (opcional, recomendado para Linear)
+   - sklearn.model_selection.train_test_split(..., test_size=0.25, random_state=42)
+   - sklearn.metrics: mean_squared_error, mean_absolute_error, r2_score
+B. Para RMSE usa: `float(np.sqrt(mean_squared_error(y_true, y_pred)))`.
+   PROHIBIDO `mean_squared_error(..., squared=False)` (removido en sklearn ≥1.6).
+   PROHIBIDO `RootMeanSquaredError`, `root_mean_squared_error`.
+C. Lista NEGRA explícita (PROHIBIDOS en este prompt — pertenecen a otras familias):
+   - `from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, f1_score, accuracy_score`
+   - `from sklearn.cluster import KMeans, DBSCAN` ; `silhouette_score, davies_bouldin_score`
+   - `import statsmodels`, `from statsmodels...`, `import pmdarima`, `auto_arima`
+   - `import prophet`, `from prophet import Prophet`
+   Si los detectas en tu salida, REESCRIBE — este prompt es solo regresión.
+D. NO importes nada que no esté en: numpy, pandas, matplotlib, seaborn, sklearn.{{linear_model,ensemble,model_selection,metrics,preprocessing}}, scipy.stats.
+
+# Métricas OBLIGATORIAS (regresión)
+- `from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error`
+- Imprime SIEMPRE las TRES:
+  - `print("RMSE:", float(np.sqrt(mean_squared_error(y_test, y_pred))))`
+  - `print("MAE :", float(mean_absolute_error(y_test, y_pred)))`
+  - `print("R²  :", float(r2_score(y_test, y_pred)))`
+- Antes del fit, imprime estadísticos del target en train:
+  `print("y_train describe:", y_train.describe().round(3).to_dict())`
+
+# Guardas obligatorias para regresión (anti-fit-degenerado)
+- ANTES del fit, valida que `y` sea numérico, finito y con varianza > 0:
+  `if not np.isfinite(y).all(): print("⚠️ TARGET NO FINITO — y contiene NaN/inf"); return / skip`
+  `if y.std() == 0: print("⚠️ TARGET SIN VARIANZA — y es constante"); return / skip`
+- Si `len(df) < 30`: imprime advertencia visible "⚠️ Dataset muy pequeño (n=<N>) — métricas inestables".
+
+# Split (regresión)
+- Si hay columna fecha (`find_first_matching_column(df.columns, date_aliases)`): split temporal
+  (orden por fecha, primer 75% train, último 25% test). Justifica en comentario.
+- Sin columna fecha: `train_test_split(X, y, test_size=0.25, random_state=42)` (sin stratify — es regresión).
+- ORDEN OBLIGATORIO: split primero → `med = X_train.median(numeric_only=True)` → imputar X_train y X_test
+  con `med`. PROHIBIDO `X.fillna(X.median())` antes del split (leakage).
+
+# Higiene de feature_cols (anti-features-basura)
+1. Candidatas = numéricas + categóricas con cardinalidad ≤ 20.
+2. Drop ID-like (cardinalidad == n_filas o token "id" en nombre normalizado).
+3. Drop near-constants (`nunique <= 1`) y high-null (`>50% NaN`).
+4. Drop features de leakage (contrato + patrones temporal-posteriores).
+5. One-hot ANTES del split: `X = pd.get_dummies(df[feature_cols], drop_first=True, dummy_na=False)`.
+6. Si `X.shape[1] == 0`: imprime "⚠️ REQUISITO FALTANTE: sin features útiles tras higiene" y SALTA.
+
+# Atomic Cell Charting (Issue #228 — un gráfico por celda)
+- PROHIBIDO `plt.subplots(1, N)` o `plt.subplots(N, M)` para mezclar gráficos heterogéneos.
+- Cada celda de visualización contiene exactamente UNA `plt.figure(...)` y UN `plt.show()`.
+- Por algoritmo, parte el bloque en sub-celdas:
+  (2a) Entrenamiento + métricas — celda SIN plots, solo `print(...)`.
+  (2b) Scatter real vs predicho con línea 45° — celda dedicada.
+  (2c) Residuals vs predicho — celda dedicada (la otra mitad de la viz canónica).
+  (2d) Feature importance — celda dedicada (solo si el modelo expone `feature_importances_` o `coef_`).
+- Cada celda termina con `plt.tight_layout(); plt.show()`.
+
+# EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo
+
+## El base template ya abrió `## Sección 3: Módulos Experimentales`; aquí emite un H3,
+## NO un H2 nuevo, para no duplicar la jerarquía.
+# %% [markdown]
+# ### 3.0 EDA Express
+# Antes de entrenar, validamos calidad y forma del dataset (regresión).
+
+# %%
+try:
+    target_col = find_first_matching_column(df.columns, ["precio", "valor", "monto", "revenue", "ventas", "importe", "score", "target"])
+    if target_col is None:
+        num_cols = df.select_dtypes(include=np.number).columns.tolist()
+        target_col = num_cols[-1] if num_cols else None
+    if target_col is not None and is_numeric_col(df, target_col):
+        print("Target candidato (regresión):", target_col)
+        print(df[target_col].describe().round(3))
+        if not np.isfinite(df[target_col].dropna()).all():
+            print("⚠️ TARGET NO FINITO — contiene NaN/inf en algunas filas.")
+        if df[target_col].std() == 0:
+            print("⚠️ TARGET SIN VARIANZA — la columna es constante; el modelo no puede aprender.")
+    if len(df) < 30:
+        print(f"\\n⚠️ Dataset muy pequeño (n={{len(df)}}): métricas de regresión muy inestables.")
+    print("\\nTop 10 columnas por % missing:")
+    print(df.isna().mean().sort_values(ascending=False).head(10).round(3))
+except Exception as e:
+    print(f"⚠️ EDA Express falló: {{e}}")
+
+## Para CADA familia en {familias_meta} (regresión: una sola familia por contrato Issue #230),
+## y para CADA algoritmo dentro del campo "algoritmos", emite las siguientes celdas EN ORDEN:
+
+## Celda 1 — Concepto (markdown)
+# %% [markdown]
+# ### regresion — [nombre exacto del algoritmo]
+# **Concepto:** [teoría en 2 líneas, sin jerga]
+# **Hipótesis experimental:** [extraída de {m3_content}, 1-2 líneas — NO inventes columnas]
+# **Prerequisitos:** [campo "prerequisito" del entry en {familias_meta}]
+
+## Celda 2a — Entrenamiento + Métricas (código, SIN plots)
+# %%
+try:
+    # 1. Resolver target_col por contrato/alias/fallback heurístico (último numérico).
+    # 2. Aplicar higiene de feature_cols (5 pasos).
+    # 3. Validar y finito + varianza > 0.
+    # 4. Split (temporal si hay fecha; sino train_test_split test_size=0.25).
+    # 5. Imputar con mediana de X_train (anti-leakage).
+    # 6. Fit y predict. Imprimir RMSE, MAE, R².
+    # 7. NO emitir plots aquí — la viz va en 2b/2c/2d.
+    # 8. Asignar `model`, `X_train`, `X_test`, `y_train`, `y_test`, `y_pred` a nombres reutilizables.
+    pass
+except Exception as e:
+    print(f"⚠️ Error: {{e}}")
+
+## Celda 2b — Scatter real vs predicho con línea 45° (código, exactamente UN plt.show())
+# %%
+try:
+    plt.figure(figsize=(7, 7))
+    # plt.scatter(y_test, y_pred, alpha=0.6)
+    # lo, hi = min(y_test.min(), y_pred.min()), max(y_test.max(), y_pred.max())
+    # plt.plot([lo, hi], [lo, hi], 'r--', lw=1)
+    # plt.xlabel("y real"); plt.ylabel("y predicho"); plt.title("Real vs Predicho")
+    # plt.tight_layout(); plt.show()
+    pass
+except Exception as e:
+    print(f"⚠️ Error scatter real-vs-pred: {{e}}")
+
+## Celda 2c — Residuals vs predicho (código, exactamente UN plt.show())
+# %%
+try:
+    plt.figure(figsize=(8, 5))
+    # residuals = y_test - y_pred
+    # plt.scatter(y_pred, residuals, alpha=0.6)
+    # plt.axhline(0, color='r', linestyle='--', lw=1)
+    # plt.xlabel("y predicho"); plt.ylabel("residual (y_real - y_pred)"); plt.title("Residuals vs Predicho")
+    # plt.tight_layout(); plt.show()
+    pass
+except Exception as e:
+    print(f"⚠️ Error residuals: {{e}}")
+
+## Celda 2d — Feature importance (código, OPCIONAL — salta si el modelo no la expone)
+# %%
+try:
+    plt.figure(figsize=(8, 5))
+    # if hasattr(model, "feature_importances_"):
+    #     pd.Series(model.feature_importances_, index=X_train.columns).nlargest(15).plot.barh()
+    # elif hasattr(model, "coef_"):
+    #     coef = model.coef_; imp = np.abs(coef).ravel()
+    #     pd.Series(imp, index=X_train.columns).nlargest(15).plot.barh()
+    # else:
+    #     print("Modelo sin importancias directas.")
+    # plt.tight_layout(); plt.show()
+    pass
+except Exception as e:
+    print(f"⚠️ Error importancia features: {{e}}")
+
+## Celda 3 — Acción de Negocio (markdown)
+# %% [markdown]
+# **Explicación pedagógica:** [qué muestran R²/RMSE y los gráficos, 2 líneas]
+# **Acción de negocio:** [próximo paso concreto basado en el resultado, 1 línea]
+
+# Sección final OBLIGATORIA — agregar SIEMPRE después del último bloque
+# %% [markdown]
+# ## Evaluación M3 — Diseño Experimental
+# Responde en la plataforma ADAM las preguntas del Módulo 3 sobre hipótesis, sesgos y descarte.
+
+---
+Caso: {case_title}
+Familias con metadata: {familias_meta}
+Algoritmos detectados: {algoritmos}
+Contexto M3 (extracto): {m3_content}
+"""
+
+
+M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING = """\
+Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para Google Colab.
+El notebook resuelve un problema de CLUSTERING NO SUPERVISADO.
+Genera SOLO la continuación del notebook después de la Sección 3 del base template.
+
+# Contrato dataset_schema_required (Issue #225)
+{dataset_contract_block}
+
+# Brechas de datos detectadas por el validador (data_gap_warnings)
+{data_gap_warnings_block}
+
+# Reglas CONTRACT-FIRST
+* Clustering NO usa target. Si el contrato declara un `target_column`, IGNÓRALO en el fit
+  (puedes mostrarlo a posteriori para colorear los clusters como diagnóstico, pero NO lo uses como `y`).
+* Sin contrato: usa todas las columnas numéricas de `df` como features.
+
+# Reglas absolutas
+1. NUNCA uses np.random, pd.DataFrame() fabricado, columnas inventadas ni placeholders.
+2. SOLO trabaja con columnas reales de `df`. Resuelve por alias con helpers del base template.
+3. Formato SOLO Jupytext Percent: `# %%` y `# %% [markdown]`.
+4. NO redefinas funciones del base template.
+5. Idioma de salida: {output_language}.
+6. Cada bloque falla de forma aislada — encapsula en try/except local.
+   EXCEPCIÓN al try/except (anti-silenciamiento): las guardas explícitas
+   (n_samples insuficiente, sin features numéricas, todos los puntos en 1 cluster)
+   NO deben quedar tragadas por un `except Exception`.
+
+# Reglas de API estable
+A. Usa SOLO API documentada y estable de scikit-learn ≥ 1.0:
+   - sklearn.cluster.KMeans(n_clusters=k, n_init=10, random_state=42)
+   - sklearn.cluster.DBSCAN(eps=<value>, min_samples=5)
+   - sklearn.preprocessing.StandardScaler()  ← OBLIGATORIO antes de fit
+   - sklearn.decomposition.PCA(n_components=2, random_state=42)
+   - sklearn.metrics: silhouette_score, davies_bouldin_score
+B. Lista NEGRA explícita (PROHIBIDOS en este prompt — pertenecen a otras familias):
+   - `from sklearn.model_selection import train_test_split`  ← clustering NO usa split
+   - `from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, f1_score`
+   - `from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error`
+   - `import statsmodels`, `import pmdarima`, `auto_arima`, `import prophet`
+   Si los detectas en tu salida, REESCRIBE — este prompt es solo clustering.
+C. NO importes nada que no esté en: numpy, pandas, matplotlib, seaborn,
+   sklearn.{{cluster,preprocessing,decomposition,metrics}}, scipy.stats.
+
+# Métricas OBLIGATORIAS (clustering)
+- `from sklearn.metrics import silhouette_score, davies_bouldin_score`
+- Después del fit, SI hay ≥2 clusters formados:
+  - `print("Silhouette:", float(silhouette_score(X_scaled, labels)))`
+  - `print("Davies-Bouldin:", float(davies_bouldin_score(X_scaled, labels)))`
+- Imprime SIEMPRE el conteo por cluster: `print(pd.Series(labels).value_counts().to_dict())`
+
+# Guardas obligatorias para clustering (anti-fit-degenerado)
+- ANTES del fit, valida tamaño mínimo: `if len(df) < 10: print("⚠️ Dataset muy pequeño (n=<N>): clustering no representativo"); skip`.
+- Valida que haya ≥2 columnas numéricas tras higiene. Si no, imprime
+  `print("⚠️ REQUISITO FALTANTE: se requieren ≥2 columnas numéricas para clustering")` y SALTA.
+- DESPUÉS del fit, valida que se formaron ≥2 clusters:
+  `if len(set(labels) - {{-1}}) < 2: print("⚠️ Solo se formó 1 cluster real; revisa hiperparámetros (k, eps)"); skip métricas y plots`.
+  (Para DBSCAN, label `-1` significa ruido y NO cuenta como cluster).
+
+# StandardScaler OBLIGATORIO
+- ANTES de cualquier fit:
+  `from sklearn.preprocessing import StandardScaler`
+  `scaler = StandardScaler()`
+  `X_scaled = scaler.fit_transform(X)`
+- TODO el clustering trabaja sobre `X_scaled`, no sobre `X` cruda. Las distancias sin escalar
+  hacen que las features con mayor magnitud dominen y los clusters resulten arbitrarios.
+
+# Higiene de feature_cols
+1. Candidatas = SOLO columnas numéricas de `df` (sin one-hot de categóricas para mantener interpretabilidad de PCA).
+2. Drop ID-like (cardinalidad == n_filas o token "id" en nombre normalizado).
+3. Drop near-constants y high-null (>50% NaN).
+4. Drop el target del contrato (si existe) — clustering NO supervisado.
+5. `X = df[feature_cols].dropna()` (sin imputación con estadísticos — clustering es sensible a la imputación con la media).
+6. Si `X.shape[1] < 2` o `X.shape[0] < 10`: imprime "⚠️ REQUISITO FALTANTE..." y SALTA.
+
+# Atomic Cell Charting (Issue #228 — un gráfico por celda)
+- PROHIBIDO `plt.subplots(1, N)` o `plt.subplots(N, M)` para mezclar gráficos heterogéneos.
+- Cada celda de visualización contiene exactamente UNA `plt.figure(...)` y UN `plt.show()`.
+- Por algoritmo, parte el bloque en sub-celdas:
+  (2a) Selección de hiperparámetro (elbow para K-Means, k-distance para DBSCAN) — celda dedicada con UN plot.
+  (2b) Fit final + métricas — celda SIN plots.
+  (2c) Scatter 2D PCA con colores por cluster — celda dedicada con UN plot.
+- Cada celda termina con `plt.tight_layout(); plt.show()`.
+
+# EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo
+
+## El base template ya abrió `## Sección 3: Módulos Experimentales`; aquí emite un H3.
+# %% [markdown]
+# ### 3.0 EDA Express
+# Antes de hacer clustering, validamos calidad y forma del dataset.
+
+# %%
+try:
+    num_cols = df.select_dtypes(include=np.number).columns.tolist()
+    print(f"Columnas numéricas disponibles: {{len(num_cols)}}")
+    print(num_cols)
+    if len(num_cols) < 2:
+        print("⚠️ REQUISITO FALTANTE: clustering requiere ≥2 columnas numéricas.")
+    if len(df) < 10:
+        print(f"⚠️ Dataset muy pequeño (n={{len(df)}}): clustering no representativo.")
+    print("\\nTop 10 columnas por % missing:")
+    print(df.isna().mean().sort_values(ascending=False).head(10).round(3))
+except Exception as e:
+    print(f"⚠️ EDA Express falló: {{e}}")
+
+## Para CADA algoritmo en el campo "algoritmos" del único entry en {familias_meta},
+## emite las siguientes celdas EN ORDEN:
+
+## Celda 1 — Concepto (markdown)
+# %% [markdown]
+# ### clustering — [nombre exacto del algoritmo]
+# **Concepto:** [teoría en 2 líneas]
+# **Hipótesis experimental:** [extraída de {m3_content}, 1-2 líneas]
+# **Prerequisitos:** [campo "prerequisito" del entry en {familias_meta}]
+
+## Celda 2a — Selección de hiperparámetro (UN plot por celda)
+# %%
+try:
+    plt.figure(figsize=(8, 5))
+    # K-Means: elbow method
+    #   inertias = []
+    #   K = range(2, min(11, len(df)))
+    #   for k in K:
+    #       km = KMeans(n_clusters=k, n_init=10, random_state=42).fit(X_scaled)
+    #       inertias.append(km.inertia_)
+    #   plt.plot(list(K), inertias, marker='o'); plt.xlabel("k"); plt.ylabel("inercia")
+    #   plt.title("Elbow Method"); plt.tight_layout(); plt.show()
+    # DBSCAN: k-distance plot (k=min_samples-1) para elegir epsilon
+    #   from sklearn.neighbors import NearestNeighbors
+    #   nn = NearestNeighbors(n_neighbors=5).fit(X_scaled)
+    #   dists, _ = nn.kneighbors(X_scaled)
+    #   plt.plot(np.sort(dists[:, -1])); plt.xlabel("punto"); plt.ylabel("dist al 5º vecino")
+    #   plt.title("k-distance plot — busca el codo para epsilon"); plt.tight_layout(); plt.show()
+    pass
+except Exception as e:
+    print(f"⚠️ Error selección hiperparámetro: {{e}}")
+
+## Celda 2b — Fit final + Métricas (código, SIN plots)
+# %%
+try:
+    # 1. Higiene de features (5 pasos), `X = df[feature_cols].dropna()`.
+    # 2. StandardScaler → X_scaled.
+    # 3. Fit (K-Means con k del elbow / DBSCAN con eps del k-distance).
+    # 4. labels = model.labels_ (o model.fit_predict(X_scaled)).
+    # 5. Validar ≥2 clusters reales (descartando -1 de DBSCAN).
+    # 6. Imprimir silhouette_score y davies_bouldin_score.
+    # 7. Imprimir conteo por cluster.
+    pass
+except Exception as e:
+    print(f"⚠️ Error fit clustering: {{e}}")
+
+## Celda 2c — Scatter 2D PCA con colores por cluster (UN plot por celda)
+# %%
+try:
+    plt.figure(figsize=(8, 6))
+    # from sklearn.decomposition import PCA
+    # pca = PCA(n_components=2, random_state=42)
+    # X_pca = pca.fit_transform(X_scaled)
+    # plt.scatter(X_pca[:, 0], X_pca[:, 1], c=labels, cmap='tab10', alpha=0.7, s=20)
+    # plt.xlabel(f"PC1 ({{pca.explained_variance_ratio_[0]:.0%}})")
+    # plt.ylabel(f"PC2 ({{pca.explained_variance_ratio_[1]:.0%}})")
+    # plt.title("Clusters proyectados en 2D (PCA)")
+    # plt.tight_layout(); plt.show()
+    pass
+except Exception as e:
+    print(f"⚠️ Error scatter PCA: {{e}}")
+
+## Celda 3 — Acción de Negocio (markdown)
+# %% [markdown]
+# **Explicación pedagógica:** [qué muestran silhouette/Davies-Bouldin y los clusters, 2 líneas]
+# **Acción de negocio:** [próximo paso concreto basado en los segmentos descubiertos, 1 línea]
+
+# Sección final OBLIGATORIA
+# %% [markdown]
+# ## Evaluación M3 — Diseño Experimental
+# Responde en la plataforma ADAM las preguntas del Módulo 3 sobre hipótesis, sesgos y descarte.
+
+---
+Caso: {case_title}
+Familias con metadata: {familias_meta}
+Algoritmos detectados: {algoritmos}
+Contexto M3 (extracto): {m3_content}
+"""
+
+
+M3_NOTEBOOK_ALGO_PROMPT_TIMESERIES = """\
+Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para Google Colab.
+El notebook resuelve un problema de SERIES TEMPORALES (forecasting).
+Genera SOLO la continuación del notebook después de la Sección 3 del base template.
+
+# Contrato dataset_schema_required (Issue #225)
+{dataset_contract_block}
+
+# Brechas de datos detectadas por el validador (data_gap_warnings)
+{data_gap_warnings_block}
+
+# Reglas CONTRACT-FIRST
+* Si el contrato declara `target_column.name`, usa ese nombre EXACTO como serie objetivo.
+* El target DEBE ser numérico continuo. Si no lo es, imprime "⚠️ REQUISITO FALTANTE..." y SALTA.
+* Detección de columna fecha: alias-first (date_aliases), fallback heurístico (`pd.to_datetime` aplicable).
+* Sin contrato: usa la última columna numérica como target y la primera fecha-parseable como índice.
+
+# Reglas absolutas
+1. NUNCA uses np.random, pd.DataFrame() fabricado, columnas inventadas ni placeholders.
+2. SOLO trabaja con columnas reales de `df`. Resuelve por alias con helpers del base template.
+3. Formato SOLO Jupytext Percent: `# %%` y `# %% [markdown]`.
+4. NO redefinas funciones del base template.
+5. Idioma de salida: {output_language}.
+6. Cada bloque falla de forma aislada — encapsula en try/except local.
+   EXCEPCIÓN al try/except (anti-silenciamiento): las guardas explícitas
+   (sin columna fecha, n_points<30, target no numérico) NO deben quedar tragadas
+   por un `except Exception`.
+
+# Reglas de API estable
+A. ARIMA: usa `statsmodels.tsa.arima.model.ARIMA` con default `order=(1,1,1)`.
+   `from statsmodels.tsa.arima.model import ARIMA`
+   `model = ARIMA(y_train, order=(1, 1, 1)).fit()`
+   `y_pred = model.forecast(steps=len(y_test))`
+   PROHIBIDO `auto_arima` salvo dentro de un try/except con fallback explícito a `ARIMA(1,1,1)`.
+B. Prophet: import OPCIONAL, SIEMPRE en try/except. Si falla, fallback a ARIMA(1,1,1).
+   Patrón canónico:
+     `try:`
+         `from prophet import Prophet`
+         `prophet_df = pd.DataFrame({{"ds": train_index, "y": y_train.values}})`
+         `m = Prophet(); m.fit(prophet_df)`
+         `future = pd.DataFrame({{"ds": test_index}})`
+         `forecast = m.predict(future)`
+         `y_pred = forecast["yhat"].values`
+     `except (ImportError, Exception) as e:`
+         `print(f"⚠️ Prophet no disponible ({{e}}), fallback a ARIMA(1,1,1)")`
+         `from statsmodels.tsa.arima.model import ARIMA`
+         `y_pred = ARIMA(y_train, order=(1, 1, 1)).fit().forecast(steps=len(y_test))`
+C. Lista NEGRA explícita (PROHIBIDOS en este prompt — pertenecen a otras familias):
+   - `from sklearn.model_selection import train_test_split`  ← series temporales NO usan split aleatorio
+   - `from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, f1_score`
+   - `from sklearn.metrics import silhouette_score, davies_bouldin_score`
+   - `from sklearn.cluster import KMeans, DBSCAN`
+   Si los detectas en tu salida, REESCRIBE — este prompt es solo series temporales.
+D. NO importes nada que no esté en: numpy, pandas, matplotlib, seaborn,
+   statsmodels.tsa.*, prophet (opcional con try/except), scipy.stats.
+
+# Métricas OBLIGATORIAS (series temporales)
+- Define las funciones MAPE y sMAPE en una celda inicial:
+  `def mape(y_true, y_pred):`
+      `mask = y_true != 0`
+      `return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)`
+  `def smape(y_true, y_pred):`
+      `denom = (np.abs(y_true) + np.abs(y_pred)) / 2`
+      `denom = np.where(denom == 0, 1, denom)`
+      `return float(np.mean(np.abs(y_true - y_pred) / denom) * 100)`
+- Después del forecast, imprime SIEMPRE las TRES:
+  - `print("MAPE :", mape(y_test.values, y_pred), "%")`
+  - `print("sMAPE:", smape(y_test.values, y_pred), "%")`
+  - `print("RMSE :", float(np.sqrt(np.mean((y_test.values - y_pred) ** 2))))`
+
+# Guardas obligatorias (series temporales)
+- ANTES del fit, valida:
+  - Columna fecha presente y parseable (`pd.to_datetime(df[col], errors="coerce")` no devuelve todo NaT).
+  - Target numérico continuo (`pd.api.types.is_numeric_dtype(df[target])`).
+  - `len(df) >= 30` puntos. Si no, imprime "⚠️ Serie muy corta (n=<N>) — forecast no confiable" y SALTA.
+- Si la serie tiene gaps temporales: imprime un aviso pero continúa con el dato disponible.
+
+# Split por corte temporal (NUNCA random)
+- ORDEN OBLIGATORIO:
+  1. `df[date_col] = pd.to_datetime(df[date_col], errors="coerce")`
+  2. `df = df.dropna(subset=[date_col, target_col]).sort_values(date_col).reset_index(drop=True)`
+  3. `cut = int(len(df) * 0.8)`
+  4. `y_train, y_test = df[target_col].iloc[:cut], df[target_col].iloc[cut:]`
+  5. `train_index, test_index = df[date_col].iloc[:cut], df[date_col].iloc[cut:]`
+  6. `print("Split temporal:", "train hasta", df[date_col].iloc[cut-1], "→ test desde", df[date_col].iloc[cut])`
+- PROHIBIDO `train_test_split(X, y, ...)` con `random_state` — se permite SOLO `TimeSeriesSplit` para CV.
+
+# Atomic Cell Charting (Issue #228 — un gráfico por celda)
+- PROHIBIDO `plt.subplots(1, N)` o `plt.subplots(N, M)` para mezclar gráficos heterogéneos.
+- Cada celda de visualización contiene exactamente UNA `plt.figure(...)` y UN `plt.show()`.
+- Por algoritmo, parte el bloque en sub-celdas:
+  (2a) Fit + forecast + métricas — celda SIN plots.
+  (2b) Forecast vs actual con eje fecha — celda dedicada con UN plot.
+  (2c) Residuals vs tiempo — celda dedicada con UN plot.
+- Cada celda termina con `plt.tight_layout(); plt.show()`.
+
+# EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo
+
+## El base template ya abrió `## Sección 3: Módulos Experimentales`; aquí emite un H3.
+# %% [markdown]
+# ### 3.0 EDA Express
+# Antes de modelar, validamos que el dataset tenga forma de serie temporal.
+
+# %%
+try:
+    date_col = find_first_matching_column(df.columns, date_aliases)
+    target_col = find_first_matching_column(df.columns, ["valor", "monto", "ventas", "demanda", "score", "target", "y"])
+    if target_col is None:
+        num_cols = df.select_dtypes(include=np.number).columns.tolist()
+        target_col = num_cols[-1] if num_cols else None
+    if date_col is None:
+        print("⚠️ REQUISITO FALTANTE: no se detectó columna de fecha parseable.")
+    if target_col is None or not is_numeric_col(df, target_col):
+        print("⚠️ REQUISITO FALTANTE: no se detectó target numérico continuo.")
+    if date_col and target_col and is_numeric_col(df, target_col):
+        print("Fecha:", date_col, "| Target:", target_col)
+        print(df[target_col].describe().round(3))
+    if len(df) < 30:
+        print(f"\\n⚠️ Serie muy corta (n={{len(df)}}): forecast con alta varianza, interpreta con cautela.")
+except Exception as e:
+    print(f"⚠️ EDA Express falló: {{e}}")
+
+## Definición de métricas (UNA sola vez antes del primer algoritmo)
+# %%
+def mape(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float); y_pred = np.asarray(y_pred, dtype=float)
+    mask = y_true != 0
+    if mask.sum() == 0:
+        return float("nan")
+    return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
+
+def smape(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float); y_pred = np.asarray(y_pred, dtype=float)
+    denom = (np.abs(y_true) + np.abs(y_pred)) / 2
+    denom = np.where(denom == 0, 1, denom)
+    return float(np.mean(np.abs(y_true - y_pred) / denom) * 100)
+
+## Para CADA algoritmo en el campo "algoritmos" del único entry en {familias_meta},
+## emite las siguientes celdas EN ORDEN:
+
+## Celda 1 — Concepto (markdown)
+# %% [markdown]
+# ### serie_temporal — [nombre exacto del algoritmo]
+# **Concepto:** [teoría en 2 líneas]
+# **Hipótesis experimental:** [extraída de {m3_content}, 1-2 líneas]
+# **Prerequisitos:** [campo "prerequisito" del entry en {familias_meta}]
+
+## Celda 2a — Fit + Forecast + Métricas (código, SIN plots)
+# %%
+try:
+    # 1. Resolver date_col + target_col por contrato/alias/fallback.
+    # 2. Validar fecha parseable + target numérico + n>=30.
+    # 3. Split temporal (último 20% test).
+    # 4. Fit (ARIMA(1,1,1) o Prophet en try/except).
+    # 5. Forecast steps=len(y_test).
+    # 6. Imprimir MAPE, sMAPE, RMSE.
+    # 7. NO emitir plots aquí — la viz va en 2b/2c.
+    pass
+except Exception as e:
+    print(f"⚠️ Error fit serie temporal: {{e}}")
+
+## Celda 2b — Forecast vs actual con eje fecha (UN plot por celda)
+# %%
+try:
+    plt.figure(figsize=(11, 5))
+    # plt.plot(train_index, y_train.values, label="Train", color="steelblue")
+    # plt.plot(test_index, y_test.values, label="Real", color="black")
+    # plt.plot(test_index, y_pred, label="Forecast", color="orange", linestyle="--")
+    # plt.xlabel("Fecha"); plt.ylabel(target_col); plt.title("Forecast vs Real")
+    # plt.legend(); plt.tight_layout(); plt.show()
+    pass
+except Exception as e:
+    print(f"⚠️ Error forecast vs actual: {{e}}")
+
+## Celda 2c — Residuals vs tiempo (UN plot por celda)
+# %%
+try:
+    plt.figure(figsize=(11, 4))
+    # residuals = y_test.values - y_pred
+    # plt.plot(test_index, residuals, marker='o', linestyle='-', color='crimson')
+    # plt.axhline(0, color='gray', linestyle='--', lw=1)
+    # plt.xlabel("Fecha"); plt.ylabel("residual"); plt.title("Residuals vs Tiempo")
+    # plt.tight_layout(); plt.show()
+    pass
+except Exception as e:
+    print(f"⚠️ Error residuals vs tiempo: {{e}}")
+
+## Celda 3 — Acción de Negocio (markdown)
+# %% [markdown]
+# **Explicación pedagógica:** [qué muestran MAPE/sMAPE y los gráficos, 2 líneas]
+# **Acción de negocio:** [próximo paso concreto basado en el forecast, 1 línea]
+
+# Sección final OBLIGATORIA
+# %% [markdown]
+# ## Evaluación M3 — Diseño Experimental
+# Responde en la plataforma ADAM las preguntas del Módulo 3 sobre hipótesis, sesgos y descarte.
+
+---
+Caso: {case_title}
+Familias con metadata: {familias_meta}
+Algoritmos detectados: {algoritmos}
+Contexto M3 (extracto): {m3_content}
+"""
+
+
+# ── PROMPT_BY_FAMILY — dispatch table consumed by graph.py::m3_notebook_generator
+# Keys MUST match the values returned by ``family_of(name)`` and the catalog's
+# ``family`` field in suggest_service.py.
+PROMPT_BY_FAMILY: dict[str, str] = {
+    "clasificacion": M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION,
+    "regresion": M3_NOTEBOOK_ALGO_PROMPT_REGRESSION,
+    "clustering": M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING,
+    "serie_temporal": M3_NOTEBOOK_ALGO_PROMPT_TIMESERIES,
+}
+
+# Backwards-compatible alias for tests / external callers that imported the
+# pre-Issue-#233 monolithic prompt symbol. The classification prompt is the
+# canonical home of all PR #232 hygiene fixes, so it remains the default.
+M3_NOTEBOOK_ALGO_PROMPT = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
