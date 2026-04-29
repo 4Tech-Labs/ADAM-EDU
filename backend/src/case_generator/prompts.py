@@ -1900,7 +1900,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import sklearn
 
-warnings.filterwarnings("ignore")
+# NO silenciamos warnings globalmente: sklearn emite UndefinedMetricWarning
+# ("Only one class present in y_true") cuando un split queda degenerado, y esa
+# se\u00f1al es exactamente lo que diagnostica gr\u00e1ficos de m\u00e9tricas vac\u00edos.
+# Filtramos solo DeprecationWarning ruidosos de dependencias.
+warnings.filterwarnings("default")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 plt.style.use("default")
 sns.set_theme(style="whitegrid")
 
@@ -2106,6 +2111,13 @@ Genera SOLO la continuación del notebook, empezando después de la Sección 3 d
   exploraciones de auditoría/EDA pero NUNCA en entrenamiento supervisado.
 * Si NO hay contrato (bloque vacío o "(sin contrato ...)"), aplica la lógica
   alias-first heredada (label_aliases → churn_aliases → último categórico).
+* **Defensa extra anti-leakage (aplica SIEMPRE, con o sin contrato):** además de
+  las features marcadas por contrato, EXCLUYE de `X` cualquier columna cuyo
+  nombre normalizado coincida con patrones temporales-posteriores comunes:
+  prefijos/sufijos `retention_m`, `churn_date`, `churned_at`, `cancellation`,
+  `days_to_churn`, `days_to_cancel`, `_post_`, `_after_`, `m3_`, `m6_`, `m12_`
+  (excepto si esa columna ES el target del contrato). Documenta en comentario
+  `# Excluida por patrón temporal-posterior (anti-leakage defensivo)`.
 
 # Reglas absolutas
 1. NUNCA uses np.random, pd.DataFrame() fabricado, columnas inventadas ni placeholders.
@@ -2114,6 +2126,12 @@ Genera SOLO la continuación del notebook, empezando después de la Sección 3 d
 4. NO redefinas funciones del base template (normalize_colname, find_first_matching_column, etc.).
 5. Idioma de salida: {output_language}.
 6. Cada bloque falla de forma aislada — encapsula en try/except local.
+   **EXCEPCIÓN al try/except (anti-silenciamiento):** las guardas explícitas
+   de pre-fit (split degenerado de Regla I, feature_cols vacío de Regla K-bis,
+   target ausente del contrato) NO deben quedar tragadas por un `except
+   Exception`. Su `print("⚠️ ...")` debe ser visible y la celda debe terminar
+   limpiamente sin lanzar excepción. El try/except local cubre fallos
+   inesperados de librerías, NO debe ocultar guardas de validación de datos.
 7. Eres un sistema ZERO-ERRORS. Está PROHIBIDO imprimir REQUISITO FALTANTE solo porque no encontraste
    una columna por alias. Siempre debes implementar un Fallback Heurístico por tipo de dato
    (df.select_dtypes) antes de rendirte. Solo imprime REQUISITO FALTANTE si df.select_dtypes()
@@ -2160,9 +2178,24 @@ H. Métricas OBLIGATORIAS por tipo de problema (imprímelas SIEMPRE, sin excepci
    - Clasificación: `from sklearn.metrics import classification_report, f1_score, confusion_matrix`
      y `print(classification_report(y_test, y_pred, zero_division=0))` +
      `print("F1 macro:", f1_score(y_test, y_pred, average="macro", zero_division=0))`.
-   - Regresión: `from sklearn.metrics import mean_squared_error, r2_score` y
+     **Para CLASIFICACIÓN BINARIA añade SIEMPRE AUC-ROC y AUC-PR** (las únicas
+     métricas que delatan un modelo que predice solo la clase mayoritaria; el
+     accuracy y la confusion_matrix sin AUC pueden disfrazar un fit degenerado):
+       `from sklearn.metrics import roc_auc_score, average_precision_score`
+       `if hasattr(model, "predict_proba") and y_test.nunique() == 2:`
+           `proba = model.predict_proba(X_test)[:, 1]`
+           `print("AUC-ROC:", roc_auc_score(y_test, proba))`
+           `print("AUC-PR :", average_precision_score(y_test, proba))`
+     **Pesos de clase OBLIGATORIOS para problemas con desbalance (>1.5x entre clases):**
+       - LogisticRegression / RandomForestClassifier / SVC → `class_weight="balanced"`
+       - XGBClassifier → `scale_pos_weight=float((y_train==0).sum()) / max(int((y_train==1).sum()), 1)`
+         (calcúlalo SIEMPRE para binario; NUNCA hardcodees 1.0).
+     Imprime ANTES del fit la distribución de clases en train con
+     `print("Distribución y_train:", y_train.value_counts(normalize=True).round(3).to_dict())`.
+   - Regresión: `from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error` y
      `print("RMSE:", float(np.sqrt(mean_squared_error(y_test, y_pred))))` +
-     `print("R2:", r2_score(y_test, y_pred))`.
+     `print("MAE :", mean_absolute_error(y_test, y_pred))` +
+     `print("R2  :", r2_score(y_test, y_pred))`.
    - Clustering: `from sklearn.metrics import silhouette_score` y
      `print("Silhouette:", silhouette_score(X, labels))` cuando hay >=2 clusters formados.
 I. Split anti-leakage para clasificación/regresión (ORDEN OBLIGATORIO):
@@ -2180,6 +2213,20 @@ I. Split anti-leakage para clasificación/regresión (ORDEN OBLIGATORIO):
    - Si NO hay columna temporal: usa `train_test_split(X, y, test_size=0.2, random_state=42,
      stratify=y if y.nunique() >= 2 and y.value_counts().min() >= 2 else None)`.
    - Justifica en comentario por qué elegiste cada estrategia.
+   - **GUARDA POST-SPLIT OBLIGATORIA (anti-fit-degenerado — Issue empty-charts):**
+     después del split y ANTES de `.fit()`, valida que ambas particiones tengan
+     ≥2 clases (clasificación) o tamaño suficiente (regresión). Patrón canónico:
+       `if y_train.nunique() < 2 or y_test.nunique() < 2:`
+           `print("⚠️ SPLIT DEGENERADO — y_train clases:", y_train.value_counts().to_dict(),
+                  "| y_test clases:", y_test.value_counts().to_dict())`
+           `print("   El split (temporal o aleatorio) dejó una sola clase en train o test.")`
+           `print("   No se entrena el modelo: cualquier métrica/gráfico sería engañoso.")`
+           `model = None`
+           `# salir de la celda — NO ejecutar .fit() ni los plots posteriores`
+       Si `model is None` al inicio de las celdas 2b/2c/2d, deben imprimir
+       `"Saltado por split degenerado"` y NO intentar plotear. Esta guarda evita
+       el bug de gráficos vacíos: feature_importances todo en 0 y matriz de
+       confusión 1×1 cuando train/test colapsan a una sola clase.
 J. SHAP es OPCIONAL y SIEMPRE en try/except. Importancia de features con jerarquía estricta
    (NO asumas `feature_importances_` para todo modelo — LogisticRegression no lo expone):
    - **Issue #228 — SHAP atómico (CRÍTICO)**: `shap.summary_plot()` crea su propia
@@ -2215,6 +2262,39 @@ J. SHAP es OPCIONAL y SIEMPRE en try/except. Importancia de features con jerarqu
      3) `else:` intenta `from sklearn.inspection import permutation_importance` dentro de
         try/except; si falla, imprime "Modelo sin importancias directas — revisar coeficientes/SHAP manualmente".
    - `plt.tight_layout(); plt.show()` al final de la celda.
+K-bis. **Higiene de feature_cols OBLIGATORIA antes de construir X (anti-features-basura):**
+   Construye `feature_cols` con esta receta determinista, NO uses
+   `df.select_dtypes(include=np.number).columns.tolist()` directo (eso arrastra
+   IDs, constantes y residuos):
+     ```
+     # 1) Candidatas: numéricas + categóricas de baja/media cardinalidad
+     num_cols = df.select_dtypes(include=np.number).columns.tolist()
+     cat_cols = [c for c in df.select_dtypes(include=["object", "category"]).columns
+                 if df[c].nunique(dropna=True) <= 20]
+     candidates = [c for c in (num_cols + cat_cols) if c != target_col]
+     # 2) Drop ID-like (cardinalidad == n_filas) y nombres con "id"
+     n = len(df)
+     candidates = [c for c in candidates
+                   if df[c].nunique(dropna=True) < n
+                   and "id" not in normalize_colname(c).split("_")]
+     # 3) Drop near-constants (nunique <= 1) y high-null (>50% NaN)
+     candidates = [c for c in candidates
+                   if df[c].nunique(dropna=True) > 1
+                   and df[c].isna().mean() <= 0.5]
+     # 4) Drop features de leakage según contrato + patrones temporal-posteriores
+     #    (ver "Defensa extra anti-leakage" en Reglas CONTRACT-FIRST)
+     feature_cols = candidates
+     print("feature_cols efectivos:", feature_cols)
+     # 5) Construye X. Si hay categóricas, one-hot ANTES del split:
+     X = pd.get_dummies(df[feature_cols], drop_first=True, dummy_na=False)
+     y = df[target_col]
+     assert X.shape[1] >= 1, "feature_cols vacío tras higiene — revisa el dataset."
+     ```
+   Si `X.shape[1] == 0` o `assert` falla, imprime `"⚠️ REQUISITO FALTANTE: sin
+   features útiles tras higiene"` y SALTA el algoritmo. Esto evita los gráficos
+   de feature_importance con barras todas en 0 (que indican que el modelo
+   trabajó solo con ruido o constantes).
+
 K. EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo:
    - Distribución del target (si fue detectado): `target_col.value_counts(normalize=True)`.
    - % missing por columna ordenado desc: `df.isna().mean().sort_values(ascending=False).head(10)`.
