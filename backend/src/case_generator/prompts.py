@@ -1959,7 +1959,7 @@ country_candidates = find_columns_containing(df.columns, ["pais", "country", "re
 label_candidates = find_columns_containing(df.columns, ["categoria", "category", "label", "tipo", "segmento", "clase", "clasificacion", "target"])
 sentiment_candidates = find_columns_containing(df.columns, ["sentiment", "sentimiento", "polaridad"])
 churn_candidates = find_columns_containing(df.columns, ["churn", "abandono", "baja", "cancelacion"])
-date_candidates = find_columns_containing(df.columns, ["fecha", "date", "timestamp", "periodo", "mes", "dia"])
+date_candidates = find_columns_containing(df.columns, ["fecha", "date", "timestamp", "periodo", "period", "mes", "month", "dia", "day", "created_at", "year_month", "yearmonth"])
 graph_candidates = find_columns_containing(df.columns, ["origen", "source", "destino", "target", "edge", "nodo"])
 reco_candidates = find_columns_containing(df.columns, ["user", "usuario", "cliente", "customer", "item", "producto", "rating", "score"])
 numeric_candidates = list(df.select_dtypes(include=[np.number]).columns)
@@ -2016,14 +2016,14 @@ B. Para RMSE usa: `np.sqrt(mean_squared_error(y_true, y_pred))`. NO inventes
    `RootMeanSquaredError`, `root_mean_squared_error` ni `squared=False`.
 C. Para grafos: `import networkx as nx` dentro del try; usa nx.Graph(), nx.spring_layout(),
    nx.draw(). Si networkx no está disponible, captura ImportError y degrada a print explicativo.
-E. Para matrices grandes, limita SIEMPRE: `df.sample(min(len(df), 5000), random_state=42)`.
-F. Toda llamada a `.fit()` debe ir precedida por dropna/imputación SIN LEAKAGE:
+D. Para matrices grandes, limita SIEMPRE: `df.sample(min(len(df), 5000), random_state=42)`.
+E. Toda llamada a `.fit()` debe ir precedida por dropna/imputación SIN LEAKAGE:
    - PROHIBIDO `X = X.fillna(X.median(...))` ANTES del split (eso fitea con info de
      test). El orden correcto es: split primero → calcular `med = X_train.median(numeric_only=True)`
      → `X_train = X_train.fillna(med)` y `X_test = X_test.fillna(med)`.
    - Para `dropna()` aplica el mismo principio (dropna sobre `df`/`df_model` ANTES del split
      es seguro porque elimina filas en bloque; imputar con estadísticos NO lo es).
-D. NO uses argumentos experimentales (nada de `n_jobs=-1` salvo en RandomForest), nada de
+F. NO uses argumentos experimentales (nada de `n_jobs=-1` salvo en RandomForest), nada de
    APIs deprecated. Lista NEGRA explícita (PROHIBIDOS, generan TypeError en versiones modernas):
    - `XGBClassifier(use_label_encoder=...)`  → removido en xgboost ≥2.0; OMÍTELO siempre.
    - `mean_squared_error(..., squared=False)` → removido en sklearn ≥1.6; usa `np.sqrt(mse)`.
@@ -2033,9 +2033,10 @@ D. NO uses argumentos experimentales (nada de `n_jobs=-1` salvo en RandomForest)
 G. NO importes nada que no esté en el set: numpy, pandas, matplotlib, seaborn, sklearn.*,
    networkx, scipy.stats. Cualquier otra librería va dentro de try/except ImportError.
    Para xgboost/lightgbm/catboost: `try: import xgboost as xgb` y captura
-   `except (ImportError, Exception)` (NO solo ImportError) para tolerar TypeErrors por
-   firmas de constructor que cambian entre versiones; en el except, fallback a
-   `GradientBoostingClassifier` / `GradientBoostingRegressor` de sklearn.
+   `except (ImportError, TypeError, AttributeError)` (quirúrgico — NO uses `Exception`,
+   tragaría bugs reales del fit). Cubre: import faltante, firmas de constructor que
+   cambian entre versiones (ej. `use_label_encoder`), y atributos removidos. En el
+   except, fallback a `GradientBoostingClassifier` / `GradientBoostingRegressor` de sklearn.
 H. Métricas OBLIGATORIAS por tipo de problema (imprímelas SIEMPRE, sin excepciones):
    - Clasificación: `from sklearn.metrics import classification_report, f1_score, confusion_matrix`
      y `print(classification_report(y_test, y_pred, zero_division=0))` +
@@ -2064,7 +2065,7 @@ J. SHAP es OPCIONAL y SIEMPRE en try/except. Importancia de features con jerarqu
    (NO asumas `feature_importances_` para todo modelo — LogisticRegression no lo expone):
    - Si el nombre del algoritmo en `algoritmos` contiene "shap": intenta
      `import shap; explainer = shap.TreeExplainer(model); shap.summary_plot(...)`; en
-     `except (ImportError, Exception)` cae al ladder de abajo.
+     `except Exception` cae al ladder de abajo (SHAP es opcional y puede fallar en muchos\n     puntos: import, TreeExplainer incompatible, plot backend; broad catch es aceptable\n     porque cualquier fallo aquí es ruido pedagógico, no un bug que esconder).
    - Ladder de fallback (úsalo siempre si SHAP no se ejecutó):
      1) `if hasattr(model, "feature_importances_"):`
           `pd.Series(model.feature_importances_, index=X.columns).nlargest(15).plot.barh()`
