@@ -21,188 +21,347 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAXONOMY OF TECHNIQUES BY PROBLEM TYPE
-# Used to validate LLM suggestions and provide consistent context to the authoring flow.
-# ══════════════════════════════════════════════════════════════════════════════
-
-# Per-technique tier is declarative (Issue #230 follow-up). Each entry in
-# ``business_techniques`` / ``ml_ds_techniques`` is a CatalogItem dict so the
-# baseline-vs-challenger split is curated, not keyword-inferred. The taxonomy
-# key (``clustering``, ``clasificacion``, ...) doubles as the algorithm
-# *family* used for cross-family coherence in contrast mode.
-ALGORITHM_TAXONOMY: dict[str, dict[str, object]] = {
-    "clustering": {
-        "label": "Segmentación / Clustering",
-        "target_type": "categorical",
-        "business_techniques": [
-            {"name": "Segmentación por cohortes", "tier": "baseline"},
-            {"name": "Análisis de perfiles de cliente", "tier": "baseline"},
-            {"name": "Agrupación visual por métricas clave", "tier": "baseline"},
-            {"name": "K-Means + Silhouette + PCA", "tier": "baseline"},
-        ],
-        "ml_ds_techniques": [
-            {"name": "K-Means + Silhouette + PCA", "tier": "baseline"},
-            {"name": "DBSCAN para detección de grupos atípicos", "tier": "challenger"},
-        ],
-        "validation": "Estabilidad de clusters (Bootstrap)",
-        "metrics": ["Silhouette", "Calinski-Harabasz", "Inertia"],
-    },
-    "clasificacion": {
-        "label": "Clasificación",
-        "target_type": "binary",
-        "business_techniques": [
-            {"name": "Scorecard de riesgo con reglas de negocio", "tier": "baseline"},
-            {"name": "Segmentación binaria por umbrales de KPI", "tier": "baseline"},
-            {"name": "Análisis de cohortes con tasa de conversión", "tier": "baseline"},
-            {"name": "Regresión Logística + SHAP", "tier": "baseline"},
-        ],
-        "ml_ds_techniques": [
-            {"name": "Logistic Regression", "tier": "baseline"},
-            {"name": "Random Forest + SHAP", "tier": "challenger"},
-            {"name": "XGBoost con tuning de hiperparámetros", "tier": "challenger"},
-        ],
-        "validation": "Cross-validation 5-fold + ROC-AUC",
-        "metrics": ["AUC-ROC", "F1", "Precision", "Recall", "Confusion Matrix"],
-    },
-    "regresion": {
-        "label": "Regresión / Predicción Continua",
-        "target_type": "numeric",
-        "business_techniques": [
-            {"name": "Proyección lineal de tendencias", "tier": "baseline"},
-            {"name": "Análisis de sensibilidad con escenarios", "tier": "baseline"},
-            {"name": "Forecast básico por promedio móvil", "tier": "baseline"},
-            {"name": "Regresión Lineal + Ridge/Lasso", "tier": "baseline"},
-        ],
-        "ml_ds_techniques": [
-            {"name": "Linear Regression + Residuals", "tier": "baseline"},
-            {"name": "Ridge / Lasso Regression", "tier": "challenger"},
-            {"name": "Gradient Boosting Regressor", "tier": "challenger"},
-        ],
-        "validation": "Cross-val + Prediction Intervals",
-        "metrics": ["R²", "MAE", "RMSE", "MAPE"],
-    },
-    "serie_temporal": {
-        "label": "Series Temporales",
-        "target_type": "numeric",
-        "business_techniques": [
-            {"name": "Análisis de tendencia y estacionalidad visual", "tier": "baseline"},
-            {"name": "Forecast por promedio móvil ponderado", "tier": "baseline"},
-            {"name": "Comparación interanual (YoY)", "tier": "baseline"},
-            {"name": "STL Decomposition + ARIMA", "tier": "baseline"},
-        ],
-        "ml_ds_techniques": [
-            {"name": "STL Decomposition + ARIMA", "tier": "baseline"},
-            {"name": "Prophet", "tier": "challenger"},
-        ],
-        "validation": "Walk-forward validation + MAPE",
-        "metrics": ["MAPE", "MAE", "RMSE", "Coverage 95%"],
-    },
-    "recomendacion": {
-        "label": "Sistemas de Recomendación",
-        "target_type": "numeric",
-        "business_techniques": [
-            {"name": "Análisis RFM (Recencia, Frecuencia, Monetización)", "tier": "baseline"},
-            {"name": "Segmentación por comportamiento de compra", "tier": "baseline"},
-            {"name": "A/B Testing de estrategias de retención", "tier": "baseline"},
-            {"name": "K-Means RFM", "tier": "baseline"},
-        ],
-        "ml_ds_techniques": [
-            {"name": "Content-Based Filtering (Cosine)", "tier": "baseline"},
-            {"name": "Collaborative Filtering (SVD)", "tier": "challenger"},
-            {"name": "K-Means RFM + Random Forest Feature Importance", "tier": "challenger"},
-        ],
-        "validation": "A/B Test + t-test de Welch",
-        "metrics": ["Precision@K", "Recall@K", "Coverage", "NDCG"],
-    },
-    "nlp": {
-        "label": "Procesamiento de Lenguaje Natural",
-        "target_type": "categorical",
-        "business_techniques": [
-            {"name": "Análisis de sentimiento con VADER/TextBlob", "tier": "baseline"},
-            {"name": "Topic Modeling (LDA) para extracción de temas", "tier": "baseline"},
-            {"name": "TF-IDF para representación e importancia de texto", "tier": "baseline"},
-        ],
-        "ml_ds_techniques": [
-            {"name": "TF-IDF + Sentiment (VADER/TextBlob)", "tier": "baseline"},
-            {"name": "Topic Modeling (LDA) + Word2Vec", "tier": "challenger"},
-        ],
-        "validation": "Kappa inter-rater + Bootstrap",
-        "metrics": ["Accuracy", "F1-macro", "Kappa", "Perplexity"],
-    },
-}
-
-
-# ── Helpers to bridge legacy `list[str]` consumers with the new dict shape.
-def _technique_items(profile: str, family: str) -> list[dict[str, str]]:
-    tech_key = "business_techniques" if profile == "business" else "ml_ds_techniques"
-    return cast(list[dict[str, str]], ALGORITHM_TAXONOMY[family][tech_key])
-
-
-def _technique_names(profile: str, family: str) -> list[str]:
-    return [item["name"] for item in _technique_items(profile, family)]
-
-# Problemas válidos para cada perfil
-BUSINESS_PROBLEM_TYPES = list(ALGORITHM_TAXONOMY.keys())
-ML_DS_PROBLEM_TYPES = list(ALGORITHM_TAXONOMY.keys())
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TIER CLASSIFICATION — Issue #230
-# Tier (``baseline`` / ``challenger``) and family (taxonomy key) are now declared
-# per-item inside ``ALGORITHM_TAXONOMY``. ``classify_tier`` is kept as a fallback
-# helper for ad-hoc strings that did not come from the catalog (e.g. legacy
-# ``suggested_techniques`` payloads).
+# ALGORITHM CATALOG — Issue #233 (single source of truth)
+# Replaces the legacy ALGORITHM_TAXONOMY here + ALGORITHM_REGISTRY in graph.py
+# with a single declarative list. 4 families × max 2 algorithms (baseline +
+# optional challenger). Business profile sees only baselines (4 items);
+# ml_ds sees both tiers (8 items).
+#
+# Why so small: the LLM that generates the M3 notebook is more reliable when it
+# reasons over a short, well-known list. Each (family) maps to ONE specialized
+# prompt template in prompts.py via ``prompt_key`` → no notebook is asked to
+# cover heterogeneous techniques.
 # ══════════════════════════════════════════════════════════════════════════════
 
 AlgorithmTier = Literal["baseline", "challenger"]
 
-# Human-readable labels for each family (taxonomy key). Used by the catalog
-# endpoint so the frontend can render section headers.
 FAMILY_LABELS: dict[str, str] = {
-    "clustering": "Clustering",
     "clasificacion": "Clasificación",
     "regresion": "Regresión",
+    "clustering": "Clustering",
     "serie_temporal": "Series Temporales",
-    "recomendacion": "Recomendación",
-    "nlp": "NLP / Texto",
 }
+
+# Per-family metadata used by the suggester prompt and the target-type fallback
+# in ``generate_suggestion``. NOT exposed via the catalog endpoint.
+FAMILY_META: dict[str, dict[str, object]] = {
+    "clasificacion": {
+        "label": "Clasificación",
+        "target_type": "binary",
+        "metrics": ["AUC-ROC", "AUC-PR", "F1", "Precision", "Recall", "Confusion Matrix"],
+        "validation": "Cross-validation 5-fold + AUC-ROC",
+    },
+    "regresion": {
+        "label": "Regresión",
+        "target_type": "numeric",
+        "metrics": ["RMSE", "MAE", "R²"],
+        "validation": "Cross-validation + Residual Analysis",
+    },
+    "clustering": {
+        "label": "Clustering",
+        "target_type": "categorical",
+        "metrics": ["Silhouette", "Davies-Bouldin", "Inertia"],
+        "validation": "Estabilidad de clusters (Bootstrap)",
+    },
+    "serie_temporal": {
+        "label": "Series Temporales",
+        "target_type": "numeric",
+        "metrics": ["MAPE", "sMAPE", "RMSE"],
+        "validation": "Walk-forward + MAPE",
+    },
+}
+
+
+# Each entry carries:
+#   - public fields exposed via /algorithm-catalog: name, family, family_label, tier
+#   - profile_visibility: which profile sees the entry in the selector
+#   - prompt_key + visualization + prerequisite + fragments_hint: server-side
+#     dispatch metadata consumed by graph.py::m3_notebook_generator
+ALGORITHM_CATALOG: list[dict[str, object]] = [
+    # ── Clasificación ───────────────────────────────────────────────────────
+    {
+        "name": "Logistic Regression",
+        "family": "clasificacion",
+        "family_label": FAMILY_LABELS["clasificacion"],
+        "tier": "baseline",
+        "profile_visibility": ["business", "ml_ds"],
+        "prompt_key": "classification",
+        "visualization": "Confusion Matrix + Feature importance (coef_)",
+        "prerequisite": "Features numéricas/categóricas con cardinalidad ≤20 + target binario o multiclase pequeño.",
+        "fragments_hint": ["categoria", "category", "label", "tipo", "clase", "target", "churn"],
+    },
+    {
+        "name": "Random Forest",
+        "family": "clasificacion",
+        "family_label": FAMILY_LABELS["clasificacion"],
+        "tier": "challenger",
+        "profile_visibility": ["ml_ds"],
+        "prompt_key": "classification",
+        "visualization": "Confusion Matrix + Feature importance (feature_importances_)",
+        "prerequisite": "Features numéricas/categóricas con cardinalidad ≤20 + target categórico.",
+        "fragments_hint": ["categoria", "category", "label", "tipo", "clase", "target", "churn"],
+    },
+    # ── Regresión ───────────────────────────────────────────────────────────
+    {
+        "name": "Linear Regression",
+        "family": "regresion",
+        "family_label": FAMILY_LABELS["regresion"],
+        "tier": "baseline",
+        "profile_visibility": ["business", "ml_ds"],
+        "prompt_key": "regression",
+        "visualization": "Scatter real vs predicho con línea 45° + Residuals vs predicho",
+        "prerequisite": "Features numéricas + target numérico continuo finito (no NaN/inf).",
+        "fragments_hint": ["precio", "valor", "monto", "revenue", "ventas", "importe", "score"],
+    },
+    {
+        "name": "Gradient Boosting Regressor",
+        "family": "regresion",
+        "family_label": FAMILY_LABELS["regresion"],
+        "tier": "challenger",
+        "profile_visibility": ["ml_ds"],
+        "prompt_key": "regression",
+        "visualization": "Scatter real vs predicho con línea 45° + Feature importance",
+        "prerequisite": "Features numéricas + target numérico continuo finito.",
+        "fragments_hint": ["precio", "valor", "monto", "revenue", "ventas", "importe", "score"],
+    },
+    # ── Clustering ──────────────────────────────────────────────────────────
+    {
+        "name": "K-Means",
+        "family": "clustering",
+        "family_label": FAMILY_LABELS["clustering"],
+        "tier": "baseline",
+        "profile_visibility": ["business", "ml_ds"],
+        "prompt_key": "clustering",
+        "visualization": "Elbow method (inercia vs k) + scatter 2D PCA por cluster",
+        "prerequisite": "≥2 columnas numéricas escalables (sin target). StandardScaler obligatorio.",
+        "fragments_hint": ["valor", "monto", "cantidad", "score", "edad", "ingreso", "frecuencia"],
+    },
+    {
+        "name": "DBSCAN",
+        "family": "clustering",
+        "family_label": FAMILY_LABELS["clustering"],
+        "tier": "challenger",
+        "profile_visibility": ["ml_ds"],
+        "prompt_key": "clustering",
+        "visualization": "k-distance plot (epsilon) + scatter 2D PCA por cluster",
+        "prerequisite": "≥2 columnas numéricas escalables (sin target). StandardScaler obligatorio.",
+        "fragments_hint": ["valor", "monto", "cantidad", "score", "edad", "ingreso", "frecuencia"],
+    },
+    # ── Series Temporales ───────────────────────────────────────────────────
+    {
+        "name": "ARIMA",
+        "family": "serie_temporal",
+        "family_label": FAMILY_LABELS["serie_temporal"],
+        "tier": "baseline",
+        "profile_visibility": ["business", "ml_ds"],
+        "prompt_key": "timeseries",
+        "visualization": "Forecast vs actual con eje fecha + Residuals vs tiempo",
+        "prerequisite": "Columna fecha parseable + columna numérica objetivo + ≥30 puntos.",
+        "fragments_hint": ["fecha", "date", "timestamp", "periodo", "mes", "dia", "year_month"],
+    },
+    {
+        "name": "Prophet",
+        "family": "serie_temporal",
+        "family_label": FAMILY_LABELS["serie_temporal"],
+        "tier": "challenger",
+        "profile_visibility": ["ml_ds"],
+        "prompt_key": "timeseries",
+        "visualization": "Forecast vs actual con eje fecha + Residuals vs tiempo (fallback ARIMA si Prophet no instalado)",
+        "prerequisite": "Columna fecha parseable + columna numérica objetivo + ≥30 puntos.",
+        "fragments_hint": ["fecha", "date", "timestamp", "periodo", "mes", "dia", "year_month"],
+    },
+]
+
+
+def _validate_catalog_invariants() -> None:
+    """Fail-fast at import time so the catalog never ships violating its contract."""
+    by_family: dict[str, list[dict[str, object]]] = {}
+    for entry in ALGORITHM_CATALOG:
+        by_family.setdefault(cast(str, entry["family"]), []).append(entry)
+    if set(by_family) != set(FAMILY_LABELS):
+        raise RuntimeError(
+            f"Catalog families {sorted(by_family)} != FAMILY_LABELS {sorted(FAMILY_LABELS)}"
+        )
+    for family, entries in by_family.items():
+        if len(entries) > 2:
+            raise RuntimeError(f"Family {family!r} has {len(entries)} entries (max 2)")
+        baselines = [e for e in entries if e["tier"] == "baseline"]
+        if len(baselines) != 1:
+            raise RuntimeError(
+                f"Family {family!r} must have exactly 1 baseline (found {len(baselines)})"
+            )
+        for e in entries:
+            vis = cast(list[str], e["profile_visibility"])
+            if e["tier"] == "baseline" and "business" not in vis:
+                raise RuntimeError(f"Baseline {e['name']!r} must be visible to business profile")
+            if e["tier"] == "challenger" and "business" in vis:
+                raise RuntimeError(
+                    f"Challenger {e['name']!r} must NOT be visible to business profile"
+                )
+
+
+_validate_catalog_invariants()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Family resolution helpers (used by graph.py::m3_notebook_generator)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Substring → family mapping for legacy / off-catalog names found in historical
+# task_payload rows (jobs created before the Issue #233 catalog reduction).
+# Forward-write paths (intake validator, suggester) reject any name not in the
+# current catalog; this map exists ONLY so the notebook generator can keep
+# republishing old jobs without crashing — the resolution is surfaced as a
+# warning inside the generated notebook.
+_LEGACY_FAMILY_MAP: dict[str, str] = {
+    # tabular classification surrogates
+    "xgboost": "clasificacion",
+    "lightgbm": "clasificacion",
+    "catboost": "clasificacion",
+    "adaboost": "clasificacion",
+    "gradient boosting classifier": "clasificacion",
+    "decision tree": "clasificacion",
+    "svc": "clasificacion",
+    "svm": "clasificacion",
+    "naive bayes": "clasificacion",
+    "shap": "clasificacion",  # "Logistic Regression + SHAP" historical names
+    # tabular regression surrogates
+    "ridge": "regresion",
+    "lasso": "regresion",
+    "elastic net": "regresion",
+    "svr": "regresion",
+    # time series surrogates
+    "stl": "serie_temporal",
+    "lstm": "serie_temporal",
+    "auto_arima": "serie_temporal",
+    "auto-arima": "serie_temporal",
+    # clustering surrogates
+    "hierarchical": "clustering",
+    "agglomerative": "clustering",
+    "rfm": "clustering",
+    "segmentacion": "clustering",
+    "segmentation": "clustering",
+    # NLP / recomendación / grafos / anomalías → fall back to clasificación so the
+    # notebook still gets a runnable template; the warning makes the remap visible.
+    "tfidf": "clasificacion",
+    "tf-idf": "clasificacion",
+    "lda": "clasificacion",
+    "word2vec": "clasificacion",
+    "bert": "clasificacion",
+    "vader": "clasificacion",
+    "textblob": "clasificacion",
+    "topic modeling": "clasificacion",
+    "sentiment": "clasificacion",
+    "collaborative filtering": "clasificacion",
+    "content-based": "clasificacion",
+    "svd": "clasificacion",
+    "matrix factorization": "clasificacion",
+    "isolation forest": "clasificacion",
+    "one-class svm": "clasificacion",
+    "anomaly": "clasificacion",
+    "outlier": "clasificacion",
+    "networkx": "clasificacion",
+    "graph": "clasificacion",
+}
+
+
+def family_of(name: str) -> Optional[str]:
+    """Return the canonical family for a catalog algorithm name, else ``None``."""
+    needle = (name or "").lower().strip()
+    if not needle:
+        return None
+    for entry in ALGORITHM_CATALOG:
+        if cast(str, entry["name"]).lower() == needle:
+            return cast(str, entry["family"])
+    return None
+
+
+def resolve_legacy_family(legacy_name: str) -> Optional[tuple[str, str]]:
+    """Map a legacy/off-catalog algorithm to the closest current family.
+
+    Returns ``(family, warning_msg)`` or ``None`` if no plausible mapping exists.
+    Used ONLY by ``m3_notebook_generator`` for backwards-read of historical jobs.
+    """
+    needle = (legacy_name or "").lower().strip()
+    if not needle:
+        return None
+    # Longest-token-first so "gradient boosting classifier" wins over "gradient".
+    for token in sorted(_LEGACY_FAMILY_MAP.keys(), key=len, reverse=True):
+        if token in needle:
+            family = _LEGACY_FAMILY_MAP[token]
+            return (
+                family,
+                f"Algoritmo legacy '{legacy_name}' tratado como familia "
+                f"'{family}' (catálogo reducido Issue #233).",
+            )
+    return None
+
+
+def get_dispatch_meta(family: str) -> dict[str, object]:
+    """Aggregated per-family dispatch metadata for the M3 notebook prompt.
+
+    Returns a single dict ``{familia, family_label, prompt_key, visualizacion,
+    prerequisito, fragments_hint}``. Both algorithms in a family share the same
+    ``prompt_key`` and use the same prerequisite, so we collapse them.
+    """
+    entries = [e for e in ALGORITHM_CATALOG if e["family"] == family]
+    if not entries:
+        raise KeyError(f"Unknown family: {family!r}")
+    fragments: list[str] = []
+    for e in entries:
+        for f in cast(list[str], e["fragments_hint"]):
+            if f not in fragments:
+                fragments.append(f)
+    return {
+        "familia": family,
+        "family_label": FAMILY_LABELS[family],
+        "prompt_key": cast(str, entries[0]["prompt_key"]),
+        "visualizacion": cast(str, entries[0]["visualization"]),
+        "prerequisito": cast(str, entries[0]["prerequisite"]),
+        "fragments_hint": fragments,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Suggester / legacy helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Problemas válidos para cada perfil (hoy idénticos: 4 familias canónicas).
+BUSINESS_PROBLEM_TYPES = list(FAMILY_LABELS.keys())
+ML_DS_PROBLEM_TYPES = list(FAMILY_LABELS.keys())
+
+
+def _technique_items(profile: str, family: str) -> list[dict[str, str]]:
+    """Return ``[{name, tier}]`` for a (profile, family) pair — used by the suggester prompt."""
+    out: list[dict[str, str]] = []
+    for e in ALGORITHM_CATALOG:
+        if e["family"] != family:
+            continue
+        if profile not in cast(list[str], e["profile_visibility"]):
+            continue
+        out.append({"name": cast(str, e["name"]), "tier": cast(str, e["tier"])})
+    return out
+
+
+def _technique_names(profile: str, family: str) -> list[str]:
+    return [it["name"] for it in _technique_items(profile, family)]
+
 
 # Substring keywords that mark an unknown (off-catalog) technique as challenger.
 _CHALLENGER_KEYWORDS: tuple[str, ...] = (
-    "random forest",
-    "xgboost",
-    "lightgbm",
-    "catboost",
-    "adaboost",
-    "gradient boosting",
-    "gbm",
-    "lstm",
-    "neural",
-    "redes neuronales",
-    "deep learning",
-    "prophet",
-    "dbscan",
-    "autoencoder",
-    "bert",
-    "embedding",
-    "word2vec",
-    "transformer",
+    "random forest", "xgboost", "lightgbm", "catboost", "adaboost",
+    "gradient boosting", "gbm", "lstm", "neural", "redes neuronales",
+    "deep learning", "prophet", "dbscan", "autoencoder", "bert",
+    "embedding", "word2vec", "transformer",
 )
 
 
 def classify_tier(technique: str) -> AlgorithmTier:
-    """Return ``"challenger"`` if the technique matches any challenger keyword.
-
-    Prefer the declarative ``tier`` field on catalog items over this fallback.
-    """
-    # Prefer declarative tier when the technique is in the catalog.
-    needle = technique.lower().strip()
-    for entry in ALGORITHM_TAXONOMY.values():
-        for tech_key in ("business_techniques", "ml_ds_techniques"):
-            for item in cast(list[dict[str, str]], entry[tech_key]):
-                if item["name"].lower() == needle:
-                    return cast(AlgorithmTier, item["tier"])
-    # Off-catalog fallback — keyword heuristic.
+    """Return the catalog tier for ``technique``, falling back to keyword heuristic."""
+    needle = (technique or "").lower().strip()
+    for entry in ALGORITHM_CATALOG:
+        if cast(str, entry["name"]).lower() == needle:
+            return cast(AlgorithmTier, entry["tier"])
     for kw in _CHALLENGER_KEYWORDS:
         if kw in needle:
             return "challenger"
@@ -211,34 +370,31 @@ def classify_tier(technique: str) -> AlgorithmTier:
 
 @functools.lru_cache(maxsize=8)
 def get_algorithm_catalog(profile: str, case_type: str) -> dict[str, object]:
-    """Return the canonical catalog of algorithms for a (profile, case_type) pair.
+    """Return the canonical algorithm catalog for a (profile, case_type) pair.
 
-    The result is a dict ``{"items": [{"name", "family", "family_label", "tier"}, ...]}``
-    with de-duplicated technique names sourced from ``ALGORITHM_TAXONOMY``.
-    The frontend groups items by ``family`` to render the selector and uses
-    ``tier`` to filter the baseline / challenger dropdowns in contrast mode.
+    Shape: ``{"items": [{"name", "family", "family_label", "tier"}, ...]}``.
+
+    - ``profile=business``: only baseline-tier items (4 algorithms).
+    - ``profile=ml_ds``: full catalog (8 algorithms = 4 families × 2 tiers).
+    - ``case_type=harvard_only``: empty list (no algorithms picked when no EDA).
     """
     if profile not in {"business", "ml_ds"}:
         raise ValueError(f"Invalid profile: {profile!r}")
     if case_type not in {"harvard_only", "harvard_with_eda"}:
         raise ValueError(f"Invalid case_type: {case_type!r}")
+    if case_type == "harvard_only":
+        return {"items": []}
 
-    tech_key = "business_techniques" if profile == "business" else "ml_ds_techniques"
     items: list[dict[str, str]] = []
-    seen_set: set[str] = set()
-    for family, entry in ALGORITHM_TAXONOMY.items():
-        family_label = FAMILY_LABELS.get(family, family)
-        for raw_item in cast(list[dict[str, str]], entry[tech_key]):
-            key = raw_item["name"].lower()
-            if key in seen_set:
-                continue
-            seen_set.add(key)
-            items.append({
-                "name": raw_item["name"],
-                "family": family,
-                "family_label": family_label,
-                "tier": raw_item["tier"],
-            })
+    for entry in ALGORITHM_CATALOG:
+        if profile not in cast(list[str], entry["profile_visibility"]):
+            continue
+        items.append({
+            "name": cast(str, entry["name"]),
+            "family": cast(str, entry["family"]),
+            "family_label": cast(str, entry["family_label"]),
+            "tier": cast(str, entry["tier"]),
+        })
     return {"items": items}
 
 
@@ -248,12 +404,11 @@ def _catalog_lookup(
     name: str,
 ) -> Optional[dict[str, str]]:
     """Return the catalog item matching ``name`` (case-insensitive) or ``None``."""
-    needle = name.lower().strip()
+    needle = (name or "").lower().strip()
     for item in cast(list[dict[str, str]], get_algorithm_catalog(profile, case_type)["items"]):
         if item["name"].lower() == needle:
             return item
     return None
-
 
 
 def _validate_techniques_strict(
@@ -262,17 +417,13 @@ def _validate_techniques_strict(
     case_type: str,
     mode: Literal["single", "contrast"],
 ) -> None:
-    """Strict validator for teacher-submitted algorithm picks (Issue #230).
-
-    Raises ``ValueError`` (with a teacher-friendly message) when the picks do
-    not match the contract for the given mode.
+    """Strict validator for teacher-submitted algorithm picks (Issues #230 / #233).
 
     Contract:
-    - mode="single": exactly 1 technique, must belong to the catalog (any tier).
-    - mode="contrast": exactly 2 techniques where the first is a baseline and
-      the second is a challenger of the catalog for the (profile, case_type),
-      and BOTH must belong to the same family (e.g. ``clasificacion``).
-    - The two contrast techniques must differ.
+    - mode="single": exactly 1 technique, must belong to the catalog visible to
+      ``(profile, case_type)``.
+    - mode="contrast": exactly 2 techniques, [baseline, challenger] of the SAME
+      family, both visible to ``(profile, case_type)``.
     """
     items = cast(list[dict[str, str]], get_algorithm_catalog(profile, case_type)["items"])
     by_name: dict[str, dict[str, str]] = {item["name"].lower(): item for item in items}
@@ -303,7 +454,6 @@ def _validate_techniques_strict(
             f"El primer algoritmo debe ser un baseline del catálogo: {primary_item['name']!r} no lo es."
         )
     if challenger_item["tier"] != "challenger":
-        # Surface a profile-specific hint when the catalog has no challengers at all.
         any_challenger = any(it["tier"] == "challenger" for it in items)
         if not any_challenger:
             raise ValueError(
@@ -372,13 +522,15 @@ class SuggestResponse(BaseModel):
 def _build_taxonomy_context(profile: str) -> str:
     """Genera texto de referencia de la taxonomía para inyectar en el prompt."""
     lines = ["## Catálogo de Tipos de Problema y Técnicas Permitidas\n"]
-    for key, t in ALGORITHM_TAXONOMY.items():
+    for key, meta in FAMILY_META.items():
         items = _technique_items(profile, key)
-        lines.append(f"### {key} — {t['label']}")
-        lines.append(f"  Target: {t['target_type']}")
+        if not items:
+            continue
+        lines.append(f"### {key} — {meta['label']}")
+        lines.append(f"  Target: {meta['target_type']}")
         rendered = ", ".join(f"{it['name']} [{it['tier']}]" for it in items)
         lines.append(f"  Técnicas: {rendered}")
-        lines.append(f"  Métricas: {', '.join(cast(list[str], t['metrics']))}")
+        lines.append(f"  Métricas: {', '.join(cast(list[str], meta['metrics']))}")
         lines.append("")
     return "\n".join(lines)
 
@@ -523,7 +675,7 @@ def _validate_techniques(
     Valida que las técnicas sugeridas por el LLM estén en el catálogo.
     Si alguna no está, la reemplaza por la primera del catálogo.
     """
-    if problem_type not in ALGORITHM_TAXONOMY:
+    if problem_type not in FAMILY_META:
         return techniques[:4]
 
     catalog = _technique_names(profile, problem_type)
@@ -554,12 +706,21 @@ def _validate_problem_type(problem_type: str) -> str:
         "regression": "regresion",
         "time_series": "serie_temporal",
         "temporal": "serie_temporal",
-        "recommendation": "recomendacion",
         "segmentation": "clustering",
         "segmentacion": "clustering",
+        # Issue #233 — NLP / recomendación / grafos / anomalías ya no están en el
+        # catálogo reducido. Si el LLM las propone, las degradamos a la familia
+        # tabular más cercana para que el resto del flujo no rompa.
+        "nlp": "clasificacion",
+        "recommendation": "clasificacion",
+        "recomendacion": "clasificacion",
+        "anomaly": "clasificacion",
+        "anomalias": "clasificacion",
+        "graph": "clasificacion",
+        "grafos": "clasificacion",
     }
     normalized = aliases.get(normalized, normalized)
-    if normalized in ALGORITHM_TAXONOMY:
+    if normalized in FAMILY_META:
         return normalized
     return "clasificacion"  # Default seguro
 
@@ -626,7 +787,7 @@ async def generate_suggestion(req: SuggestRequest) -> SuggestResponse:
         # Derivar del problemType
         resp.targetVariableType = cast(
             str,
-            ALGORITHM_TAXONOMY.get(resp.problemType, {}).get("target_type", "numeric"),
+            FAMILY_META.get(resp.problemType, {}).get("target_type", "numeric"),
         )
 
     # Validate techniques

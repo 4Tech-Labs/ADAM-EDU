@@ -88,13 +88,18 @@ from case_generator.prompts import (
     M3_AUDIT_QUESTIONS_PROMPT,
     M3_EXPERIMENT_QUESTIONS_PROMPT,
     M3_NOTEBOOK_BASE_TEMPLATE,
-    M3_NOTEBOOK_ALGO_PROMPT,
+    PROMPT_BY_FAMILY,
     M4_CONTENT_GENERATOR_PROMPT,
     M4_CHART_GENERATOR_PROMPT,
     M5_CONTENT_GENERATOR_PROMPT,
     TEACHING_NOTE_PART1_PROMPT,
     TEACHING_NOTE_PART2_PROMPT,
     SCHEMA_DESIGNER_PROMPT,
+)
+from case_generator.suggest_service import (
+    family_of,
+    get_dispatch_meta,
+    resolve_legacy_family,
 )
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
@@ -2048,11 +2053,11 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
     max_rows = 200 if profile == "ml_ds" else 100
 
     # Extraer familias ML requeridas para el Módulo 3 a partir del input del usuario.
-    # _detect_algorithm_families usa ALGORITHM_REGISTRY (keyword matching).
+    # _detect_algorithm_families resuelve por catálogo (Issue #233) con fallback legacy.
     algoritmos_raw = state.get("algoritmos", [])
     familias_detectadas = _detect_algorithm_families(algoritmos_raw) if algoritmos_raw else []
     ml_required_families = (
-        ", ".join(familias_detectadas) if familias_detectadas else "nlp_text_mining, clasificacion_tabular"
+        ", ".join(familias_detectadas) if familias_detectadas else "clasificacion"
     )
 
     context = _build_base_context(state)
@@ -2827,133 +2832,35 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
 # ─────────────────────────────────────────────────────────
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ALGORITHM REGISTRY — mapeo determinístico de algoritmos → familias
-# Usado por m3_notebook_generator para detectar familias y prerrequisitos.
-# Fuente de verdad para toda lógica de notebook en el sistema.
+# ALGORITHM FAMILY DETECTION — Issue #233
+# Single source of truth lives in suggest_service.ALGORITHM_CATALOG. The legacy
+# graph-local ALGORITHM_REGISTRY (9 keys with `_tabular` suffixes) was deleted
+# so we cannot drift from the catalog the teacher form actually exposes.
 # ══════════════════════════════════════════════════════════════════════════════
-ALGORITHM_REGISTRY: dict[str, dict] = {
-    "clasificacion_tabular": {
-        "keywords": [
-            "clasificacion", "classification", "classifier", "logistic",
-            "random forest", "xgboost", "decision tree", "svm", "naive bayes",
-            "gradient boosting", "catboost", "lightgbm", "adaboost",
-        ],
-        "imports_needed": ["sklearn.model_selection", "sklearn.metrics"],
-        "prerequisite_note": "Requiere columnas numéricas como features y una columna categórica como target.",
-        "visualization": "Feature Importance (barh) + Confusion Matrix",
-        "fragments_hint": ["categoria", "category", "label", "tipo", "clase", "clasificacion", "target"],
-    },
-    "regresion_tabular": {
-        "keywords": [
-            "regresion", "regression", "regressor", "linear regression",
-            "ridge", "lasso", "elastic net", "svr",
-        ],
-        "imports_needed": ["sklearn.model_selection", "sklearn.metrics"],
-        "prerequisite_note": "Requiere columnas numéricas como features y una columna continua como target.",
-        "visualization": "Scatter real vs predicho + línea 45°",
-        "fragments_hint": ["precio", "valor", "monto", "revenue", "ventas", "importe", "score"],
-    },
-    "clustering": {
-        "keywords": [
-            "clustering", "kmeans", "k-means", "dbscan",
-            "hierarchical", "agglomerative", "cluster",
-        ],
-        "imports_needed": ["sklearn.cluster", "sklearn.preprocessing"],
-        "prerequisite_note": "Requiere al menos 2 columnas numéricas. No requiere columna target.",
-        "visualization": "Elbow method (inercia vs k) + Scatter 2D con colores por cluster",
-        "fragments_hint": ["valor", "monto", "cantidad", "score", "precio", "edad", "ingreso"],
-    },
-    "nlp_text_mining": {
-        "keywords": [
-            "nlp", "text mining", "text analysis", "topic modeling", "lda",
-            "tfidf", "tf-idf", "sentiment", "ner", "named entity",
-            "word2vec", "bert", "embeddings", "procesamiento lenguaje",
-        ],
-        "imports_needed": ["sklearn.feature_extraction.text"],
-        "prerequisite_note": "Requiere una columna de texto libre en el dataset.",
-        "visualization": "Bar de términos más frecuentes (TF-IDF)",
-        "fragments_hint": ["ticket", "queja", "texto", "descripcion", "comentario", "mensaje", "detalle"],
-    },
-    "grafos": {
-        "keywords": [
-            "graph", "grafo", "network", "red", "networkx",
-            "node", "nodo", "link", "edge", "arista", "community detection",
-            "graph neural", "gnn",
-        ],
-        "imports_needed": ["networkx"],
-        "prerequisite_note": "Requiere columnas de origen y destino (y opcionalmente peso).",
-        "visualization": "networkx.draw con nodos, aristas y pesos de afinidad",
-        "fragments_hint": ["origen", "source", "destino", "target", "nodo", "edge", "from", "to"],
-    },
-    "recomendacion": {
-        "keywords": [
-            "recommendation", "recomendacion", "collaborative filtering",
-            "content-based", "matrix factorization", "svd", "als",
-            "cosine similarity", "filtrado colaborativo",
-        ],
-        "imports_needed": [],
-        "prerequisite_note": "Requiere columnas de entidad_A (usuario), entidad_B (ítem) y score/interacción.",
-        "visualization": "Heatmap de afinidad (seaborn) con entidades en ejes",
-        "fragments_hint": ["usuario", "user", "cliente", "item", "producto", "rating", "score", "afinidad"],
-    },
-    "anomalias": {
-        "keywords": [
-            "anomaly", "anomalia", "anomaly detection", "outlier",
-            "isolation forest", "one-class svm", "autoencoder", "fraud detection",
-            "deteccion anomalias",
-        ],
-        "imports_needed": ["sklearn.ensemble"],
-        "prerequisite_note": "Requiere columnas numéricas. No requiere columna target.",
-        "visualization": "Scatter con puntos normales vs anomalías en distinto color",
-        "fragments_hint": ["valor", "monto", "cantidad", "score", "importe", "transaccion"],
-    },
-    "serie_temporal": {
-        "keywords": [
-            "time series", "serie temporal", "arima", "prophet", "lstm",
-            "forecasting", "forecast", "prediccion temporal", "time-series",
-            "seasonality", "estacionalidad",
-        ],
-        "imports_needed": [],
-        "prerequisite_note": "Requiere columna de fecha/periodo y al menos una variable numérica.",
-        "visualization": "plt.plot con fecha/periodo en eje X y variable objetivo en eje Y",
-        "fragments_hint": ["fecha", "date", "timestamp", "periodo", "mes", "dia", "created"],
-    },
-    "segmentacion": {
-        "keywords": [
-            "segmentacion", "segmentation", "segment", "rfm",
-            "customer segment", "market segment", "perfil cliente",
-        ],
-        "imports_needed": ["sklearn.cluster", "sklearn.preprocessing"],
-        "prerequisite_note": "Requiere columnas numéricas para calcular perfiles por segmento.",
-        "visualization": "K-Means + comparación de perfiles por cluster (barh)",
-        "fragments_hint": ["rfm", "valor", "frecuencia", "recencia", "segmento", "monto", "cliente"],
-    },
-}
 
 
 def _detect_algorithm_families(algoritmos: list[str]) -> list[str]:
-    """Detecta las familias algorítmicas para un listado de algoritmos.
+    """Return the canonical 4-family keys for a list of algorithms.
 
-    Usa ALGORITHM_REGISTRY para keyword matching. Si un algoritmo no mapea
-    a ninguna familia conocida, devuelve "unsupported" para ese algoritmo.
+    Resolution order per algorithm:
+      1. ``family_of(name)``     — exact catalog match (Issue #233 catalog).
+      2. ``resolve_legacy_family(name)`` — substring fallback for historical
+         jobs (XGBoost, Ridge, Prophet pre-rename, NLP/recomendación, ...).
+      3. ``"unsupported"``       — surfaces as a notebook warning.
 
-    Issue #230 contract: ``len(algoritmos) ∈ {1, 2}`` — el formulario docente
-    permite exactamente 1 algoritmo (modo single) o 2 algoritmos baseline +
-    challenger (modo contrast). Otras longitudes provienen de jobs históricos
-    o de un payload mal formado y se procesan best-effort.
+    Issue #230 contract: ``len(algoritmos) ∈ {1, 2}`` — the teacher form picks
+    exactly 1 (single mode) or 2 (contrast mode) algorithms. In contrast mode
+    the family-coherence rule guarantees both share the same family, so the
+    returned list is always length 1 (or ["unsupported"] if neither resolves).
     """
     detected: list[str] = []
     for algo in algoritmos:
-        algo_lower = algo.lower()
-        matched = False
-        for family, config in ALGORITHM_REGISTRY.items():
-            if any(kw in algo_lower for kw in config["keywords"]):
-                if family not in detected:
-                    detected.append(family)
-                matched = True
-                break
-        if not matched and "unsupported" not in detected:
-            detected.append("unsupported")
+        family = family_of(algo)
+        if family is None:
+            legacy = resolve_legacy_family(algo)
+            family = legacy[0] if legacy else "unsupported"
+        if family not in detected:
+            detected.append(family)
     return detected
 
 # Issue 4.1 — M3 CONTENT GENERATOR
@@ -3060,6 +2967,126 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         return {"m3_questions": [], "current_agent": "m3_questions_generator"}
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Issue #233 — Post-LLM family-consistency validator
+# Catches the rare case where the specialized prompt strays into another
+# family's API surface (e.g. a clustering notebook emitting `train_test_split`
+# or a regression notebook emitting `roc_auc_score`). The notebook generator
+# reprompts ONCE on violation and fails the job if a second attempt also
+# strays — better to fail loudly than ship a runtime-broken notebook.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Substrings whose presence in the generated notebook proves a family violation.
+# Kept narrow on purpose (only API tokens unique to other families) to minimize
+# false positives. The validator strips Jupytext markdown cells and code-comment
+# lines before scanning (see ``_strip_jupytext_for_validation``), so pedagogical
+# echoes of these tokens in markdown/comments do NOT count — only executable
+# import statements and call sites do.
+_FAMILY_PROHIBITED_PATTERNS: dict[str, tuple[str, ...]] = {
+    "clustering": (
+        "train_test_split(",
+        "roc_auc_score",
+        "confusion_matrix",
+        "classification_report",
+        "f1_score(",
+        "mean_squared_error(",
+        "r2_score(",
+        "from sklearn.model_selection import train_test_split",
+    ),
+    "serie_temporal": (
+        "train_test_split(",
+        "roc_auc_score",
+        "confusion_matrix",
+        "classification_report",
+        "silhouette_score(",
+        "davies_bouldin_score(",
+        "from sklearn.cluster import",
+        "from sklearn.model_selection import train_test_split",
+    ),
+    "regresion": (
+        "roc_auc_score",
+        "confusion_matrix",
+        "classification_report",
+        "silhouette_score(",
+        "davies_bouldin_score(",
+        "auto_arima",
+        "from prophet import",
+        "from sklearn.cluster import",
+    ),
+    "clasificacion": (
+        "silhouette_score(",
+        "davies_bouldin_score(",
+        "auto_arima",
+        "from prophet import",
+        "from sklearn.cluster import",
+        "from statsmodels.tsa.arima",
+    ),
+}
+
+
+def _strip_jupytext_for_validation(notebook_text: str) -> str:
+    """Return only the executable Python from a Jupytext Percent notebook.
+
+    The per-family prompts enumerate forbidden tokens in their ``Lista NEGRA``
+    sections, so an obedient LLM frequently echoes those names back as
+    pedagogical markdown or as ``#``-prefixed code comments. Scanning the
+    raw notebook would treat such pedagogy as a violation and trigger a
+    false-positive reprompt → potential job failure on a clean notebook.
+
+    Strategy:
+      * Drop every ``# %% [markdown]`` cell (everything until the next ``# %%``
+        header or EOF).
+      * Inside ``# %%`` code cells, drop pure comment lines (``^\\s*#``) and
+        strip ``#``-suffix inline comments from non-empty code lines.
+      * Keep string literals untouched — they can still smuggle a forbidden
+        call (e.g. ``eval("roc_auc_score(...)")``) and the validator should
+        catch that.
+
+    Returns the stripped text, ready for substring scanning.
+    """
+    lines = notebook_text.splitlines()
+    out: list[str] = []
+    in_markdown = False
+    for raw in lines:
+        stripped = raw.lstrip()
+        if stripped.startswith("# %% [markdown]"):
+            in_markdown = True
+            continue
+        if stripped.startswith("# %%"):
+            in_markdown = False
+            continue
+        if in_markdown:
+            continue
+        # Skip pure-comment lines inside code cells.
+        if stripped.startswith("#"):
+            continue
+        # Strip trailing inline comments (``code  # comment``) — naive split
+        # on " #" is enough; we don't try to preserve "#" inside strings
+        # because the inline-comment heuristic is intentionally conservative.
+        if " #" in raw:
+            raw = raw.split(" #", 1)[0]
+        out.append(raw)
+    return "\n".join(out)
+
+
+def _validate_notebook_family_consistency(family: str, code: str) -> list[str]:
+    """Return a list of prohibited tokens found in executable code for ``family``.
+
+    Strips Jupytext markdown cells and code-comment lines first, then runs a
+    substring scan against ``_FAMILY_PROHIBITED_PATTERNS[family]``. This avoids
+    flagging the prompt's own ``Lista NEGRA`` echoes that the LLM may legitimately
+    include as documentation.
+
+    Empty list = pass. Non-empty = the LLM strayed; caller should reprompt
+    once and fail-job if the second attempt also contains forbidden tokens.
+    """
+    patterns = _FAMILY_PROHIBITED_PATTERNS.get(family, ())
+    if not patterns:
+        return []
+    scannable = _strip_jupytext_for_validation(code)
+    return [p for p in patterns if p in scannable]
+
+
 def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """Genera el notebook del Experiment Engineer — ÚNICO notebook del sistema.
 
@@ -3069,9 +3096,17 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
     Si cualquiera falla → noop. Ningún otro nodo del sistema genera notebooks.
 
     Output: m3_notebook_code (Jupytext Percent → frontend convierte a .ipynb)
-    Arquitectura:
-      - Sección base: M3_NOTEBOOK_BASE_TEMPLATE (estático, cero alucinaciones)
-      - Sección módulos: M3_NOTEBOOK_ALGO_PROMPT (LLM, usa ALGORITHM_REGISTRY)
+
+    Arquitectura (Issue #233 — per-family dispatch):
+      - Sección base : M3_NOTEBOOK_BASE_TEMPLATE (estático, cero alucinaciones).
+      - Sección módulos: PROMPT_BY_FAMILY[family] — UN prompt especializado por
+        familia (clasificacion / regresion / clustering / serie_temporal). El
+        contrato Issue #230 garantiza que los algoritmos del caso comparten
+        familia (en contrast mode), así que SIEMPRE hay un único prompt.
+      - Post-LLM: ``_validate_notebook_family_consistency`` revisa que el código
+        no contenga API de otras familias (anti-alucinación). Si hay violación,
+        se hace UN reprompt explícito; si vuelve a fallar, el job falla con un
+        mensaje en español y un log estructurado.
     """
     profile = state.get("studentProfile", "business")
     output_depth = state.get("output_depth", "")
@@ -3129,39 +3164,50 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # with curly braces (dict comprehensions, f-strings) that .format() misparses.
         base_template = M3_NOTEBOOK_BASE_TEMPLATE.replace("{case_title}", case_title)
 
-        # Detectar familias algorítmicas para informar al LLM
+        # ── Family dispatch (Issue #233) ─────────────────────────────────────
+        # The teacher form (Issue #230) guarantees algoritmos share a family
+        # in contrast mode. We resolve the first algorithm to its family,
+        # falling back to the legacy substring map for historical jobs.
         algoritmos_raw: list[str] = state.get("algoritmos", [])
-        familias = _detect_algorithm_families(algoritmos_raw)
-        print(f"[m3_notebook_generator] Familias detectadas: {familias}")
+        legacy_warning: str | None = None
+        family: str | None = None
+        for algo in algoritmos_raw:
+            family = family_of(algo)
+            if family is not None:
+                break
+        if family is None:
+            for algo in algoritmos_raw:
+                legacy = resolve_legacy_family(algo)
+                if legacy is not None:
+                    family, legacy_warning = legacy
+                    break
+        if family is None or family not in PROMPT_BY_FAMILY:
+            print(
+                f"[m3_notebook_generator] Familia no resuelta para algoritmos="
+                f"{algoritmos_raw!r} — usando fallback 'clasificacion'"
+            )
+            family = "clasificacion"
+            legacy_warning = (
+                f"Algoritmos {algoritmos_raw!r} no mapearon a ninguna familia "
+                f"del catálogo Issue #233; se generó notebook con plantilla de clasificación."
+            )
 
-        # Build familias_meta: deterministic registry data per family so the LLM
-        # doesn't need to recall visualization specs or fragment hints from its weights.
-        # `algoritmos`: lista de los algoritmos crudos del caso que activaron esta familia.
-        # El prompt ALGO renderiza UN bloque por algoritmo dentro de cada familia, así un
-        # caso que pide "Logistic + RF + SHAP" y "XGBoost con tuning" en clasificacion_tabular
-        # produce DOS bloques visuales y no uno colapsado.
-        familias_meta = []
-        for f in familias:
-            if f not in ALGORITHM_REGISTRY:
-                continue
-            keywords = ALGORITHM_REGISTRY[f]["keywords"]
-            algos_de_familia = [
-                a for a in algoritmos_raw
-                if any(kw in a.lower() for kw in keywords)
-            ]
-            # Si esta familia fue detectada (está en ALGORITHM_REGISTRY) pero ningún algoritmo
-            # crudo coincide con sus keywords en este segundo paso, conserva al menos el nombre
-            # de la familia para que el prompt pueda renderizar 1 bloque genérico de la familia.
-            # Nota: "unsupported" ya quedó filtrado por el `continue` de arriba.
-            if not algos_de_familia:
-                algos_de_familia = [f]
-            familias_meta.append({
-                "familia": f,
-                "algoritmos": algos_de_familia,
-                "visualizacion": ALGORITHM_REGISTRY[f]["visualization"],
-                "prerequisito": ALGORITHM_REGISTRY[f]["prerequisite_note"],
-                "fragments_hint": ALGORITHM_REGISTRY[f]["fragments_hint"],
-            })
+        print(f"[m3_notebook_generator] Familia despachada: {family!r} (algoritmos={algoritmos_raw!r})")
+
+        # Single-entry familias_meta: the prompt expects a list with metadata
+        # for the active family; we collapse to one entry because per-family
+        # dispatch makes multi-family notebooks impossible by construction.
+        meta = get_dispatch_meta(family)
+        familias_meta = [
+            {
+                "familia": meta["familia"],
+                "family_label": meta["family_label"],
+                "algoritmos": list(algoritmos_raw) if algoritmos_raw else [meta["familia"]],
+                "visualizacion": meta["visualizacion"],
+                "prerequisito": meta["prerequisito"],
+                "fragments_hint": meta["fragments_hint"],
+            }
+        ]
 
         algo_section = ""
         try:
@@ -3171,24 +3217,74 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
             contract_block = _format_dataset_contract_block(
                 state.get("dataset_schema_required")
             )
-            gap_warnings = state.get("data_gap_warnings") or []
+            gap_warnings = list(state.get("data_gap_warnings") or [])
+            if legacy_warning:
+                gap_warnings.append(legacy_warning)
             gaps_block = (
                 "\n".join(f"- {w}" for w in gap_warnings)
                 if gap_warnings
                 else "(sin brechas detectadas — schema cubre el contrato)"
             )
-            prompt = M3_NOTEBOOK_ALGO_PROMPT.format(
-                m3_content=(state.get("m3_content", "") or "")[:2000],
-                algoritmos=json.dumps(algoritmos_raw, ensure_ascii=False),
-                familias_meta=json.dumps(familias_meta, ensure_ascii=False),
-                case_title=case_title,
-                output_language=context.get("output_language", "es"),
-                dataset_contract_block=contract_block,
-                data_gap_warnings_block=gaps_block,
-            )
+
+            prompt_template = PROMPT_BY_FAMILY[family]
+
+            def _render(template: str) -> str:
+                return template.format(
+                    m3_content=(state.get("m3_content", "") or "")[:2000],
+                    algoritmos=json.dumps(algoritmos_raw, ensure_ascii=False),
+                    familias_meta=json.dumps(familias_meta, ensure_ascii=False),
+                    case_title=case_title,
+                    output_language=context.get("output_language", "es"),
+                    dataset_contract_block=contract_block,
+                    data_gap_warnings_block=gaps_block,
+                )
+
+            prompt = _render(prompt_template)
             response = llm.invoke(prompt)
             algo_section = sanitize_markdown(_extract_text(response))
-            print(f"[m3_notebook_generator] Sección módulos LLM: {len(algo_section)} chars")
+            print(f"[m3_notebook_generator] Sección módulos LLM (1ª pasada): {len(algo_section)} chars")
+
+            # Issue #233 — post-LLM family-consistency check + reprompt-once.
+            violations = _validate_notebook_family_consistency(family, algo_section)
+            if violations:
+                print(
+                    f"[m3_notebook_generator] Violación de familia detectada (familia={family}, "
+                    f"tokens={violations}). Reprompt explícito (1/1)."
+                )
+                # Belt-and-suspenders against reprompt amplification: we do NOT
+                # echo the offending token strings in the corrective message
+                # (the LLM might politely repeat them in its acknowledgement,
+                # which would re-trip the validator and fail the job). Instead
+                # we reference the prompt's own ``Lista NEGRA`` section.
+                reprompt = (
+                    prompt
+                    + "\n\n# CORRECCIÓN OBLIGATORIA\n"
+                    + f"# Tu salida anterior emitió código ejecutable de OTRAS familias prohibidas para '{family}'.\n"
+                    + "# Releé la sección 'Lista NEGRA' del prompt y reescribe la salida COMPLETA\n"
+                    + "# usando EXCLUSIVAMENTE la API estable declarada para esta familia.\n"
+                    + "# Los nombres prohibidos pueden aparecer en celdas markdown como advertencia pedagógica,\n"
+                    + "# pero NUNCA como import, call site, ni dentro de un string ejecutable."
+                )
+                response2 = llm.invoke(reprompt)
+                algo_section = sanitize_markdown(_extract_text(response2))
+                violations2 = _validate_notebook_family_consistency(family, algo_section)
+                if violations2:
+                    logger.error(
+                        "[m3_notebook_generator] Reprompt falló — familia=%s tokens=%s",
+                        family, violations2,
+                    )
+                    raise RuntimeError(
+                        f"M3 notebook generator emitió código de otras familias para "
+                        f"'{family}' incluso tras un reprompt: {violations2}. "
+                        f"Job marcado como fallido para evitar shipping de notebook roto."
+                    )
+                print(
+                    f"[m3_notebook_generator] Reprompt OK — familia={family}, "
+                    f"chars={len(algo_section)}"
+                )
+        except RuntimeError:
+            # Re-raise to fail the job — the validator policy demands it.
+            raise
         except Exception as e:
             logger.error("[m3_notebook_generator] Error en LLM módulos: %s", e, exc_info=True)
             algo_section = (
@@ -3201,6 +3297,10 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
         final_notebook = base_template + "\n\n" + algo_section
         print(f"[m3_notebook_generator] Notebook ensamblado: {len(final_notebook)} chars")
         return {"m3_notebook_code": final_notebook, "current_agent": "m3_notebook_generator"}
+    except RuntimeError:
+        # Issue #233 — family-consistency violation after reprompt. Re-raise so
+        # the worker can mark the job as failed; never ship a runtime-broken notebook.
+        raise
     except Exception as e:
         logger.error("[m3_notebook_generator] ERROR: %s", e, exc_info=True)
         return {"m3_notebook_code": "# ⚠️ Error generando notebook M3. Revisa el Módulo 3."}

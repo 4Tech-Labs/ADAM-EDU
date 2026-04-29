@@ -4,9 +4,9 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
-## TODO-230-A: Curar `challenger` para perfil `business` en `ALGORITHM_TAXONOMY`
+## TODO-230-A: Curar `challenger` para perfil `business` en `ALGORITHM_CATALOG`
 
-**What:** Hoy `get_algorithm_catalog("business", "harvard_with_eda").challenger == []` porque el catálogo `business_techniques` solo contiene baselines. El frontend ya degrada el toggle "2 algoritmos" cuando esto pasa, pero el contrato ideal es exponer al menos 1-2 challengers seguros para business (p. ej. `Random Forest interpretable + SHAP`).
+**What:** Hoy `get_algorithm_catalog("business", "harvard_with_eda")` devuelve solo baselines (4 entradas: 1 por familia). El frontend ya degrada el toggle "2 algoritmos" cuando esto pasa, pero el contrato ideal es exponer al menos 1-2 challengers seguros para business (p. ej. `Random Forest interpretable + SHAP`).
 
 **Why:** Permitir el modo contraste también en cursos de negocio sin forzar perfil `ml_ds`.
 
@@ -14,7 +14,7 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Cons:** Cambio de catálogo afecta UX inmediatamente; requiere consenso pedagógico.
 
-**Context:** Issue #230 envío inicial mantuvo el catálogo intacto a propósito (cambio quirúrgico). La curación de challengers para business se puede hacer en cualquier PR posterior tocando solo `ALGORITHM_TAXONOMY` y los tests asociados.
+**Context:** Issue #233 (`ALGORITHM_CATALOG` 4×2) preserva la decisión de #230 de mantener business solo con baselines. La curación de challengers para business se puede hacer en cualquier PR posterior tocando solo `ALGORITHM_CATALOG` (campo `profile_visibility`) y los tests asociados.
 
 ---
 

@@ -133,10 +133,19 @@ Only run live LLM tests explicitly:
 - The teacher form picks algorithms from a canonical catalog instead of accepting up to five free-text chips.
 - `POST /api/authoring/jobs` accepts the breaking fields `algorithm_mode` (`"single" | "contrast"`), `algorithm_primary`, and `algorithm_challenger`. The legacy `suggested_techniques` body field has been removed; do not reintroduce it.
 - Algorithm picks are validated server-side at intake by `_validate_techniques_strict` whenever `case_type == "harvard_with_eda"` or `student_profile == "ml_ds"`. They are persisted into `task_payload` as `algorithm_mode` plus `algoritmos: list[str]` of length 0, 1, or 2.
-- `GET /api/authoring/algorithm-catalog?profile=...&case_type=...` returns the canonical declarative catalog as `{profile, case_type, items: [{name, family, family_label, tier}]}` where `tier ∈ {"baseline", "challenger"}` and `family ∈ {clustering, clasificacion, regresion, serie_temporal, recomendacion, nlp}`. The endpoint is open (no PII), `Literal`-validated, and re-checked at intake.
+- `GET /api/authoring/algorithm-catalog?profile=...&case_type=...` returns the canonical declarative catalog as `{profile, case_type, items: [{name, family, family_label, tier}]}` where `tier ∈ {"baseline", "challenger"}` and `family ∈ {clasificacion, regresion, clustering, serie_temporal}` (Issue #233 — 4×2 catalog, max 2 algorithms per family, exactly 1 baseline per family). The endpoint is open (no PII), `Literal`-validated, and re-checked at intake.
 - Family-coherence rule: in `contrast` mode the baseline and the challenger MUST belong to the same `family`. The backend rejects cross-family contrast picks (e.g. Logistic Regression vs Prophet) at intake with a 422 and a teacher-friendly Spanish message. The frontend `AlgorithmSelector` filters the challenger options to the baseline family. The LLM suggester is taught the same rule via prompt boundary AND the post-LLM `_snap_item` filter, so it cannot cross families even if the model strays.
 - LSTM has been removed from the canonical ml_ds time-series catalog. Do not reintroduce LSTM (or other heavy DL surrogates) without an ADR.
 - The `business` profile may legitimately expose only baseline items (no challengers in any family). The frontend disables the "2 algoritmos" mode in that case; the backend rejects contrast picks with a teacher-friendly message. Do not silently fall back to `single` on the backend.
+
+## M3 Notebook Per-Family Dispatch (Issue #233)
+
+- The M3 notebook generator (`m3_notebook_generator` in `backend/src/case_generator/graph.py`) dispatches to ONE specialized prompt per algorithm family instead of a single monolithic prompt.
+- `case_generator.prompts.PROMPT_BY_FAMILY` exposes exactly 4 keys: `clasificacion`, `regresion`, `clustering`, `serie_temporal`. The legacy `M3_NOTEBOOK_ALGO_PROMPT` symbol is preserved as a back-compat alias for `M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION`.
+- Family is resolved with `family_of(name)` first, then `resolve_legacy_family(name)` for historical task_payloads (XGBoost, Ridge, NLP, etc.). On no match the dispatcher falls back to `clasificacion` and emits a `legacy_warning` appended to the data-gap block.
+- After the LLM call, `_validate_notebook_family_consistency(family, code)` checks the output against `_FAMILY_PROHIBITED_PATTERNS` (other-family API tokens like `train_test_split(` in clustering, `roc_auc_score` in regression). On violation the dispatcher reprompts ONCE with the explicit forbidden-tokens list; if the second attempt also violates, it raises `RuntimeError` and the job is marked failed. Never ship a runtime-broken notebook.
+- The single registry of truth lives in `case_generator.suggest_service.ALGORITHM_CATALOG`. The legacy `ALGORITHM_REGISTRY` dict in `graph.py` has been removed.
+- Deprecated families (`nlp`, `recomendacion`, `grafos`, `anomalias`, `segmentacion`, `clasificacion_tabular`, `regresion_tabular`, `nlp_text_mining`) are no longer exposed by the catalog and degrade to `clasificacion` via the legacy resolver. Do not reintroduce them without an ADR.
 
 ## Forbidden Patterns
 

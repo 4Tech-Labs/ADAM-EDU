@@ -65,9 +65,15 @@ export type ModuleId = "m1" | "m2" | "m3" | "m4" | "m5" | "m6";
 // Issue #230 — algorithm selection mode replaces the legacy 5-chip free-text input.
 export type AlgorithmMode = "single" | "contrast";
 export type AlgorithmTier = "baseline" | "challenger";
+// Issue #233 — canonical 4-family taxonomy. Frontend mirrors backend ALGORITHM_CATALOG.
+export type AlgorithmFamily =
+    | "clasificacion"
+    | "regresion"
+    | "clustering"
+    | "serie_temporal";
 export interface AlgorithmCatalogItem {
     name: string;
-    family: string;
+    family: AlgorithmFamily;
     family_label: string;
     tier: AlgorithmTier;
 }
