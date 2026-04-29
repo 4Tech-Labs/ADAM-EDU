@@ -2936,6 +2936,11 @@ def _detect_algorithm_families(algoritmos: list[str]) -> list[str]:
 
     Usa ALGORITHM_REGISTRY para keyword matching. Si un algoritmo no mapea
     a ninguna familia conocida, devuelve "unsupported" para ese algoritmo.
+
+    Issue #230 contract: ``len(algoritmos) ∈ {1, 2}`` — el formulario docente
+    permite exactamente 1 algoritmo (modo single) o 2 algoritmos baseline +
+    challenger (modo contrast). Otras longitudes provienen de jobs históricos
+    o de un payload mal formado y se procesan best-effort.
     """
     detected: list[str] = []
     for algo in algoritmos:

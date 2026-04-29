@@ -10,7 +10,7 @@ import os
 import pathlib
 import sys
 import time
-from typing import Any
+from typing import Any, Literal, cast
 import uuid
 from zoneinfo import ZoneInfo
 
@@ -28,7 +28,13 @@ from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.orm import Session
 
 from case_generator.core.authoring import AuthoringService, derive_progress_percentage
-from case_generator.suggest_service import SuggestRequest, SuggestResponse, generate_suggestion
+from case_generator.suggest_service import (
+    SuggestRequest,
+    SuggestResponse,
+    _validate_techniques_strict,
+    generate_suggestion,
+    get_algorithm_catalog,
+)
 from shared.admin_router import router as admin_router
 from shared.course_access_router import router as course_access_router
 from shared.student_router import router as student_router
@@ -656,7 +662,10 @@ class IntakeRequest(BaseModel):
     target_course_ids: list[str] = []
     eda_depth: str | None = None
     include_python_code: bool = False
-    suggested_techniques: list[str] = []
+    # Issue #230 — algorithm picks replace the legacy 5-chip free-text list.
+    algorithm_mode: Literal["single", "contrast"] = "single"
+    algorithm_primary: str | None = None
+    algorithm_challenger: str | None = None
     available_from: str | None = None
     due_at: str | None = None
 
@@ -687,6 +696,37 @@ def create_authoring_job(
 ) -> JobCreatedResponse:
     started = time.monotonic()
     try:
+        # Issue #230 — strict catalog-bound validation of teacher algorithm picks.
+        # Algorithm picks are only mandatory when the case requires algorithm
+        # context (harvard_with_eda OR ml_ds profile). For pure harvard_only +
+        # business cases, picks are optional and the payload may be empty.
+        algorithms_required = (
+            req.case_type == "harvard_with_eda" or req.student_profile == "ml_ds"
+        )
+        algorithm_picks: list[str] = []
+        if req.algorithm_primary:
+            algorithm_picks.append(req.algorithm_primary)
+        if req.algorithm_mode == "contrast":
+            if not req.algorithm_challenger:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="En modo contraste debes seleccionar un challenger.",
+                )
+            algorithm_picks.append(req.algorithm_challenger)
+        if algorithms_required or algorithm_picks:
+            try:
+                _validate_techniques_strict(
+                    algorithm_picks,
+                    profile=req.student_profile,
+                    case_type=req.case_type,
+                    mode=req.algorithm_mode,
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=str(exc),
+                ) from exc
+
         context = resolve_teacher_context(actor)
         teacher = get_legacy_teacher_or_500(db, actor)
         owned_course = get_teacher_owned_course_with_syllabus(db, context, req.course_id, lock=True)
@@ -750,7 +790,8 @@ def create_authoring_job(
                 "targetGroups": target_groups,
                 "edaDepth": req.eda_depth,
                 "includePythonCode": req.include_python_code,
-                "algoritmos": req.suggested_techniques,
+                "algorithm_mode": req.algorithm_mode,
+                "algoritmos": algorithm_picks,
                 "availableFrom": normalized_available_from,
                 "dueAt": normalized_due_at,
             },
@@ -1563,6 +1604,49 @@ def activate_oauth_complete(
         reason="activated",
     )
     return ActivateOAuthCompleteResponse(status="activated")
+
+
+class AlgorithmCatalogItem(BaseModel):
+    """Single technique entry in the catalog (Issue #230 follow-up)."""
+
+    name: str
+    family: str
+    family_label: str
+    tier: Literal["baseline", "challenger"]
+
+
+class AlgorithmCatalogResponse(BaseModel):
+    """Issue #230 — catalog returned to the teacher authoring form selector."""
+
+    profile: Literal["business", "ml_ds"]
+    case_type: Literal["harvard_only", "harvard_with_eda"]
+    items: list[AlgorithmCatalogItem]
+
+
+@app.get("/api/authoring/algorithm-catalog", response_model=AlgorithmCatalogResponse)
+async def get_authoring_algorithm_catalog(
+    profile: Literal["business", "ml_ds"],
+    case_type: Literal["harvard_only", "harvard_with_eda"],
+) -> AlgorithmCatalogResponse:
+    """Return the canonical algorithm catalog used by the form's mode selector.
+
+    Security note (Issue #230): this endpoint exposes a static catalog with no
+    PII. It mirrors the access posture of ``POST /api/suggest`` and is
+    re-validated at intake time by ``_validate_techniques_strict``.
+    """
+    try:
+        catalog = get_algorithm_catalog(profile, case_type)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    raw_items = cast(list[dict[str, str]], catalog["items"])
+    return AlgorithmCatalogResponse(
+        profile=profile,
+        case_type=case_type,
+        items=[AlgorithmCatalogItem(**item) for item in raw_items],
+    )
 
 
 @app.post("/api/suggest", response_model=SuggestResponse)

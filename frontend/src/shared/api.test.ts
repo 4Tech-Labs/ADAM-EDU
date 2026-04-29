@@ -86,7 +86,9 @@ describe("api auth + stream glue", () => {
             target_groups: ["A"],
             eda_depth: null,
             include_python_code: false,
-            suggested_techniques: ["SWOT"],
+            algorithm_mode: "single",
+            algorithm_primary: "Regresión Lineal",
+            algorithm_challenger: null,
             available_from: null,
             due_at: null,
         });

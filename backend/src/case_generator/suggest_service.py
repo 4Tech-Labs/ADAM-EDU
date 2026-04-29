@@ -2,16 +2,22 @@
 
 Generates scenario, guiding-question, and technique suggestions aligned with
 the current authoring prompts and the maintained problem-type taxonomy.
+
+Issue #230 — Algorithm mode toggle:
+The teacher form no longer accepts free-text "5 algorithm chips". Instead, the
+teacher picks 1 algorithm (mode="single") or a baseline + a challenger
+(mode="contrast"), both drawn from the canonical catalog returned by
+``get_algorithm_catalog(profile, case_type)``.
 """
 
+import functools
 import json
 import os
-from typing import cast
-
-from pydantic import BaseModel, Field
-from typing import Optional, Literal
 from enum import Enum
+from typing import Literal, Optional, cast
+
 from langchain_google_genai import ChatGoogleGenerativeAI
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -19,19 +25,24 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 # Used to validate LLM suggestions and provide consistent context to the authoring flow.
 # ══════════════════════════════════════════════════════════════════════════════
 
-ALGORITHM_TAXONOMY = {
+# Per-technique tier is declarative (Issue #230 follow-up). Each entry in
+# ``business_techniques`` / ``ml_ds_techniques`` is a CatalogItem dict so the
+# baseline-vs-challenger split is curated, not keyword-inferred. The taxonomy
+# key (``clustering``, ``clasificacion``, ...) doubles as the algorithm
+# *family* used for cross-family coherence in contrast mode.
+ALGORITHM_TAXONOMY: dict[str, dict[str, object]] = {
     "clustering": {
         "label": "Segmentación / Clustering",
         "target_type": "categorical",
         "business_techniques": [
-            "Segmentación por cohortes",
-            "Análisis de perfiles de cliente",
-            "Agrupación visual por métricas clave",
-            "K-Means + Silhouette + PCA",
+            {"name": "Segmentación por cohortes", "tier": "baseline"},
+            {"name": "Análisis de perfiles de cliente", "tier": "baseline"},
+            {"name": "Agrupación visual por métricas clave", "tier": "baseline"},
+            {"name": "K-Means + Silhouette + PCA", "tier": "baseline"},
         ],
         "ml_ds_techniques": [
-            "K-Means + Silhouette + PCA",
-            "DBSCAN para detección de grupos atípicos",
+            {"name": "K-Means + Silhouette + PCA", "tier": "baseline"},
+            {"name": "DBSCAN para detección de grupos atípicos", "tier": "challenger"},
         ],
         "validation": "Estabilidad de clusters (Bootstrap)",
         "metrics": ["Silhouette", "Calinski-Harabasz", "Inertia"],
@@ -40,14 +51,15 @@ ALGORITHM_TAXONOMY = {
         "label": "Clasificación",
         "target_type": "binary",
         "business_techniques": [
-            "Scorecard de riesgo con reglas de negocio",
-            "Segmentación binaria por umbrales de KPI",
-            "Análisis de cohortes con tasa de conversión",
-            "Regresión Logística + SHAP",
+            {"name": "Scorecard de riesgo con reglas de negocio", "tier": "baseline"},
+            {"name": "Segmentación binaria por umbrales de KPI", "tier": "baseline"},
+            {"name": "Análisis de cohortes con tasa de conversión", "tier": "baseline"},
+            {"name": "Regresión Logística + SHAP", "tier": "baseline"},
         ],
         "ml_ds_techniques": [
-            "Logistic Regression + Random Forest + SHAP",
-            "XGBoost con tuning de hiperparámetros",
+            {"name": "Logistic Regression", "tier": "baseline"},
+            {"name": "Random Forest + SHAP", "tier": "challenger"},
+            {"name": "XGBoost con tuning de hiperparámetros", "tier": "challenger"},
         ],
         "validation": "Cross-validation 5-fold + ROC-AUC",
         "metrics": ["AUC-ROC", "F1", "Precision", "Recall", "Confusion Matrix"],
@@ -56,14 +68,15 @@ ALGORITHM_TAXONOMY = {
         "label": "Regresión / Predicción Continua",
         "target_type": "numeric",
         "business_techniques": [
-            "Proyección lineal de tendencias",
-            "Análisis de sensibilidad con escenarios",
-            "Forecast básico por promedio móvil",
-            "Regresión Lineal + Ridge/Lasso",
+            {"name": "Proyección lineal de tendencias", "tier": "baseline"},
+            {"name": "Análisis de sensibilidad con escenarios", "tier": "baseline"},
+            {"name": "Forecast básico por promedio móvil", "tier": "baseline"},
+            {"name": "Regresión Lineal + Ridge/Lasso", "tier": "baseline"},
         ],
         "ml_ds_techniques": [
-            "Linear Regression + Ridge/Lasso + Residuals",
-            "Gradient Boosting Regressor",
+            {"name": "Linear Regression + Residuals", "tier": "baseline"},
+            {"name": "Ridge / Lasso Regression", "tier": "challenger"},
+            {"name": "Gradient Boosting Regressor", "tier": "challenger"},
         ],
         "validation": "Cross-val + Prediction Intervals",
         "metrics": ["R²", "MAE", "RMSE", "MAPE"],
@@ -72,14 +85,14 @@ ALGORITHM_TAXONOMY = {
         "label": "Series Temporales",
         "target_type": "numeric",
         "business_techniques": [
-            "Análisis de tendencia y estacionalidad visual",
-            "Forecast por promedio móvil ponderado",
-            "Comparación interanual (YoY)",
-            "STL Decomposition + ARIMA",
+            {"name": "Análisis de tendencia y estacionalidad visual", "tier": "baseline"},
+            {"name": "Forecast por promedio móvil ponderado", "tier": "baseline"},
+            {"name": "Comparación interanual (YoY)", "tier": "baseline"},
+            {"name": "STL Decomposition + ARIMA", "tier": "baseline"},
         ],
         "ml_ds_techniques": [
-            "STL Decomposition + ARIMA + Prophet",
-            "LSTM para secuencias complejas (si >500 filas)",
+            {"name": "STL Decomposition + ARIMA", "tier": "baseline"},
+            {"name": "Prophet", "tier": "challenger"},
         ],
         "validation": "Walk-forward validation + MAPE",
         "metrics": ["MAPE", "MAE", "RMSE", "Coverage 95%"],
@@ -88,14 +101,15 @@ ALGORITHM_TAXONOMY = {
         "label": "Sistemas de Recomendación",
         "target_type": "numeric",
         "business_techniques": [
-            "Análisis RFM (Recencia, Frecuencia, Monetización)",
-            "Segmentación por comportamiento de compra",
-            "A/B Testing de estrategias de retención",
-            "K-Means RFM",
+            {"name": "Análisis RFM (Recencia, Frecuencia, Monetización)", "tier": "baseline"},
+            {"name": "Segmentación por comportamiento de compra", "tier": "baseline"},
+            {"name": "A/B Testing de estrategias de retención", "tier": "baseline"},
+            {"name": "K-Means RFM", "tier": "baseline"},
         ],
         "ml_ds_techniques": [
-            "K-Means RFM + Random Forest Feature Importance",
-            "Collaborative Filtering (SVD) + Content-Based (Cosine)",
+            {"name": "Content-Based Filtering (Cosine)", "tier": "baseline"},
+            {"name": "Collaborative Filtering (SVD)", "tier": "challenger"},
+            {"name": "K-Means RFM + Random Forest Feature Importance", "tier": "challenger"},
         ],
         "validation": "A/B Test + t-test de Welch",
         "metrics": ["Precision@K", "Recall@K", "Coverage", "NDCG"],
@@ -104,22 +118,207 @@ ALGORITHM_TAXONOMY = {
         "label": "Procesamiento de Lenguaje Natural",
         "target_type": "categorical",
         "business_techniques": [
-            "Análisis de sentimiento con VADER/TextBlob",
-            "Topic Modeling (LDA) para extracción de temas",
-            "TF-IDF para representación e importancia de texto",
+            {"name": "Análisis de sentimiento con VADER/TextBlob", "tier": "baseline"},
+            {"name": "Topic Modeling (LDA) para extracción de temas", "tier": "baseline"},
+            {"name": "TF-IDF para representación e importancia de texto", "tier": "baseline"},
         ],
         "ml_ds_techniques": [
-            "TF-IDF + Sentiment (VADER/TextBlob)",
-            "Topic Modeling (LDA) + Word2Vec",
+            {"name": "TF-IDF + Sentiment (VADER/TextBlob)", "tier": "baseline"},
+            {"name": "Topic Modeling (LDA) + Word2Vec", "tier": "challenger"},
         ],
         "validation": "Kappa inter-rater + Bootstrap",
         "metrics": ["Accuracy", "F1-macro", "Kappa", "Perplexity"],
     },
 }
 
+
+# ── Helpers to bridge legacy `list[str]` consumers with the new dict shape.
+def _technique_items(profile: str, family: str) -> list[dict[str, str]]:
+    tech_key = "business_techniques" if profile == "business" else "ml_ds_techniques"
+    return cast(list[dict[str, str]], ALGORITHM_TAXONOMY[family][tech_key])
+
+
+def _technique_names(profile: str, family: str) -> list[str]:
+    return [item["name"] for item in _technique_items(profile, family)]
+
 # Problemas válidos para cada perfil
 BUSINESS_PROBLEM_TYPES = list(ALGORITHM_TAXONOMY.keys())
 ML_DS_PROBLEM_TYPES = list(ALGORITHM_TAXONOMY.keys())
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TIER CLASSIFICATION — Issue #230
+# Tier (``baseline`` / ``challenger``) and family (taxonomy key) are now declared
+# per-item inside ``ALGORITHM_TAXONOMY``. ``classify_tier`` is kept as a fallback
+# helper for ad-hoc strings that did not come from the catalog (e.g. legacy
+# ``suggested_techniques`` payloads).
+# ══════════════════════════════════════════════════════════════════════════════
+
+AlgorithmTier = Literal["baseline", "challenger"]
+
+# Human-readable labels for each family (taxonomy key). Used by the catalog
+# endpoint so the frontend can render section headers.
+FAMILY_LABELS: dict[str, str] = {
+    "clustering": "Clustering",
+    "clasificacion": "Clasificación",
+    "regresion": "Regresión",
+    "serie_temporal": "Series Temporales",
+    "recomendacion": "Recomendación",
+    "nlp": "NLP / Texto",
+}
+
+# Substring keywords that mark an unknown (off-catalog) technique as challenger.
+_CHALLENGER_KEYWORDS: tuple[str, ...] = (
+    "random forest",
+    "xgboost",
+    "lightgbm",
+    "catboost",
+    "adaboost",
+    "gradient boosting",
+    "gbm",
+    "lstm",
+    "neural",
+    "redes neuronales",
+    "deep learning",
+    "prophet",
+    "dbscan",
+    "autoencoder",
+    "bert",
+    "embedding",
+    "word2vec",
+    "transformer",
+)
+
+
+def classify_tier(technique: str) -> AlgorithmTier:
+    """Return ``"challenger"`` if the technique matches any challenger keyword.
+
+    Prefer the declarative ``tier`` field on catalog items over this fallback.
+    """
+    # Prefer declarative tier when the technique is in the catalog.
+    needle = technique.lower().strip()
+    for entry in ALGORITHM_TAXONOMY.values():
+        for tech_key in ("business_techniques", "ml_ds_techniques"):
+            for item in cast(list[dict[str, str]], entry[tech_key]):
+                if item["name"].lower() == needle:
+                    return cast(AlgorithmTier, item["tier"])
+    # Off-catalog fallback — keyword heuristic.
+    for kw in _CHALLENGER_KEYWORDS:
+        if kw in needle:
+            return "challenger"
+    return "baseline"
+
+
+@functools.lru_cache(maxsize=8)
+def get_algorithm_catalog(profile: str, case_type: str) -> dict[str, object]:
+    """Return the canonical catalog of algorithms for a (profile, case_type) pair.
+
+    The result is a dict ``{"items": [{"name", "family", "family_label", "tier"}, ...]}``
+    with de-duplicated technique names sourced from ``ALGORITHM_TAXONOMY``.
+    The frontend groups items by ``family`` to render the selector and uses
+    ``tier`` to filter the baseline / challenger dropdowns in contrast mode.
+    """
+    if profile not in {"business", "ml_ds"}:
+        raise ValueError(f"Invalid profile: {profile!r}")
+    if case_type not in {"harvard_only", "harvard_with_eda"}:
+        raise ValueError(f"Invalid case_type: {case_type!r}")
+
+    tech_key = "business_techniques" if profile == "business" else "ml_ds_techniques"
+    items: list[dict[str, str]] = []
+    seen_set: set[str] = set()
+    for family, entry in ALGORITHM_TAXONOMY.items():
+        family_label = FAMILY_LABELS.get(family, family)
+        for raw_item in cast(list[dict[str, str]], entry[tech_key]):
+            key = raw_item["name"].lower()
+            if key in seen_set:
+                continue
+            seen_set.add(key)
+            items.append({
+                "name": raw_item["name"],
+                "family": family,
+                "family_label": family_label,
+                "tier": raw_item["tier"],
+            })
+    return {"items": items}
+
+
+def _catalog_lookup(
+    profile: str,
+    case_type: str,
+    name: str,
+) -> Optional[dict[str, str]]:
+    """Return the catalog item matching ``name`` (case-insensitive) or ``None``."""
+    needle = name.lower().strip()
+    for item in cast(list[dict[str, str]], get_algorithm_catalog(profile, case_type)["items"]):
+        if item["name"].lower() == needle:
+            return item
+    return None
+
+
+
+def _validate_techniques_strict(
+    techniques: list[str],
+    profile: str,
+    case_type: str,
+    mode: Literal["single", "contrast"],
+) -> None:
+    """Strict validator for teacher-submitted algorithm picks (Issue #230).
+
+    Raises ``ValueError`` (with a teacher-friendly message) when the picks do
+    not match the contract for the given mode.
+
+    Contract:
+    - mode="single": exactly 1 technique, must belong to the catalog (any tier).
+    - mode="contrast": exactly 2 techniques where the first is a baseline and
+      the second is a challenger of the catalog for the (profile, case_type),
+      and BOTH must belong to the same family (e.g. ``clasificacion``).
+    - The two contrast techniques must differ.
+    """
+    items = cast(list[dict[str, str]], get_algorithm_catalog(profile, case_type)["items"])
+    by_name: dict[str, dict[str, str]] = {item["name"].lower(): item for item in items}
+
+    if not techniques:
+        raise ValueError("Debes seleccionar al menos un algoritmo del catálogo.")
+
+    for tech in techniques:
+        if tech.lower() not in by_name:
+            raise ValueError(
+                f"Algoritmo fuera del catálogo para perfil {profile!r}: {tech!r}."
+            )
+
+    if mode == "single":
+        if len(techniques) != 1:
+            raise ValueError("El modo 'single' requiere exactamente 1 algoritmo.")
+        return
+
+    # mode == "contrast"
+    if len(techniques) != 2:
+        raise ValueError("El modo 'contrast' requiere exactamente 2 algoritmos (baseline + challenger).")
+    primary_item = by_name[techniques[0].lower()]
+    challenger_item = by_name[techniques[1].lower()]
+    if primary_item["name"].lower() == challenger_item["name"].lower():
+        raise ValueError("El baseline y el challenger no pueden ser el mismo algoritmo.")
+    if primary_item["tier"] != "baseline":
+        raise ValueError(
+            f"El primer algoritmo debe ser un baseline del catálogo: {primary_item['name']!r} no lo es."
+        )
+    if challenger_item["tier"] != "challenger":
+        # Surface a profile-specific hint when the catalog has no challengers at all.
+        any_challenger = any(it["tier"] == "challenger" for it in items)
+        if not any_challenger:
+            raise ValueError(
+                "El catálogo actual no expone challengers para este perfil; usa modo 'single'."
+            )
+        raise ValueError(
+            f"El segundo algoritmo debe ser un challenger del catálogo: {challenger_item['name']!r} no lo es."
+        )
+    if primary_item["family"] != challenger_item["family"]:
+        raise ValueError(
+            f"El baseline y el challenger deben pertenecer a la misma familia "
+            f"({primary_item['family_label']}). "
+            f"Recibido: {primary_item['name']!r} ({primary_item['family_label']}) "
+            f"vs {challenger_item['name']!r} ({challenger_item['family_label']})."
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -133,6 +332,8 @@ class IntentEnum(str, Enum):
 
 
 class SuggestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     subject: str
     academicLevel: str
     targetGroups: list[str]
@@ -146,6 +347,8 @@ class SuggestRequest(BaseModel):
     ] = None
     includePythonCode: bool = False
     intent: IntentEnum = IntentEnum.both
+    # Issue #230 — algorithm selection mode used to shape the techniques prompt.
+    mode: Literal["single", "contrast"] = "single"
 
     scenarioDescription: str = ""
     guidingQuestion: str = ""
@@ -157,6 +360,9 @@ class SuggestResponse(BaseModel):
     suggestedTechniques: list[str] = Field(default_factory=list)
     problemType: str = ""
     targetVariableType: str = ""
+    # Issue #230 — explicit baseline/challenger fields to drive the new selector.
+    algorithmPrimary: Optional[str] = None
+    algorithmChallenger: Optional[str] = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -167,12 +373,12 @@ def _build_taxonomy_context(profile: str) -> str:
     """Genera texto de referencia de la taxonomía para inyectar en el prompt."""
     lines = ["## Catálogo de Tipos de Problema y Técnicas Permitidas\n"]
     for key, t in ALGORITHM_TAXONOMY.items():
-        tech_key = "business_techniques" if profile == "business" else "ml_ds_techniques"
-        techniques = t[tech_key]
+        items = _technique_items(profile, key)
         lines.append(f"### {key} — {t['label']}")
         lines.append(f"  Target: {t['target_type']}")
-        lines.append(f"  Técnicas: {', '.join(techniques)}")
-        lines.append(f"  Métricas: {', '.join(t['metrics'])}")
+        rendered = ", ".join(f"{it['name']} [{it['tier']}]" for it in items)
+        lines.append(f"  Técnicas: {rendered}")
+        lines.append(f"  Métricas: {', '.join(cast(list[str], t['metrics']))}")
         lines.append("")
     return "\n".join(lines)
 
@@ -253,11 +459,18 @@ Tu sugerencia alimentará al Case Architect, así que debe ser precisa y coheren
 # Your Boundaries
 - Responde ÚNICAMENTE con JSON válido. PROHIBIDO Markdown, saludos o texto extra.
 - Empresa 100% ficticia. NUNCA uses empresas reales.
-- `suggestedTechniques`: entre 1 y 3 técnicas, SOLO del catálogo provisto.
 - `problemType`: DEBE ser uno de: clustering, clasificacion, regresion,
   serie_temporal, recomendacion, nlp.
 - `scenarioDescription`: 2-4 oraciones con tensión empresarial y deadline.
 - `guidingQuestion`: 1 oración, formulada como dilema con opciones en tensión.
+- Cuando sugieras técnicas, usa SOLO nombres exactos del catálogo provisto.
+  Modo `single`: devuelve `algorithmPrimary` con UNA técnica del catálogo.
+  Modo `contrast`: devuelve `algorithmPrimary` (baseline interpretable) y
+  `algorithmChallenger` (modelo de mayor capacidad). Ambos del catálogo y distintos.
+  REGLA DE FAMILIA: en modo `contrast`, baseline y challenger DEBEN pertenecer
+  al mismo `problemType` (clasificacion, regresion, clustering, serie_temporal,
+  recomendacion, nlp). Comparar Logistic Regression (clasificacion) vs
+  Prophet (serie_temporal) es un contraste experimental inválido.
 
 {boundary_profile}""")
 
@@ -274,7 +487,9 @@ Tu sugerencia alimentará al Case Architect, así que debe ser precisa y coheren
         req.intent in (IntentEnum.techniques, IntentEnum.both)
         and req.caseType == "harvard_with_eda"
     ):
-        json_schema["suggestedTechniques"] = ["string (del catálogo)", "..."]
+        json_schema["algorithmPrimary"] = "string (nombre exacto del catálogo)"
+        if req.mode == "contrast":
+            json_schema["algorithmChallenger"] = "string (nombre exacto del catálogo, distinto al baseline)"
         if "problemType" not in json_schema:
             json_schema["problemType"] = "string (del catálogo)"
             json_schema["targetVariableType"] = "string (binary|numeric|categorical)"
@@ -311,8 +526,7 @@ def _validate_techniques(
     if problem_type not in ALGORITHM_TAXONOMY:
         return techniques[:4]
 
-    tech_key = "business_techniques" if profile == "business" else "ml_ds_techniques"
-    catalog = ALGORITHM_TAXONOMY[problem_type][tech_key]
+    catalog = _technique_names(profile, problem_type)
     catalog_lower = [t.lower() for t in catalog]
 
     validated = []
@@ -422,5 +636,72 @@ async def generate_suggestion(req: SuggestRequest) -> SuggestResponse:
             req.studentProfile,
             resp.problemType,
         )
+
+    # Issue #230 — mode-aware algorithm picks. Snap LLM output to the canonical
+    # catalog so the frontend can pre-fill the dropdowns without further work.
+    catalog_items = cast(
+        list[dict[str, str]],
+        get_algorithm_catalog(req.studentProfile, req.caseType)["items"],
+    )
+
+    def _snap_item(name: str, candidates: list[dict[str, str]]) -> Optional[dict[str, str]]:
+        needle = name.lower().strip()
+        if not needle:
+            return None
+        for c in candidates:
+            if c["name"].lower() == needle:
+                return c
+        for c in candidates:
+            cl = c["name"].lower()
+            if cl in needle or needle in cl:
+                return c
+        return None
+
+    raw_primary = data.get("algorithmPrimary") or ""
+    raw_challenger = data.get("algorithmChallenger") or ""
+
+    primary_item: Optional[dict[str, str]] = None
+    if isinstance(raw_primary, str) and raw_primary:
+        # In contrast mode the primary must be a baseline; in single mode any tier.
+        primary_pool = (
+            [c for c in catalog_items if c["tier"] == "baseline"]
+            if req.mode == "contrast"
+            else catalog_items
+        )
+        primary_item = _snap_item(raw_primary, primary_pool)
+        if primary_item:
+            resp.algorithmPrimary = primary_item["name"]
+
+    if req.mode == "contrast" and isinstance(raw_challenger, str) and raw_challenger:
+        # Family-coherence guard: only consider challengers from the SAME family
+        # as the snapped baseline. Comparing LR (clasificacion) vs Prophet
+        # (serie_temporal) is not a valid pedagogical contrast. If the baseline
+        # could not be snapped, refuse to emit a challenger at all instead of
+        # leaking a cross-family pick (defense-in-depth against off-catalog LLM
+        # output).
+        if not primary_item:
+            resp.algorithmChallenger = None
+        else:
+            challenger_pool = [
+                c
+                for c in catalog_items
+                if c["tier"] == "challenger" and c["family"] == primary_item["family"]
+            ]
+            snapped_chal = _snap_item(raw_challenger, challenger_pool)
+            if (
+                snapped_chal
+                and snapped_chal["name"].lower() == primary_item["name"].lower()
+            ):
+                snapped_chal = None
+            resp.algorithmChallenger = snapped_chal["name"] if snapped_chal else None
+
+    # Mirror picks into suggestedTechniques for legacy consumers (preview, logs).
+    mirror: list[str] = []
+    if resp.algorithmPrimary:
+        mirror.append(resp.algorithmPrimary)
+    if resp.algorithmChallenger:
+        mirror.append(resp.algorithmChallenger)
+    if mirror and not resp.suggestedTechniques:
+        resp.suggestedTechniques = mirror
 
     return resp
