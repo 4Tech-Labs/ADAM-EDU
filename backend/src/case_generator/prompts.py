@@ -1903,7 +1903,8 @@ churn_aliases = [
 ]
 
 date_aliases = [
-    "fecha", "date", "timestamp", "periodo", "mes", "dia", "created_at"
+    "fecha", "date", "timestamp", "periodo", "period", "mes", "month",
+    "dia", "day", "created_at", "fecha_periodo", "year_month", "yearmonth"
 ]
 
 source_aliases = ["origen", "source", "from", "source_id", "nodo_origen"]
@@ -2015,13 +2016,26 @@ B. Para RMSE usa: `np.sqrt(mean_squared_error(y_true, y_pred))`. NO inventes
    `RootMeanSquaredError`, `root_mean_squared_error` ni `squared=False`.
 C. Para grafos: `import networkx as nx` dentro del try; usa nx.Graph(), nx.spring_layout(),
    nx.draw(). Si networkx no está disponible, captura ImportError y degrada a print explicativo.
-D. NO uses argumentos experimentales (nada de `n_jobs=-1` salvo en RandomForest), nada de
-   APIs deprecated (`sklearn.cross_validation`, `from sklearn.externals import joblib`).
 E. Para matrices grandes, limita SIEMPRE: `df.sample(min(len(df), 5000), random_state=42)`.
-F. Toda llamada a `.fit()` debe ir precedida por dropna/imputación: usa
-   `df_X.dropna()` o `df_X.fillna(df_X.median(numeric_only=True))` antes del fit.
+F. Toda llamada a `.fit()` debe ir precedida por dropna/imputación SIN LEAKAGE:
+   - PROHIBIDO `X = X.fillna(X.median(...))` ANTES del split (eso fitea con info de
+     test). El orden correcto es: split primero → calcular `med = X_train.median(numeric_only=True)`
+     → `X_train = X_train.fillna(med)` y `X_test = X_test.fillna(med)`.
+   - Para `dropna()` aplica el mismo principio (dropna sobre `df`/`df_model` ANTES del split
+     es seguro porque elimina filas en bloque; imputar con estadísticos NO lo es).
+D. NO uses argumentos experimentales (nada de `n_jobs=-1` salvo en RandomForest), nada de
+   APIs deprecated. Lista NEGRA explícita (PROHIBIDOS, generan TypeError en versiones modernas):
+   - `XGBClassifier(use_label_encoder=...)`  → removido en xgboost ≥2.0; OMÍTELO siempre.
+   - `mean_squared_error(..., squared=False)` → removido en sklearn ≥1.6; usa `np.sqrt(mse)`.
+   - `from sklearn.externals import joblib` → usa `import joblib` directo.
+   - `sklearn.cross_validation` → usa `sklearn.model_selection`.
+   - `n_estimators` sin `random_state` en cualquier ensemble → siempre fija `random_state=42`.
 G. NO importes nada que no esté en el set: numpy, pandas, matplotlib, seaborn, sklearn.*,
    networkx, scipy.stats. Cualquier otra librería va dentro de try/except ImportError.
+   Para xgboost/lightgbm/catboost: `try: import xgboost as xgb` y captura
+   `except (ImportError, Exception)` (NO solo ImportError) para tolerar TypeErrors por
+   firmas de constructor que cambian entre versiones; en el except, fallback a
+   `GradientBoostingClassifier` / `GradientBoostingRegressor` de sklearn.
 H. Métricas OBLIGATORIAS por tipo de problema (imprímelas SIEMPRE, sin excepciones):
    - Clasificación: `from sklearn.metrics import classification_report, f1_score, confusion_matrix`
      y `print(classification_report(y_test, y_pred, zero_division=0))` +
@@ -2066,6 +2080,9 @@ K. EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo:
    - Flag de outliers por IQR para columnas numéricas (sin imputar, solo reportar conteo):
      `q1, q3 = df[c].quantile([0.25, 0.75]); iqr = q3 - q1; outliers = ((df[c] < q1 - 1.5*iqr) | (df[c] > q3 + 1.5*iqr)).sum()`
      y print en formato tabular para top-5 columnas con más outliers.
+   - GUARDA de tamaño mínimo: si `len(df) < 50`, imprime una ADVERTENCIA visible
+     ("⚠️ Dataset pequeño (n=<N>): los modelos posteriores son ilustrativos; las métricas
+     tienen alta varianza”) para que el estudiante interprete los resultados con cautela.
 
 # Estructura OBLIGATORIA
 
@@ -2087,6 +2104,9 @@ try:
     if target_col is not None:
         print("Target candidato:", target_col)
         print(df[target_col].value_counts(normalize=True).round(3))
+    if len(df) < 50:
+        print(f"\\n⚠️ Dataset pequeño (n={{len(df)}}): los modelos posteriores son ilustrativos; "
+              "las métricas tendrán alta varianza. Interprétalas con cautela.")
     print("\\nTop 10 columnas por % missing:")
     print(df.isna().mean().sort_values(ascending=False).head(10).round(3))
     print("\\nTop 5 columnas numéricas con más outliers (IQR 1.5x — solo reporte, no se imputan):")
