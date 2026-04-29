@@ -13,8 +13,6 @@ Cero LLMs, cero red, cero DB. Tests puros y rápidos.
 
 from __future__ import annotations
 
-import pytest
-
 from case_generator.graph import (
     _infer_leakage_risk_from_naming,
     _validate_target_semantic_coherence,
@@ -23,7 +21,6 @@ from case_generator.prompts import (
     CASE_ARCHITECT_PROMPT,
     M3_NOTEBOOK_ALGO_PROMPT,
 )
-
 
 # ─────────────────────────────────────────────────────────
 # _validate_target_semantic_coherence
@@ -71,8 +68,8 @@ def test_target_semantic_coherence_passes_on_role_match() -> None:
     """El match puede venir del role aunque el name no contenga el token."""
     warnings = _validate_target_semantic_coherence(
         "Caso de retención Q4",
-        # 'retention_rate' contiene 'retention' → match por name.
-        {"name": "retention_rate", "role": "regression_target"},
+        # name no contiene tokens esperados; el match viene exclusivamente del role.
+        {"name": "status_flag", "role": "churn_classification_target"},
     )
     assert warnings == []
 
@@ -189,6 +186,30 @@ def test_leakage_inference_handles_none_and_empty() -> None:
                                 "dtype": "int", "description": "x"},
              "feature_columns": []}
     assert _infer_leakage_risk_from_naming(empty) == empty
+
+
+def test_leakage_inference_keeps_description_user_safe() -> None:
+    """La descripción original de la feature NO debe contaminarse con tags
+    de auditoría: downstream la propaga a ColumnDefinition.description
+    visible para el docente. La marca de auditoría vive en
+    `leakage_inferred_by` y NO en `description`.
+    """
+    contract = _contract_with(
+        target_name="delay_flag",
+        target_role="classification_target",
+        features=[
+            {"name": "nps", "role": "feature", "dtype": "float",
+             "description": "Net Promoter Score del trimestre.",
+             "is_leakage_risk": False},
+        ],
+    )
+    out = _infer_leakage_risk_from_naming(contract)
+    assert out is not None
+    feat = out["feature_columns"][0]
+    assert feat["is_leakage_risk"] is True
+    assert feat["description"] == "Net Promoter Score del trimestre."
+    assert "auto-flagged" not in feat["description"]
+    assert feat.get("leakage_inferred_by") == "naming_pattern"
 
 
 def test_leakage_inference_does_not_mutate_input() -> None:

@@ -1781,11 +1781,10 @@ _LEAKAGE_NAMING_PATTERN = re.compile(
     r")"
 )
 
-# Roles del target que SÍ son retención/churn — en esos casos NO inferimos
-# leakage para retention/churn features (podrían ser lags válidos de auditoría).
-_RETENTION_TARGET_ROLES: frozenset[str] = frozenset({
-    "classification_target",  # ambiguo, decide por nombre del target abajo
-})
+# Tokens de nombre del target que identifican targets de retención/churn;
+# se usan para evitar inferir leakage por naming cuando el propio objetivo
+# pertenece a esa misma familia (las retention_* features podrían ser lags
+# válidos de auditoría temporal en ese caso).
 _RETENTION_TARGET_NAME_TOKENS: tuple[str, ...] = (
     "churn", "retention", "renewal", "attrition", "loyalty",
 )
@@ -1872,10 +1871,10 @@ def _infer_leakage_risk_from_naming(contract: dict | None) -> dict | None:
         if _LEAKAGE_NAMING_PATTERN.search(fname):
             updated = dict(feat)
             updated["is_leakage_risk"] = True
-            existing_desc = (updated.get("description") or "").rstrip()
-            tag = " [auto-flagged: naming sugiere leakage vs target operacional]"
-            if tag.strip() not in existing_desc:
-                updated["description"] = f"{existing_desc}{tag}".strip()
+            # Marca interna no destinada a docente: queda en el dict del
+            # contrato pero no se propaga a ColumnDefinition.description
+            # (downstream solo lee `description`). Útil para auditoría/logging.
+            updated["leakage_inferred_by"] = "naming_pattern"
             new_features.append(updated)
             inferred_count += 1
         else:

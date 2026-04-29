@@ -2193,8 +2193,9 @@ J. SHAP es OPCIONAL y SIEMPRE en try/except. Importancia de features con jerarqu
            Patrón canónico:
              `import shap`
              `explainer = shap.TreeExplainer(model)`
-             `shap_values = explainer.shap_values(X_test.sample(min(len(X_test), 200), random_state=42))`
-             `shap.summary_plot(shap_values, X_test.sample(min(len(X_test), 200), random_state=42), show=False)`
+             `sample = X_test.sample(min(len(X_test), 200), random_state=42)`
+             `shap_values = explainer.shap_values(sample)`
+             `shap.summary_plot(shap_values, sample, show=False)`
              `plt.tight_layout(); plt.show()`
        (c) Si SHAP falla (import, TreeExplainer incompatible, backend), en el
            `except Exception` abre una NUEVA figura (`plt.figure(figsize=(8, 5))`)
