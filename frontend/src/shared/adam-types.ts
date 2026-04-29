@@ -62,6 +62,20 @@ export type EDADepth = "charts_only" | "charts_plus_explanation" | "charts_plus_
 export type IntentType = "scenario" | "techniques" | "both";
 export type StudentProfile = "business" | "ml_ds";
 export type ModuleId = "m1" | "m2" | "m3" | "m4" | "m5" | "m6";
+// Issue #230 — algorithm selection mode replaces the legacy 5-chip free-text input.
+export type AlgorithmMode = "single" | "contrast";
+export type AlgorithmTier = "baseline" | "challenger";
+export interface AlgorithmCatalogItem {
+    name: string;
+    family: string;
+    family_label: string;
+    tier: AlgorithmTier;
+}
+export interface AlgorithmCatalog {
+    profile: StudentProfile;
+    case_type: CaseType;
+    items: AlgorithmCatalogItem[];
+}
 export interface CaseFormData {
     courseId: string;
     subject: string;
@@ -77,7 +91,10 @@ export interface CaseFormData {
     includePythonCode: boolean;
     scenarioDescription: string;
     guidingQuestion: string;
-    suggestedTechniques: string[];
+    // Issue #230 — algorithm picks (replaces suggestedTechniques: string[]).
+    algorithmMode: AlgorithmMode;
+    algorithmPrimary: string | null;
+    algorithmChallenger: string | null;
     // Submission / Delivery
     availableFrom: string;
     dueAt: string;
@@ -153,7 +170,10 @@ export interface AuthoringJobCreateRequest {
     target_groups: string[];
     eda_depth: EDADepth | null;
     include_python_code: boolean;
-    suggested_techniques: string[];
+    // Issue #230 — algorithm picks shape.
+    algorithm_mode: AlgorithmMode;
+    algorithm_primary: string | null;
+    algorithm_challenger: string | null;
     available_from: string | null;
     due_at: string | null;
 }
@@ -176,12 +196,17 @@ export interface SuggestRequest {
     includePythonCode: boolean;
     scenarioDescription: string;
     guidingQuestion: string;
+    // Issue #230 — drives baseline-only vs baseline+challenger LLM responses.
+    mode?: AlgorithmMode;
 }
 
 export interface SuggestResponse {
     scenarioDescription?: string;
     guidingQuestion?: string;
     suggestedTechniques: string[];
+    // Issue #230 — explicit picks pre-filling the form selector.
+    algorithmPrimary?: string | null;
+    algorithmChallenger?: string | null;
     [key: string]: unknown;
 }
 
@@ -925,7 +950,9 @@ export const EMPTY_FORM: CaseFormData = {
     includePythonCode: false,
     scenarioDescription: "",
     guidingQuestion: "",
-    suggestedTechniques: [],
+    algorithmMode: "single",
+    algorithmPrimary: null,
+    algorithmChallenger: null,
     availableFrom: "",
     dueAt: "",
 };

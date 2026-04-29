@@ -1,9 +1,9 @@
 /** ADAM v4.1 — AuthoringForm: formulario del profesor, fiel al mockup HtmlFormFrame.html */
 
 
-import { useState, useCallback, useEffect, useRef, type KeyboardEvent, type FormEvent } from "react";
+import { useState, useCallback, useEffect, useRef, type FormEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { CaseFormData, CaseType, EDADepth, StudentProfile, SuggestRequest, TeacherCourseItem } from "@/shared/adam-types";
+import type { AlgorithmMode, CaseFormData, CaseType, EDADepth, StudentProfile, SuggestRequest, TeacherCourseItem } from "@/shared/adam-types";
 import {
     Select, SelectContent, SelectGroup,
     SelectItem, SelectTrigger, SelectValue,
@@ -17,6 +17,7 @@ import {
     FORM_STATE_SESSION_KEY,
 } from "./authoringFormConfig";
 import { GroupsCombobox } from "./GroupsCombobox";
+import { AlgorithmSelector } from "./AlgorithmSelector";
 
 interface Props {
     initialData?: CaseFormData;
@@ -68,15 +69,16 @@ export function AuthoringForm({
 
     const [scenarioDescription, setScenarioDescription] = useState(initialData?.scenarioDescription ?? "");
     const [guidingQuestion, setGuidingQuestion] = useState(initialData?.guidingQuestion ?? "");
-    const [suggestedTechniques, setSuggestedTechniques] = useState<string[]>(initialData?.suggestedTechniques ?? []);
-    const [algoInput, setAlgoInput] = useState("");
+    // Issue #230 — algorithm picks (replaces 5-chip free-text suggestedTechniques).
+    const [algorithmMode, setAlgorithmMode] = useState<AlgorithmMode>(initialData?.algorithmMode ?? "single");
+    const [algorithmPrimary, setAlgorithmPrimary] = useState<string | null>(initialData?.algorithmPrimary ?? null);
+    const [algorithmChallenger, setAlgorithmChallenger] = useState<string | null>(initialData?.algorithmChallenger ?? null);
 
     const [availableFrom, setAvailableFrom] = useState(initialData?.availableFrom ?? "");
     const [dueAt, setDueAt] = useState(initialData?.dueAt ?? "");
 
     // ── Estados IA ──
     const [formAlertError, setFormAlertError] = useState<string | null>(null);
-    const [areTechniquesStale, setAreTechniquesStale] = useState(false);
     // ── Validation ──
     const [errors, setErrors] = useState<Record<string, boolean>>({});
 
@@ -103,8 +105,15 @@ export function AuthoringForm({
             if (typeof saved.notebookToggle === "boolean") setNotebookToggle(saved.notebookToggle);
             if (typeof saved.scenarioDescription === "string") setScenarioDescription(saved.scenarioDescription);
             if (typeof saved.guidingQuestion === "string") setGuidingQuestion(saved.guidingQuestion);
-            if (Array.isArray(saved.suggestedTechniques)) setSuggestedTechniques(saved.suggestedTechniques as string[]);
-            if (typeof saved.algoInput === "string") setAlgoInput(saved.algoInput);
+            if (saved.algorithmMode === "single" || saved.algorithmMode === "contrast") {
+                setAlgorithmMode(saved.algorithmMode);
+            }
+            if (typeof saved.algorithmPrimary === "string" || saved.algorithmPrimary === null) {
+                setAlgorithmPrimary(saved.algorithmPrimary as string | null);
+            }
+            if (typeof saved.algorithmChallenger === "string" || saved.algorithmChallenger === null) {
+                setAlgorithmChallenger(saved.algorithmChallenger as string | null);
+            }
             if (typeof saved.availableFrom === "string") setAvailableFrom(saved.availableFrom);
             if (typeof saved.dueAt === "string") setDueAt(saved.dueAt);
         } catch {
@@ -188,7 +197,8 @@ export function AuthoringForm({
                 sessionStorage.setItem(FORM_STATE_SESSION_KEY, JSON.stringify({
                     subject, syllabusModule, topicUnit, targetGroups, targetCourseIds, studentProfile,
                     industry, caseType, notebookToggle,
-                    scenarioDescription, guidingQuestion, suggestedTechniques, algoInput,
+                    scenarioDescription, guidingQuestion,
+                    algorithmMode, algorithmPrimary, algorithmChallenger,
                     availableFrom, dueAt,
                 }));
             } catch {
@@ -199,14 +209,9 @@ export function AuthoringForm({
             if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
         };
     }, [subject, syllabusModule, topicUnit, targetGroups, targetCourseIds, studentProfile, industry, caseType,
-        notebookToggle, scenarioDescription, guidingQuestion, suggestedTechniques, algoInput,
+        notebookToggle, scenarioDescription, guidingQuestion,
+        algorithmMode, algorithmPrimary, algorithmChallenger,
         availableFrom, dueAt]);
-
-    const markStale = useCallback(() => {
-        if (suggestedTechniques.length > 0) {
-            setAreTechniquesStale(true);
-        }
-    }, [suggestedTechniques]);
 
     const invalidateSuggestionResponses = useCallback(() => {
         suggestionGenerationRef.current.scenario += 1;
@@ -224,6 +229,10 @@ export function AuthoringForm({
     // ── Validation CanSubmit ──
     const isAlgorithmsRequired = caseType === "harvard_with_eda" || studentProfile === "ml_ds";
     const hasValidTopicUnit = units.length === 0 || !!topicUnit;
+    const hasValidAlgorithmPicks =
+        !!algorithmPrimary
+        && (algorithmMode === "single"
+            || (!!algorithmChallenger && algorithmPrimary.toLowerCase() !== algorithmChallenger.toLowerCase()));
     const canSubmit =
         !!subject &&
         !!syllabusModule &&
@@ -234,7 +243,7 @@ export function AuthoringForm({
         !!guidingQuestion.trim() &&
         !!availableFrom &&
         !!dueAt &&
-        (!isAlgorithmsRequired || suggestedTechniques.length > 0);
+        (!isAlgorithmsRequired || hasValidAlgorithmPicks);
 
     const buildSuggestPayload = useCallback((): SuggestRequest => {
         const moduleName = selectedModule?.module_title ?? "";
@@ -254,8 +263,10 @@ export function AuthoringForm({
             includePythonCode,
             scenarioDescription,
             guidingQuestion,
+            mode: algorithmMode,
         };
     }, [
+        algorithmMode,
         caseType,
         edaDepth,
         guidingQuestion,
@@ -331,13 +342,27 @@ export function AuthoringForm({
                     return;
                 }
 
-                if (data.suggestedTechniques.length > 0) {
-                    setSuggestedTechniques(data.suggestedTechniques);
-                    setAreTechniquesStale(false);
+                // Always sync state with the response so a backend null
+                // (cross-family / off-catalog / unsnappable baseline) clears
+                // the previous selection instead of leaving a stale pick.
+                setAlgorithmPrimary(
+                    typeof data.algorithmPrimary === "string" && data.algorithmPrimary
+                        ? data.algorithmPrimary
+                        : null,
+                );
+                if (algorithmMode === "contrast") {
+                    setAlgorithmChallenger(
+                        typeof data.algorithmChallenger === "string" && data.algorithmChallenger
+                            ? data.algorithmChallenger
+                            : null,
+                    );
+                } else {
+                    setAlgorithmChallenger(null);
                 }
+                setErrors((prev) => ({ ...prev, suggestedTechniques: false }));
             },
         });
-    }, [buildSuggestPayload, canSuggest, resetSuggestionFeedback, techniquesMutation]);
+    }, [algorithmMode, buildSuggestPayload, canSuggest, resetSuggestionFeedback, techniquesMutation]);
 
     // ── B6: Cascading resets ──
     const handleSubjectChange = (id: string) => {
@@ -376,53 +401,33 @@ export function AuthoringForm({
         setTargetCourseIds((prev) => prev.filter((value) => value !== group));
     }, [invalidateSuggestionResponses]);
 
-    // ── Chips Orchestration ──
-    const addChip = useCallback(
-        (value: string) => {
-            const trimmed = value.trim();
-            if (!trimmed) return;
-            if (suggestedTechniques.length >= 5) return;
-            if (suggestedTechniques.some((c) => c.toLowerCase() === trimmed.toLowerCase())) return;
-            setSuggestedTechniques((prev) => [...prev, trimmed]);
+    // ── Issue #230: algorithm selector change handler ──
+    const handleAlgorithmChange = useCallback(
+        (next: { mode: AlgorithmMode; primary: string | null; challenger: string | null }) => {
+            setAlgorithmMode(next.mode);
+            setAlgorithmPrimary(next.primary);
+            setAlgorithmChallenger(next.challenger);
+            setErrors((prev) => ({ ...prev, suggestedTechniques: false }));
         },
-        [suggestedTechniques]
-    );
-
-    const removeChip = useCallback((label: string) => {
-        setSuggestedTechniques((prev) => prev.filter((c) => c !== label));
-    }, []);
-
-    const handleAlgoKeyDown = useCallback(
-        (e: KeyboardEvent<HTMLInputElement>) => {
-            if (e.key === "Enter" || e.key === ",") {
-                e.preventDefault();
-                addChip(algoInput);
-                setAlgoInput("");
-            }
-        },
-        [algoInput, addChip]
+        [],
     );
 
     // ── Component Events Triggering Warning ──
     const onChangeScenarioDescription = (val: string) => {
         invalidateSuggestionResponses();
         setScenarioDescription(val);
-        markStale();
     };
     const onChangeGuidingQuestion = (val: string) => {
         invalidateSuggestionResponses();
         setGuidingQuestion(val);
-        markStale();
     };
     const onIndustryChange = (val: string) => {
         invalidateSuggestionResponses();
         setIndustry(val);
-        markStale();
     };
     const onStudentProfileChange = (val: string) => {
         invalidateSuggestionResponses();
         setStudentProfile(val as StudentProfile);
-        markStale();
     };
     const onCaseTypeChange = (val: CaseType) => {
         invalidateSuggestionResponses();
@@ -430,7 +435,6 @@ export function AuthoringForm({
             setStudentProfile("business");
         }
         setCaseType(val);
-        markStale();
     };
     const onChangeAvailableFrom = (val: string) => {
         setAvailableFrom(val);
@@ -456,7 +460,7 @@ export function AuthoringForm({
             if (!guidingQuestion.trim()) newErrors.guidingQuestion = true;
             if (!availableFrom) newErrors.availableFrom = true;
             if (!dueAt) newErrors.dueAt = true;
-            if (isAlgorithmsRequired && suggestedTechniques.length === 0) newErrors.suggestedTechniques = true;
+            if (isAlgorithmsRequired && !hasValidAlgorithmPicks) newErrors.suggestedTechniques = true;
             // edaDepth is calculated automatically — no user validation needed
 
             // Validate date order after presence checks
@@ -494,7 +498,10 @@ export function AuthoringForm({
                 includePythonCode,
                 scenarioDescription,
                 guidingQuestion,
-                suggestedTechniques,
+                algorithmMode: isAlgorithmsRequired ? algorithmMode : "single",
+                algorithmPrimary: isAlgorithmsRequired ? algorithmPrimary : null,
+                algorithmChallenger:
+                    isAlgorithmsRequired && algorithmMode === "contrast" ? algorithmChallenger : null,
                 availableFrom,
                 dueAt
             };
@@ -514,13 +521,13 @@ export function AuthoringForm({
         setTargetCourseIds([]);
         setScenarioDescription("");
         setGuidingQuestion("");
-        setSuggestedTechniques([]);
-        setAlgoInput("");
+        setAlgorithmMode("single");
+        setAlgorithmPrimary(null);
+        setAlgorithmChallenger(null);
         setErrors({});
         scenarioMutation.reset();
         techniquesMutation.reset();
         setFormAlertError(null);
-        setAreTechniquesStale(false);
         setCaseType("harvard_only");
         setEdaDepth(undefined);
         setIncludePythonCode(false);
@@ -879,75 +886,20 @@ export function AuthoringForm({
                                         </div>
                                     </div>
 
-                                    {/* Técnicas / Algoritmos — visible for harvard_with_eda or for ml_ds with any case type */}
+                                    {/* Algoritmos / Técnicas — Issue #230 (mode toggle 1 deep | 2 contrast + canonical dropdowns) */}
                                     {(caseType === "harvard_with_eda" || studentProfile === "ml_ds") && (
-                                        <div className="pt-4 border-t border-slate-100 mt-2">
-                                            <div className="flex items-center justify-between mb-2.5">
-                                                <div>
-                                                    <label className="text-sm font-semibold text-slate-700 block" htmlFor="algo-input">
-                                                        Algoritmos / Técnicas Sugeridas <span className="text-red-500" aria-hidden="true">*</span>
-                                                        <button
-                                                            type="button"
-                                                            onClick={handleSuggestTechniques}
-                                                            disabled={!canSuggest || techniquesMutation.isPending}
-                                                            className={`ml-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-bold text-[#0144a0] bg-blue-50 border border-blue-200 rounded-lg transition-all ${!canSuggest ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:bg-blue-100 hover:border-blue-300 hover:shadow-sm active:scale-[0.97]"}`}
-                                                        >
-                                                            {techniquesMutation.isPending ? (
-                                                                <><span className="animate-spin w-3 h-3 border-2 border-[#0144a0] border-t-transparent rounded-full"></span> Pensando...</>
-                                                            ) : (
-                                                                <>🪄 Sugerir Técnicas de Análisis</>
-                                                            )}
-                                                        </button>
-                                                    </label>
-                                                    <span className="text-xs text-slate-400 font-normal">
-                                                        {caseType === "harvard_only"
-                                                            ? "Sirven como contexto pedagógico del perfil ML/DS. Máx. 5."
-                                                            : "Al menos una técnica requerida. ADAM las usará para el dataset sintético del caso. Máx. 5."}
-                                                    </span>
-                                                </div>
-
-                                            </div>
-
-                                            <div
-                                                onClick={() => document.getElementById("algo-input")?.focus()}
-                                                className={`input-base w-full flex flex-wrap items-center gap-2 rounded-lg border bg-white px-3 py-2 min-h-[46px] cursor-text transition-colors duration-300 ${areTechniquesStale ? 'border-amber-300 bg-amber-50/20' : 'border-slate-200'}`}
-                                            >
-                                                {suggestedTechniques.map((chip) => (
-                                                    <span
-                                                        key={chip}
-                                                        className={`chip inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-semibold ${areTechniquesStale ? 'border-amber-200 bg-amber-100/50 text-amber-800' : 'border-blue-200 bg-blue-50 text-[#0144a0]'}`}
-                                                    >
-                                                        {chip}
-                                                        <button
-                                                            type="button"
-                                                            onClick={(e) => { e.stopPropagation(); removeChip(chip); }}
-                                                            className={`focus:outline-none ml-1 leading-none text-base ${areTechniquesStale ? 'text-amber-500 hover:text-amber-700' : 'text-blue-400 hover:text-red-500'}`}
-                                                        >
-                                                            ×
-                                                        </button>
-                                                    </span>
-                                                ))}
-                                                <input
-                                                    id="algo-input"
-                                                    type="text"
-                                                    value={algoInput}
-                                                    onChange={(e) => setAlgoInput(e.target.value)}
-                                                    onKeyDown={handleAlgoKeyDown}
-                                                    placeholder="Escribir nombre técnico y Enter..."
-                                                    className="flex-1 bg-transparent text-sm outline-none placeholder:text-slate-400 min-w-[200px] py-0.5"
-                                                />
-                                            </div>
-                                            {suggestedTechniques.length >= 5 && (
-                                                <div className="chip-warning">Máximo 5 algoritmos permitidos.</div>
-                                            )}
-                                            {areTechniquesStale && suggestedTechniques.length > 0 && (
-                                                <div className="text-[11.5px] font-medium text-amber-700 mt-2 ml-1 animate-pulse">
-                                                    ⚠️ Las técnicas sugeridas podrían estar desactualizadas de acuerdo al último contexto académico configurado.
-                                                </div>
-                                            )}
-                                            <ErrorMsg show={!!errors.suggestedTechniques} />
-                                            <p className="field-hint mt-1.5">ADAM optimizará estas variables sobre el Dataset ficticio si logras predefinirlas.</p>
-                                        </div>
+                                        <AlgorithmSelector
+                                            profile={studentProfile}
+                                            caseType={caseType}
+                                            mode={algorithmMode}
+                                            primary={algorithmPrimary}
+                                            challenger={algorithmChallenger}
+                                            onChange={handleAlgorithmChange}
+                                            onSuggest={handleSuggestTechniques}
+                                            isSuggestPending={techniquesMutation.isPending}
+                                            canSuggest={canSuggest}
+                                            hasError={!!errors.suggestedTechniques}
+                                        />
                                     )}
                                 </div>
                             </fieldset>

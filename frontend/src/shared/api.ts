@@ -17,6 +17,7 @@ import type {
     AdminTeacherInviteRequest,
     AdminTeacherInviteResponse,
     AdminTeacherOptionsResponse,
+    AlgorithmCatalog,
     AuthoringBootstrapState,
     AuthoringJobCreateRequest,
     AuthoringJobCreateResponse,
@@ -43,8 +44,10 @@ import type {
     StudentCaseSubmitRequest,
     StudentCaseSubmitResponse,
     StudentCoursesResponse,
+    StudentProfile,
     SuggestRequest,
     SuggestResponse,
+    CaseType,
     TeacherCaseDetailResponse,
     TeacherCaseSubmissionDetailResponse,
     TeacherCaseSubmissionsResponse,
@@ -938,6 +941,15 @@ export const api = {
             signal?: AbortSignal,
         ) {
             await streamRealtimeProgress(jobId, onEvent, signal);
+        },
+        async getAlgorithmCatalog(
+            profile: StudentProfile,
+            caseType: CaseType,
+        ): Promise<AlgorithmCatalog> {
+            const params = new URLSearchParams({ profile, case_type: caseType });
+            return parseJsonResponse<AlgorithmCatalog>(
+                `/authoring/algorithm-catalog?${params.toString()}`,
+            );
         },
     },
     async suggest(intent: IntentType, data: SuggestRequest): Promise<SuggestResponse> {

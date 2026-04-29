@@ -4,6 +4,48 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
+## TODO-230-A: Curar `challenger` para perfil `business` en `ALGORITHM_TAXONOMY`
+
+**What:** Hoy `get_algorithm_catalog("business", "harvard_with_eda").challenger == []` porque el catálogo `business_techniques` solo contiene baselines. El frontend ya degrada el toggle "2 algoritmos" cuando esto pasa, pero el contrato ideal es exponer al menos 1-2 challengers seguros para business (p. ej. `Random Forest interpretable + SHAP`).
+
+**Why:** Permitir el modo contraste también en cursos de negocio sin forzar perfil `ml_ds`.
+
+**Pros:** Mejora la cobertura del modo contrast; mantiene el catálogo corto y curado.
+
+**Cons:** Cambio de catálogo afecta UX inmediatamente; requiere consenso pedagógico.
+
+**Context:** Issue #230 envío inicial mantuvo el catálogo intacto a propósito (cambio quirúrgico). La curación de challengers para business se puede hacer en cualquier PR posterior tocando solo `ALGORITHM_TAXONOMY` y los tests asociados.
+
+---
+
+## TODO-230-B: Consumir `algorithm_mode == "contrast"` en M3 (`m3_content_generator`)
+
+**What:** Cuando `task_payload["algorithm_mode"] == "contrast"` y `len(algoritmos) == 2`, los prompts de M3 deben generar narrativa, secciones de modelado y conclusiones que comparen explícitamente baseline vs challenger (trade-off, métricas, interpretabilidad).
+
+**Why:** Hoy el grafo solo recibe `algoritmos: list[str]` y los prompts no diferencian. Para entregar el "deep contrast" prometido en la UI, M3 necesita branching consciente del modo.
+
+**Pros:** Cierra el ciclo del feature #230; entrega el valor pedagógico real al docente.
+
+**Cons:** Toca `case_generator/graph.py` y prompts sensibles → requiere review eng + diseño.
+
+**Context:** El payload ya viaja con `algorithm_mode`; el campo solo se persiste y el grafo ignora la distinción. Crear como issue separada con plan de prompts contrast-aware.
+
+---
+
+## TODO-230-C: Deprecar `SuggestResponse.suggestedTechniques` cuando todos los consumidores migren a `algorithmPrimary` / `algorithmChallenger`
+
+**What:** Mantener el campo `suggestedTechniques` como espejo legacy mientras dura la transición; planificar su remoción una vez que todos los consumidores (frontend + tooling externo) hayan migrado a los campos canónicos `algorithmPrimary` y `algorithmChallenger` introducidos por #230.
+
+**Why:** Evitar dos fuentes de verdad para la sugerencia de algoritmos.
+
+**Pros:** Limpia la API pública de `/api/suggest`.
+
+**Cons:** Requiere coordinación si el endpoint es llamado fuera del frontend del repo.
+
+**Context:** El frontend ya usa los campos canónicos; el espejo se conserva por compat de tests y posibles consumidores externos no auditados.
+
+---
+
 ## TODO-004: Mover `usePublishCase` a `shared/` para eliminar import cross-feature
 
 **What:** Extraer `usePublishCase` de `frontend/src/features/teacher-dashboard/useTeacherDashboard.ts` hacia un archivo en `shared/` (ej: `shared/usePublishCase.ts`).
