@@ -2180,16 +2180,38 @@ H. Métricas OBLIGATORIAS por tipo de problema (imprímelas SIEMPRE, sin excepci
      `print("F1 macro:", f1_score(y_test, y_pred, average="macro", zero_division=0))`.
      **Para CLASIFICACIÓN BINARIA añade SIEMPRE AUC-ROC y AUC-PR** (las únicas
      métricas que delatan un modelo que predice solo la clase mayoritaria; el
-     accuracy y la confusion_matrix sin AUC pueden disfrazar un fit degenerado):
+     accuracy y la confusion_matrix sin AUC pueden disfrazar un fit degenerado).
+     ATENCIÓN — dos trampas frecuentes que debes evitar SIEMPRE en este bloque:
+       (a) `predict_proba` puede no existir (p.ej. SVC con `probability=False`).
+           Si no existe, intenta `decision_function` antes de saltar AUC.
+       (b) `roc_auc_score` falla con targets binarios string ("yes"/"no") si no
+           binarizas o no fijas `pos_label`. Binariza `y_test` SIEMPRE a 0/1
+           antes del cálculo, usando como clase positiva la última en orden
+           ascendente de `model.classes_` (consistente con la columna 1 de
+           `predict_proba`).
+     Patrón canónico (úsalo literalmente, ajustando solo nombres si fuese
+     necesario):
        `from sklearn.metrics import roc_auc_score, average_precision_score`
-       `if hasattr(model, "predict_proba") and y_test.nunique() == 2:`
-           `proba = model.predict_proba(X_test)[:, 1]`
-           `print("AUC-ROC:", roc_auc_score(y_test, proba))`
-           `print("AUC-PR :", average_precision_score(y_test, proba))`
+       `if y_test.nunique() == 2:`
+           `pos_label = model.classes_[1] if hasattr(model, "classes_") and len(model.classes_) == 2 else sorted(pd.Series(y_train).dropna().unique().tolist())[-1]`
+           `if hasattr(model, "predict_proba"):`
+               `scores = model.predict_proba(X_test)[:, 1]`
+           `elif hasattr(model, "decision_function"):`
+               `scores = model.decision_function(X_test)`
+           `else:`
+               `scores = None; print("AUC omitido: el modelo no expone predict_proba ni decision_function.")`
+           `if scores is not None:`
+               `y_test_bin = (pd.Series(y_test).reset_index(drop=True) == pos_label).astype(int)`
+               `print("AUC-ROC:", roc_auc_score(y_test_bin, scores))`
+               `print("AUC-PR :", average_precision_score(y_test_bin, scores))`
      **Pesos de clase OBLIGATORIOS para problemas con desbalance (>1.5x entre clases):**
        - LogisticRegression / RandomForestClassifier / SVC → `class_weight="balanced"`
-       - XGBClassifier → `scale_pos_weight=float((y_train==0).sum()) / max(int((y_train==1).sum()), 1)`
-         (calcúlalo SIEMPRE para binario; NUNCA hardcodees 1.0).
+         (para SVC que requiera AUC, además `probability=True`).
+       - XGBClassifier → NO asumas labels `0/1`. Calcula `scale_pos_weight`
+         desde `y_train.value_counts()` como ratio mayoritaria/minoritaria,
+         coherente con la `pos_label` usada para AUC. Patrón:
+         `vc = y_train.value_counts(); scale_pos_weight = float(vc.max()) / float(max(vc.min(), 1))`.
+         NUNCA hardcodees `1.0` ni asumas `(y_train==0).sum()/(y_train==1).sum()`.
      Imprime ANTES del fit la distribución de clases en train con
      `print("Distribución y_train:", y_train.value_counts(normalize=True).round(3).to_dict())`.
    - Regresión: `from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error` y
@@ -2263,36 +2285,30 @@ J. SHAP es OPCIONAL y SIEMPRE en try/except. Importancia de features con jerarqu
         try/except; si falla, imprime "Modelo sin importancias directas — revisar coeficientes/SHAP manualmente".
    - `plt.tight_layout(); plt.show()` al final de la celda.
 K-bis. **Higiene de feature_cols OBLIGATORIA antes de construir X (anti-features-basura):**
-   Construye `feature_cols` con esta receta determinista, NO uses
-   `df.select_dtypes(include=np.number).columns.tolist()` directo (eso arrastra
-   IDs, constantes y residuos):
-     ```
-     # 1) Candidatas: numéricas + categóricas de baja/media cardinalidad
-     num_cols = df.select_dtypes(include=np.number).columns.tolist()
-     cat_cols = [c for c in df.select_dtypes(include=["object", "category"]).columns
-                 if df[c].nunique(dropna=True) <= 20]
-     candidates = [c for c in (num_cols + cat_cols) if c != target_col]
-     # 2) Drop ID-like (cardinalidad == n_filas) y nombres con "id"
-     n = len(df)
-     candidates = [c for c in candidates
-                   if df[c].nunique(dropna=True) < n
-                   and "id" not in normalize_colname(c).split("_")]
-     # 3) Drop near-constants (nunique <= 1) y high-null (>50% NaN)
-     candidates = [c for c in candidates
-                   if df[c].nunique(dropna=True) > 1
-                   and df[c].isna().mean() <= 0.5]
-     # 4) Drop features de leakage según contrato + patrones temporal-posteriores
-     #    (ver "Defensa extra anti-leakage" en Reglas CONTRACT-FIRST)
-     feature_cols = candidates
-     print("feature_cols efectivos:", feature_cols)
-     # 5) Construye X. Si hay categóricas, one-hot ANTES del split:
-     X = pd.get_dummies(df[feature_cols], drop_first=True, dummy_na=False)
-     y = df[target_col]
-     assert X.shape[1] >= 1, "feature_cols vacío tras higiene — revisa el dataset."
-     ```
-   Si `X.shape[1] == 0` o `assert` falla, imprime `"⚠️ REQUISITO FALTANTE: sin
+   Construye `feature_cols` con esta receta determinista en cinco pasos. NO uses
+   `df.select_dtypes(include=np.number).columns.tolist()` directo (arrastra IDs,
+   constantes y residuos). NO emitas estos pasos como bloque cercado con triple
+   backtick — emítelos como código Python normal de la celda (Regla absoluta 3):
+     1) Candidatas = numéricas + categóricas de cardinalidad ≤ 20.
+        `num_cols = df.select_dtypes(include=np.number).columns.tolist()`
+        `cat_cols = [c for c in df.select_dtypes(include=["object", "category"]).columns if df[c].nunique(dropna=True) <= 20]`
+        `candidates = [c for c in (num_cols + cat_cols) if c != target_col]`
+     2) Drop ID-like (cardinalidad == n_filas o token `"id"` en el nombre normalizado).
+        `n = len(df)`
+        `candidates = [c for c in candidates if df[c].nunique(dropna=True) < n and "id" not in normalize_colname(c).split("_")]`
+     3) Drop near-constants (`nunique <= 1`) y high-null (`>50%` NaN).
+        `candidates = [c for c in candidates if df[c].nunique(dropna=True) > 1 and df[c].isna().mean() <= 0.5]`
+     4) Drop features de leakage por contrato + patrones temporal-posteriores
+        (ver "Defensa extra anti-leakage" en Reglas CONTRACT-FIRST).
+        `feature_cols = candidates`
+        `print("feature_cols efectivos:", feature_cols)`
+     5) Construye X con one-hot ANTES del split (categóricas codificadas):
+        `X = pd.get_dummies(df[feature_cols], drop_first=True, dummy_na=False)`
+        `y = df[target_col]`
+        `assert X.shape[1] >= 1, "feature_cols vacío tras higiene — revisa el dataset."`
+   Si `X.shape[1] == 0` o el `assert` falla, imprime `"⚠️ REQUISITO FALTANTE: sin
    features útiles tras higiene"` y SALTA el algoritmo. Esto evita los gráficos
-   de feature_importance con barras todas en 0 (que indican que el modelo
+   de feature_importance con barras todas en 0 (síntoma de que el modelo
    trabajó solo con ruido o constantes).
 
 K. EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo:

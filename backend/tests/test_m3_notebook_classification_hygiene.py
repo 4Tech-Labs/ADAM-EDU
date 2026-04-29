@@ -85,7 +85,10 @@ def test_prompt_carves_out_validation_guards_from_silent_except() -> None:
 
 
 def test_prompt_still_renders_with_existing_substitution_vars() -> None:
-    """Smoke: las nuevas reglas no rompen el .format() existente."""
+    """Smoke real: .format() no lanza, los placeholders desaparecen y los
+    valores sustituidos sí aparecen literalmente. El check anterior
+    (`'{' not in ... or '{{' not in ...`) era una tautología: tras .format()
+    `{{` ya se transforma en `{`, así que la rama derecha siempre era True."""
     rendered = M3_NOTEBOOK_ALGO_PROMPT.format(
         m3_content="contenido m3",
         algoritmos='["LogisticRegression", "XGBoost"]',
@@ -95,5 +98,22 @@ def test_prompt_still_renders_with_existing_substitution_vars() -> None:
         dataset_contract_block="(sin contrato)",
         data_gap_warnings_block="(sin brechas)",
     )
-    assert len(rendered) > 5000
-    assert "{" not in rendered.split("---")[0] or "{{" not in rendered  # placeholders bien escapados
+    # 1) Ningún placeholder canónico debe sobrevivir al .format()
+    for placeholder in (
+        "{m3_content}",
+        "{algoritmos}",
+        "{familias_meta}",
+        "{case_title}",
+        "{output_language}",
+        "{dataset_contract_block}",
+        "{data_gap_warnings_block}",
+    ):
+        assert placeholder not in rendered, f"placeholder sin sustituir: {placeholder}"
+    # 2) Los valores sustituidos deben aparecer literalmente.
+    assert "contenido m3" in rendered
+    assert "Caso Test" in rendered
+    assert "(sin contrato)" in rendered
+    assert "(sin brechas)" in rendered
+    assert "LogisticRegression" in rendered
+    # 3) Sigue siendo un prompt sustancial (sanidad gruesa, no fragil a refactor).
+    assert len(rendered) > 1000
