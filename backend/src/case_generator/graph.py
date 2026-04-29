@@ -776,6 +776,25 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             f"dilema={len(result.dilema_brief)} chars"
         )
 
+        # Issue #225 — persiste contrato dataset↔dilema (None-safe).
+        contract_dict = (
+            result.dataset_schema_required.model_dump()
+            if result.dataset_schema_required is not None
+            else None
+        )
+
+        # Issue #228 — endurecemos el contrato emitido por el LLM con dos
+        # validaciones deterministas:
+        #   (a) coherencia semántica título↔target → warning si hay mismatch.
+        #   (b) inferencia de leakage por naming → marca features obvias
+        #       (retention_*, churn_*, nps, ...) cuando el target NO es de
+        #       la familia retención. Cero tokens, idempotente.
+        coherence_warnings = _validate_target_semantic_coherence(
+            result.titulo,
+            (contract_dict or {}).get("target_column") if contract_dict else None,
+        )
+        contract_dict = _infer_leakage_risk_from_naming(contract_dict)
+
         return {
             "current_agent": "case_architect",
             "titulo": result.titulo,
@@ -786,14 +805,13 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             "doc1_anexo_financiero": result.anexo_financiero,
             "doc1_anexo_operativo": result.anexo_operativo,
             "doc1_anexo_stakeholders": result.anexo_stakeholders,
-            # Issue #225 — persiste contrato dataset↔dilema (None-safe).
             # downstream nodes leen state["dataset_schema_required"] y degradan
             # gracefully al comportamiento previo si es None.
-            "dataset_schema_required": (
-                result.dataset_schema_required.model_dump()
-                if result.dataset_schema_required is not None
-                else None
-            ),
+            "dataset_schema_required": contract_dict,
+            # Issue #228 — semilla de data_gap_warnings con detección de
+            # mismatch título↔target. schema_designer concatenará sus propios
+            # warnings (missing/leakage) preservando esta semilla.
+            "data_gap_warnings": coherence_warnings,
         }
     except Exception as e:
         logger.error("[case_architect] ERROR: %s", e, exc_info=True)
@@ -1712,6 +1730,168 @@ _CONTRACT_TYPE_TO_SCHEMA_TYPE = {
 }
 
 
+# ─────────────────────────────────────────────────────────
+# Issue #228 — Coherencia semántica título↔target + inferencia de leakage
+# Determinista, cero tokens LLM. Cubre las dos brechas observadas en la
+# revisión empírica de PR #227 (caso "LogiTech — retención" con target
+# `delay_flag` y features `retention_m*` no marcadas como leakage).
+# ─────────────────────────────────────────────────────────
+
+# Diccionario título→tokens esperados en target_column.name/role.
+# Cada clave es un keyword (sin acentos) que puede aparecer en el título;
+# el valor es la lista de tokens (snake_case) que el target debería contener
+# para considerarse coherente. Mantener corto y de alta precisión: si el
+# título no matchea ninguna clave, NO emitimos warning (silent OK).
+_TITLE_TO_TARGET_TOKENS: dict[str, tuple[str, ...]] = {
+    "retencion": ("churn", "retention", "renewal", "attrition"),
+    "retención": ("churn", "retention", "renewal", "attrition"),
+    "churn": ("churn", "retention", "attrition"),
+    "abandono": ("churn", "attrition", "abandon"),
+    "cancelacion": ("churn", "cancel", "attrition"),
+    "cancelación": ("churn", "cancel", "attrition"),
+    "fidelizacion": ("churn", "retention", "loyalty"),
+    "fidelización": ("churn", "retention", "loyalty"),
+    "retraso": ("delay", "late", "lateness", "delivery_time"),
+    "demora": ("delay", "late", "lateness", "delivery_time"),
+    "fraude": ("fraud", "fraudulent", "anomaly"),
+    "fraud": ("fraud", "fraudulent", "anomaly"),
+    "default": ("default", "delinquency", "credit_loss"),
+    "morosidad": ("default", "delinquency", "overdue"),
+    "ventas": ("sales", "revenue", "demand", "units_sold"),
+    "demanda": ("demand", "sales", "units_sold", "forecast"),
+    "ingresos": ("revenue", "sales", "income"),
+    "rotacion": ("turnover", "attrition", "churn"),
+    "rotación": ("turnover", "attrition", "churn"),
+    "produccion": ("output", "production", "throughput"),
+    "producción": ("output", "production", "throughput"),
+    "calidad": ("defect", "quality", "reject"),
+    "defectos": ("defect", "reject", "quality"),
+    "satisfaccion": ("satisfaction", "nps", "csat"),
+    "satisfacción": ("satisfaction", "nps", "csat"),
+}
+
+# Patrones de naming que marcan leakage cuando el target NO es la propia familia
+# de retención/churn. Aplicado por _infer_leakage_risk_from_naming.
+_LEAKAGE_NAMING_PATTERN = re.compile(
+    r"(?i)("
+    r"^retention_|^churn_|^churn$|^retention$|"
+    r"^nps$|^csat$|customer_ltv|^ltv$|"
+    r"^complaint|^complaints?_|cancellation_|cancellations?$|"
+    r"_post_event|_after_event|_post_churn"
+    r")"
+)
+
+# Tokens de nombre del target que identifican targets de retención/churn;
+# se usan para evitar inferir leakage por naming cuando el propio objetivo
+# pertenece a esa misma familia (las retention_* features podrían ser lags
+# válidos de auditoría temporal en ese caso).
+_RETENTION_TARGET_NAME_TOKENS: tuple[str, ...] = (
+    "churn", "retention", "renewal", "attrition", "loyalty",
+)
+
+
+def _validate_target_semantic_coherence(
+    case_title: str | None, target_spec: dict | None
+) -> list[str]:
+    """Detecta desalineamiento entre título del caso y target_column.
+
+    Devuelve list[str] de warnings (vacía si no hay mismatch o no aplica).
+    Cero LLM, cero red, idempotente. Falsos positivos minimizados: solo
+    emite cuando el título contiene un keyword conocido y el target no
+    matchea NINGUNO de los tokens esperados.
+    """
+    if not case_title or not target_spec:
+        return []
+    target_name = (target_spec.get("name") or "").lower().strip()
+    target_role = (target_spec.get("role") or "").lower().strip()
+    if not target_name:
+        return []
+
+    title_lower = case_title.lower()
+    matched_keys: list[str] = []
+    expected_tokens: set[str] = set()
+    for kw, tokens in _TITLE_TO_TARGET_TOKENS.items():
+        if kw in title_lower:
+            matched_keys.append(kw)
+            expected_tokens.update(tokens)
+
+    if not expected_tokens:
+        # Título sin keyword conocido — no juzgamos coherencia (silent OK).
+        return []
+
+    haystack = f"{target_name} {target_role}"
+    if any(tok in haystack for tok in expected_tokens):
+        return []
+
+    expected_str = ", ".join(sorted(expected_tokens))
+    matched_str = ", ".join(sorted(set(matched_keys)))
+    return [
+        f"target_semantic_mismatch: el título sugiere [{matched_str}] "
+        f"(tokens esperados: {expected_str}) pero target_column.name='{target_name}' "
+        f"(role={target_role or 'n/a'}). Revisa que el dataset y el dilema "
+        f"resuelvan la misma pregunta de negocio."
+    ]
+
+
+def _infer_leakage_risk_from_naming(contract: dict | None) -> dict | None:
+    """Marca features con `is_leakage_risk=True` cuando su nombre matchea
+    patrones de naming (retention_*, churn_*, nps, customer_ltv, complaint_*,
+    cancellation_*, *_post_event) Y el target NO pertenece a la familia de
+    retención/churn (en cuyo caso esas features podrían ser lags válidos).
+
+    No muta el dict de entrada. Idempotente: features ya marcadas se respetan.
+    Devuelve el contrato (posiblemente con flags adicionales) o None.
+    """
+    if not contract:
+        return contract
+
+    target = contract.get("target_column") or {}
+    target_name = (target.get("name") or "").lower()
+    target_role = (target.get("role") or "").lower()
+
+    target_is_retention = (
+        any(tok in target_name for tok in _RETENTION_TARGET_NAME_TOKENS)
+        or target_role == "forecasting_target" and "retention" in target_name
+    )
+    if target_is_retention:
+        # No inferimos leakage: retention_m* podría ser un lag válido del propio target.
+        return contract
+
+    new_contract = dict(contract)
+    new_features: list[dict] = []
+    inferred_count = 0
+    for feat in contract.get("feature_columns") or []:
+        fname = (feat.get("name") or "").strip()
+        if not fname:
+            new_features.append(feat)
+            continue
+        if feat.get("is_leakage_risk"):
+            new_features.append(feat)
+            continue
+        if _LEAKAGE_NAMING_PATTERN.search(fname):
+            updated = dict(feat)
+            updated["is_leakage_risk"] = True
+            # Marca interna no destinada a docente: queda en el dict del
+            # contrato pero no se propaga a ColumnDefinition.description
+            # (downstream solo lee `description`). Útil para auditoría/logging.
+            updated["leakage_inferred_by"] = "naming_pattern"
+            new_features.append(updated)
+            inferred_count += 1
+        else:
+            new_features.append(feat)
+
+    if inferred_count == 0:
+        return contract
+
+    new_contract["feature_columns"] = new_features
+    logger.warning(
+        "[contract.leakage_inference] %d feature(s) auto-marcadas como leakage "
+        "por naming (target='%s', role='%s')",
+        inferred_count, target_name, target_role,
+    )
+    return new_contract
+
+
 def _format_dataset_contract_block(contract: dict | None) -> str:
     """Renderiza el contrato como bloque legible para inyectar en SCHEMA_DESIGNER_PROMPT.
 
@@ -1972,7 +2152,10 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
             contract = state.get("dataset_schema_required")
             schema_result = _augment_schema_with_contract(schema_result, contract)
             missing, leakage = _validate_schema_against_contract(schema_result, contract)
-            warnings_payload: list[str] = []
+            # Issue #228 — preserva semillas de data_gap_warnings emitidas por
+            # case_architect (ej: target_semantic_mismatch). LangGraph reemplaza
+            # el canal en cada return, así que merge explícito.
+            warnings_payload: list[str] = list(state.get("data_gap_warnings") or [])
             if missing:
                 warnings_payload.extend(missing)
             if leakage:
@@ -1990,7 +2173,8 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
     contract = state.get("dataset_schema_required")
     fallback_schema = _augment_schema_with_contract(fallback_schema, contract)
     missing, leakage = _validate_schema_against_contract(fallback_schema, contract)
-    warnings_payload = []
+    # Issue #228 — preserva warnings sembrados por case_architect.
+    warnings_payload = list(state.get("data_gap_warnings") or [])
     if missing:
         warnings_payload.extend(missing)
     if leakage:

@@ -172,10 +172,33 @@ Reglas duras:
    Ej: si el dilema es "decidir cómo retener clientes", el target NO puede ser un
    código aleatorio sin relación causal. Debe ser una variable medible y observable
    en producción (ej: `churn_flag`, `delivery_delay_minutes`, `default_60d`).
+1bis. **Coherencia título↔target (Issue #228)**: el `name` y el `role` del target
+   deben reflejar el sustantivo central del `titulo`. Mapeo de referencia
+   (no exhaustivo — adapta al caso, pero respeta la familia):
+     - título habla de "retención"/"churn"/"abandono"/"fidelización" → target
+       en familia retención: `churn_flag`, `retention_rate`, `renewal_flag`,
+       con role `classification_target` o `regression_target`. **NO** uses
+       `delay_flag`, `defect_count`, etc.
+     - título habla de "retraso"/"demora"/"entrega" → target operativo:
+       `delivery_delay_minutes`, `late_delivery_flag`.
+     - título habla de "fraude" → `fraud_flag`, role `anomaly_target` o
+       `classification_target`.
+     - título habla de "ventas"/"demanda"/"ingresos" → `units_sold`, `revenue`,
+       role `regression_target` o `forecasting_target`.
+     - título habla de "calidad"/"defectos" → `defect_count`, `reject_rate`.
+   Si el dilema requiere combinar dos familias, prioriza el sustantivo del título.
 2. **Anti-leakage**: marca `is_leakage_risk=true` y/o `temporal_offset_months>0`
    en cualquier feature que en operación real se conoce DESPUÉS del target.
    Ej: al predecir `churn_flag` del mes 0, las columnas `retention_m3`, `retention_m6`,
    `retention_m12` son leakage por construcción → marcarlas siempre.
+2bis. **Naming patterns que SIEMPRE son leakage cuando el target NO es de
+   familia retención (Issue #228)**: `retention_*`, `churn_*`, `nps`, `csat`,
+   `customer_ltv`, `complaint_*`, `cancellation_*`, `*_post_event`. Si tu
+   target es operativo (delay/defecto/fraude/ventas) y declaras alguna de
+   estas como feature, marca `is_leakage_risk=true` SIEMPRE — el pipeline
+   downstream las excluirá del entrenamiento. (El validador determinista
+   las marcará automáticamente si lo olvidas, pero declararlas correctamente
+   evita el warning visible en logs.)
 3. `feature_columns` debe contener entre 3 y 8 entradas. Mínimo 2 features con
    `is_leakage_risk=false` para garantizar señal aprendible.
 4. `domain_features_required` lista categorías semánticas que `schema_designer` debe
@@ -2159,10 +2182,31 @@ I. Split anti-leakage para clasificación/regresión (ORDEN OBLIGATORIO):
    - Justifica en comentario por qué elegiste cada estrategia.
 J. SHAP es OPCIONAL y SIEMPRE en try/except. Importancia de features con jerarquía estricta
    (NO asumas `feature_importances_` para todo modelo — LogisticRegression no lo expone):
+   - **Issue #228 — SHAP atómico (CRÍTICO)**: `shap.summary_plot()` crea su propia
+     figura internamente y NO acepta el `ax=` que le pases vía `plt.sca(ax)`.
+     Mezclarlo con otros gráficos en `plt.subplots(1, N)` deja paneles vacíos
+     (bug visual confirmado en el caso LogiTech). Reglas obligatorias:
+       (a) SHAP SIEMPRE en su propia celda, dedicada exclusivamente a SHAP.
+           NUNCA dentro de un `subplots(1, 2)` con confusion_matrix u otro plot.
+       (b) Llama SIEMPRE con `show=False`, captura la figura activa con
+           `fig = plt.gcf()` y cierra con `plt.tight_layout(); plt.show()`.
+           Patrón canónico:
+             `import shap`
+             `explainer = shap.TreeExplainer(model)`
+             `sample = X_test.sample(min(len(X_test), 200), random_state=42)`
+             `shap_values = explainer.shap_values(sample)`
+             `shap.summary_plot(shap_values, sample, show=False)`
+             `plt.tight_layout(); plt.show()`
+       (c) Si SHAP falla (import, TreeExplainer incompatible, backend), en el
+           `except Exception` abre una NUEVA figura (`plt.figure(figsize=(8, 5))`)
+           y ejecuta el ladder de fallback abajo. NO reutilices la figura SHAP.
    - Si el nombre del algoritmo en `algoritmos` contiene "shap": intenta
-     `import shap; explainer = shap.TreeExplainer(model); shap.summary_plot(...)`; en
-     `except Exception` cae al ladder de abajo (SHAP es opcional y puede fallar en muchos\n     puntos: import, TreeExplainer incompatible, plot backend; broad catch es aceptable\n     porque cualquier fallo aquí es ruido pedagógico, no un bug que esconder).
-   - Ladder de fallback (úsalo siempre si SHAP no se ejecutó):
+     `import shap; explainer = shap.TreeExplainer(model); shap.summary_plot(..., show=False)`; en
+     `except Exception` cae al ladder de abajo (SHAP es opcional y puede fallar en muchos
+     puntos: import, TreeExplainer incompatible, plot backend; broad catch es aceptable
+     porque cualquier fallo aquí es ruido pedagógico, no un bug que esconder).
+   - Ladder de fallback (úsalo siempre si SHAP no se ejecutó), SIEMPRE en figura nueva:
+     `plt.figure(figsize=(8, 5))` antes de cualquier `.plot.barh()`.
      1) `if hasattr(model, "feature_importances_"):`
           `pd.Series(model.feature_importances_, index=X.columns).nlargest(15).plot.barh()`
      2) `elif hasattr(model, "coef_"):`
@@ -2170,7 +2214,7 @@ J. SHAP es OPCIONAL y SIEMPRE en try/except. Importancia de features con jerarqu
           `pd.Series(imp, index=X.columns).nlargest(15).plot.barh()`
      3) `else:` intenta `from sklearn.inspection import permutation_importance` dentro de
         try/except; si falla, imprime "Modelo sin importancias directas — revisar coeficientes/SHAP manualmente".
-   - `plt.tight_layout(); plt.show()` al final.
+   - `plt.tight_layout(); plt.show()` al final de la celda.
 K. EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo:
    - Distribución del target (si fue detectado): `target_col.value_counts(normalize=True)`.
    - % missing por columna ordenado desc: `df.isna().mean().sort_values(ascending=False).head(10)`.
@@ -2180,6 +2224,27 @@ K. EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo:
    - GUARDA de tamaño mínimo: si `len(df) < 50`, imprime una ADVERTENCIA visible
      ("⚠️ Dataset pequeño (n=<N>): los modelos posteriores son ilustrativos; las métricas
      tienen alta varianza”) para que el estudiante interprete los resultados con cautela.
+L. **Atomic Cell Charting (Issue #228 — un gráfico por celda)**: cada celda de
+   código que muestre un plot DEBE contener exactamente UN `plt.show()` y UNA
+   única figura visible. Reglas operativas:
+   - **PROHIBIDO** `plt.subplots(1, N)` o `plt.subplots(N, M)` para mezclar
+     gráficos heterogéneos en una misma celda (ej: confusion_matrix + SHAP +
+     feature_importances en un solo grid). Esto es la causa raíz del bug
+     visual SHAP-vacío observado en el caso LogiTech.
+   - **OBLIGATORIO**: por cada algoritmo, parte el bloque en sub-celdas:
+       (2a) Entrenamiento + métricas — celda de código SIN plots, solo
+            `print(...)` de classification_report / RMSE / Silhouette.
+       (2b) Visualización primaria del algoritmo (la del campo "visualizacion"
+            del entry correspondiente en `familias_meta`) — celda dedicada
+            con una sola `plt.figure(figsize=(...))` y un solo `plt.show()`.
+       (2c) [Solo si aplica] Importancia de features — celda dedicada,
+            `plt.figure(...)` y un solo `plt.show()`. Aplica REGLA J.
+       (2d) [Solo si "shap" aparece en el nombre del algoritmo] Celda SHAP
+            DEDICADA: nada más que el bloque SHAP atómico de la regla J.
+   - `plt.subplots(1, 2)` SOLO se permite cuando los DOS subplots son del
+     mismo tipo y se generan con la misma API (ej: dos `sns.heatmap(..., ax=axN)`
+     consecutivos). NUNCA mezcles SHAP con cualquier otra cosa.
+   - Cada celda de visualización debe terminar con `plt.tight_layout(); plt.show()`.
 
 # Estructura OBLIGATORIA
 
@@ -2220,8 +2285,9 @@ except Exception as e:
     print(f"⚠️ EDA Express falló: {{e}}")
 
 ## Para CADA familia en {familias_meta}, y para CADA algoritmo dentro del campo
-## "algoritmos" de esa familia, emite EXACTAMENTE 3 celdas (no colapses dos algoritmos
-## en un solo bloque):
+## "algoritmos" de esa familia, emite las siguientes celdas EN ORDEN (no
+## colapses dos algoritmos en un solo bloque, no mezcles plots heterogéneos
+## en una sola celda — REGLA L):
 
 ## Celda 1 — Concepto (markdown) [una por algoritmo]
 # %% [markdown]
@@ -2230,7 +2296,7 @@ except Exception as e:
 # **Hipótesis experimental:** [extraída de {m3_content}, 1-2 líneas — NO inventes columnas]
 # **Prerequisitos:** [campo "prerequisito" del entry correspondiente en {familias_meta}]
 
-## Celda 2 — Entrenamiento + Métricas (código) [una por algoritmo]
+## Celda 2a — Entrenamiento + Métricas (código, SIN plots) [una por algoritmo]
 # %%
 try:
     # 1. INTENTO PRIMARIO: Buscar por alias semántico usando helpers del base template
@@ -2255,15 +2321,55 @@ try:
     # 5. Para clasificación/regresión: aplica REGLA I (split temporal si hay fecha; si no,
     #    train_test_split con stratify=y).
     # 6. Imprime SIEMPRE las métricas obligatorias (REGLA H) para el tipo de problema.
-    # 7. Cierra con la visualización del campo "visualizacion" en {familias_meta}.
-    #    Para clasificación/regresión: feature_importances_ (o REGLA J si hay "shap" en el nombre).
-    #    plt.tight_layout(); plt.show()
+    # 7. NO emitas plots en esta celda — la visualización va en 2b/2c/2d.
+    # 8. Asigna `model`, `X`, `X_test`, `y_test`, `y_pred` a nombres reutilizables
+    #    para que las celdas 2b/2c/2d puedan referirse a ellos sin re-entrenar.
 except Exception as e:
     print(f"⚠️ Error: {{e}}")
 
+## Celda 2b — Visualización primaria (código, exactamente UN plt.show()) [una por algoritmo]
+# %%
+try:
+    # Implementa la visualización del campo "visualizacion" del entry en {familias_meta}.
+    # Patrón obligatorio: plt.figure(figsize=(8, 5)) → render → plt.tight_layout(); plt.show()
+    # NO uses subplots con otros gráficos — UNA figura, UN show. (REGLA L)
+    pass
+except Exception as e:
+    print(f"⚠️ Error visualización primaria: {{e}}")
+
+## Celda 2c — Importancia de features (código, OPCIONAL solo para clasificación/regresión)
+## Omite esta celda completa si el algoritmo es clustering puro / PCA / NLP exploratorio
+## sin modelo supervisado.
+# %%
+try:
+    # Aplica el ladder de REGLA J en figura DEDICADA y nueva:
+    # plt.figure(figsize=(8, 5))
+    # if hasattr(model, "feature_importances_"): ... .nlargest(15).plot.barh()
+    # elif hasattr(model, "coef_"): ... .nlargest(15).plot.barh()
+    # else: permutation_importance dentro de try/except.
+    # plt.tight_layout(); plt.show()
+    pass
+except Exception as e:
+    print(f"⚠️ Error importancia features: {{e}}")
+
+## Celda 2d — SHAP (código, OPCIONAL — solo si "shap" aparece en el nombre del algoritmo)
+## Si el algoritmo NO menciona "shap", OMITE esta celda completa (no la generes vacía).
+# %%
+try:
+    # SHAP atómico — REGLA J (Issue #228). NUNCA en subplot mixto.
+    # import shap
+    # explainer = shap.TreeExplainer(model)
+    # sample = X_test.sample(min(len(X_test), 200), random_state=42)
+    # shap_values = explainer.shap_values(sample)
+    # shap.summary_plot(shap_values, sample, show=False)
+    # plt.tight_layout(); plt.show()
+    pass
+except Exception as e:
+    print(f"⚠️ SHAP no disponible ({{e}}) — revisa la celda 2c para importancias alternativas.")
+
 ## Celda 3 — Acción de Negocio (markdown) [una por algoritmo]
 # %% [markdown]
-# **Explicación pedagógica:** [qué muestran las métricas y el gráfico, 2 líneas]
+# **Explicación pedagógica:** [qué muestran las métricas y los gráficos, 2 líneas]
 # **Acción de negocio:** [próximo paso concreto basado en el resultado, 1 línea]
 
 # Helpers disponibles (del base template — NO los redefinas)
