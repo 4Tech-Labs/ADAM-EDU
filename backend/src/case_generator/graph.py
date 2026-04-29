@@ -2743,8 +2743,10 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 a for a in algoritmos_raw
                 if any(kw in a.lower() for kw in keywords)
             ]
-            # Si no se pudo mapear ningún algo crudo (caso "unsupported" mezclado), conserva
-            # al menos el nombre de la familia para que el prompt pueda renderizar 1 bloque.
+            # Si esta familia fue detectada (está en ALGORITHM_REGISTRY) pero ningún algoritmo
+            # crudo coincide con sus keywords en este segundo paso, conserva al menos el nombre
+            # de la familia para que el prompt pueda renderizar 1 bloque genérico de la familia.
+            # Nota: "unsupported" ya quedó filtrado por el `continue` de arriba.
             if not algos_de_familia:
                 algos_de_familia = [f]
             familias_meta.append({

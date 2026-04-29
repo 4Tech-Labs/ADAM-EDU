@@ -2031,21 +2031,35 @@ H. Métricas OBLIGATORIAS por tipo de problema (imprímelas SIEMPRE, sin excepci
      `print("R2:", r2_score(y_test, y_pred))`.
    - Clustering: `from sklearn.metrics import silhouette_score` y
      `print("Silhouette:", silhouette_score(X, labels))` cuando hay >=2 clusters formados.
-I. Split anti-leakage para clasificación/regresión:
+I. Split anti-leakage para clasificación/regresión (ORDEN OBLIGATORIO):
    - Detecta columna temporal con `find_first_matching_column(df.columns, date_aliases)`.
-   - Si existe y `is_datetime_like(df, col)` o se puede convertir con `pd.to_datetime(..., errors="coerce")`:
-     ordena `df = df.sort_values(col)`, calcula `cut = int(len(df) * 0.8)` y haz split
-     cronológico: `X_train, X_test = X.iloc[:cut], X.iloc[cut:]` (idem `y`).
+   - Si existe: SIEMPRE `df[col] = pd.to_datetime(df[col], errors="coerce")`, descarta filas
+     no convertibles con `df = df.dropna(subset=[col])`, y luego
+     `df = df.sort_values(col).reset_index(drop=True)`.
+   - PROHIBIDO mezclar `df.sort_values(col)` con `X.iloc[...]` / `y.iloc[...]` si X e y se
+     construyeron ANTES de ordenar `df`. Tras ordenar, DERIVA siempre X/y desde el df ordenado:
+     `X = df[feature_cols]; y = df[target_col]` (o reordena con `X = X.loc[df.index]`,
+     `y = y.loc[df.index]` y luego `reset_index(drop=True)`).
+   - Recién entonces `cut = int(len(df) * 0.8)` y split cronológico alineado:
+     `X_train, X_test = X.iloc[:cut], X.iloc[cut:]`; `y_train, y_test = y.iloc[:cut], y.iloc[cut:]`.
      Imprime: `print("Split temporal por", col, "→ train hasta", df[col].iloc[cut-1])`.
    - Si NO hay columna temporal: usa `train_test_split(X, y, test_size=0.2, random_state=42,
      stratify=y if y.nunique() >= 2 and y.value_counts().min() >= 2 else None)`.
    - Justifica en comentario por qué elegiste cada estrategia.
-J. SHAP es OPCIONAL y SIEMPRE en try/except:
+J. SHAP es OPCIONAL y SIEMPRE en try/except. Importancia de features con jerarquía estricta
+   (NO asumas `feature_importances_` para todo modelo — LogisticRegression no lo expone):
    - Si el nombre del algoritmo en `algoritmos` contiene "shap": intenta
-     `import shap; explainer = shap.TreeExplainer(model); shap.summary_plot(...)` con
-     `except ImportError: print("SHAP no disponible — usando feature_importances_ como fallback")`
-     y fallback a `pd.Series(model.feature_importances_, index=X.columns).nlargest(15).plot.barh()`.
-   - Si NO contiene "shap": ignora SHAP completamente, usa feature_importances_ directo.
+     `import shap; explainer = shap.TreeExplainer(model); shap.summary_plot(...)`; en
+     `except (ImportError, Exception)` cae al ladder de abajo.
+   - Ladder de fallback (úsalo siempre si SHAP no se ejecutó):
+     1) `if hasattr(model, "feature_importances_"):`
+          `pd.Series(model.feature_importances_, index=X.columns).nlargest(15).plot.barh()`
+     2) `elif hasattr(model, "coef_"):`
+          `coef = model.coef_; imp = np.abs(coef).mean(axis=0) if coef.ndim > 1 else np.abs(coef).ravel()`
+          `pd.Series(imp, index=X.columns).nlargest(15).plot.barh()`
+     3) `else:` intenta `from sklearn.inspection import permutation_importance` dentro de
+        try/except; si falla, imprime "Modelo sin importancias directas — revisar coeficientes/SHAP manualmente".
+   - `plt.tight_layout(); plt.show()` al final.
 K. EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo:
    - Distribución del target (si fue detectado): `target_col.value_counts(normalize=True)`.
    - % missing por columna ordenado desc: `df.isna().mean().sort_values(ascending=False).head(10)`.
@@ -2055,9 +2069,11 @@ K. EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo:
 
 # Estructura OBLIGATORIA
 
-## Sección 3.0 — EDA Express (UNA sola vez, antes del primer algoritmo)
+## Sección 3.0 — EDA Express (UNA sola vez, antes del primer algoritmo).
+## El base template ya abrió `## Sección 3: Módulos Experimentales`; aquí emite un H3,
+## NO un H2 nuevo, para no duplicar la jerarquía.
 # %% [markdown]
-# ## Sección 3 — Diseño Experimental
+# ### 3.0 EDA Express
 # Antes de entrenar, validamos calidad y forma del dataset (regla K).
 
 # %%
