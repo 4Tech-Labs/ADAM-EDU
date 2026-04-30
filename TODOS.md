@@ -281,6 +281,27 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Cons:** Tiene riesgo de limpieza incorrecta si la heurística no es conservadora; requiere modo dry-run y auditoría de cambios.
 
+---
+
+## TODO-ADR0002-A: Suite de evaluación offline para coherencia escenario↔familia
+
+**What:** Construir un eval set de N (target ~200) prompts sintéticos por familia (`clasificacion` / `regresion` / `clustering` / `serie_temporal`) y medir la tasa con la que el LLM genera un escenario cuyo `problemType` coincide con la familia anclada.
+
+**Why:** ADR 0002 ancla el escenario al algoritmo vía prompt + coherence-check post-LLM. Sin un eval suite no hay forma defendible de saber si refuerzos del prompt mejoran o regresan la coherencia. Hoy solo tenemos un live LLM smoke test (Prophet→serie_temporal) bajo `RUN_LIVE_LLM_TESTS=1`.
+
+**Context:** Ver `docs/adr/0002-suggest-scenario-anchored-by-algorithm.md`. Reusar el mock pattern de `backend/tests/test_suggest_scenario_anchor.py::_patch_llm` y exponer una métrica agregada en el reporte del eval. Considerar correr el eval en CI nightly, no por PR.
+
+---
+
+## TODO-ADR0002-B: Telemetría de `coherenceWarning` y de banner stale
+
+**What:** Emitir métricas (counter + tasa por familia) cuando `SuggestResponse.coherenceWarning` se activa en producción y cuando el frontend renderiza el `ScenarioStaleBanner` variant `stale`. Threshold inicial sugerido: alerta si la tasa de warning supera ~5% en una familia durante 7 días.
+
+**Why:** Sin telemetría no podemos saber si el LLM ignora el anchor en producción ni si los profesores realmente cambian el algoritmo después de generar el escenario (señal de UX para refinar el orden o agregar un confirm step).
+
+**Context:** El campo `coherenceWarning` ya viaja en el contrato de respuesta. Falta wiring de telemetría server-side (endpoint protegido o log estructurado) y client-side (event al render del banner). No bloquea el ship de ADR 0002.
+
+
 **Context:** Reconfirmado en la revisión de corrección de Issue #112. La Fase 2 queda checkpoint-first; la reconciliación histórica sigue fuera de alcance para no mezclar cleanup legado con el fix del blocker async.
 
 **Depends on / blocked by:** Definir criterios de reconciliación por tipo de artifact y ventana temporal, más aprobación operativa para ejecutar limpieza en ambientes compartidos después de estabilizar el resume durable.
