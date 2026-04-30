@@ -56,7 +56,12 @@ export const STUDENT_PROFILES = [
     { value: "ml_ds", label: "Machine Learning / Data Science" },
 ];
 
-export const FORM_STATE_SESSION_KEY = "adam.authoring.formState.v2";
+// Bumped from v2 → v3 when the scenario-anchored authoring contract landed.
+// This forces a one-time discard of stored drafts whose algorithm picks could
+// reference algorithms removed from the canonical catalog (e.g. LSTM removal),
+// or whose `scenarioDescription` was generated under the legacy non-anchored
+// prompt and therefore lacks coherence with the new picker-first ordering.
+export const FORM_STATE_SESSION_KEY = "adam.authoring.formState.v3";
 
 export const FORM_STYLES = `
 .teacher-form .input-base {
