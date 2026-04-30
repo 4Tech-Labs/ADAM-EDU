@@ -56,6 +56,7 @@ def test_back_compat_alias_points_to_classification() -> None:
         ("clustering", M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING),
         ("serie_temporal", M3_NOTEBOOK_ALGO_PROMPT_TIMESERIES),
     ],
+    ids=["clasificacion", "regresion", "clustering", "serie_temporal"],
 )
 def test_prompt_accepts_shared_format_keys(family: str, prompt: str) -> None:
     rendered = prompt.format(**SHARED_FORMAT_KEYS)

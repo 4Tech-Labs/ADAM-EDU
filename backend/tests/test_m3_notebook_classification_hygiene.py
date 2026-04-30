@@ -9,11 +9,22 @@ matriz de confusión 1x1) by enforcing five rules in the prompt:
   4. Higiene de feature_cols (drop IDs/constantes, one-hot categóricas)
   5. UndefinedMetricWarning ya no se silencia globalmente
 
+Issue #236 — Harvard ml_ds quality bar adds:
+
+  6. Bloque comparativo obligatorio (DummyClassifier + Pipelines + StratifiedKFold
+     + curvas ROC/PR + tabla comparativa final) con sentinelas contractuales.
+  7. ``_FAMILY_REQUIRED_PATTERNS`` + extensión del validador a ``FALTANTE: <token>``
+     sin afectar otras familias.
+
 Cero LLMs, cero red, cero DB.
 """
 
 from __future__ import annotations
 
+from case_generator.graph import (
+    _FAMILY_REQUIRED_PATTERNS,
+    _validate_notebook_family_consistency,
+)
 from case_generator.prompts import (
     M3_NOTEBOOK_ALGO_PROMPT,
     M3_NOTEBOOK_BASE_TEMPLATE,
@@ -117,3 +128,112 @@ def test_prompt_still_renders_with_existing_substitution_vars() -> None:
     assert "LogisticRegression" in rendered
     # 3) Sigue siendo un prompt sustancial (sanidad gruesa, no fragil a refactor).
     assert len(rendered) > 1000
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Issue #236 — Harvard ml_ds quality bar (sentinelas + required-token validator)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_REQUIRED_SENTINELS = (
+    "# === SECTION:dummy_baseline ===",
+    "# === SECTION:pipeline_lr ===",
+    "# === SECTION:pipeline_rf ===",
+    "# === SECTION:cv_scores ===",
+    "# === SECTION:roc_pr_curves ===",
+    "# === SECTION:comparison_table ===",
+)
+
+_REQUIRED_API_TOKENS = (
+    "DummyClassifier",
+    "ColumnTransformer",
+    "StandardScaler",
+    "OneHotEncoder",
+    "StratifiedKFold",
+    "cross_val_score",
+    "roc_curve(",
+    "precision_recall_curve(",
+)
+
+
+def test_prompt_emits_six_mandatory_sentinels_for_classification() -> None:
+    """Las 6 sentinelas son contractuales: el validador rechaza el notebook
+    si falta cualquiera. El prompt DEBE instruir al LLM a emitirlas."""
+    for sentinel in _REQUIRED_SENTINELS:
+        assert sentinel in M3_NOTEBOOK_ALGO_PROMPT, f"falta sentinela {sentinel!r}"
+
+
+def test_prompt_mandates_dummy_pipeline_cv_curves_and_table() -> None:
+    """Las 6 mejoras pedagógicas Harvard ml_ds están explicitadas en el prompt."""
+    for token in _REQUIRED_API_TOKENS:
+        assert token in M3_NOTEBOOK_ALGO_PROMPT, f"falta API token {token!r}"
+    # Tabla comparativa final con columnas exactas.
+    for col in (
+        "auc_roc_cv_mean",
+        "auc_roc_cv_std",
+        "f1_macro",
+        "recall_minority",
+        "training_time_s",
+        "interpretability_note",
+    ):
+        assert col in M3_NOTEBOOK_ALGO_PROMPT, f"falta columna comparison_table {col!r}"
+
+
+def test_prompt_has_dedicated_harvard_quality_section() -> None:
+    """El bloque comparativo vive en una sección case-wide explícita."""
+    assert "Sección 3.0.5" in M3_NOTEBOOK_ALGO_PROMPT
+    assert "PEDAGOGÍA HARVARD" in M3_NOTEBOOK_ALGO_PROMPT
+
+
+def test_required_patterns_only_populated_for_classification() -> None:
+    """Issue #236 se enfoca en clasificación. Otras familias NO deben aparecer
+    en el mapa (devolverán () por .get y mantendrán bit-identicidad pre-#236)."""
+    assert set(_FAMILY_REQUIRED_PATTERNS) == {"clasificacion"}
+
+
+def test_validator_flags_missing_required_tokens_with_faltante_prefix() -> None:
+    """Notebook de clasificación SIN ningún token Harvard → todas las
+    sentinelas + APIs salen como FALTANTE: <token>."""
+    bad = "from sklearn.linear_model import LogisticRegression\nmodel = LogisticRegression()\n"
+    violations = _validate_notebook_family_consistency("clasificacion", bad)
+    # Cada token requerido aparece UNA vez con prefijo FALTANTE.
+    for sentinel in _REQUIRED_SENTINELS:
+        assert f"FALTANTE: {sentinel}" in violations, f"falta marca FALTANTE de {sentinel!r}"
+    assert "FALTANTE: DummyClassifier" in violations
+    assert "FALTANTE: StratifiedKFold" in violations
+    assert "FALTANTE: roc_curve(" in violations
+    assert "FALTANTE: precision_recall_curve(" in violations
+
+
+def test_validator_passes_when_all_required_present() -> None:
+    """Notebook con sentinelas + APIs + sin tokens prohibidos → []. """
+    code = "\n".join(_REQUIRED_SENTINELS) + "\n" + (
+        "from sklearn.dummy import DummyClassifier\n"
+        "from sklearn.compose import ColumnTransformer\n"
+        "from sklearn.preprocessing import StandardScaler, OneHotEncoder\n"
+        "from sklearn.model_selection import StratifiedKFold, cross_val_score\n"
+        "from sklearn.metrics import roc_curve, precision_recall_curve\n"
+        "model = DummyClassifier(strategy='most_frequent')\n"
+        "fpr, tpr, _ = roc_curve(y, scores)\n"
+        "prec, rec, _ = precision_recall_curve(y, scores)\n"
+    )
+    assert _validate_notebook_family_consistency("clasificacion", code) == []
+
+
+def test_validator_does_not_enforce_classification_tokens_on_other_families() -> None:
+    """No-regresión crítica: regresión / clustering / serie_temporal NUNCA
+    reciben FALTANTE: ... aunque omitan los tokens de clasificación."""
+    minimal_code = "from sklearn.linear_model import LinearRegression\n"
+    for family in ("regresion", "clustering", "serie_temporal"):
+        violations = _validate_notebook_family_consistency(family, minimal_code)
+        assert all(not v.startswith("FALTANTE:") for v in violations), (
+            f"familia {family!r} no debe recibir FALTANTE: ... — got {violations!r}"
+        )
+
+
+def test_prohibited_violations_remain_bare_strings_for_back_compat() -> None:
+    """Los tokens prohibidos siguen retornándose SIN prefijo (compat con
+    los unit tests de Issue #233 que hacen `assert token in violations`)."""
+    bad = "from sklearn.cluster import KMeans\nlabels = KMeans().fit_predict(X)\n"
+    violations = _validate_notebook_family_consistency("clasificacion", bad)
+    # El token prohibido viene SIN prefijo FALTANTE.
+    assert "from sklearn.cluster import" in violations

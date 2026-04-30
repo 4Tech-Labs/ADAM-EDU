@@ -3024,6 +3024,45 @@ _FAMILY_PROHIBITED_PATTERNS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Issue #236 — Required-token validator for the Harvard ml_ds quality bar.
+#
+# Unlike `_FAMILY_PROHIBITED_PATTERNS` (which rejects cross-family API leakage),
+# this map enumerates pedagogical artefacts the notebook MUST contain. Today it
+# is populated only for ``clasificacion`` because the v1 quality push targets
+# Logistic Regression vs Random Forest. Other families return ``()`` from the
+# ``.get(family, ())`` lookup, so they remain bit-identical to the pre-#236
+# behaviour (no FALTANTE entries can be raised against them).
+#
+# Two kinds of tokens live here:
+#   * Section sentinels (``# === SECTION:<id> ===``) — force the LLM to emit
+#     the 6 mandatory pedagogical sections in a parser-friendly shape.
+#   * Canonical sklearn API tokens (``DummyClassifier``, ``StratifiedKFold``,
+#     ``ColumnTransformer``, ``cross_val_score``, ``roc_curve(``,
+#     ``precision_recall_curve(``) — guarantee the sections do real work.
+#
+# IMPORTANT: required-token scanning runs against the RAW notebook text (not
+# the comment-stripped variant used for prohibited tokens). Sentinels are
+# Python ``#`` comments and would otherwise be erased by
+# ``_strip_jupytext_for_validation``. Real API tokens also legitimately appear
+# in markdown pedagogical preambles, and that should count as ``present``.
+_FAMILY_REQUIRED_PATTERNS: dict[str, tuple[str, ...]] = {
+    "clasificacion": (
+        "# === SECTION:dummy_baseline ===",
+        "# === SECTION:pipeline_lr ===",
+        "# === SECTION:pipeline_rf ===",
+        "# === SECTION:cv_scores ===",
+        "# === SECTION:roc_pr_curves ===",
+        "# === SECTION:comparison_table ===",
+        "DummyClassifier",
+        "ColumnTransformer",
+        "StratifiedKFold",
+        "cross_val_score",
+        "roc_curve(",
+        "precision_recall_curve(",
+    ),
+}
+
+
 def _strip_jupytext_for_validation(notebook_text: str) -> str:
     """Return only the executable Python from a Jupytext Percent notebook.
 
@@ -3070,21 +3109,47 @@ def _strip_jupytext_for_validation(notebook_text: str) -> str:
 
 
 def _validate_notebook_family_consistency(family: str, code: str) -> list[str]:
-    """Return a list of prohibited tokens found in executable code for ``family``.
+    """Return notebook violations for ``family`` (prohibited + required tokens).
 
-    Strips Jupytext markdown cells and code-comment lines first, then runs a
-    substring scan against ``_FAMILY_PROHIBITED_PATTERNS[family]``. This avoids
-    flagging the prompt's own ``Lista NEGRA`` echoes that the LLM may legitimately
-    include as documentation.
+    Two independent checks are combined into a single flat list of strings so
+    that the existing reprompt-once-then-fail policy in ``m3_notebook_generator``
+    keeps a single integration point.
 
-    Empty list = pass. Non-empty = the LLM strayed; caller should reprompt
-    once and fail-job if the second attempt also contains forbidden tokens.
+    Result format
+    -------------
+    * Prohibited tokens (cross-family API leakage) are returned as **bare
+      strings** matching the pattern (e.g. ``"silhouette_score("``). This
+      preserves backwards compatibility with the Issue #233 unit tests and the
+      reprompt block which references the prompt's ``Lista NEGRA`` section.
+    * Required tokens missing from the notebook (Issue #236, classification
+      Harvard ml_ds quality bar) are returned with a ``"FALTANTE: "`` prefix.
+      The reprompt block can split on this prefix to build a corrective
+      instruction that explicitly lists the missing artefacts.
+
+    Empty list = pass. Non-empty = the LLM strayed; caller reprompts once and
+    fails the job if the second attempt still has any entry.
+
+    Scoping rules (anti false-positive)
+    -----------------------------------
+    * Prohibited scan runs on the **stripped** code (markdown + ``#`` comments
+      removed) so the prompt's own ``Lista NEGRA`` echoes don't trip it.
+    * Required scan runs on the **raw** code because section sentinels are
+      themselves ``#``-prefixed lines and would otherwise be erased by the
+      strip pass; legitimate appearance of a required identifier in a
+      markdown pedagogical preamble also counts as "present".
     """
-    patterns = _FAMILY_PROHIBITED_PATTERNS.get(family, ())
-    if not patterns:
-        return []
-    scannable = _strip_jupytext_for_validation(code)
-    return [p for p in patterns if p in scannable]
+    violations: list[str] = []
+
+    prohibited = _FAMILY_PROHIBITED_PATTERNS.get(family, ())
+    if prohibited:
+        scannable = _strip_jupytext_for_validation(code)
+        violations.extend(p for p in prohibited if p in scannable)
+
+    required = _FAMILY_REQUIRED_PATTERNS.get(family, ())
+    if required:
+        violations.extend(f"FALTANTE: {token}" for token in required if token not in code)
+
+    return violations
 
 
 def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
@@ -3244,37 +3309,54 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
             algo_section = sanitize_markdown(_extract_text(response))
             print(f"[m3_notebook_generator] Sección módulos LLM (1ª pasada): {len(algo_section)} chars")
 
-            # Issue #233 — post-LLM family-consistency check + reprompt-once.
+            # Issue #233 + #236 — post-LLM family-consistency check + reprompt-once.
+            # Violations come pre-tagged: bare strings = prohibited cross-family
+            # tokens (don't echo back to avoid amplification); ``"FALTANTE: ..."``
+            # = required Harvard-quality artefacts missing (DO echo so the LLM
+            # has a precise fixing target).
             violations = _validate_notebook_family_consistency(family, algo_section)
             if violations:
+                missing = [v.removeprefix("FALTANTE: ") for v in violations if v.startswith("FALTANTE: ")]
+                prohibited_hits = [v for v in violations if not v.startswith("FALTANTE: ")]
                 print(
                     f"[m3_notebook_generator] Violación de familia detectada (familia={family}, "
-                    f"tokens={violations}). Reprompt explícito (1/1)."
+                    f"prohibited={prohibited_hits}, faltantes={missing}). Reprompt explícito (1/1)."
                 )
-                # Belt-and-suspenders against reprompt amplification: we do NOT
-                # echo the offending token strings in the corrective message
-                # (the LLM might politely repeat them in its acknowledgement,
-                # which would re-trip the validator and fail the job). Instead
-                # we reference the prompt's own ``Lista NEGRA`` section.
-                reprompt = (
-                    prompt
-                    + "\n\n# CORRECCIÓN OBLIGATORIA\n"
-                    + f"# Tu salida anterior emitió código ejecutable de OTRAS familias prohibidas para '{family}'.\n"
-                    + "# Releé la sección 'Lista NEGRA' del prompt y reescribe la salida COMPLETA\n"
-                    + "# usando EXCLUSIVAMENTE la API estable declarada para esta familia.\n"
-                    + "# Los nombres prohibidos pueden aparecer en celdas markdown como advertencia pedagógica,\n"
-                    + "# pero NUNCA como import, call site, ni dentro de un string ejecutable."
-                )
+                corrective_blocks: list[str] = ["\n\n# CORRECCIÓN OBLIGATORIA"]
+                if prohibited_hits:
+                    # Belt-and-suspenders against reprompt amplification: we do
+                    # NOT echo the offending prohibited tokens (the LLM might
+                    # politely repeat them and re-trip the validator). Refer
+                    # the model to the prompt's own ``Lista NEGRA`` section.
+                    corrective_blocks.append(
+                        f"# Tu salida anterior emitió código ejecutable de OTRAS familias prohibidas para '{family}'.\n"
+                        "# Releé la sección 'Lista NEGRA' del prompt y reescribe la salida COMPLETA\n"
+                        "# usando EXCLUSIVAMENTE la API estable declarada para esta familia.\n"
+                        "# Los nombres prohibidos pueden aparecer en celdas markdown como advertencia pedagógica,\n"
+                        "# pero NUNCA como import, call site, ni dentro de un string ejecutable."
+                    )
+                if missing:
+                    # For FALTANTE we DO echo: the LLM needs to know exactly
+                    # what to add. Sentinels are emitted verbatim.
+                    bullet_list = "\n".join(f"#   - {tok}" for tok in missing)
+                    corrective_blocks.append(
+                        "# Tu salida anterior NO incluyó artefactos pedagógicos OBLIGATORIOS\n"
+                        f"# para la familia '{family}'. Reescribe la salida COMPLETA asegurándote\n"
+                        "# de que aparezcan literalmente (sentinelas como comentario Python al inicio\n"
+                        "# de la celda correspondiente; identificadores como import o call real):\n"
+                        f"{bullet_list}"
+                    )
+                reprompt = prompt + "\n".join(corrective_blocks)
                 response2 = llm.invoke(reprompt)
                 algo_section = sanitize_markdown(_extract_text(response2))
                 violations2 = _validate_notebook_family_consistency(family, algo_section)
                 if violations2:
                     logger.error(
-                        "[m3_notebook_generator] Reprompt falló — familia=%s tokens=%s",
+                        "[m3_notebook_generator] Reprompt falló — familia=%s violations=%s",
                         family, violations2,
                     )
                     raise RuntimeError(
-                        f"M3 notebook generator emitió código de otras familias para "
+                        f"M3 notebook generator no satisfizo la familia "
                         f"'{family}' incluso tras un reprompt: {violations2}. "
                         f"Job marcado como fallido para evitar shipping de notebook roto."
                     )
