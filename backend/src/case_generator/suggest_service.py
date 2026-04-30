@@ -503,6 +503,15 @@ class SuggestRequest(BaseModel):
     scenarioDescription: str = ""
     guidingQuestion: str = ""
 
+    # Scenario-anchored suggest (this PR): when the teacher already picked an
+    # algorithm in the form, send it so the scenario+guidingQuestion prompt can
+    # be anchored to the corresponding family. Optional + backwards compatible:
+    # if absent, the prompt is byte-equal to the legacy (Issue #230) shape.
+    # Family is intentionally NOT a request field — it is derived server-side
+    # via family_of() to keep a single source of truth (the canonical catalog).
+    algorithmPrimary: Optional[str] = None
+    algorithmChallenger: Optional[str] = None
+
 
 class SuggestResponse(BaseModel):
     scenarioDescription: str = ""
@@ -513,6 +522,11 @@ class SuggestResponse(BaseModel):
     # Issue #230 — explicit baseline/challenger fields to drive the new selector.
     algorithmPrimary: Optional[str] = None
     algorithmChallenger: Optional[str] = None
+    # Scenario-anchored suggest (this PR): teacher-facing advisory message in
+    # Spanish when the scenario the LLM produced does not look coherent with
+    # the algorithm/family the teacher pre-chose. Consultative only — never
+    # blocks submission. Empty when coherent or when no anchor was sent.
+    coherenceWarning: Optional[str] = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -532,6 +546,70 @@ def _build_taxonomy_context(profile: str) -> str:
         lines.append(f"  Técnicas: {rendered}")
         lines.append(f"  Métricas: {', '.join(cast(list[str], meta['metrics']))}")
         lines.append("")
+    return "\n".join(lines)
+
+
+_FAMILY_TARGET_HINT: dict[str, str] = {
+    "clasificacion": (
+        "El target debe ser una variable categórica (binaria o multiclase pequeña). "
+        "El dilema gerencial debe pedir DECIDIR sobre clases discretas "
+        "(p.ej. churn sí/no, aprobar/rechazar, segmento A/B/C)."
+    ),
+    "regresion": (
+        "El target debe ser una variable numérica continua y finita "
+        "(p.ej. precio, demanda, tiempo, monto, score). El dilema debe pedir "
+        "ESTIMAR un valor continuo, no clasificar."
+    ),
+    "clustering": (
+        "NO existe variable target supervisada. El dilema debe pedir DESCUBRIR "
+        "agrupaciones latentes en datos sin etiqueta (p.ej. segmentar clientes, "
+        "agrupar productos por comportamiento)."
+    ),
+    "serie_temporal": (
+        "El target debe ser una variable numérica indexada por fecha/tiempo. "
+        "El dilema debe pedir PRONOSTICAR el futuro de esa serie usando su historia "
+        "(p.ej. demanda mensual, ventas semanales, ocupación diaria)."
+    ),
+}
+
+
+def _build_algorithm_anchor_block(req: SuggestRequest) -> Optional[str]:
+    """Build the teacher-anchor block for the prompt when picks are present.
+
+    Returns ``None`` when the request carries no ``algorithmPrimary`` (legacy
+    callers / "Sugerir Algoritmos" path with no scenario yet) so the prompt
+    remains byte-equal to the pre-anchor (Issue #230) shape — guarantees full
+    backwards compatibility for clients that have not migrated.
+    """
+    if not req.algorithmPrimary:
+        return None
+    family = family_of(req.algorithmPrimary)
+    if not family:
+        # Off-catalog algorithm — refuse to anchor on a guess. Better to fall
+        # back to the global-taxonomy prompt than mislead the LLM.
+        return None
+    family_label = FAMILY_LABELS.get(family, family)
+    target_hint = _FAMILY_TARGET_HINT.get(family, "")
+    lines = [
+        "# Anclaje del Algoritmo Elegido por el Docente",
+        "El docente YA seleccionó el algoritmo en el formulario. El escenario y la",
+        "pregunta guía DEBEN ser coherentes con esta elección — NO la contradigas.",
+        "",
+        f"- Familia anclada: **{family} ({family_label})**",
+        f"- Algoritmo principal: **{req.algorithmPrimary}**",
+    ]
+    if req.algorithmChallenger and family_of(req.algorithmChallenger) == family:
+        lines.append(f"- Challenger (misma familia): **{req.algorithmChallenger}**")
+    lines.extend([
+        "",
+        "## Reglas duras de coherencia",
+        f"1. `problemType` en tu respuesta DEBE ser exactamente `{family}`.",
+        f"2. {target_hint}",
+        "3. La narrativa, los datos disponibles y el deadline deben hacer NATURAL",
+        f"   resolver el caso con un modelo de la familia `{family}`. Si la unidad",
+        "   temática del docente sugiere otra familia, prioriza el algoritmo elegido.",
+        "4. NO sugieras técnicas de otras familias en `suggestedTechniques`.",
+    ])
     return "\n".join(lines)
 
 
@@ -658,6 +736,15 @@ Tu sugerencia alimentará al Case Architect, así que debe ser precisa y coheren
     sections.append(f"""\
 # Contexto del Profesor
 {context_str}""")
+
+    # ── TEACHER ALGORITHM ANCHOR (this PR) ──
+    # Appended LAST so recency bias inside the LLM context window prioritises
+    # this constraint over the global taxonomy. Only included when the teacher
+    # actually pre-picked an algorithm in the form; otherwise the prompt stays
+    # byte-equal to the legacy (Issue #230) shape for backwards compatibility.
+    anchor_block = _build_algorithm_anchor_block(req)
+    if anchor_block:
+        sections.append(anchor_block)
 
     return "\n\n".join(sections)
 
@@ -865,4 +952,42 @@ async def generate_suggestion(req: SuggestRequest) -> SuggestResponse:
     if mirror and not resp.suggestedTechniques:
         resp.suggestedTechniques = mirror
 
+    # Scenario-anchor coherence (this PR): if the teacher pre-selected an
+    # algorithm and asked for a scenario, surface a teacher-facing advisory
+    # when the LLM produced a problemType that does not match the algorithm's
+    # family. Consultative only — never blocks. Frontend renders this as a
+    # banner so the teacher can re-generate or accept consciously.
+    resp.coherenceWarning = _check_scenario_family_coherence(req, resp)
+
     return resp
+
+
+def _check_scenario_family_coherence(
+    req: SuggestRequest,
+    resp: SuggestResponse,
+) -> Optional[str]:
+    """Return a Spanish advisory if scenario problemType disagrees with the
+    teacher-anchored algorithm's family. ``None`` means coherent or no anchor.
+
+    Compared values are both in canonical family vocabulary (``family_of`` and
+    ``_validate_problem_type`` both return ``FAMILY_META`` keys), so the
+    equality check is direct without alias gymnastics.
+    """
+    if not req.algorithmPrimary:
+        return None
+    expected_family = family_of(req.algorithmPrimary)
+    if not expected_family:
+        return None
+    # Only meaningful when the LLM actually produced a scenario in this call.
+    if req.intent not in (IntentEnum.scenario, IntentEnum.both):
+        return None
+    if not resp.problemType or resp.problemType == expected_family:
+        return None
+    expected_label = FAMILY_LABELS.get(expected_family, expected_family)
+    actual_label = FAMILY_LABELS.get(resp.problemType, resp.problemType)
+    return (
+        f"El escenario sugerido es de tipo «{actual_label}», pero el algoritmo "
+        f"elegido ({req.algorithmPrimary}) pertenece a la familia «{expected_label}». "
+        "Considera regenerar el escenario o ajustarlo manualmente para mantener "
+        "la coherencia pedagógica con el algoritmo."
+    )
