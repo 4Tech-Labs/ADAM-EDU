@@ -302,7 +302,12 @@ class EDAChartSpec(BaseModel):
     description: Optional[str] = Field(default=None, description="Explicación básica de métricas")
     library: Literal["plotly"] = Field(description="Siempre 'plotly'")
     chart_type: str = Field(
-        description="scatter|heatmap|violin|box|bar"
+        # Issue #237 review: NO incluir `bar` en la descripción visible al
+        # LLM. El path LLM-JSON tiene un prompt que prohíbe `bar`; sólo el
+        # builder Python-determinista (clasificación ml_ds) lo emite, y
+        # ese path no pasa por with_structured_output() así que la
+        # descripción no necesita anunciarlo.
+        description="scatter|heatmap|violin|box"
     )
     traces: list[dict] = Field(
         default_factory=list,

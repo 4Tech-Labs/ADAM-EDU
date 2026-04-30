@@ -179,7 +179,7 @@ def _build_missingness_heatmap(
     return {
         "id": "missingness_heatmap",
         "title": "Mapa de valores faltantes",
-        "subtitle": f"Muestra estratificada de {len(sample)} filas",
+        "subtitle": f"Muestra aleatoria de {len(sample)} filas (random_state=42)",
         "library": "plotly",
         "chart_type": "heatmap",
         "traces": [
@@ -230,8 +230,10 @@ def _build_mutual_info_top8(
             mean_val = s.mean()
             work[col] = s.fillna(0.0 if pd.isna(mean_val) else mean_val)
         else:
-            work[col] = LabelEncoder().fit_transform(s.astype(str).fillna("__nan__"))
-    y = LabelEncoder().fit_transform(work[target_col].astype(str).fillna("__nan__"))
+            # Order matters: fillna BEFORE astype(str), otherwise NaN becomes
+            # the literal string 'nan' and the bucket marker is never applied.
+            work[col] = LabelEncoder().fit_transform(s.fillna("__nan__").astype(str))
+    y = LabelEncoder().fit_transform(work[target_col].fillna("__nan__").astype(str))
     X = work[feature_cols].to_numpy()
 
     discrete_mask = [
@@ -367,17 +369,18 @@ def _build_stacked_top2_categorical(
     composite_x: list[str] = []
     pct_by_class: dict[str, list[float]] = {c: [] for c in classes}
     for col in candidates:
+        # fillna BEFORE astype(str): otherwise NaN -> 'nan' string and the
+        # explicit __nan__ bucket is never created.
+        col_str = df[col].fillna("__nan__").astype(str)
         cats = (
-            df[col]
-            .astype(str)
-            .fillna("__nan__")
+            col_str
             .value_counts()
             .head(_STACKED_MAX_CATEGORIES)
             .index.tolist()
         )
         cats = sorted(cats)
         for cat in cats:
-            mask = df[col].astype(str).fillna("__nan__") == cat
+            mask = col_str == cat
             sub = df.loc[mask, target_col].astype(str)
             total = max(int(sub.shape[0]), 1)
             label = f"{col}={cat}"
@@ -418,7 +421,13 @@ def _build_stacked_top2_categorical(
 def _build_pca_2d_scatter(
     df: pd.DataFrame, target_col: str, source: str, numeric_cols: list[str]
 ) -> dict[str, Any] | None:
-    """Returns ``None`` if PCA cannot run (need ≥2 numeric features)."""
+    """Build the PCA 2D scatter chart.
+
+    Returns an empty-skeleton chart (via ``_empty_chart``) when there are
+    fewer than 2 numeric features available, so the dispatcher always sees
+    a valid ``EDAChartSpec`` shape and the panel keeps a stable 6-chart
+    contract. Never returns ``None`` in the current implementation.
+    """
     if len(numeric_cols) < 2:
         return _empty_chart(
             "pca_2d_scatter",

@@ -1413,7 +1413,10 @@ def _eda_classification_python_path(
 
 
 def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
-    """Extrae 4 charts JSON del reporte EDA (Documento 2 — parte charts).
+    """Extrae los charts JSON del reporte EDA (Documento 2 — parte charts).
+
+    Contrato: el path LLM-JSON legacy emite exactamente 3 charts. El path
+    Python-determinista (Issue #237, ml_ds + clasificacion) emite 6 charts.
 
     Issue #237 — para `studentProfile == "ml_ds"` y familia primaria
     `clasificacion`, los 6 charts se generan deterministicamente en Python
@@ -1473,7 +1476,12 @@ def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
         for chart in charts_raw:
             try:
                 if chart.id and chart.chart_type and chart.traces:
-                    charts_valid.append(chart.model_dump())
+                    dumped = chart.model_dump()
+                    # Issue #237 — telemetría: marcar el path LLM-JSON
+                    # explicitamente para distinguirlo de python_builder.
+                    if not dumped.get("data_source"):
+                        dumped["data_source"] = "llm_json"
+                    charts_valid.append(dumped)
             except Exception:
                 continue
 

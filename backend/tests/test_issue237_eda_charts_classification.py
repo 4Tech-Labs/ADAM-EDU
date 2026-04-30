@@ -7,7 +7,6 @@ contra "regresiones LLM-fabricated": si los números cambian, el test falla.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -217,3 +216,44 @@ def test_boundary_llm_cannot_alter_traces(df_binary: pd.DataFrame) -> None:
     pca = next(c for c in charts if c["id"] == "pca_2d_scatter")
     assert pca["description"] == ""
     assert pca["notes"] == ""
+
+
+def test_llm_ghost_chart_id_is_silently_dropped(df_binary: pd.DataFrame) -> None:
+    """Si el LLM annotate-only devuelve un id que NO existe entre los 6
+    charts del builder, el id fantasma se descarta y NO se añade chart.
+    """
+    from case_generator.graph import _eda_classification_python_path
+
+    state: dict[str, Any] = {
+        "doc7_dataset": df_binary.to_dict(orient="records"),
+        "studentProfile": "ml_ds",
+        "dataset_schema_required": CONTRACT,
+        "dataset_metadata": {"target_variable": "churn"},
+        "task_payload": {"algoritmos": ["Logistic Regression"]},
+        "case_id": "test_case_237",
+    }
+    fake_ann = MagicMock()
+    fake_ann.annotations = [
+        MagicMock(id="ghost_chart_does_not_exist", description="x", notes="y"),
+        MagicMock(id="class_distribution", description="real", notes="real_n"),
+    ]
+    chained = MagicMock()
+    chained.with_structured_output.return_value.invoke.return_value = fake_ann
+
+    with patch(
+        "case_generator.graph._get_chart_llm", return_value=chained
+    ), patch(
+        "case_generator.graph.Configuration.from_runnable_config",
+        return_value=MagicMock(writer_model="gemini-2.5-flash"),
+    ):
+        update = _eda_classification_python_path(state, config=None, contract=CONTRACT)
+
+    assert update is not None
+    charts = update["doc2_eda_charts"]
+    # Sigue siendo exactamente 6 — el ghost no se añade.
+    assert len(charts) == 6
+    chart_ids = {c["id"] for c in charts}
+    assert "ghost_chart_does_not_exist" not in chart_ids
+    # La annotation real sí se aplicó.
+    cd = next(c for c in charts if c["id"] == "class_distribution")
+    assert cd["description"] == "real"

@@ -615,51 +615,50 @@ Deuda t√©cnica y mejoras diferidas identificadas durante el desarrollo.
 
 ## TODO-237-A: Migrar familia `regresion` a builder Python-determinista
 
-**What:** Replicar el patrÛn de Issue #237 (`datagen/eda_charts_classification.py` + dispatch en `eda_chart_generator`) para la familia `regresion`. Charts: histograma del target, scatter target vs top-3 numÈricas, residuales OLS, QQ-plot, heatmap de correlaciÛn, missingness.
+**What:** Replicar el patr√≥n de Issue #237 (`datagen/eda_charts_classification.py` + dispatch en `eda_chart_generator`) para la familia `regresion`. Charts: histograma del target, scatter target vs top-3 num√©ricas, residuales OLS, QQ-plot, heatmap de correlaci√≥n, missingness.
 
 **Why:** Cerrar el gap de `zero LLM-fabricated numbers` para el resto de familias ml_ds.
 
-**Pros:** Misma garantÌa de determinismo. Cons: requiere snapshot tests adicionales y annotate-only prompt afinado para regresiÛn.
+**Pros:** Misma garant√≠a de determinismo. Cons: requiere snapshot tests adicionales y annotate-only prompt afinado para regresi√≥n.
 
-**Context:** El builder reutiliza `_resolve_primary_family` y `EDA_ANNOTATE_ONLY_PROMPT` ya extraÌdos.
+**Context:** El builder reutiliza `_resolve_primary_family` y `EDA_ANNOTATE_ONLY_PROMPT` ya extra√≠dos.
 
 ---
 
 ## TODO-237-B: Migrar familia `clustering` a builder Python-determinista
 
-**What:** Builder con: silhouette por k, elbow (inertia), PCA 2D coloreado por cluster predicho con KMeans random_state=42, distribuciÛn por cluster, distancia intra-cluster, missingness.
+**What:** Builder con: silhouette por k, elbow (inertia), PCA 2D coloreado por cluster predicho con KMeans random_state=42, distribuci√≥n por cluster, distancia intra-cluster, missingness.
 
 **Why:** Mismo objetivo de #237 para clustering ml_ds.
 
-**Context:** Importante: la elecciÛn de k debe venir de `dataset_schema_required` o un default conservador (k=3) ó NO del LLM.
+**Context:** Importante: la elecci√≥n de k debe venir de `dataset_schema_required` o un default conservador (k=3) ‚Äî NO del LLM.
 
 ---
 
 ## TODO-237-C: Migrar familia `serie_temporal` a builder Python-determinista
 
-**What:** Charts: serie cruda, descomposiciÛn STL (trend/seasonal/residual), ACF/PACF, missingness temporal, rolling mean, distribuciÛn del target.
+**What:** Charts: serie cruda, descomposici√≥n STL (trend/seasonal/residual), ACF/PACF, missingness temporal, rolling mean, distribuci√≥n del target.
 
 **Why:** Cerrar #237 para todas las familias ml_ds.
 
-**Context:** Necesita `statsmodels` como nueva dep o c·lculo manual con scipy/numpy. Decidir en planning antes de empezar.
+**Context:** Necesita `statsmodels` como nueva dep o c√°lculo manual con scipy/numpy. Decidir en planning antes de empezar.
 
 ---
 
 ## TODO-237-D: Renderizar `anchored_question` en el preview del docente
 
-**What:** El schema `EDAChartSpec` ahora expone `anchored_question: Optional[str]` (Issue #237). El builder Python a˙n no lo puebla para los 6 charts de clasificaciÛn. Falta: (1) escribir las 6 preguntas socr·ticas ancladas como constantes en `datagen/eda_charts_classification.py`, (2) agregarlas al payload, (3) renderizarlas en `PlotlyChartsRenderer.tsx` debajo de `description`.
+**What:** El schema `EDAChartSpec` ahora expone `anchored_question: Optional[str]` (Issue #237). El builder Python a√∫n no lo puebla para los 6 charts de clasificaci√≥n. Falta: (1) escribir las 6 preguntas socr√°ticas ancladas como constantes en `datagen/eda_charts_classification.py`, (2) agregarlas al payload, (3) renderizarlas en `PlotlyChartsRenderer.tsx` debajo de `description`.
 
-**Why:** Cerrar la pieza pedagÛgica del DoD original de #237.
+**Why:** Cerrar la pieza pedag√≥gica del DoD original de #237.
 
-**Context:** El campo es Optional y back-compat ó no rompe charts existentes que no lo populen.
+**Context:** El campo es Optional y back-compat ‚Äî no rompe charts existentes que no lo populen.
 
 ---
 
-## TODO-237-E: TelemetrÌa `data_source` en logs de jobs
+## TODO-237-E: Telemetr√≠a `data_source` en logs de jobs
 
-**What:** Emitir un log estructurado por job con la distribuciÛn `data_source` final del array `doc2_eda_charts` (cu·ntos `python_builder` vs `llm_json`). Permite verificar en producciÛn que el path Python se activa solo para ml_ds + clasificaciÛn y NO se cae al fallback LLM por bugs silenciosos.
+**What:** Emitir un log estructurado por job con la distribuci√≥n `data_source` final del array `doc2_eda_charts` (cu√°ntos `python_builder` vs `llm_json`). Permite verificar en producci√≥n que el path Python se activa solo para ml_ds + clasificaci√≥n y NO se cae al fallback LLM por bugs silenciosos.
 
 **Why:** Observabilidad del switch del path determinista.
 
 **Context:** Hoy logueamos via `logger.info` en `_eda_classification_python_path`. Falta consolidarlo a un campo del job en `authoring_jobs.task_payload` o en un campo dedicado del snapshot final.
-
