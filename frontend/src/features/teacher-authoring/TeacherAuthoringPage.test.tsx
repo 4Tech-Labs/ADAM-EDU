@@ -194,7 +194,7 @@ describe("TeacherAuthoringPage", () => {
     });
 
     it("clears the form sessionStorage key when the job completes successfully", async () => {
-        sessionStorage.setItem("adam.authoring.formState.v2", JSON.stringify({ subject: "course-1" }));
+        sessionStorage.setItem("adam.authoring.formState.v3", JSON.stringify({ subject: "course-1" }));
 
         vi.mocked(useAuthoringJobProgress).mockReturnValue({
             jobId: "job-success",
@@ -213,7 +213,7 @@ describe("TeacherAuthoringPage", () => {
         render(<TeacherAuthoringPage />);
 
         await waitFor(() => {
-            expect(sessionStorage.getItem("adam.authoring.formState.v2")).toBeNull();
+            expect(sessionStorage.getItem("adam.authoring.formState.v3")).toBeNull();
         });
     });
 });

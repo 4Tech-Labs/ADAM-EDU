@@ -42,6 +42,14 @@ async function showTechniquesSection(user: ReturnType<typeof userEvent.setup>) {
     await user.click(screen.getByRole("radio", { name: /caso .*an[aá]lisis de datos/i }));
 }
 
+async function pickPrimaryAlgorithm(
+    user: ReturnType<typeof userEvent.setup>,
+    optionMatcher: RegExp,
+) {
+    await user.click(screen.getByLabelText(/algoritmo principal/i));
+    await user.click(await screen.findByRole("option", { name: optionMatcher }));
+}
+
 describe("AuthoringForm", () => {
     beforeAll(() => {
         Element.prototype.hasPointerCapture ??= () => false;
@@ -404,6 +412,186 @@ describe("AuthoringForm", () => {
             expect(screen.queryByDisplayValue("No debe aplicar")).not.toBeInTheDocument();
         });
     }, 20_000);
+
+    // ─── Scenario anchored to algorithm picks (post-#230 hardening) ──────────
+    // Behaviour locked here:
+    //   1. In EDA mode the algorithm picker renders BEFORE the scenario textarea
+    //      and the "Sugerir Caso y Dilema" button is gated until a valid pick.
+    //   2. When the algorithm changes AFTER scenario generation a stale-banner
+    //      appears prompting regeneration. Manual edit clears the banner.
+    //   3. Backend `coherenceWarning` is surfaced via a non-blocking warning banner.
+    //   4. Suggest payload carries `algorithmPrimary` whenever picks are required.
+
+    it("renders the algorithm picker BEFORE the scenario textarea in EDA mode", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+        await enableSuggestions(user);
+        await showTechniquesSection(user);
+
+        const picker = await screen.findByLabelText(/algoritmo principal/i);
+        const textarea = document.getElementById("field-scenarioDescription");
+        expect(textarea).not.toBeNull();
+        expect(
+            picker.compareDocumentPosition(textarea as Node)
+                & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+    });
+
+    it("disables the scenario suggest button until the teacher picks an algorithm in EDA mode", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+        await enableSuggestions(user);
+        await showTechniquesSection(user);
+
+        const button = await screen.findByRole("button", {
+            name: /sugerir caso y dilema/i,
+        });
+        expect(button).toBeDisabled();
+        expect(button).toHaveAttribute(
+            "title",
+            expect.stringMatching(/primero selecciona el algoritmo/i),
+        );
+
+        await pickPrimaryAlgorithm(user, /regresi[oó]n lineal/i);
+
+        await waitFor(() => {
+            expect(button).toBeEnabled();
+        });
+    }, 15_000);
+
+    it("sends algorithmPrimary in the suggest payload when picks are required", async () => {
+        const user = userEvent.setup();
+        const captured: Array<Record<string, unknown>> = [];
+
+        server.use(
+            http.post("/api/suggest", async ({ request }) => {
+                const body = (await request.json()) as Record<string, unknown>;
+                if (body.intent === "scenario" || body.intent === "both") {
+                    captured.push(body);
+                    return HttpResponse.json({
+                        scenarioDescription: "Escenario anclado",
+                        guidingQuestion: "Pregunta anclada",
+                        suggestedTechniques: [],
+                    });
+                }
+                return HttpResponse.json({
+                    scenarioDescription: "",
+                    guidingQuestion: "",
+                    suggestedTechniques: [],
+                });
+            }),
+        );
+
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+        await enableSuggestions(user);
+        await showTechniquesSection(user);
+        await pickPrimaryAlgorithm(user, /regresi[oó]n lineal/i);
+
+        await user.click(
+            await screen.findByRole("button", { name: /sugerir caso y dilema/i }),
+        );
+
+        await screen.findByDisplayValue("Escenario anclado");
+        expect(captured).toHaveLength(1);
+        expect(captured[0]).toMatchObject({
+            algorithmPrimary: "Regresión Lineal",
+        });
+    }, 20_000);
+
+    it("shows the warning banner when the backend returns coherenceWarning", async () => {
+        const user = userEvent.setup();
+
+        server.use(
+            http.post("/api/suggest", async () =>
+                HttpResponse.json({
+                    scenarioDescription: "Escenario potencialmente desviado",
+                    guidingQuestion: "Pregunta",
+                    suggestedTechniques: [],
+                    coherenceWarning:
+                        "El escenario sugerido parece no coincidir con la familia del algoritmo elegido.",
+                }),
+            ),
+        );
+
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+        await enableSuggestions(user);
+        await showTechniquesSection(user);
+        await pickPrimaryAlgorithm(user, /regresi[oó]n lineal/i);
+
+        await user.click(
+            await screen.findByRole("button", { name: /sugerir caso y dilema/i }),
+        );
+
+        const banner = await screen.findByText(
+            /escenario sugerido parece no coincidir/i,
+        );
+        const statusEl = banner.closest("[data-variant]");
+        expect(statusEl).toHaveAttribute("data-variant", "warning");
+    }, 20_000);
+
+    it("shows the stale banner when the algorithm changes after scenario generation, and clears on manual edit", async () => {
+        const user = userEvent.setup();
+
+        server.use(
+            http.post("/api/suggest", async () =>
+                HttpResponse.json({
+                    scenarioDescription: "Escenario v1",
+                    guidingQuestion: "Pregunta v1",
+                    suggestedTechniques: [],
+                }),
+            ),
+        );
+
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+        await enableSuggestions(user);
+        await showTechniquesSection(user);
+        await pickPrimaryAlgorithm(user, /regresi[oó]n lineal/i);
+
+        await user.click(
+            await screen.findByRole("button", { name: /sugerir caso y dilema/i }),
+        );
+        await screen.findByDisplayValue("Escenario v1");
+
+        expect(
+            screen.queryByText(/cambiaste el algoritmo/i),
+        ).not.toBeInTheDocument();
+
+        await pickPrimaryAlgorithm(user, /árboles de decisi[oó]n/i);
+
+        const staleBanner = await screen.findByText(/cambiaste el algoritmo/i);
+        const staleEl = staleBanner.closest("[data-variant]");
+        expect(staleEl).toHaveAttribute("data-variant", "stale");
+        expect(
+            screen.getByRole("button", { name: /regenerar/i }),
+        ).toBeInTheDocument();
+
+        const textarea = document.getElementById(
+            "field-scenarioDescription",
+        ) as HTMLTextAreaElement | null;
+        expect(textarea).not.toBeNull();
+        await user.type(textarea!, " (ajustado)");
+
+        await waitFor(() => {
+            expect(
+                screen.queryByText(/cambiaste el algoritmo/i),
+            ).not.toBeInTheDocument();
+        });
+    }, 25_000);
+
+    it("does NOT gate the scenario button in legacy harvard_only + business mode (no picker rendered)", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<AuthoringForm onSubmit={vi.fn()} />);
+        await enableSuggestions(user);
+
+        expect(
+            screen.queryByLabelText(/algoritmo principal/i),
+        ).not.toBeInTheDocument();
+
+        const button = screen.getByRole("button", {
+            name: /sugerir caso y dilema/i,
+        });
+        expect(button).toBeEnabled();
+    });
 });
 
 describe("GroupsCombobox (within AuthoringForm)", () => {
@@ -860,3 +1048,20 @@ describe("Task 3 — sessionStorage persistence", () => {
         expect(sessionStorage.getItem(FORM_STATE_SESSION_KEY)).toBeNull();
     });
 });
+
+// ─── Task 4 — Scenario anchored to algorithm picks (post-#230 hardening) ─────
+//
+// Behaviour locked here:
+//   1. When `caseType === harvard_with_eda` OR `studentProfile === ml_ds`
+//      the algorithm picker renders BEFORE the scenario textarea, and the
+//      "Sugerir Caso y Dilema" button is gated until a valid pick exists.
+//   2. When the algorithm changes AFTER scenario generation, a stale-banner
+//      appears prompting regeneration. Manually editing the textarea clears
+//      the banner.
+//   3. When the backend returns `coherenceWarning`, a warning-banner is
+//      surfaced under the textarea (non-blocking).
+//   4. Suggest payload carries `algorithmPrimary` whenever picks are required.
+//
+// Tests live INSIDE the `AuthoringForm` describe block (above) so they reuse
+// the full handler setup — see `pickPrimaryAlgorithm` helper there.
+
