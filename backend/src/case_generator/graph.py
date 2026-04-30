@@ -800,6 +800,28 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         )
         contract_dict = _infer_leakage_risk_from_naming(contract_dict)
 
+        # Issue #238 — valida la matriz de costos del negocio para threshold
+        # tuning en M3. Resolvemos la familia desde task_payload.algoritmos
+        # (mismo orden que el dispatcher M3): family_of(name) → fallback
+        # resolve_legacy_family(name) → None si no hay algoritmos. La política
+        # es degrade-with-warning (no reprompts en M1).
+        task_payload_obj = state.get("task_payload") or {}
+        algoritmos_list: list = []
+        if isinstance(task_payload_obj, dict):
+            algoritmos_list = task_payload_obj.get("algoritmos") or []
+        family_resolved: str | None = None
+        if algoritmos_list:
+            primary_algo = str(algoritmos_list[0])
+            family_resolved = family_of(primary_algo)
+            if family_resolved is None:
+                legacy = resolve_legacy_family(primary_algo)
+                if legacy is not None:
+                    family_resolved = legacy[0]
+        contract_dict, cost_warnings = _validate_business_cost_matrix(
+            contract_dict, family_resolved, result.titulo
+        )
+        coherence_warnings = list(coherence_warnings) + cost_warnings
+
         return {
             "current_agent": "case_architect",
             "titulo": result.titulo,
@@ -1895,6 +1917,142 @@ def _infer_leakage_risk_from_naming(contract: dict | None) -> dict | None:
         inferred_count, target_name, target_role,
     )
     return new_contract
+
+
+def _validate_business_cost_matrix(
+    contract: dict | None, family: str | None, case_title: str | None
+) -> tuple[dict | None, list[str]]:
+    """Valida y sanitiza ``business_cost_matrix`` del contrato (Issue #238).
+
+    Política de degradación (case_architect-style):
+      * Si ``family is None`` (no se pudo resolver el algoritmo via
+        ``family_of`` ni ``resolve_legacy_family``) y el campo viene poblado
+        → se preserva intacto + warning ``unknown_family``. Razón: el
+        dispatcher M3 hace fallback a ``clasificacion`` cuando no resuelve
+        familia, así que nulificar aquí perdería una matriz que M3 sí va a
+        usar. La asimetría no se compromete por un nombre de algoritmo
+        no canónico.
+      * Si el LLM emitió un dict inválido (negativo, no finito, fields faltantes)
+        → ``ValidationError`` capturado, structured ``logger.warning`` con
+        ``case_title`` + ``raw_values`` + ``e.errors()`` para trazabilidad,
+        + warning sanitizado en español apto para ``data_gap_warnings`` (sin
+        repetir el título crudo en el string del prompt), + ``business_cost_matrix``
+        nulificado en el dict devuelto.
+      * Si la familia es ``clasificacion`` y el campo viene None → warning
+        estructurado + sanitizado (M3 caerá en el fallback fp=1, fn=5).
+      * Si la familia es una NO-clasificación conocida y el campo viene
+        poblado → warning + nulificado (M3 de otras familias no usa cost
+        matrix).
+      * Si todo OK → se devuelve un contrato con la matriz **normalizada**
+        (currency upper, tipos float emitidos por Pydantic). El contrato
+        original nunca se muta in-place.
+
+    El contrato de entrada NO se muta in-place: se devuelve un nuevo dict
+    cuando hay cualquier cambio efectivo (nulificación o normalización).
+    Devuelve ``(contract_or_copy, warnings)``.
+
+    El logger NUNCA loguea el dict raw completo del contrato (puede contener
+    metadatos pedagógicos largos); siempre acota ``raw_values`` a las 3 keys
+    esperadas (``fp_cost``, ``fn_cost``, ``currency``) para evitar leakear
+    shape inesperada del LLM al log estructurado.
+    """
+    # Late import para evitar ciclo: tools_and_schemas <- graph en tests.
+    from case_generator.tools_and_schemas import BusinessCostMatrix
+    from pydantic import ValidationError
+
+    warnings: list[str] = []
+    if contract is None:
+        return contract, warnings
+
+    raw_value = contract.get("business_cost_matrix")
+    family_norm = (family or "").strip().lower()
+    is_classification = family_norm == "clasificacion"
+    is_unknown_family = family_norm == ""
+
+    # Helper para acotar el log estructurado a las 3 keys conocidas, evitando
+    # leakear keys inesperadas del LLM.
+    def _safe_subset(value: object) -> dict:
+        if not isinstance(value, dict):
+            return {"_raw_type": type(value).__name__}
+        return {k: value.get(k) for k in ("fp_cost", "fn_cost", "currency")}
+
+    # Caso 1 — campo ausente para clasificacion.
+    if raw_value is None:
+        if is_classification:
+            logger.warning(
+                "[case_architect.cost_matrix] missing for classification case "
+                "(case_title=%r, family=%r)",
+                case_title or "<sin titulo>", family,
+            )
+            warnings.append(
+                "business_cost_matrix_missing: el caso es de clasificación pero "
+                "case_architect no emitió matriz de costos (fp_cost/fn_cost). "
+                "El notebook M3 usará fallback fp=1, fn=5 (sin asimetría real)."
+            )
+        return contract, warnings
+
+    # Caso 1b — familia desconocida (no resoluble) con matriz poblada:
+    # NO nulificar. El dispatcher M3 cae a clasificación por defecto, así
+    # que descartar aquí perdería datos válidos. Solo emitimos warning.
+    if is_unknown_family:
+        logger.warning(
+            "[case_architect.cost_matrix] cost matrix emitted but family could "
+            "not be resolved (case_title=%r, family=%r, raw_values=%r) \u2014 "
+            "preservando matriz (M3 har\u00e1 fallback a clasificacion)",
+            case_title or "<sin titulo>", family, _safe_subset(raw_value),
+        )
+        warnings.append(
+            "business_cost_matrix_unknown_family: no se pudo resolver la familia "
+            "del algoritmo principal. La matriz de costos se preserva porque el "
+            "notebook M3 hará fallback a clasificación."
+        )
+        # Continúa al Caso 3/4 para validar e (idealmente) normalizar la matriz.
+
+    # Caso 2 — campo poblado para una familia conocida que no es clasificación.
+    elif not is_classification:
+        logger.warning(
+            "[case_architect.cost_matrix] cost matrix emitted for non-classification "
+            "family (case_title=%r, family=%r, raw_values=%r) \u2014 nulificando",
+            case_title or "<sin titulo>", family, _safe_subset(raw_value),
+        )
+        warnings.append(
+            "business_cost_matrix_wrong_family: case_architect emitió matriz de "
+            "costos para una familia que no es clasificación. Se descarta "
+            "(M3 no la usa fuera de clasificación)."
+        )
+        new_contract = dict(contract)
+        new_contract["business_cost_matrix"] = None
+        return new_contract, warnings
+
+    # Caso 3 — campo poblado para clasificacion (o familia desconocida que
+    # cae al fallback de M3): validamos con Pydantic.
+    try:
+        validated = BusinessCostMatrix.model_validate(raw_value)
+    except ValidationError as e:
+        # Structured log con todos los detalles para trazabilidad en producción.
+        # raw_values se acota a las 3 keys esperadas para evitar PII inesperada.
+        logger.warning(
+            "[case_architect.cost_matrix] ValidationError (case_title=%r, "
+            "raw_values=%r, errors=%r) \u2014 nulificando",
+            case_title or "<sin titulo>", _safe_subset(raw_value), e.errors(),
+        )
+        # Warning sanitizado para data_gap_warnings (no repite el título crudo
+        # ni los errors de Pydantic; basta para que el docente entienda que el
+        # M3 cayó al fallback).
+        warnings.append(
+            "business_cost_matrix_invalid: case_architect emitió valores no "
+            "válidos en la matriz de costos (revisa logs estructurados para "
+            "fp_cost/fn_cost/currency exactos). El notebook M3 usará fallback "
+            "fp=1, fn=5."
+        )
+        new_contract = dict(contract)
+        new_contract["business_cost_matrix"] = None
+        return new_contract, warnings
+
+    # Caso 4 — válido. Persistimos la versión normalizada (currency upper).
+    new_contract = dict(contract)
+    new_contract["business_cost_matrix"] = validated.model_dump()
+    return new_contract, warnings
 
 
 def _format_dataset_contract_block(contract: dict | None) -> str:
@@ -3035,10 +3193,12 @@ _FAMILY_PROHIBITED_PATTERNS: dict[str, tuple[str, ...]] = {
 #
 # Two kinds of tokens live here:
 #   * Section sentinels (``# === SECTION:<id> ===``) — force the LLM to emit
-#     the 6 mandatory pedagogical sections in a parser-friendly shape.
+#     the 8 mandatory pedagogical sections in a parser-friendly shape
+#     (Issue #238 added ``cost_matrix`` to the original 7 from #236).
 #   * Canonical sklearn API tokens (``DummyClassifier``, ``StratifiedKFold``,
 #     ``ColumnTransformer``, ``cross_val_score``, ``roc_curve(``,
-#     ``precision_recall_curve(``) — guarantee the sections do real work.
+#     ``precision_recall_curve(``, ``confusion_matrix(``, ``predict_proba(``)
+#     — guarantee the sections do real work.
 #
 # Required tokens split in two buckets so each is checked against the right
 # corpus (PR #244 review):
@@ -3067,6 +3227,8 @@ _FAMILY_REQUIRED_SENTINELS: dict[str, tuple[str, ...]] = {
         "# === SECTION:roc_curves ===",
         "# === SECTION:pr_curves ===",
         "# === SECTION:comparison_table ===",
+        # Issue #238 — celda de threshold tuning con matriz de costos del negocio.
+        "# === SECTION:cost_matrix ===",
     ),
 }
 
@@ -3079,6 +3241,11 @@ _FAMILY_REQUIRED_APIS: dict[str, tuple[str, ...]] = {
         "roc_curve(",
         "precision_recall_curve(",
         "train_test_split(",
+        # Issue #238 — la celda cost_matrix usa confusion_matrix() para barrer
+        # thresholds y predict_proba() para obtener scores continuos. Ambos
+        # tienen que aparecer en código ejecutable, no solo en markdown.
+        "confusion_matrix(",
+        "predict_proba(",
     ),
 }
 
