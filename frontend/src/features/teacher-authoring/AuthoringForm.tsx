@@ -18,6 +18,28 @@ import {
 } from "./authoringFormConfig";
 import { GroupsCombobox } from "./GroupsCombobox";
 import { AlgorithmSelector } from "./AlgorithmSelector";
+import { ScenarioStaleBanner } from "./ScenarioStaleBanner";
+
+// Fingerprint of the algorithm picks AT THE TIME the scenario was generated.
+// If the teacher changes any of these afterwards, the previous scenario is
+// flagged as stale and a regenerate banner appears.
+interface ScenarioFingerprint {
+    mode: AlgorithmMode;
+    primary: string | null;
+    challenger: string | null;
+}
+
+function sameFingerprint(
+    a: ScenarioFingerprint | null,
+    b: ScenarioFingerprint,
+): boolean {
+    if (!a) return false;
+    return (
+        a.mode === b.mode
+        && (a.primary ?? null) === (b.primary ?? null)
+        && (a.challenger ?? null) === (b.challenger ?? null)
+    );
+}
 
 interface Props {
     initialData?: CaseFormData;
@@ -73,6 +95,13 @@ export function AuthoringForm({
     const [algorithmMode, setAlgorithmMode] = useState<AlgorithmMode>(initialData?.algorithmMode ?? "single");
     const [algorithmPrimary, setAlgorithmPrimary] = useState<string | null>(initialData?.algorithmPrimary ?? null);
     const [algorithmChallenger, setAlgorithmChallenger] = useState<string | null>(initialData?.algorithmChallenger ?? null);
+
+    // Scenario-anchored authoring (this PR) — fingerprint of the picks at the
+    // time of the last successful scenario generation, and the most recent
+    // backend coherenceWarning. Both reset together when the teacher edits the
+    // scenario manually or hits Limpiar.
+    const [scenarioFingerprint, setScenarioFingerprint] = useState<ScenarioFingerprint | null>(null);
+    const [coherenceWarning, setCoherenceWarning] = useState<string | null>(null);
 
     const [availableFrom, setAvailableFrom] = useState(initialData?.availableFrom ?? "");
     const [dueAt, setDueAt] = useState(initialData?.dueAt ?? "");
@@ -233,6 +262,13 @@ export function AuthoringForm({
         !!algorithmPrimary
         && (algorithmMode === "single"
             || (!!algorithmChallenger && algorithmPrimary.toLowerCase() !== algorithmChallenger.toLowerCase()));
+
+    // Scenario suggestion gate (this PR): when algorithm picks are required
+    // (harvard_with_eda or ml_ds), the teacher MUST pick the algorithm BEFORE
+    // generating the scenario, so the LLM prompt can be anchored to that
+    // family. Otherwise we fall back to the legacy non-anchored prompt.
+    const canSuggestScenario =
+        canSuggest && (!isAlgorithmsRequired || hasValidAlgorithmPicks);
     const canSubmit =
         !!subject &&
         !!syllabusModule &&
@@ -264,14 +300,23 @@ export function AuthoringForm({
             scenarioDescription,
             guidingQuestion,
             mode: algorithmMode,
+            // Scenario-anchored suggest (this PR): only forward picks when
+            // they are required by the case shape AND actually selected.
+            // Off-anchor calls keep the legacy prompt intact.
+            algorithmPrimary: isAlgorithmsRequired ? algorithmPrimary : null,
+            algorithmChallenger:
+                isAlgorithmsRequired && algorithmMode === "contrast" ? algorithmChallenger : null,
         };
     }, [
         algorithmMode,
+        algorithmPrimary,
+        algorithmChallenger,
         caseType,
         edaDepth,
         guidingQuestion,
         includePythonCode,
         industry,
+        isAlgorithmsRequired,
         scenarioDescription,
         selectedIndustry,
         selectedCourse,
@@ -303,13 +348,24 @@ export function AuthoringForm({
     }, [scenarioMutation, techniquesMutation]);
 
     const handleSuggestScenario = useCallback(() => {
-        if (!canSuggest || scenarioMutation.isPending) {
+        if (!canSuggestScenario || scenarioMutation.isPending) {
             return;
         }
 
         resetSuggestionFeedback();
+        setCoherenceWarning(null);
         const generation = suggestionGenerationRef.current.scenario + 1;
         suggestionGenerationRef.current.scenario = generation;
+
+        // Snapshot the picks AT REQUEST TIME so the fingerprint reflects what
+        // the LLM was actually anchored to, not whatever the form state is at
+        // the (later) success callback.
+        const fingerprint: ScenarioFingerprint = {
+            mode: algorithmMode,
+            primary: isAlgorithmsRequired ? algorithmPrimary : null,
+            challenger:
+                isAlgorithmsRequired && algorithmMode === "contrast" ? algorithmChallenger : null,
+        };
 
         scenarioMutation.mutate(buildSuggestPayload(), {
             onSuccess: (data) => {
@@ -317,15 +373,42 @@ export function AuthoringForm({
                     return;
                 }
 
-                if (data.scenarioDescription) {
-                    setScenarioDescription(data.scenarioDescription);
+                const nextScenario = data.scenarioDescription;
+                const nextGuiding = data.guidingQuestion;
+                let scenarioReplaced = false;
+                let guidingReplaced = false;
+                if (typeof nextScenario === "string" && nextScenario.length > 0) {
+                    setScenarioDescription(nextScenario);
+                    scenarioReplaced = true;
                 }
-                if (data.guidingQuestion) {
-                    setGuidingQuestion(data.guidingQuestion);
+                if (typeof nextGuiding === "string" && nextGuiding.length > 0) {
+                    setGuidingQuestion(nextGuiding);
+                    guidingReplaced = true;
+                }
+                // Only refresh the fingerprint and the coherence advisory when
+                // the response actually replaced the scenario or guiding
+                // question. An empty/failed SuggestResponse must NOT silently
+                // re-anchor the previous (stale) text to the new picks.
+                if (scenarioReplaced || guidingReplaced) {
+                    setScenarioFingerprint(fingerprint);
+                    setCoherenceWarning(
+                        typeof data.coherenceWarning === "string" && data.coherenceWarning
+                            ? data.coherenceWarning
+                            : null,
+                    );
                 }
             },
         });
-    }, [buildSuggestPayload, canSuggest, resetSuggestionFeedback, scenarioMutation]);
+    }, [
+        algorithmChallenger,
+        algorithmMode,
+        algorithmPrimary,
+        buildSuggestPayload,
+        canSuggestScenario,
+        isAlgorithmsRequired,
+        resetSuggestionFeedback,
+        scenarioMutation,
+    ]);
 
     const handleSuggestTechniques = useCallback(() => {
         if (!canSuggest || techniquesMutation.isPending) {
@@ -413,13 +496,20 @@ export function AuthoringForm({
     );
 
     // ── Component Events Triggering Warning ──
+    // Manual edits invalidate the fingerprint (the scenario is no longer the
+    // verbatim LLM output) and clear any prior coherenceWarning, since the
+    // teacher is taking ownership of the text.
     const onChangeScenarioDescription = (val: string) => {
         invalidateSuggestionResponses();
         setScenarioDescription(val);
+        setScenarioFingerprint(null);
+        setCoherenceWarning(null);
     };
     const onChangeGuidingQuestion = (val: string) => {
         invalidateSuggestionResponses();
         setGuidingQuestion(val);
+        setScenarioFingerprint(null);
+        setCoherenceWarning(null);
     };
     const onIndustryChange = (val: string) => {
         invalidateSuggestionResponses();
@@ -524,6 +614,8 @@ export function AuthoringForm({
         setAlgorithmMode("single");
         setAlgorithmPrimary(null);
         setAlgorithmChallenger(null);
+        setScenarioFingerprint(null);
+        setCoherenceWarning(null);
         setErrors({});
         scenarioMutation.reset();
         techniquesMutation.reset();
@@ -831,6 +923,26 @@ export function AuthoringForm({
                                         </div>
                                     </div>
 
+                                    {/* Algoritmos / Técnicas — Issue #230 (mode toggle 1 deep | 2 contrast + canonical dropdowns).
+                                        Anchored authoring (this PR): rendered BEFORE the scenario textarea so the
+                                        teacher locks the algorithm first, and the LLM scenario can be anchored to
+                                        the corresponding family. Order: case type → profile → notebook → industry →
+                                        algoritmos → escenario → pregunta guía. */}
+                                    {isAlgorithmsRequired && (
+                                        <AlgorithmSelector
+                                            profile={studentProfile}
+                                            caseType={caseType}
+                                            mode={algorithmMode}
+                                            primary={algorithmPrimary}
+                                            challenger={algorithmChallenger}
+                                            onChange={handleAlgorithmChange}
+                                            onSuggest={handleSuggestTechniques}
+                                            isSuggestPending={techniquesMutation.isPending}
+                                            canSuggest={canSuggest}
+                                            hasError={!!errors.suggestedTechniques}
+                                        />
+                                    )}
+
                                     {/* Sugestión global error flag */}
                                     {(formAlertError || mutationError) && (
                                         <div className="p-3 mb-2 rounded border border-red-200 bg-red-50 text-red-600 text-[13px] font-medium flex items-center gap-2">
@@ -849,8 +961,15 @@ export function AuthoringForm({
                                                 <button
                                                     type="button"
                                                     onClick={handleSuggestScenario}
-                                                    disabled={!canSuggest || scenarioMutation.isPending}
-                                                    className={`ml-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-bold text-[#0144a0] bg-blue-50 border border-blue-200 rounded-lg transition-all ${!canSuggest ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:bg-blue-100 hover:border-blue-300 hover:shadow-sm active:scale-[0.97]"}`}
+                                                    disabled={!canSuggestScenario || scenarioMutation.isPending}
+                                                    title={
+                                                        canSuggestScenario
+                                                            ? undefined
+                                                            : isAlgorithmsRequired && !hasValidAlgorithmPicks
+                                                                ? "Primero selecciona el algoritmo arriba para que el escenario sea coherente con esa familia."
+                                                                : undefined
+                                                    }
+                                                    className={`ml-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-bold text-[#0144a0] bg-blue-50 border border-blue-200 rounded-lg transition-all ${!canSuggestScenario ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:bg-blue-100 hover:border-blue-300 hover:shadow-sm active:scale-[0.97]"}`}
                                                 >
                                                     {scenarioMutation.isPending ? (
                                                         <><span className="animate-spin w-3 h-3 border-2 border-[#0144a0] border-t-transparent rounded-full"></span> Generando...</>
@@ -868,6 +987,32 @@ export function AuthoringForm({
                                                 className={`input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 resize-none leading-relaxed ${errors.scenario ? "input-error" : ""}`}
                                             />
                                             <ErrorMsg show={!!errors.scenario} />
+
+                                            {/* Scenario-anchored authoring (this PR): banners surface coherence
+                                                risk between the algorithm pick and the generated scenario.
+                                                Neither blocks submission. */}
+                                            {scenarioFingerprint
+                                                && isAlgorithmsRequired
+                                                && hasValidAlgorithmPicks
+                                                && !sameFingerprint(scenarioFingerprint, {
+                                                    mode: algorithmMode,
+                                                    primary: algorithmPrimary,
+                                                    challenger:
+                                                        algorithmMode === "contrast" ? algorithmChallenger : null,
+                                                }) ? (
+                                                <ScenarioStaleBanner
+                                                    variant="stale"
+                                                    onRegenerate={handleSuggestScenario}
+                                                    isRegenerating={scenarioMutation.isPending}
+                                                    canRegenerate={canSuggestScenario}
+                                                />
+                                            ) : null}
+                                            {coherenceWarning ? (
+                                                <ScenarioStaleBanner
+                                                    variant="warning"
+                                                    message={coherenceWarning}
+                                                />
+                                            ) : null}
                                         </div>
 
                                         <div>
@@ -885,22 +1030,6 @@ export function AuthoringForm({
                                             <ErrorMsg show={!!errors.guidingQuestion} />
                                         </div>
                                     </div>
-
-                                    {/* Algoritmos / Técnicas — Issue #230 (mode toggle 1 deep | 2 contrast + canonical dropdowns) */}
-                                    {(caseType === "harvard_with_eda" || studentProfile === "ml_ds") && (
-                                        <AlgorithmSelector
-                                            profile={studentProfile}
-                                            caseType={caseType}
-                                            mode={algorithmMode}
-                                            primary={algorithmPrimary}
-                                            challenger={algorithmChallenger}
-                                            onChange={handleAlgorithmChange}
-                                            onSuggest={handleSuggestTechniques}
-                                            isSuggestPending={techniquesMutation.isPending}
-                                            canSuggest={canSuggest}
-                                            hasError={!!errors.suggestedTechniques}
-                                        />
-                                    )}
                                 </div>
                             </fieldset>
 

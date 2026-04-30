@@ -204,6 +204,11 @@ export interface SuggestRequest {
     guidingQuestion: string;
     // Issue #230 — drives baseline-only vs baseline+challenger LLM responses.
     mode?: AlgorithmMode;
+    // Scenario-anchored suggest: when the teacher already picked an algorithm
+    // in the form, ship it so the scenario+guidingQuestion prompt is anchored
+    // to the corresponding family. Optional + backwards compatible.
+    algorithmPrimary?: string | null;
+    algorithmChallenger?: string | null;
 }
 
 export interface SuggestResponse {
@@ -213,6 +218,10 @@ export interface SuggestResponse {
     // Issue #230 — explicit picks pre-filling the form selector.
     algorithmPrimary?: string | null;
     algorithmChallenger?: string | null;
+    // Scenario-anchored suggest: Spanish advisory the backend emits when the
+    // generated scenario does not look coherent with the picked algorithm's
+    // family. Consultative only — never blocks submission.
+    coherenceWarning?: string | null;
     [key: string]: unknown;
 }
 

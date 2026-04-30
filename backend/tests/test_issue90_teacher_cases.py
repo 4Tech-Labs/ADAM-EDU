@@ -154,10 +154,17 @@ def test_issue90_teacher_cases_fall_back_to_authoring_payload_available_from(
     )
     db.commit()
 
-    response = client.get(
-        "/api/teacher/cases",
-        headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
-    )
+    # Freeze "now" before the hard-coded deadline so the route's
+    # `deadline > now` filter keeps the row regardless of wall-clock drift in
+    # CI (the deadline is 2026-04-30 14:30 UTC; without freezing this test
+    # fails as soon as the build runs after that timestamp).
+    fixed_now = datetime(2026, 4, 14, 12, 0, tzinfo=timezone.utc)
+    with patch("shared.teacher_router.datetime") as mock_datetime:
+        mock_datetime.now.return_value = fixed_now
+        response = client.get(
+            "/api/teacher/cases",
+            headers=_auth_headers(auth_headers_factory, user_id=teacher_id, email=teacher_email),
+        )
 
     assert response.status_code == 200, response.text
     body = response.json()
