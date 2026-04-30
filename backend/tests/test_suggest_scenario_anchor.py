@@ -23,6 +23,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from case_generator.suggest_service import (
     IntentEnum,
@@ -85,8 +86,10 @@ def test_suggest_request_accepts_algorithm_picks() -> None:
 
 def test_suggest_request_rejects_unknown_field() -> None:
     # extra="forbid" must still apply — guards against typo-driven payloads
-    # that would otherwise silently no-op the anchor.
-    with pytest.raises(Exception):
+    # that would otherwise silently no-op the anchor. Pin to the exact
+    # Pydantic exception so this test cannot accidentally pass on an unrelated
+    # error.
+    with pytest.raises(ValidationError):
         SuggestRequest(
             subject="x",
             academicLevel="x",

@@ -373,18 +373,30 @@ export function AuthoringForm({
                     return;
                 }
 
-                if (data.scenarioDescription) {
-                    setScenarioDescription(data.scenarioDescription);
+                const nextScenario = data.scenarioDescription;
+                const nextGuiding = data.guidingQuestion;
+                let scenarioReplaced = false;
+                let guidingReplaced = false;
+                if (typeof nextScenario === "string" && nextScenario.length > 0) {
+                    setScenarioDescription(nextScenario);
+                    scenarioReplaced = true;
                 }
-                if (data.guidingQuestion) {
-                    setGuidingQuestion(data.guidingQuestion);
+                if (typeof nextGuiding === "string" && nextGuiding.length > 0) {
+                    setGuidingQuestion(nextGuiding);
+                    guidingReplaced = true;
                 }
-                setScenarioFingerprint(fingerprint);
-                setCoherenceWarning(
-                    typeof data.coherenceWarning === "string" && data.coherenceWarning
-                        ? data.coherenceWarning
-                        : null,
-                );
+                // Only refresh the fingerprint and the coherence advisory when
+                // the response actually replaced the scenario or guiding
+                // question. An empty/failed SuggestResponse must NOT silently
+                // re-anchor the previous (stale) text to the new picks.
+                if (scenarioReplaced || guidingReplaced) {
+                    setScenarioFingerprint(fingerprint);
+                    setCoherenceWarning(
+                        typeof data.coherenceWarning === "string" && data.coherenceWarning
+                            ? data.coherenceWarning
+                            : null,
+                    );
+                }
             },
         });
     }, [

@@ -25,7 +25,7 @@ la peor experiencia para el formulario más crítico del producto.
    `algorithm_mode + algorithm_primary [+ algorithm_challenger]` sea válida.
 2. **Anclaje en el prompt.** `case_generator.suggest_service._build_prompt` añade,
    **al final** del prompt y solo cuando hay picks resueltos en el catálogo, un
-   bloque `# Anclaje algorítmico (no negociable)` con la familia, el algoritmo, el
+   bloque `# Anclaje del Algoritmo Elegido por el Docente` con la familia, el algoritmo, el
    modo y un *target hint* específico de la familia. Si los picks están ausentes o
    son off-catalog, el bloque se omite y el prompt es **byte-equivalente** al
    anterior — garantía de no romper flujos legacy.

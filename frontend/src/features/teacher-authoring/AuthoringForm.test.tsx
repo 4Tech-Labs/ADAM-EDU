@@ -60,6 +60,11 @@ describe("AuthoringForm", () => {
 
     beforeEach(() => {
         vi.restoreAllMocks();
+        // Reset persisted form state — Task 4 (algorithm picker) writes to
+        // sessionStorage via the debounced effect and would otherwise leak
+        // pre-selected picks (and case_type/profile) into the next test, which
+        // breaks the legacy-mode gating asserts.
+        sessionStorage.clear();
         server.use(
             http.get("/api/teacher/courses", () => HttpResponse.json({
                 courses: [
@@ -750,6 +755,7 @@ describe("Task 1 — Required fields and disabled submit button", () => {
 
     beforeEach(() => {
         vi.restoreAllMocks();
+        sessionStorage.clear();
         server.use(baseCoursesHandler, baseCourseDetailHandler);
     });
 
