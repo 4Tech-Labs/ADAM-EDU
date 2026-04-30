@@ -77,6 +77,7 @@ CLEAN_CLASSIFICATION_CODE = """
 # === SECTION:roc_curves ===
 # === SECTION:pr_curves ===
 # === SECTION:comparison_table ===
+# === SECTION:cost_matrix ===
 from sklearn.dummy import DummyClassifier
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
@@ -88,6 +89,8 @@ model = LogisticRegression().fit(X_train, y_train)
 auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
 fpr, tpr, _ = roc_curve(y_test, model.predict_proba(X_test)[:, 1])
 prec, rec, _ = precision_recall_curve(y_test, model.predict_proba(X_test)[:, 1])
+proba = model.predict_proba(X_test)[:, 1]
+tn, fp, fn, tp = confusion_matrix(y_test, (proba >= 0.5).astype(int)).ravel()
 """
 
 CLEAN_CLUSTERING_CODE = """

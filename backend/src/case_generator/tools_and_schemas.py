@@ -4,9 +4,10 @@ These models describe the structured payloads returned by the authoring agents
 that feed the teacher preview and downstream synthesis steps.
 """
 
+import math
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ═══════════════════════════════════════════════════════
@@ -130,6 +131,78 @@ class DatasetSchemaRequired(BaseModel):
         default=None,
         description="Notas opcionales del architect sobre el diseño del contrato",
     )
+    # Issue #238 — matriz de costos del negocio para threshold tuning en M3.
+    # Solo aplica cuando family == "clasificacion"; para otras familias debe
+    # quedar None. Validación estricta (ratios, ISO 4217, cross-family) está
+    # deferred a #242 (ver TODOS.md).
+    business_cost_matrix: Optional["BusinessCostMatrix"] = Field(
+        default=None,
+        description=(
+            "Costos asimétricos del negocio (USD/EUR/etc.) para tuning de "
+            "threshold en clasificación. fp_cost = costo de un falso positivo "
+            "(predecir 1 cuando es 0). fn_cost = costo de un falso negativo "
+            "(predecir 0 cuando es 1). Si None, M3 usa fallback fp=1, fn=5."
+        ),
+    )
+
+
+class BusinessCostMatrix(BaseModel):
+    """Costos asimétricos del negocio para threshold tuning en M3 (Issue #238).
+
+    Solo aplica para problemas de clasificación. Permite que el notebook M3
+    construya una curva de costo total vs threshold y elija el óptimo en
+    lugar de quedarse con el default 0.5.
+
+    Validación strict-mode (Issue #238 scope reducido):
+      * fp_cost > 0 y finito
+      * fn_cost > 0 y finito
+      * currency normalizada vía .upper().strip() (sin enforcement ISO 4217)
+    """
+
+    fp_cost: float = Field(
+        gt=0,
+        description=(
+            "Costo de un falso positivo en la moneda indicada por `currency`. "
+            "Ej: en churn, costo de regalar una retención a un cliente que no "
+            "se iba a ir. Debe ser > 0 y finito."
+        ),
+    )
+    fn_cost: float = Field(
+        gt=0,
+        description=(
+            "Costo de un falso negativo en la moneda indicada por `currency`. "
+            "Ej: en churn, costo de perder un cliente porque no se le ofreció "
+            "retención. Debe ser > 0 y finito."
+        ),
+    )
+    currency: str = Field(
+        default="USD",
+        description=(
+            "Código de moneda (string libre, normalizado a mayúsculas). "
+            "No se valida contra ISO 4217 en este scope (#242)."
+        ),
+    )
+
+    @field_validator("fp_cost", "fn_cost")
+    @classmethod
+    def _finite_cost(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("cost must be a finite number (no inf/nan)")
+        return v
+
+    @field_validator("currency")
+    @classmethod
+    def _normalize_currency(cls, v: str) -> str:
+        normalized = (v or "").strip().upper()
+        if not normalized:
+            return "USD"
+        return normalized
+
+
+# Issue #238 — resuelve la forward reference declarada en DatasetSchemaRequired
+# para el campo `business_cost_matrix`. Pydantic v2 no resuelve string refs
+# automáticamente cuando la clase referenciada se define después.
+DatasetSchemaRequired.model_rebuild()
 
 
 # ═══════════════════════════════════════════════════════
