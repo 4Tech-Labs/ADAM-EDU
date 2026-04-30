@@ -2342,6 +2342,52 @@ L. **Atomic Cell Charting (Issue #228 — un gráfico por celda)**: cada celda d
      consecutivos). NUNCA mezcles SHAP con cualquier otra cosa.
    - Cada celda de visualización debe terminar con `plt.tight_layout(); plt.show()`.
 
+M. **PEDAGOGÍA HARVARD ml_ds — bloque comparativo OBLIGATORIO (Issue #236).**
+   Antes del bloque per-algoritmo, emite la **Sección 3.0.5** descrita más
+   abajo en "Estructura OBLIGATORIA". Esa sección contiene SIETE celdas con
+   sentinelas contractuales que el validador post-LLM verifica:
+     - `# === SECTION:dummy_baseline ===`     → bootstrap (target_col, y, feature_cols, X_raw, is_binary) + DummyClassifier (most_frequent + stratified)
+     - `# === SECTION:pipeline_lr ===`        → Pipeline(ColumnTransformer + LogisticRegression)
+     - `# === SECTION:pipeline_rf ===`        → Pipeline(ColumnTransformer + RandomForestClassifier)
+     - `# === SECTION:cv_scores ===`          → StratifiedKFold(5) + cross_val_score (fallback cv=3 si la minoritaria es escasa)
+     - `# === SECTION:roc_curves ===`         → hold-out propio + curva ROC (LR vs RF) en una sola figura
+     - `# === SECTION:pr_curves ===`          → curva Precision-Recall (LR vs RF) en una sola figura, reusando el hold-out
+     - `# === SECTION:comparison_table ===`   → tabla pd.DataFrame final con las 7 columnas, hold-out reconstruido localmente
+   Reglas:
+   * Las sentinelas se emiten LITERALMENTE como primera línea de su celda
+     `# %%` (comentario Python). Si una sentinela falta, el job falla en
+     reprompt-once.
+   * El bloque comparativo es CASE-WIDE (no per-algoritmo): se emite una sola
+     vez con LR y RF juntos. El bloque per-algoritmo posterior queda para
+     interpretación profunda (importancias, narrativa de negocio).
+   * **Auto-contención (PR #244 review)**: la celda `dummy_baseline` resuelve
+     `target_col`, deriva `y`, calcula `feature_cols` con la receta K-bis,
+     construye `X_raw = df[feature_cols]`, y fija `is_binary = (target_col is
+     not None) and (y.nunique() == 2)`. Las celdas siguientes NO pueden
+     asumir variables del bloque per-algoritmo (que se ejecuta DESPUÉS); usan
+     `feature_cols`, `y`, `X_raw` e `is_binary` definidos aquí.
+   * **Guarda binaria consistente**: cada celda inicia con
+     `if not is_binary: print("Bloque comparativo omitido: target no
+     binario")` antes del trabajo real, dentro de su `try`. Esto garantiza
+     que un dataset multiclase NO produzca cascada de NameError ni mensajes
+     de error inútiles — solo el aviso pedagógico unificado.
+   * `ColumnTransformer` debe combinar `StandardScaler` para numéricas y
+     `OneHotEncoder(handle_unknown="ignore")` para categóricas (≤20
+     cardinalidad). Particiona `feature_cols` por dtype antes del Pipeline.
+     NUNCA pre-codifiques con `pd.get_dummies` antes del split en este
+     bloque (el ColumnTransformer vive dentro del Pipeline para que el CV
+     no filtre estadísticos).
+   * `roc_curves` IMPORTA explícitamente `train_test_split` y construye su
+     propio hold-out estratificado (`_Xtr/_Xte/_ytr/_yte`). `pr_curves` y
+     `comparison_table` NO pueden depender de variables de celdas previas:
+     cada una reconstruye el hold-out localmente con la misma semilla
+     (`random_state=42`) para garantizar aislamiento (Regla 6) y
+     reproducibilidad.
+   * La tabla comparativa final es un `pd.DataFrame` con columnas exactas
+     `["model", "auc_roc_cv_mean", "auc_roc_cv_std", "f1_macro", "recall_minority", "training_time_s", "interpretability_note"]`,
+     una fila por modelo (Dummy + LR + RF), renderizada con `display(...)` o
+     `print(comparison.to_markdown(index=False))`.
+
 # Estructura OBLIGATORIA
 
 ## Sección 3.0 — EDA Express (UNA sola vez, antes del primer algoritmo).
@@ -2379,6 +2425,316 @@ try:
         print(f"  {{c}}: {{n}} outliers")
 except Exception as e:
     print(f"⚠️ EDA Express falló: {{e}}")
+
+## Sección 3.0.5 — Bloque comparativo Harvard ml_ds (REGLA M, Issue #236)
+## Emite EXACTAMENTE las 7 celdas de código siguientes, EN ORDEN, con su
+## sentinela como primera línea (comentario Python). Cada sentinela es
+## contractual — el validador post-LLM rechaza el notebook y reprompt si falta.
+## Este bloque es CASE-WIDE (una sola vez, para Logistic Regression vs
+## Random Forest juntos). El bloque per-algoritmo posterior queda para
+## interpretación profunda.
+##
+## AUTO-CONTENCIÓN (PR #244 review): la primera celda (`dummy_baseline`)
+## DEBE bootstrappar `target_col`, `y`, `feature_cols`, `X_raw` e
+## `is_binary` a partir de `df` directamente. Las celdas siguientes NO
+## pueden asumir variables del bloque per-algoritmo (que se ejecuta
+## DESPUÉS de esta sección). Cada celda subsiguiente arranca con la
+## guarda `if not is_binary: print("Bloque comparativo omitido: target
+## no binario")` antes del trabajo real, dentro de su `try` aislado.
+
+# %% [markdown]
+# ### 3.0.5 — Bloque comparativo Harvard
+# Comparamos siempre contra el baseline trivial (Dummy), entrenamos Logistic
+# Regression y Random Forest dentro de Pipelines reproducibles, validamos con
+# CV estratificada de 5 folds, ploteamos curvas ROC y PR (en celdas
+# separadas), y consolidamos en una tabla comparativa final.
+
+# %% [markdown]
+# #### 3.0.5.1 Baseline trivial (DummyClassifier) + bootstrap de variables
+# Sin baseline, una AUC de 0.7 no significa nada. Comparamos siempre contra
+# la estrategia más tonta posible: predecir la clase mayoritaria. Esta celda
+# además resuelve `target_col`, `y`, `feature_cols`, `X_raw` e `is_binary`
+# que reutilizan las 6 celdas siguientes.
+
+# %%
+# === SECTION:dummy_baseline ===
+try:
+    from sklearn.dummy import DummyClassifier
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import f1_score as _f1_dummy
+
+    # 1) Resolver target_col vía alias-first (label_aliases → churn_aliases →
+    #    último categórico). Independiente del bloque per-algoritmo posterior.
+    target_col = find_first_matching_column(df.columns, label_aliases) or \
+                 find_first_matching_column(df.columns, churn_aliases)
+    if target_col is None:
+        _cat_cols_boot = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        target_col = _cat_cols_boot[-1] if _cat_cols_boot else None
+
+    # 2) Construir feature_cols con la receta K-bis (sin target, sin IDs, sin
+    #    constantes, sin >50%% nulos). NO usamos pd.get_dummies aquí —
+    #    el ColumnTransformer del Pipeline se encarga del encoding sin fuga.
+    _num_cols_boot = df.select_dtypes(include=np.number).columns.tolist()
+    _cat_cols_boot = [c for c in df.select_dtypes(include=["object", "category"]).columns
+                      if df[c].nunique(dropna=True) <= 20]
+    _candidates_boot = [c for c in (_num_cols_boot + _cat_cols_boot) if c != target_col]
+    _n_boot = len(df)
+    feature_cols = [
+        c for c in _candidates_boot
+        if df[c].nunique(dropna=True) < _n_boot
+        and "id" not in normalize_colname(c).split("_")
+        and df[c].nunique(dropna=True) > 1
+        and df[c].isna().mean() <= 0.5
+    ]
+
+    # 3) Derivar y, X_raw, is_binary. is_binary gobierna las 6 celdas siguientes.
+    y = df[target_col] if target_col is not None else None
+    X_raw = df[feature_cols] if feature_cols else None
+    is_binary = bool(target_col is not None and y is not None and y.nunique(dropna=True) == 2)
+
+    if is_binary:
+        X_tr_d, X_te_d, y_tr_d, y_te_d = train_test_split(
+            X_raw, y, test_size=0.2, random_state=42,
+            stratify=y if y.value_counts().min() >= 2 else None,
+        )
+        # DummyClassifier necesita features numéricas/binarias ⇒ get_dummies SOLO
+        # para esta celda (no contaminamos el pipeline real, que vive aparte).
+        _Xtr_dummy = pd.get_dummies(X_tr_d, drop_first=True, dummy_na=False)
+        _Xte_dummy = pd.get_dummies(X_te_d, drop_first=True, dummy_na=False).reindex(columns=_Xtr_dummy.columns, fill_value=0)
+        dummy_mf = DummyClassifier(strategy="most_frequent", random_state=42).fit(_Xtr_dummy, y_tr_d)
+        dummy_st = DummyClassifier(strategy="stratified",     random_state=42).fit(_Xtr_dummy, y_tr_d)
+        print("Dummy most_frequent → F1 macro:", _f1_dummy(y_te_d, dummy_mf.predict(_Xte_dummy), average="macro", zero_division=0))
+        print("Dummy stratified    → F1 macro:", _f1_dummy(y_te_d, dummy_st.predict(_Xte_dummy), average="macro", zero_division=0))
+        print("Distribución y_train:", y_tr_d.value_counts(normalize=True).round(3).to_dict())
+    else:
+        print("Bloque comparativo omitido: target no binario")
+except Exception as e:
+    # Failsafe: si el bootstrap falla, garantiza que las celdas siguientes
+    # encuentren is_binary=False y emitan el aviso pedagógico estándar.
+    is_binary = False
+    print(f"⚠️ Dummy baseline falló: {{e}}")
+
+# %% [markdown]
+# #### 3.0.5.2 Pipeline reproducible — Logistic Regression
+# `ColumnTransformer` aplica `StandardScaler` a numéricas y `OneHotEncoder`
+# a categóricas dentro del Pipeline, así el CV no filtra estadísticos del fold
+# de validación al de entrenamiento.
+
+# %%
+# === SECTION:pipeline_lr ===
+try:
+    if not is_binary:
+        print("Bloque comparativo omitido: target no binario")
+    else:
+        from sklearn.pipeline import Pipeline
+        from sklearn.compose import ColumnTransformer
+        from sklearn.preprocessing import StandardScaler, OneHotEncoder
+        from sklearn.linear_model import LogisticRegression
+
+        _num_feats = [c for c in feature_cols if c in df.select_dtypes(include=np.number).columns]
+        _cat_feats = [c for c in feature_cols if c not in _num_feats]
+        preprocess_lr = ColumnTransformer(
+            transformers=[
+                ("num", StandardScaler(), _num_feats),
+                ("cat", OneHotEncoder(handle_unknown="ignore"), _cat_feats),
+            ],
+            remainder="drop",
+        )
+        pipe_lr = Pipeline(steps=[
+            ("preprocess", preprocess_lr),
+            ("clf", LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42)),
+        ])
+        pipe_lr.fit(X_raw, y)
+        print("Pipeline LR ajustado:", pipe_lr.named_steps["clf"])
+except Exception as e:
+    print(f"⚠️ Pipeline LR falló: {{e}}")
+
+# %% [markdown]
+# #### 3.0.5.3 Pipeline reproducible — Random Forest
+
+# %%
+# === SECTION:pipeline_rf ===
+try:
+    if not is_binary:
+        print("Bloque comparativo omitido: target no binario")
+    else:
+        from sklearn.pipeline import Pipeline as _PipelineRF
+        from sklearn.compose import ColumnTransformer as _CTRF
+        from sklearn.preprocessing import StandardScaler as _StdRF, OneHotEncoder as _OheRF
+        from sklearn.ensemble import RandomForestClassifier
+
+        _num_feats_rf = [c for c in feature_cols if c in df.select_dtypes(include=np.number).columns]
+        _cat_feats_rf = [c for c in feature_cols if c not in _num_feats_rf]
+        preprocess_rf = _CTRF(
+            transformers=[
+                ("num", _StdRF(), _num_feats_rf),
+                ("cat", _OheRF(handle_unknown="ignore"), _cat_feats_rf),
+            ],
+            remainder="drop",
+        )
+        pipe_rf = _PipelineRF(steps=[
+            ("preprocess", preprocess_rf),
+            ("clf", RandomForestClassifier(n_estimators=200, class_weight="balanced", random_state=42)),
+        ])
+        pipe_rf.fit(X_raw, y)
+        print("Pipeline RF ajustado:", pipe_rf.named_steps["clf"])
+except Exception as e:
+    print(f"⚠️ Pipeline RF falló: {{e}}")
+
+# %% [markdown]
+# #### 3.0.5.4 Validación cruzada estratificada (5 folds)
+# `StratifiedKFold` preserva la prevalencia en cada fold. Si la minoritaria
+# tiene <5 ejemplos por fold posible, hacemos fallback a `cv=3`.
+
+# %%
+# === SECTION:cv_scores ===
+cv_lr, cv_rf = None, None
+try:
+    if not is_binary:
+        print("Bloque comparativo omitido: target no binario")
+    else:
+        from sklearn.model_selection import StratifiedKFold, cross_val_score
+
+        _min_class = int(y.value_counts().min()) if y is not None and len(y) else 0
+        n_splits_cv = 5 if _min_class >= 5 else (3 if _min_class >= 3 else 2)
+        cv_kfold = StratifiedKFold(n_splits=n_splits_cv, shuffle=True, random_state=42)
+        cv_lr = cross_val_score(pipe_lr, X_raw, y, cv=cv_kfold, scoring="roc_auc")
+        cv_rf = cross_val_score(pipe_rf, X_raw, y, cv=cv_kfold, scoring="roc_auc")
+        print(f"AUC-ROC CV (n_splits={{n_splits_cv}}) — LR: {{cv_lr.mean():.3f}} ± {{cv_lr.std():.3f}}")
+        print(f"AUC-ROC CV (n_splits={{n_splits_cv}}) — RF: {{cv_rf.mean():.3f}} ± {{cv_rf.std():.3f}}")
+except Exception as e:
+    print(f"⚠️ CV scores fallaron: {{e}}")
+
+# %% [markdown]
+# #### 3.0.5.5 Curva ROC — LR vs RF
+# Una sola figura, una sola `plt.show()` (REGLA L atomic charting). El
+# hold-out se construye localmente con `train_test_split` (semilla 42) para
+# que la celda sea aislada (Regla 6).
+
+# %%
+# === SECTION:roc_curves ===
+try:
+    if not is_binary:
+        print("Bloque comparativo omitido: target no binario")
+    else:
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import roc_curve, roc_auc_score
+
+        _Xtr_roc, _Xte_roc, _ytr_roc, _yte_roc = train_test_split(
+            X_raw, y, test_size=0.2, random_state=42,
+            stratify=y if y.value_counts().min() >= 2 else None,
+        )
+        pipe_lr.fit(_Xtr_roc, _ytr_roc); pipe_rf.fit(_Xtr_roc, _ytr_roc)
+        _proba_lr_roc = pipe_lr.predict_proba(_Xte_roc)[:, 1]
+        _proba_rf_roc = pipe_rf.predict_proba(_Xte_roc)[:, 1]
+        _pos_roc = pipe_lr.named_steps["clf"].classes_[1]
+        _y_bin_roc = (_yte_roc.reset_index(drop=True) == _pos_roc).astype(int)
+
+        fpr_lr, tpr_lr, _ = roc_curve(_y_bin_roc, _proba_lr_roc)
+        fpr_rf, tpr_rf, _ = roc_curve(_y_bin_roc, _proba_rf_roc)
+        plt.figure(figsize=(7, 6))
+        plt.plot(fpr_lr, tpr_lr, label=f"LR (AUC={{roc_auc_score(_y_bin_roc, _proba_lr_roc):.3f}})")
+        plt.plot(fpr_rf, tpr_rf, label=f"RF (AUC={{roc_auc_score(_y_bin_roc, _proba_rf_roc):.3f}})")
+        plt.plot([0, 1], [0, 1], "k--", alpha=0.4)
+        plt.xlabel("False Positive Rate"); plt.ylabel("True Positive Rate")
+        plt.title("Curvas ROC — LR vs RF"); plt.legend(loc="lower right")
+        plt.tight_layout(); plt.show()
+except Exception as e:
+    print(f"⚠️ Curvas ROC fallaron: {{e}}")
+
+# %% [markdown]
+# #### 3.0.5.6 Curva Precision-Recall — LR vs RF
+# Celda dedicada (REGLA L). Reconstruye el hold-out localmente para no
+# depender del estado de la celda anterior (Regla 6 — try/except aislado).
+
+# %%
+# === SECTION:pr_curves ===
+try:
+    if not is_binary:
+        print("Bloque comparativo omitido: target no binario")
+    else:
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import precision_recall_curve, average_precision_score
+
+        _Xtr_pr, _Xte_pr, _ytr_pr, _yte_pr = train_test_split(
+            X_raw, y, test_size=0.2, random_state=42,
+            stratify=y if y.value_counts().min() >= 2 else None,
+        )
+        pipe_lr.fit(_Xtr_pr, _ytr_pr); pipe_rf.fit(_Xtr_pr, _ytr_pr)
+        _proba_lr_pr = pipe_lr.predict_proba(_Xte_pr)[:, 1]
+        _proba_rf_pr = pipe_rf.predict_proba(_Xte_pr)[:, 1]
+        _pos_pr = pipe_lr.named_steps["clf"].classes_[1]
+        _y_bin_pr = (_yte_pr.reset_index(drop=True) == _pos_pr).astype(int)
+
+        prec_lr, rec_lr, _ = precision_recall_curve(_y_bin_pr, _proba_lr_pr)
+        prec_rf, rec_rf, _ = precision_recall_curve(_y_bin_pr, _proba_rf_pr)
+        plt.figure(figsize=(7, 6))
+        plt.plot(rec_lr, prec_lr, label=f"LR (AP={{average_precision_score(_y_bin_pr, _proba_lr_pr):.3f}})")
+        plt.plot(rec_rf, prec_rf, label=f"RF (AP={{average_precision_score(_y_bin_pr, _proba_rf_pr):.3f}})")
+        plt.xlabel("Recall"); plt.ylabel("Precision")
+        plt.title("Curvas Precision-Recall — LR vs RF"); plt.legend(loc="lower left")
+        plt.tight_layout(); plt.show()
+except Exception as e:
+    print(f"⚠️ Curvas PR fallaron: {{e}}")
+
+# %% [markdown]
+# #### 3.0.5.7 Tabla comparativa final
+# Consolida AUC CV (media y std), F1 macro, recall de la clase minoritaria,
+# tiempo de entrenamiento e interpretabilidad cualitativa. Reconstruye el
+# hold-out localmente para no depender del estado de las curvas (Regla 6).
+
+# %%
+# === SECTION:comparison_table ===
+try:
+    if not is_binary:
+        print("Bloque comparativo omitido: target no binario")
+    else:
+        import time as _time_cmp
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import f1_score as _f1_cmp, recall_score as _rec_cmp
+
+        _Xtr_cmp, _Xte_cmp, _ytr_cmp, _yte_cmp = train_test_split(
+            X_raw, y, test_size=0.2, random_state=42,
+            stratify=y if y.value_counts().min() >= 2 else None,
+        )
+
+        def _train_and_score(pipe, name):
+            t0 = _time_cmp.perf_counter()
+            pipe.fit(_Xtr_cmp, _ytr_cmp)
+            elapsed = _time_cmp.perf_counter() - t0
+            y_hat = pipe.predict(_Xte_cmp)
+            minority = y.value_counts().idxmin() if y is not None and y.nunique() == 2 else None
+            rec_min = _rec_cmp(_yte_cmp, y_hat, labels=[minority], average="macro", zero_division=0) if minority is not None else float("nan")
+            return {{
+                "model": name,
+                "auc_roc_cv_mean": float(cv_lr.mean()) if name == "LogisticRegression" and cv_lr is not None else (float(cv_rf.mean()) if name == "RandomForest" and cv_rf is not None else float("nan")),
+                "auc_roc_cv_std":  float(cv_lr.std())  if name == "LogisticRegression" and cv_lr is not None else (float(cv_rf.std())  if name == "RandomForest" and cv_rf is not None else float("nan")),
+                "f1_macro": float(_f1_cmp(_yte_cmp, y_hat, average="macro", zero_division=0)),
+                "recall_minority": float(rec_min),
+                "training_time_s": round(elapsed, 4),
+                "interpretability_note": (
+                    "alta — coeficientes interpretables como log-odds" if name == "LogisticRegression"
+                    else "media — feature_importances_, requiere permutation importance para causalidad"
+                ),
+            }}
+
+        rows_cmp = [
+            {{"model": "DummyClassifier(most_frequent)", "auc_roc_cv_mean": 0.5, "auc_roc_cv_std": 0.0,
+              "f1_macro": float("nan"), "recall_minority": 0.0, "training_time_s": 0.0,
+              "interpretability_note": "baseline trivial — sin aprendizaje"}},
+            _train_and_score(pipe_lr, "LogisticRegression"),
+            _train_and_score(pipe_rf, "RandomForest"),
+        ]
+        comparison = pd.DataFrame(rows_cmp, columns=[
+            "model", "auc_roc_cv_mean", "auc_roc_cv_std", "f1_macro",
+            "recall_minority", "training_time_s", "interpretability_note",
+        ])
+        try:
+            print(comparison.to_markdown(index=False))
+        except Exception:
+            print(comparison.to_string(index=False))
+except Exception as e:
+    print(f"⚠️ Tabla comparativa falló: {{e}}")
 
 ## Para CADA familia en {familias_meta}, y para CADA algoritmo dentro del campo
 ## "algoritmos" de esa familia, emite las siguientes celdas EN ORDEN (no

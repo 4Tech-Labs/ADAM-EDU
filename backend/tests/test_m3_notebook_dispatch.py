@@ -70,13 +70,24 @@ def test_detect_empty_input_does_not_crash() -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 CLEAN_CLASSIFICATION_CODE = """
+# === SECTION:dummy_baseline ===
+# === SECTION:pipeline_lr ===
+# === SECTION:pipeline_rf ===
+# === SECTION:cv_scores ===
+# === SECTION:roc_curves ===
+# === SECTION:pr_curves ===
+# === SECTION:comparison_table ===
+from sklearn.dummy import DummyClassifier
+from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score, confusion_matrix
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score, confusion_matrix, roc_curve, precision_recall_curve
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y)
 model = LogisticRegression().fit(X_train, y_train)
 auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
+fpr, tpr, _ = roc_curve(y_test, model.predict_proba(X_test)[:, 1])
+prec, rec, _ = precision_recall_curve(y_test, model.predict_proba(X_test)[:, 1])
 """
 
 CLEAN_CLUSTERING_CODE = """
