@@ -77,6 +77,7 @@ from case_generator.prompts import (
     CASE_ARCHITECT_PROMPT,
     CASE_QUESTIONS_PROMPT,
     CASE_WRITER_PROMPT,
+    EDA_ANNOTATE_ONLY_PROMPT,
     EDA_CHART_GENERATOR_PROMPT,
     EDA_QUESTIONS_GENERATOR_PROMPT,
     EDA_TEXT_ANALYST_PROMPT,
@@ -103,11 +104,15 @@ from case_generator.suggest_service import (
 )
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
+    EDAAnnotateOnlyOutput,
     EDAChartGeneratorOutput,
     GeneradorPreguntasOutput,
     GeneradorPreguntasM5Output,
     EDAQuestionsOutput,
     DatasetSchema,
+)
+from case_generator.datagen.eda_charts_classification import (
+    generate_classification_eda_charts,
 )
 from case_generator.orchestration.frontend_adapter import adapter_canonical_to_legacy
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
@@ -1285,12 +1290,156 @@ def _inject_heatmap_matrices(
 # ─────────────────────────────────────────────────────────
 # NODO 4 — EDA CHART GENERATOR (Flash, structured output)
 # ─────────────────────────────────────────────────────────
+# Issue #237 — helpers para el path Python-determinista (clasificación ml_ds)
+def _clamp(text: str, max_chars: int) -> str:
+    if not isinstance(text, str):
+        return ""
+    return text if len(text) <= max_chars else text[: max_chars - 1] + "…"
+
+
+def _eda_classification_python_path(
+    state: ADAMState, config: RunnableConfig, contract: dict | None
+) -> dict | None:
+    """Issue #237 — construye 6 charts EDA en Python y pide al LLM solo
+    `description` + `notes`. Devuelve el dict de update del nodo o ``None``
+    si el path Python no aplica (deja que el caller use el LLM-JSON).
+    """
+    try:
+        import pandas as pd  # noqa: PLC0415 — local para no penalizar imports globales
+
+        dataset = state.get("doc7_dataset") or []
+        if not dataset:
+            logger.warning(
+                "[eda_chart_generator/py] doc7_dataset vacío — fallback a path LLM"
+            )
+            return None
+        df = pd.DataFrame(dataset)
+        target_col = _identify_target_variable(state, df)
+        if not target_col:
+            logger.warning(
+                "[eda_chart_generator/py] target no identificable — fallback a path LLM"
+            )
+            return None
+
+        charts = generate_classification_eda_charts(df, target_col, contract)
+        if not charts:
+            logger.warning(
+                "[eda_chart_generator/py] builder devolvió 0 charts — fallback a path LLM"
+            )
+            return None
+
+        # Cap defensivo: el contrato Issue #237 son 6 charts.
+        if len(charts) > 6:
+            charts = charts[:6]
+
+        # Annotate-only: pedimos al LLM solo description/notes por id.
+        try:
+            cfg = Configuration.from_runnable_config(config)
+            llm = _get_chart_llm(cfg.writer_model, temperature=0.3, thinking_level="minimal")
+            charts_context = [
+                {
+                    "id": c.get("id", ""),
+                    "title": c.get("title", ""),
+                    "subtitle": c.get("subtitle", ""),
+                    "chart_type": c.get("chart_type", ""),
+                }
+                for c in charts
+            ]
+            prompt = EDA_ANNOTATE_ONLY_PROMPT.format(
+                charts_context_json=json.dumps(charts_context, ensure_ascii=False),
+                case_id=state.get("case_id", "") or state.get("titulo", ""),
+                student_profile=state.get("studentProfile", "ml_ds"),
+                output_language=state.get("output_language", "es"),
+            )
+            ann_result: EDAAnnotateOnlyOutput = llm.with_structured_output(
+                EDAAnnotateOnlyOutput
+            ).invoke(prompt)
+            ann_by_id: dict[str, tuple[str, str]] = {}
+            for ann in (ann_result.annotations or []):
+                if not ann.id:
+                    continue
+                ann_by_id[ann.id] = (
+                    _clamp(ann.description or "", 500),
+                    _clamp(ann.notes or "", 300),
+                )
+        except Exception as ann_err:  # noqa: BLE001
+            # Boundary Issue #237: errores del LLM nunca tumban el panel.
+            logger.warning(
+                "[eda_chart_generator/py] annotate-only LLM falló (%s) — sirviendo charts sin anotaciones",
+                ann_err,
+            )
+            ann_by_id = {}
+
+        # Merge defensivo: solo description/notes; preservamos data_source.
+        for c in charts:
+            cid = c.get("id", "")
+            desc, notes = ann_by_id.get(cid, ("", ""))
+            c["description"] = desc
+            c["notes"] = notes
+            c["data_source"] = "python_builder"
+
+        # Validamos contra el schema antes de devolver (descartamos charts que rompan el contrato).
+        validated: list[dict] = []
+        for c in charts:
+            try:
+                spec = EDAChartGeneratorOutput.model_validate({"charts": [c]})
+                validated.append(spec.charts[0].model_dump())
+            except Exception as ve:  # noqa: BLE001
+                logger.warning(
+                    "[eda_chart_generator/py] chart %s falló validación: %s — se omite",
+                    c.get("id"), ve,
+                )
+
+        if not validated:
+            logger.warning(
+                "[eda_chart_generator/py] todos los charts fallaron validación — fallback a path LLM"
+            )
+            return None
+
+        logger.info(
+            "[eda_chart_generator/py] panel Python-determinista emitido: %d/%d charts",
+            len(validated), len(charts),
+        )
+        return {
+            "doc2_eda_charts": validated,
+            "current_agent": "eda_chart_generator",
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "[eda_chart_generator/py] ERROR no recuperable: %s — fallback a path LLM",
+            e, exc_info=True,
+        )
+        return None
+
+
 def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
-    """Extrae 4 charts JSON del reporte EDA (Documento 2 — parte charts)."""
+    """Extrae 4 charts JSON del reporte EDA (Documento 2 — parte charts).
+
+    Issue #237 — para `studentProfile == "ml_ds"` y familia primaria
+    `clasificacion`, los 6 charts se generan deterministicamente en Python
+    y el LLM solo escribe `description`/`notes`. El path original
+    (LLM-JSON monolítico) queda intacto para business y otras familias.
+    """
     eda_report = state.get("doc2_eda", "")
     if not eda_report or "No disponible" in eda_report:
         print("[eda_chart_generator] Skipping: no hay reporte EDA válido")
         return {"doc2_eda_charts": [], "current_agent": "eda_chart_generator"}
+
+    # ── Issue #237 dispatch ──────────────────────────────────────────────
+    profile = state.get("studentProfile", "business")
+    task_payload_obj = state.get("task_payload") or {}
+    algoritmos_disp: list[str] = []
+    if isinstance(task_payload_obj, dict):
+        algoritmos_disp = list(task_payload_obj.get("algoritmos") or [])
+    if not algoritmos_disp:
+        algoritmos_disp = list(state.get("algoritmos") or [])
+    primary_family, _legacy_warn = _resolve_primary_family(algoritmos_disp)
+    if profile == "ml_ds" and primary_family == "clasificacion":
+        contract = state.get("dataset_schema_required")
+        py_update = _eda_classification_python_path(state, config, contract)
+        if py_update is not None:
+            return py_update
+        # else: fall through to legacy LLM-JSON path with warning already logged.
 
     try:
         cfg = Configuration.from_runnable_config(config)
@@ -3021,6 +3170,36 @@ def _detect_algorithm_families(algoritmos: list[str]) -> list[str]:
             detected.append(family)
     return detected
 
+
+def _resolve_primary_family(
+    algoritmos: list[str],
+) -> tuple[str | None, str | None]:
+    """Resolve the first algorithm to a canonical 4-family key.
+
+    Issue #237 — DRY helper extracted from ``m3_notebook_generator`` so the
+    EDA chart generator can apply the exact same dispatch chain without
+    duplicating the resolution loop. Returns ``(family, legacy_warning)``:
+
+      * ``family`` is one of ``{"clasificacion","regresion","clustering",
+        "serie_temporal"}`` or ``None`` when neither the canonical catalog
+        nor the legacy substring map can place the first algorithm.
+      * ``legacy_warning`` is non-empty only when the legacy fallback fired
+        and produced a teacher-facing message.
+
+    Callers decide what to do with ``None`` (M3 falls back to
+    ``"clasificacion"`` with a warning; EDA falls through to the
+    profile-based LLM path).
+    """
+    for algo in algoritmos:
+        family = family_of(algo)
+        if family is not None:
+            return family, None
+    for algo in algoritmos:
+        legacy = resolve_legacy_family(algo)
+        if legacy is not None:
+            return legacy[0], legacy[1]
+    return None, None
+
 # Issue 4.1 — M3 CONTENT GENERATOR
 def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """M3 bifurcado por perfil:
@@ -3435,19 +3614,10 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # The teacher form (Issue #230) guarantees algoritmos share a family
         # in contrast mode. We resolve the first algorithm to its family,
         # falling back to the legacy substring map for historical jobs.
+        # Issue #237 — single resolution chain via ``_resolve_primary_family``
+        # so EDA chart dispatch shares the exact same precedence.
         algoritmos_raw: list[str] = state.get("algoritmos", [])
-        legacy_warning: str | None = None
-        family: str | None = None
-        for algo in algoritmos_raw:
-            family = family_of(algo)
-            if family is not None:
-                break
-        if family is None:
-            for algo in algoritmos_raw:
-                legacy = resolve_legacy_family(algo)
-                if legacy is not None:
-                    family, legacy_warning = legacy
-                    break
+        family, legacy_warning = _resolve_primary_family(algoritmos_raw)
         if family is None or family not in PROMPT_BY_FAMILY:
             print(
                 f"[m3_notebook_generator] Familia no resuelta para algoritmos="
