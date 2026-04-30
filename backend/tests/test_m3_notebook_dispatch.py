@@ -74,7 +74,8 @@ CLEAN_CLASSIFICATION_CODE = """
 # === SECTION:pipeline_lr ===
 # === SECTION:pipeline_rf ===
 # === SECTION:cv_scores ===
-# === SECTION:roc_pr_curves ===
+# === SECTION:roc_curves ===
+# === SECTION:pr_curves ===
 # === SECTION:comparison_table ===
 from sklearn.dummy import DummyClassifier
 from sklearn.compose import ColumnTransformer

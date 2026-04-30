@@ -3040,26 +3040,55 @@ _FAMILY_PROHIBITED_PATTERNS: dict[str, tuple[str, ...]] = {
 #     ``ColumnTransformer``, ``cross_val_score``, ``roc_curve(``,
 #     ``precision_recall_curve(``) — guarantee the sections do real work.
 #
-# IMPORTANT: required-token scanning runs against the RAW notebook text (not
-# the comment-stripped variant used for prohibited tokens). Sentinels are
-# Python ``#`` comments and would otherwise be erased by
-# ``_strip_jupytext_for_validation``. Real API tokens also legitimately appear
-# in markdown pedagogical preambles, and that should count as ``present``.
-_FAMILY_REQUIRED_PATTERNS: dict[str, tuple[str, ...]] = {
+# Required tokens split in two buckets so each is checked against the right
+# corpus (PR #244 review):
+#
+#   * ``_FAMILY_REQUIRED_SENTINELS`` — section-marker comments
+#     (``# === SECTION:<id> ===``). These are Python ``#`` comments and would
+#     be erased by ``_strip_jupytext_for_validation``, so we MUST scan them
+#     against the RAW notebook text.
+#   * ``_FAMILY_REQUIRED_APIS`` — canonical sklearn API tokens
+#     (``DummyClassifier``, ``StratifiedKFold``, ``ColumnTransformer``,
+#     ``cross_val_score``, ``roc_curve(``, ``precision_recall_curve(``).
+#     These MUST be scanned against the STRIPPED text so the LLM cannot
+#     satisfy the validator by merely mentioning the identifier inside a
+#     markdown preamble or a Python comment — they have to appear in
+#     executable code (call site or import) for the section to do real work.
+#
+# Both maps remain populated only for ``clasificacion`` (Issue #236 v1 scope).
+# Other families return ``()`` from the ``.get`` lookup and remain
+# bit-identical to pre-#236 behaviour (no FALTANTE entries can ever fire).
+_FAMILY_REQUIRED_SENTINELS: dict[str, tuple[str, ...]] = {
     "clasificacion": (
         "# === SECTION:dummy_baseline ===",
         "# === SECTION:pipeline_lr ===",
         "# === SECTION:pipeline_rf ===",
         "# === SECTION:cv_scores ===",
-        "# === SECTION:roc_pr_curves ===",
+        "# === SECTION:roc_curves ===",
+        "# === SECTION:pr_curves ===",
         "# === SECTION:comparison_table ===",
+    ),
+}
+
+_FAMILY_REQUIRED_APIS: dict[str, tuple[str, ...]] = {
+    "clasificacion": (
         "DummyClassifier",
         "ColumnTransformer",
         "StratifiedKFold",
         "cross_val_score",
         "roc_curve(",
         "precision_recall_curve(",
+        "train_test_split(",
     ),
+}
+
+# Back-compat alias: external callers and Issue #233 unit tests may still
+# reference the legacy combined map. Keep it as a derived view so future code
+# can migrate to the explicit pair without an import break.
+_FAMILY_REQUIRED_PATTERNS: dict[str, tuple[str, ...]] = {
+    family: _FAMILY_REQUIRED_SENTINELS.get(family, ())
+    + _FAMILY_REQUIRED_APIS.get(family, ())
+    for family in set(_FAMILY_REQUIRED_SENTINELS) | set(_FAMILY_REQUIRED_APIS)
 }
 
 
@@ -3129,25 +3158,31 @@ def _validate_notebook_family_consistency(family: str, code: str) -> list[str]:
     Empty list = pass. Non-empty = the LLM strayed; caller reprompts once and
     fails the job if the second attempt still has any entry.
 
-    Scoping rules (anti false-positive)
-    -----------------------------------
+    Scoping rules (anti false-positive AND anti false-negative — PR #244)
+    ---------------------------------------------------------------------
     * Prohibited scan runs on the **stripped** code (markdown + ``#`` comments
       removed) so the prompt's own ``Lista NEGRA`` echoes don't trip it.
-    * Required scan runs on the **raw** code because section sentinels are
-      themselves ``#``-prefixed lines and would otherwise be erased by the
-      strip pass; legitimate appearance of a required identifier in a
-      markdown pedagogical preamble also counts as "present".
+    * Required **sentinels** scan runs on the **raw** code because they ARE
+      ``#``-prefixed lines that the strip pass would erase. The contract says
+      they must appear as the first line of their cell.
+    * Required **APIs** scan runs on the **stripped** code so the LLM cannot
+      cheat by mentioning ``DummyClassifier`` only inside a markdown
+      pedagogical preamble or a ``# Comentario`` line. They have to appear in
+      executable code (call site or import) for the section to do real work.
     """
     violations: list[str] = []
 
+    scannable = _strip_jupytext_for_validation(code)
+
     prohibited = _FAMILY_PROHIBITED_PATTERNS.get(family, ())
     if prohibited:
-        scannable = _strip_jupytext_for_validation(code)
         violations.extend(p for p in prohibited if p in scannable)
 
-    required = _FAMILY_REQUIRED_PATTERNS.get(family, ())
-    if required:
-        violations.extend(f"FALTANTE: {token}" for token in required if token not in code)
+    sentinels = _FAMILY_REQUIRED_SENTINELS.get(family, ())
+    violations.extend(f"FALTANTE: {token}" for token in sentinels if token not in code)
+
+    apis = _FAMILY_REQUIRED_APIS.get(family, ())
+    violations.extend(f"FALTANTE: {token}" for token in apis if token not in scannable)
 
     return violations
 
