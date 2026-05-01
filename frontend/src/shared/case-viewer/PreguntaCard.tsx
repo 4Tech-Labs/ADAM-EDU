@@ -56,6 +56,8 @@ export function PreguntaCard({
     const hasSolution = p.solucion_esperada !== undefined && p.solucion_esperada !== null;
     const rubric = Array.isArray(p.rubric) && p.rubric.length > 0 ? p.rubric : null;
     const hasTeacherDetails = hasSolution || rubric !== null;
+    const teacherDetailsLabel = hasSolution ? "solución esperada" : "rúbrica docente";
+    const teacherDetailsTitle = hasSolution ? "Solución Esperada — Solo Docentes" : "Rúbrica Docente — Solo Docentes";
 
     useEffect(() => {
         setShowSolucion(showExpectedSolutions);
@@ -105,7 +107,7 @@ export function PreguntaCard({
                             <svg className={`w-3 h-3 transition-transform duration-200 ${showSolucion ? "rotate-0" : "rotate-180"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 15l7-7 7 7" />
                             </svg>
-                            <span>{showSolucion ? "Ocultar solución esperada" : "Mostrar solución esperada"}</span>
+                            <span>{showSolucion ? `Ocultar ${teacherDetailsLabel}` : `Mostrar ${teacherDetailsLabel}`}</span>
                         </button>
                     </div>
                 )}
@@ -116,7 +118,7 @@ export function PreguntaCard({
                         <svg className="w-3.5 h-3.5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                         </svg>
-                        <span className="text-[10px] font-bold text-amber-700 tracking-[0.12em] uppercase">Solución Esperada — Solo Docentes</span>
+                        <span className="text-[10px] font-bold text-amber-700 tracking-[0.12em] uppercase">{teacherDetailsTitle}</span>
                     </div>
                     {hasSolution && <SolucionEsperadaRenderer solucion={p.solucion_esperada} />}
                     {rubric && <RubricRenderer rubric={rubric} />}

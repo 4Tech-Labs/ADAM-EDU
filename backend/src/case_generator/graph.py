@@ -725,15 +725,15 @@ def _build_base_context(state: ADAMState) -> dict:
     for preferred in grounding_generation_hints.get("preferred_techniques", []):
         if isinstance(preferred, str) and preferred and preferred not in algoritmos:
             algoritmos.append(preferred)
-    _profile_for_focus, primary_family = _resolve_generation_focus(
+    profile_for_focus, primary_family = _resolve_generation_focus(
         state,
         default_unresolved_ml_ds_to_classification=True,
     )
 
     return {
-        "student_profile": profile,
+        "student_profile": profile_for_focus,
         "primary_family": primary_family or "desconocida",
-        "pregunta_eje": state.get("pregunta_eje") or "(no aplica)",
+        "pregunta_eje": state.get("pregunta_eje") or "",
         "output_language": state.get("output_language", "es"),
         "case_id": case_id,
         "course_level": course,
@@ -776,7 +776,7 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             "asignatura": state.get("asignatura", ""),
             "modulos": state.get("modulos", []),
             "nivel": state.get("nivel", "pregrado"),
-            "perfil_estudiante": state.get("studentProfile", "business"),
+            "perfil_estudiante": context.get("student_profile", "business"),
             "horas": state.get("horas", 4),
             "industria": state.get("industria", ""),
             "descripcion_escenario": state.get("descripcion", ""),
@@ -791,9 +791,13 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
     prompt = CASE_ARCHITECT_PROMPT.format(**context)
 
     try:
-        result: CaseArchitectOutput = llm.with_structured_output(
-            CaseArchitectOutput
-        ).invoke(prompt)
+        result, profile_resolved, family_resolved, pregunta_eje = (
+            _invoke_case_architect_with_contract(
+                llm=llm,
+                prompt=prompt,
+                state=state,
+            )
+        )
 
         print(
             f"[case_architect] titulo='{result.titulo}', industria='{result.industria}', "
@@ -820,18 +824,12 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         )
         contract_dict = _infer_leakage_risk_from_naming(contract_dict)
 
-        # Issue #238/#242 — valida matriz de costos y pregunta_eje con la misma
-        # resolución de familia que usan los dispatchers downstream.
-        profile_resolved, family_resolved = _resolve_generation_focus(state)
+        # Issue #238/#242 — valida matriz de costos con la misma resolución de
+        # familia que usan los dispatchers downstream.
         contract_dict, cost_warnings = _validate_business_cost_matrix(
             contract_dict, family_resolved, result.titulo
         )
         coherence_warnings = list(coherence_warnings) + cost_warnings
-        pregunta_eje = _sanitize_pregunta_eje(
-            result.pregunta_eje,
-            profile=profile_resolved,
-            family=family_resolved,
-        )
 
         return {
             "current_agent": "case_architect",
@@ -852,6 +850,8 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             # warnings (missing/leakage) preservando esta semilla.
             "data_gap_warnings": coherence_warnings,
         }
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error("[case_architect] ERROR: %s", e, exc_info=True)
         return {
@@ -956,12 +956,18 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
     prompt = CASE_QUESTIONS_PROMPT.format(**context)
 
     try:
-        resultado: GeneradorPreguntasOutput = llm.with_structured_output(
-            GeneradorPreguntasOutput
-        ).invoke(prompt)
+        resultado: GeneradorPreguntasOutput = _invoke_question_output_with_rubric_contract(
+            llm=llm,
+            output_schema=GeneradorPreguntasOutput,
+            prompt=prompt,
+            state=state,
+            node_name="case_questions",
+        )
         
         preguntas_dict = [p.model_dump() for p in resultado.preguntas]
         print(f"[case_questions] {len(preguntas_dict)} preguntas generadas")
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error("[case_questions] ERROR tras reintentos: %s", e, exc_info=True)
         return {"doc1_preguntas": []}  # Degradación graceful — pipeline continúa sin preguntas M1
@@ -1551,9 +1557,13 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         prompt = EDA_QUESTIONS_GENERATOR_PROMPT.format(**context)
 
         # v9 M2-Redesign: EDAQuestionsOutput con EDASocraticQuestion (solucion_esperada = objeto)
-        resultado: EDAQuestionsOutput = llm.with_structured_output(
-            EDAQuestionsOutput
-        ).invoke(prompt)
+        resultado: EDAQuestionsOutput = _invoke_question_output_with_rubric_contract(
+            llm=llm,
+            output_schema=EDAQuestionsOutput,
+            prompt=prompt,
+            state=state,
+            node_name="eda_questions_generator",
+        )
 
         preguntas_eda_dict = [p.model_dump() for p in resultado.preguntas]
         print(f"[eda_questions_generator] {len(preguntas_eda_dict)} preguntas socráticas generadas")
@@ -1563,6 +1573,8 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "current_agent": "doc3_generation",
         }
 
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error("[eda_questions_generator] ERROR tras reintentos: %s", e, exc_info=True)
         return {"doc2_preguntas_eda": [], "current_agent": "doc3_generation"}  # Degradación graceful — sin preguntas EDA
@@ -3140,13 +3152,19 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             # main_risk_from_m3_m4 e implementation_timeframe vienen de _build_base_context
         })
 
-        resultado: GeneradorPreguntasM5Output = llm.with_structured_output(
-            GeneradorPreguntasM5Output
-        ).invoke(M5_QUESTIONS_GENERATOR_PROMPT.format(**context))
+        resultado: GeneradorPreguntasM5Output = _invoke_question_output_with_rubric_contract(
+            llm=llm,
+            output_schema=GeneradorPreguntasM5Output,
+            prompt=M5_QUESTIONS_GENERATOR_PROMPT.format(**context),
+            state=state,
+            node_name="m5_questions_generator",
+        )
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
         print(f"[m5_questions_generator] {len(preguntas)} preguntas Junta Directiva")
         return {"m5_questions": preguntas, "current_agent": "m5_questions_generator"}
+    except RuntimeError:
+        raise
     except Exception as e:
         err_msg = str(e)
         # Re-raise errores transitorios → LangGraph RetryPolicy dispara con backoff
@@ -3244,7 +3262,9 @@ def _resolve_generation_focus(
     default_unresolved_ml_ds_to_classification: bool = False,
 ) -> tuple[str, str | None]:
     """Return normalized ``(student_profile, primary_family)`` for graph gates."""
-    profile = str(state.get("studentProfile", "business") or "business").strip()
+    profile = str(state.get("studentProfile", "business") or "business").strip().lower()
+    if profile not in {"business", "ml_ds"}:
+        profile = "business"
     family, _legacy_warning = _resolve_primary_family(_extract_state_algoritmos(state))
     if (
         family is None
@@ -3279,6 +3299,118 @@ def _sanitize_pregunta_eje(
         return None
     normalized = " ".join(str(pregunta_eje).split())
     return normalized or None
+
+
+def _issue242_contract_required(state: ADAMState) -> bool:
+    return _is_ml_ds_classification(
+        state,
+        default_unresolved_ml_ds_to_classification=True,
+    )
+
+
+def _invoke_case_architect_with_contract(
+    *,
+    llm: Any,
+    prompt: str,
+    state: ADAMState,
+) -> tuple[CaseArchitectOutput, str, str | None, str | None]:
+    profile, family = _resolve_generation_focus(
+        state,
+        default_unresolved_ml_ds_to_classification=True,
+    )
+    structured_llm = llm.with_structured_output(CaseArchitectOutput)
+    result: CaseArchitectOutput = structured_llm.invoke(prompt)
+    pregunta_eje = _sanitize_pregunta_eje(
+        result.pregunta_eje,
+        profile=profile,
+        family=family,
+    )
+
+    if not _issue242_contract_required(state) or pregunta_eje:
+        return result, profile, family, pregunta_eje
+
+    logger.warning(
+        "[case_architect] pregunta_eje ausente para ml_ds+clasificacion; reprompt 1/1",
+        extra={"case_id": state.get("case_id")},
+    )
+    reprompt = (
+        prompt
+        + "\n\n# CORRECCIÓN OBLIGATORIA DE PREGUNTA EJE (Issue #242)\n"
+        + "Tu salida anterior omitió `pregunta_eje`. Reescribe la respuesta "
+        + "COMPLETA respetando el schema y emitiendo `pregunta_eje` como una "
+        + "pregunta directiva gerencial concreta para ml_ds + clasificación. "
+        + "No menciones Python, notebooks, AUC, F1 ni hiperparámetros."
+    )
+    result = structured_llm.invoke(reprompt)
+    pregunta_eje = _sanitize_pregunta_eje(
+        result.pregunta_eje,
+        profile=profile,
+        family=family,
+    )
+    if not pregunta_eje:
+        raise RuntimeError(
+            "case_architect no emitió pregunta_eje para ml_ds+clasificacion "
+            "tras un reprompt. Job marcado como fallido para evitar un caso "
+            "sin eje pedagógico M1-M5."
+        )
+    return result, profile, family, pregunta_eje
+
+
+def _question_rubric_violations(questions: list[Any]) -> list[str]:
+    violations: list[str] = []
+    for fallback_index, question in enumerate(questions, start=1):
+        numero = getattr(question, "numero", fallback_index)
+        rubric = getattr(question, "rubric", None)
+        if not rubric:
+            violations.append(f"pregunta_{numero}: rubric ausente o vacía")
+    return violations
+
+
+def _invoke_question_output_with_rubric_contract(
+    *,
+    llm: Any,
+    output_schema: type[Any],
+    prompt: str,
+    state: ADAMState,
+    node_name: str,
+) -> Any:
+    structured_llm = llm.with_structured_output(output_schema)
+    result = structured_llm.invoke(prompt)
+
+    if not _issue242_contract_required(state):
+        return result
+
+    violations = _question_rubric_violations(list(getattr(result, "preguntas", [])))
+    if not violations:
+        return result
+
+    bullet_list = "\n".join(f"- {violation}" for violation in violations)
+    logger.warning(
+        "[%s] rúbricas Issue #242 ausentes; reprompt 1/1 violations=%s",
+        node_name,
+        violations,
+        extra={"case_id": state.get("case_id")},
+    )
+    reprompt = (
+        prompt
+        + "\n\n# CORRECCIÓN OBLIGATORIA DE RÚBRICAS DOCENTES (Issue #242)\n"
+        + "Tu salida anterior omitió rúbricas requeridas para ml_ds + clasificación. "
+        + "Reescribe la respuesta COMPLETA respetando el mismo JSON schema. Cada "
+        + "pregunta debe incluir `rubric` con 3-4 criterios compactos y pesos "
+        + "enteros que sumen exactamente 100. Violaciones detectadas:\n"
+        + bullet_list
+    )
+    corrected = structured_llm.invoke(reprompt)
+    corrected_violations = _question_rubric_violations(
+        list(getattr(corrected, "preguntas", []))
+    )
+    if corrected_violations:
+        raise RuntimeError(
+            f"{node_name} no emitió rúbricas Issue #242 tras un reprompt: "
+            f"{corrected_violations}. Job marcado como fallido para evitar "
+            "preview docente sin criterios de calificación."
+        )
+    return corrected
 
 
 def _prepare_classification_narrative_grounding(
@@ -3624,7 +3756,7 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "m3_content": state.get("m3_content", ""),
         })
 
-        profile = state.get("studentProfile", "business")
+        profile, _family = _resolve_generation_focus(state)
         if profile == "ml_ds":
             prompt = M3_EXPERIMENT_QUESTIONS_PROMPT
             tag = "m3_experiment_questions"
@@ -3632,13 +3764,19 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             prompt = M3_AUDIT_QUESTIONS_PROMPT
             tag = "m3_audit_questions"
 
-        resultado: GeneradorPreguntasOutput = llm.with_structured_output(
-            GeneradorPreguntasOutput
-        ).invoke(prompt.format(**context))
+        resultado: GeneradorPreguntasOutput = _invoke_question_output_with_rubric_contract(
+            llm=llm,
+            output_schema=GeneradorPreguntasOutput,
+            prompt=prompt.format(**context),
+            state=state,
+            node_name="m3_questions_generator",
+        )
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
         print(f"[{tag}] {len(preguntas)} preguntas")
         return {"m3_questions": preguntas, "current_agent": "m3_questions_generator"}
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error("[m3_questions_generator] ERROR: %s", e, exc_info=True)
         return {"m3_questions": [], "current_agent": "m3_questions_generator"}

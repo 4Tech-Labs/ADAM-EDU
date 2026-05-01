@@ -22,6 +22,7 @@ from case_generator.prompts import (
 )
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
+    GeneradorPreguntasOutput,
     PreguntaMinimalista,
     RubricItem,
 )
@@ -44,6 +45,28 @@ class _FakeLLM:
         if not self._outputs:
             raise AssertionError("Fake LLM invoked more times than expected")
         return _FakeResponse(self._outputs.pop(0))
+
+
+class _FakeStructuredInvoker:
+    def __init__(self, parent: "_FakeStructuredLLM", schema: type) -> None:
+        self._parent = parent
+        self._schema = schema
+
+    def invoke(self, prompt: str):
+        self._parent.prompts.append(prompt)
+        if not self._parent.outputs:
+            raise AssertionError("Fake structured LLM invoked more times than expected")
+        output = self._parent.outputs.pop(0)
+        return self._schema.model_validate(output)
+
+
+class _FakeStructuredLLM:
+    def __init__(self, outputs: list[dict[str, object]]) -> None:
+        self.outputs = list(outputs)
+        self.prompts: list[str] = []
+
+    def with_structured_output(self, schema: type) -> _FakeStructuredInvoker:
+        return _FakeStructuredInvoker(self, schema)
 
 
 def _valid_rubric() -> list[RubricItem]:
@@ -82,6 +105,17 @@ def _valid_m5_matrix() -> str:
 | Revisar umbral de intervención | Costo total -8% | Falsos negativos | matriz de costos |
 | Monitorear drift mensual | Estabilidad del score | Degradación operativa | evidencia M2/M4 |
 """.strip()
+
+
+def _valid_question_payload(*, rubric: list[dict[str, object]] | None) -> dict[str, object]:
+    return {
+        "numero": 1,
+        "titulo": "Decision inicial",
+        "enunciado": "¿Qué decisión defenderías con la evidencia disponible?",
+        "solucion_esperada": "Debe citar evidencia y trade-offs.",
+        "bloom_level": "evaluation",
+        "rubric": rubric,
+    }
 
 
 def test_rubric_item_and_question_contract_accept_valid_rubric() -> None:
@@ -150,6 +184,93 @@ def test_generation_focus_reads_state_and_task_payload_fallback() -> None:
 
     assert (profile, family) == ("ml_ds", "clasificacion")
     assert (fallback_profile, fallback_family) == ("ml_ds", "clasificacion")
+
+
+def test_base_context_normalizes_profile_and_avoids_no_aplica_sentinel() -> None:
+    context = graph_module._build_base_context(  # type: ignore[arg-type]
+        {"studentProfile": " ML_DS ", "algoritmos": ["Logistic Regression"]}
+    )
+
+    assert context["student_profile"] == "ml_ds"
+    assert context["primary_family"] == "clasificacion"
+    assert context["pregunta_eje"] == ""
+
+
+def test_case_architect_reprompts_once_for_missing_classification_pregunta_eje() -> None:
+    fake_llm = _FakeStructuredLLM(
+        [
+            _valid_case_architect_payload(pregunta_eje=None),
+            _valid_case_architect_payload(
+                pregunta_eje="¿Debe RetenCo intervenir clientes de alto riesgo aunque suba el costo operativo?"
+            ),
+        ]
+    )
+
+    result, profile, family, pregunta_eje = graph_module._invoke_case_architect_with_contract(
+        llm=fake_llm,
+        prompt="PROMPT BASE",
+        state={"studentProfile": "ml_ds", "algoritmos": ["Logistic Regression"]},  # type: ignore[arg-type]
+    )
+
+    assert result.pregunta_eje == pregunta_eje
+    assert (profile, family) == ("ml_ds", "clasificacion")
+    assert len(fake_llm.prompts) == 2
+    assert "CORRECCIÓN OBLIGATORIA DE PREGUNTA EJE" in fake_llm.prompts[1]
+
+
+def test_case_architect_raises_after_second_missing_classification_pregunta_eje() -> None:
+    fake_llm = _FakeStructuredLLM(
+        [
+            _valid_case_architect_payload(pregunta_eje=None),
+            _valid_case_architect_payload(pregunta_eje="   "),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="pregunta_eje"):
+        graph_module._invoke_case_architect_with_contract(
+            llm=fake_llm,
+            prompt="PROMPT BASE",
+            state={"studentProfile": "ml_ds", "algoritmos": ["Logistic Regression"]},  # type: ignore[arg-type]
+        )
+
+
+def test_question_output_reprompts_once_for_missing_classification_rubric() -> None:
+    rubric_payload = [item.model_dump() for item in _valid_rubric()]
+    fake_llm = _FakeStructuredLLM(
+        [
+            {"preguntas": [_valid_question_payload(rubric=None)]},
+            {"preguntas": [_valid_question_payload(rubric=rubric_payload)]},
+        ]
+    )
+
+    result = graph_module._invoke_question_output_with_rubric_contract(
+        llm=fake_llm,
+        output_schema=GeneradorPreguntasOutput,
+        prompt="PROMPT BASE",
+        state={"studentProfile": "ml_ds", "algoritmos": ["Logistic Regression"]},  # type: ignore[arg-type]
+        node_name="case_questions",
+    )
+
+    assert result.preguntas[0].rubric is not None
+    assert len(fake_llm.prompts) == 2
+    assert "CORRECCIÓN OBLIGATORIA DE RÚBRICAS" in fake_llm.prompts[1]
+
+
+def test_question_output_allows_missing_rubric_outside_classification_contract() -> None:
+    fake_llm = _FakeStructuredLLM(
+        [{"preguntas": [_valid_question_payload(rubric=None)]}]
+    )
+
+    result = graph_module._invoke_question_output_with_rubric_contract(
+        llm=fake_llm,
+        output_schema=GeneradorPreguntasOutput,
+        prompt="PROMPT BASE",
+        state={"studentProfile": "business", "algoritmos": ["Logistic Regression"]},  # type: ignore[arg-type]
+        node_name="case_questions",
+    )
+
+    assert result.preguntas[0].rubric is None
+    assert len(fake_llm.prompts) == 1
 
 
 def test_m5_decision_matrix_validator_accepts_exact_contract() -> None:

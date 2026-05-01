@@ -55,4 +55,26 @@ describe("PreguntaCard", () => {
         expect(screen.getAllByText("35%")).toHaveLength(2);
         expect(screen.getByText("Implicación ejecutiva")).toBeInTheDocument();
     });
+
+    it("labels rubric-only teacher details without calling them expected solutions", () => {
+        render(
+            <PreguntaCard
+                p={{
+                    numero: 1,
+                    titulo: "Diagnóstico",
+                    enunciado: "Explica el riesgo principal.",
+                    rubric,
+                }}
+                questionId="M1-Q1"
+                answer=""
+                onAnswerChange={vi.fn()}
+                readOnly={false}
+                showExpectedSolutions
+            />,
+        );
+
+        expect(screen.getByText("Ocultar rúbrica docente")).toBeInTheDocument();
+        expect(screen.getByText("Rúbrica Docente — Solo Docentes")).toBeInTheDocument();
+        expect(screen.queryByText(/Solución Esperada/i)).not.toBeInTheDocument();
+    });
 });
