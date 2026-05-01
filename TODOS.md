@@ -14,7 +14,7 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Cons:** Introduce ejecución de notebooks, timeouts, manejo de errores de dependencias y extracción robusta de artefactos; requiere pruebas de runtime más pesadas que los unit tests actuales.
 
-**Context:** Issue #243 implementa `build_computed_metrics_block`, validación `CITA:` / `UNANCHORED:` y reprompt-once para clasificación. Mientras #C-EXEC no exista, `build_computed_metrics_block(None)` emite placeholder, el validador se deshabilita y se persiste `narrative_grounding_warning`.
+**Context:** Issue #243 implementa `build_computed_metrics_block`, validación `CITA:` / `UNANCHORED:` para métricas del modelo y reprompt-once para clasificación. Mientras #C-EXEC no exista, `build_computed_metrics_block(None)` emite placeholder, el validador se deshabilita y se persiste `narrative_grounding_warning`.
 
 **Depends on / blocked by:** #C-EXEC aprobado e implementado; definir contrato exacto de `m3_metrics_summary` antes de activar validación live obligatoria.
 

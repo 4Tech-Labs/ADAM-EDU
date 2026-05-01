@@ -3288,8 +3288,9 @@ def _invoke_narrative_with_grounding(
         prompt
         + "\n\n# CORRECCIÓN OBLIGATORIA DE GROUNDING NARRATIVO\n"
         + "Tu salida anterior violó el contrato de grounding. Reescribe la "
-        + "salida COMPLETA sin citas externas y usando únicamente números "
-        + "presentes en `{computed_metrics_block}`. Violaciones detectadas:\n"
+        + "salida COMPLETA sin citas externas y corrigiendo las métricas "
+        + "de rendimiento o interpretabilidad del modelo no ancladas al "
+        + "bloque de métricas incluido arriba. Violaciones detectadas:\n"
         + bullet_list
     )
     response2 = llm.invoke(reprompt)

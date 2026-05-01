@@ -108,9 +108,31 @@ def test_validator_flags_unanchored_number() -> None:
     assert "UNANCHORED: 87" in violations
 
 
-def test_validator_accepts_number_within_tolerance() -> None:
+def test_validator_allows_business_numbers_from_case_context() -> None:
     block = build_computed_metrics_block({"auc_lr": 0.7234})
 
+    violations = validate_narrative_grounding(
+        "ROI proyectado 35%, payback 8 meses y NPV estimado +120000.",
+        block,
+    )
+
+    assert violations == []
+
+
+def test_validator_preserves_sign_for_model_interpretability_numbers() -> None:
+    block = build_computed_metrics_block(
+        {"top_features": [{"name": "tenure_months", "coefficient": -0.42}]}
+    )
+
+    assert validate_narrative_grounding("El coeficiente fue -0.42.", block) == []
+    assert "UNANCHORED: 0.42" in validate_narrative_grounding(
+        "El coeficiente fue 0.42.",
+        block,
+    )
+
+
+def test_validator_accepts_number_within_tolerance() -> None:
+    block = build_computed_metrics_block({"auc_lr": 0.7234})
 
     assert validate_narrative_grounding("El AUC fue ≈71%.", block) == []
 
@@ -162,7 +184,10 @@ def test_prompts_inject_computed_metrics_block_only_for_classification() -> None
     literal_rule = (
         "NUNCA cites estudios externos, papers, autores ni estadísticas de industria. "
         "Razona EXCLUSIVAMENTE sobre `{computed_metrics_block}` y el contexto del caso. "
-        "Si un número no está en `{computed_metrics_block}`, NO lo escribas."
+        "Si una métrica de rendimiento o interpretabilidad del modelo (AUC, F1, "
+        "precisión, recall, prevalencia, coeficiente, importancia, etc.) no está "
+        "en `{computed_metrics_block}`, NO la escribas. Los números de negocio "
+        "deben venir de M2, Exhibits o M4."
     )
     for prompt in (
         M3_CONTENT_PROMPT_CLASSIFICATION,

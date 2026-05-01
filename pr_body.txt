@@ -1,12 +1,12 @@
 ## Summary
 - adds classification-only narrative grounding helpers for Issue 243: `build_computed_metrics_block` and `validate_narrative_grounding`
 - injects `{computed_metrics_block}` only into M3-content, M4, and M5 classification prompt variants
-- rejects external citations (`CITA:`) and unanchored generated numbers (`UNANCHORED:`), with one reprompt before failing the job
+- rejects external citations (`CITA:`) and unanchored generated model-metric numbers (`UNANCHORED:`), with one reprompt before failing the job
 - persists `narrative_grounding_warning` and disables validation when #C-EXEC has not yet populated `m3_metrics_summary`
 - documents the partial DoD and tracks the notebook executor follow-up in `TODOS.md`
 
 ## Pre-Landing Review
-Pre-Landing Review: No issues found.
+Pre-Landing Review: No issues found after fixing the two critical review findings from the first pass.
 
 ## Eval Results
 Prompt-related code changed, but this repository has no `test/evals` or `*eval*` suites configured. No eval suite was available to run.
@@ -57,16 +57,16 @@ M3-content receives fallback/manual computed_metrics_block until #C-EXEC lands; 
 | Prefix | Meaning | Examples detected |
 | --- | --- | --- |
 | `CITA:` | External citation or academic/industry-source pattern in generated prose | `según el estudio`, `paper`, `et al.`, `(2023)` |
-| `UNANCHORED:` | Numeric value in generated prose not present in the metrics block within tolerance | `87%` when only `auc_lr: 0.7100` is anchored |
+| `UNANCHORED:` | Model-metric numeric value in generated prose not present in the metrics block within tolerance | `87% de AUC` when only `auc_lr: 0.7100` is anchored |
 
-Numeric anchoring accepts +/-2 percentage points for percentage-like values and +/-2% relative tolerance for scalar values. Structural references such as M1-M6 labels, section numbers, parenthetical years, non-metric date ranges, and fixed writing-rule phrases are stripped only for numeric anchoring; citation detection still runs on the raw prose first.
+Numeric anchoring accepts +/-2 percentage points for percentage-like values and +/-2% relative tolerance for scalar values. Business figures from M2, Exhibits, or M4 remain valid context and are not blocked by the model-metric validator. Structural references such as M1-M6 labels, section numbers, parenthetical years, non-metric date ranges, and fixed writing-rule phrases are stripped only for numeric anchoring; citation detection still runs on the raw prose first.
 
 ## Validation Evidence
-- [x] `uv run --directory backend pytest -q` (`600 passed, 13 skipped, 1 warning`)
+- [x] `uv run --directory backend pytest -q` (`602 passed, 13 skipped, 1 warning`)
 - [x] `uv run --directory backend mypy src` (`Success: no issues found in 47 source files`)
 - [x] `npm --prefix frontend run test -- --run` (`57 files passed`, `418 tests passed`)
 - [x] `npm --prefix frontend run lint`
-- [x] `npm --prefix frontend run build` (`built in 35.72s`)
+- [x] `npm --prefix frontend run build` (`built in 27.29s`)
 
 ## References
 - Closes #243

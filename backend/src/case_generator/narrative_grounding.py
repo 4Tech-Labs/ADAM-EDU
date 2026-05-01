@@ -23,9 +23,15 @@ NARRATIVE_GROUNDING_WARNING = (
 )
 
 _FALLBACK_MARKER = "M3_METRICS_SUMMARY_AUSENTE"
-_NUMBER_RE = re.compile(r"(?<![A-Za-z_])(\d+(?:[.,]\d+)?)\s*%?")
+_NUMBER_RE = re.compile(r"(?<![A-Za-z_])([+-]?\d+(?:[.,]\d+)?)\s*%?")
 _CITATION_RE = re.compile(
     r"(?i)(según\s+(?:el\s+)?estudio|paper|et\s+al\.|\(\d{4}\))"
+)
+_MODEL_METRIC_CONTEXT_RE = re.compile(
+    r"(?i)"
+    r"\b(auc|roc|f1|accuracy|exactitud|precision|precisión|recall|sensibilidad|"
+    r"especificidad|prevalencia|prevalence|baseline|dummy|coeficiente|coefficient|"
+    r"importancia|importance|feature|variable|shap|permutation)\b"
 )
 _DATE_RANGE_RE = re.compile(r"\b(?:19|20)\d{2}\s*[-–]\s*(?:19|20)\d{2}\b")
 _PAREN_YEAR_RE = re.compile(r"\((?:19|20)\d{2}\)")
@@ -86,14 +92,14 @@ def build_computed_metrics_block(metrics_summary: dict | None) -> str:
 
 
 def validate_narrative_grounding(prose: str, metrics_block: str) -> list[str]:
-    """Return citation and numeric anchoring violations for generated prose.
+    """Return citation and model-metric anchoring violations for prose.
 
     Citations are detected on the raw prose first. Numeric anchoring then strips
     structural markers only (markdown heading numbers, module/section labels,
     parenthetical citation years, non-metric date ranges like ``2019-2023``, and
-    fixed writing-rule phrases such as ``4 párrafos``). Percentages such as
-    ``15%`` are never stripped globally; they must be anchored to
-    ``metrics_block``.
+    fixed writing-rule phrases such as ``4 párrafos``). Business figures from
+    M2/Exhibits/M4 are allowed; only numeric claims near model performance or
+    interpretability terms must be anchored to ``metrics_block``.
     """
     if _FALLBACK_MARKER in metrics_block:
         return []
@@ -102,6 +108,8 @@ def validate_narrative_grounding(prose: str, metrics_block: str) -> list[str]:
     anchors = _extract_anchor_numbers(metrics_block)
     numeric_prose = _strip_structural_numbers_for_numeric_anchoring(prose)
     for match in _NUMBER_RE.finditer(numeric_prose):
+        if not _is_model_metric_number(numeric_prose, match):
+            continue
         raw_number = match.group(1).replace(",", ".")
         found = float(raw_number)
         if not any(_within_tolerance(found, anchor) for anchor in anchors):
@@ -151,6 +159,15 @@ def _extract_anchor_numbers(metrics_block: str) -> list[float]:
         for match in _NUMBER_RE.finditer(value):
             anchors.append(float(match.group(1).replace(",", ".")))
     return anchors
+
+
+def _is_model_metric_number(prose: str, match: re.Match[str]) -> bool:
+    line_start = prose.rfind("\n", 0, match.start()) + 1
+    line_end = prose.find("\n", match.end())
+    if line_end == -1:
+        line_end = len(prose)
+    line = prose[line_start:line_end]
+    return bool(_MODEL_METRIC_CONTEXT_RE.search(line))
 
 
 def _strip_structural_numbers_for_numeric_anchoring(prose: str) -> str:

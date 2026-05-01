@@ -1617,7 +1617,7 @@ _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK = """\
 {computed_metrics_block}
 
 # Prohibición literal de grounding narrativo
-NUNCA cites estudios externos, papers, autores ni estadísticas de industria. Razona EXCLUSIVAMENTE sobre `{{computed_metrics_block}}` y el contexto del caso. Si un número no está en `{{computed_metrics_block}}`, NO lo escribas.
+NUNCA cites estudios externos, papers, autores ni estadísticas de industria. Razona EXCLUSIVAMENTE sobre `{{computed_metrics_block}}` y el contexto del caso. Si una métrica de rendimiento o interpretabilidad del modelo (AUC, F1, precisión, recall, prevalencia, coeficiente, importancia, etc.) no está en `{{computed_metrics_block}}`, NO la escribas. Los números de negocio deben venir de M2, Exhibits o M4.
 """
 
 M3_CONTENT_PROMPT_CLASSIFICATION = (
