@@ -1,50 +1,72 @@
-﻿## Summary
-- aligns the canonical student runtime route to `/student/cases/:assignmentId/resolve` from dashboard to router tests
-- moves student autosave, retry/backoff, local draft backup, submit, conflict handling, and deadline handling into `useStudentCaseResolution`
-- replaces inline submit/conflict handling with dedicated runtime UI components and modal flows required by Issue 196
-- normalizes backend student-case auth/detail errors to the structured envelope expected by the frontend
-- extracts shared case-viewer pieces so teacher preview and student runtime share the same rendering surface without duplicating logic
-- fixes the post-submit dashboard flash found in manual QA by updating student dashboard caches immediately after submit succeeds
+## Summary
+- adds classification-only narrative grounding helpers for Issue 243: `build_computed_metrics_block` and `validate_narrative_grounding`
+- injects `{computed_metrics_block}` only into M3-content, M4, and M5 classification prompt variants
+- rejects external citations (`CITA:`) and unanchored generated numbers (`UNANCHORED:`), with one reprompt before failing the job
+- persists `narrative_grounding_warning` and disables validation when #C-EXEC has not yet populated `m3_metrics_summary`
+- documents the partial DoD and tracks the notebook executor follow-up in `TODOS.md`
 
-## Executive Summary
-This PR takes Issue 196 from blocked-for-merge to production-ready. The student runtime now uses the correct route contract, keeps autosave logic in the hook instead of the page, persists local drafts safely, handles version conflicts and closed deadlines explicitly, and returns the dashboard to a coherent submitted state immediately after delivery. Teacher preview parity remains covered after the shared renderer extraction.
+## Pre-Landing Review
+Pre-Landing Review: No issues found.
 
-## Architecture Decisions
-- keep `queryKeys.student.caseDetail(assignmentId)` as the canonical runtime query key and preserve `case()` only as a deprecated alias
-- keep autosave orchestration in the hook, not the page, so debounce, retry, reconciliation, and unmount flush stay bound to state ownership
-- treat backend sanitization and structured error envelopes as authoritative for student detail, draft, and submit endpoints
-- reuse the shared case-viewer surface for student and teacher flows by extracting `PreguntaCard`, `SectionRail`, and `SolucionEsperadaRenderer`
-- update `student.cases` and `student.courses` cache optimistically on submit success so the dashboard never flashes stale actionable state
+## Eval Results
+Prompt-related code changed, but this repository has no `test/evals` or `*eval*` suites configured. No eval suite was available to run.
 
-## Main Files Changed
-- `backend/src/shared/student_reads.py`
-- `backend/tests/test_issue196_student_case_resolution.py`
-- `frontend/src/app/App.tsx`
-- `frontend/src/app/App.test.tsx`
-- `frontend/src/features/student-dashboard/StudentDashboardPage.tsx`
-- `frontend/src/features/student-dashboard/StudentDashboardPage.test.tsx`
-- `frontend/src/features/student-runtime/StudentCaseResolutionPage.tsx`
-- `frontend/src/features/student-runtime/StudentCaseResolutionPage.test.tsx`
-- `frontend/src/features/student-runtime/useStudentCaseResolution.ts`
-- `frontend/src/features/student-runtime/useStudentCaseResolution.test.ts`
-- `frontend/src/shared/queryKeys.ts`
-- `frontend/src/shared/api.ts`
-- `frontend/src/shared/case-viewer/CaseContentRenderer.tsx`
-- `frontend/src/shared/case-viewer/CaseContentRenderer.test.tsx`
+## Scope
+
+| Surface | Change | Classification only? |
+| --- | --- | --- |
+| M3-content | `M3_CONTENT_PROMPT_CLASSIFICATION` appends the grounding block to the existing experiment prompt | Yes |
+| M4 | `M4_PROMPT_CLASSIFICATION` appends the grounding block to the existing M4 prompt | Yes |
+| M5 | `M5_PROMPT_CLASSIFICATION` appends the grounding block to the existing M5 prompt | Yes |
+
+The other three families remain prompt-identical: `regresion`, `clustering`, and `serie_temporal` still map directly to the existing prompt constants by object identity. This PR does not change `_FAMILY_PROHIBITED_PATTERNS`, `_FAMILY_REQUIRED_SENTINELS`, or `_FAMILY_REQUIRED_APIS`.
+
+## Computed Metrics Block Examples
+
+Example block from a mock computed summary:
+
+```text
+auc_dummy: 0.5000
+auc_dummy_pct: 50.00%
+auc_lr: 0.7234
+auc_lr_pct: 72.34%
+auc_rf: 0.8123
+auc_rf_pct: 81.23%
+f1_macro: 0.6543
+f1_macro_pct: 65.43%
+prevalence: 0.1530
+prevalence_pct: 15.30%
+top_feature_1_name: tenure_months
+top_feature_1_coefficient: -0.4200
+top_feature_2_name: support_calls
+top_feature_2_importance: 0.3100
+```
+
+Fallback placeholder until #C-EXEC lands:
+
+```text
+M3_METRICS_SUMMARY_AUSENTE: m3_metrics_summary ausente; grounding deshabilitado. No hay métricas computadas del notebook para este job. No cites AUC, F1, prevalencia, porcentajes ni ranking de features como resultados ejecutados.
+```
+
+DoD parcial: ejecutor real queda para #C-EXEC; fallback graceful activo entre tanto.
+
+M3-content receives fallback/manual computed_metrics_block until #C-EXEC lands; no notebook-derived metric in M3/M4/M5 is real execution output in this PR.
+
+## Violation Contract
+
+| Prefix | Meaning | Examples detected |
+| --- | --- | --- |
+| `CITA:` | External citation or academic/industry-source pattern in generated prose | `según el estudio`, `paper`, `et al.`, `(2023)` |
+| `UNANCHORED:` | Numeric value in generated prose not present in the metrics block within tolerance | `87%` when only `auc_lr: 0.7100` is anchored |
+
+Numeric anchoring accepts +/-2 percentage points for percentage-like values and +/-2% relative tolerance for scalar values. Structural references such as M1-M6 labels, section numbers, parenthetical years, non-metric date ranges, and fixed writing-rule phrases are stripped only for numeric anchoring; citation detection still runs on the raw prose first.
 
 ## Validation Evidence
-- [x] `uv run --directory backend pytest -q` (`337 passed, 12 skipped`)
-- [x] `uv run --directory backend mypy src`
+- [x] `uv run --directory backend pytest -q` (`600 passed, 13 skipped, 1 warning`)
+- [x] `uv run --directory backend mypy src` (`Success: no issues found in 47 source files`)
+- [x] `npm --prefix frontend run test -- --run` (`57 files passed`, `418 tests passed`)
 - [x] `npm --prefix frontend run lint`
-- [x] `npm --prefix frontend run test -- --run` (`49/49` files, `355/355` tests)
-- [x] `npm --prefix frontend run build`
-- [x] manual browser smoke on local student flow: login, `/student/cases/:assignmentId/resolve`, autosave visible, blocking submit modal, read-only post-submit, dashboard returns immediately as `Entregado`
-
-## Residual Risks
-- conflict and deadline modal branches are covered by tests; manual browser smoke exercised the submit path but not a live multi-tab conflict race
-- the tracked `supabase/.temp/cli-latest` change is unrelated local CLI churn and should stay out of the PR
+- [x] `npm --prefix frontend run build` (`built in 35.72s`)
 
 ## References
-- References #196
-
-🤖 Generated with GitHub Copilot
+- Closes #243

@@ -141,6 +141,13 @@ Supabase or another environment that exposes compatible Auth helpers like `auth.
 - Deprecated families (`nlp`, `recomendacion`, `grafos`, `anomalias`, `segmentacion`, `clasificacion_tabular`, `regresion_tabular`, `nlp_text_mining`) are no longer exposed by the catalog and degrade to `clasificacion` via the legacy resolver. Do not reintroduce them without an ADR.
 - Issue #240 amplía `_FAMILY_REQUIRED_SENTINELS["clasificacion"]` con `tuning_lr/tuning_rf/interp_lr/interp_rf` y `_FAMILY_REQUIRED_APIS["clasificacion"]` con `GridSearchCV/RandomizedSearchCV/permutation_importance/PartialDependenceDisplay`. Las celdas declaran modo rápido por tamaño en cascada de mayor a menor (orden importa para alcanzabilidad: >5000 ⊂ >2000): `>5000 → SKIP tuning`, `>2000 → cv/n_iter reducidos`, `≤ 2000 → grilla completa`., guard `is_binary` y self-bootstrap. VIF se calcula sin `statsmodels` (fallback `1/(1-R²)` con `LinearRegression`). SHAP NO se duplica en `interp_rf`: vive en la Regla J global. Cero cambios a otras familias ni a `_FAMILY_PROHIBITED_PATTERNS`.
 
+## Narrative Grounding (Issue #243)
+
+- Narrative grounding applies only when `family == "clasificacion"` for M3-content, M4, and M5. The other three families keep their existing prompt strings and must not receive `{computed_metrics_block}`.
+- Until #C-EXEC provides `m3_metrics_summary`, `build_computed_metrics_block(None)` emits a clear fallback placeholder, validation is disabled for that run, and `narrative_grounding_warning` is persisted.
+- `validate_narrative_grounding` rejects citations with `CITA:` and unanchored numbers with `UNANCHORED:`. Numeric tolerance is ±2 percentage points for percentage-like values and ±2% relative for scalar values.
+- The narrative nodes reprompt once with the `CITA:` / `UNANCHORED:` bullet list. A second violation raises `RuntimeError` so the job fails instead of shipping fabricated metrics.
+
 ## Forbidden Patterns
 
 - Secrets, tokens, keys, DSNs, or credentials committed to the repo

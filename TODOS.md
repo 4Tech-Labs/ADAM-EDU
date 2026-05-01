@@ -4,6 +4,22 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
+## TODO-243-A: Ejecutar notebook M3 y poblar `m3_metrics_summary` (#C-EXEC)
+
+**What:** Implementar `m3_notebook_executor` con `nbclient` para ejecutar el notebook M3 de clasificación y poblar `m3_metrics_summary` con métricas reales: AUC LR/RF/Dummy, F1, prevalencia y top features con coeficiente/importancia.
+
+**Why:** Issue #243 solo puede cerrar su DoD completo cuando M3-content, M4 y M5 reciban métricas derivadas de ejecución real. El PR actual deja activo el contrato y el fallback, pero no ejecuta notebooks.
+
+**Pros:** Desbloquea grounding narrativo real, permite rechazar números fabricados con evidencia ejecutada y mejora la credibilidad académica del caso Harvard ml_ds.
+
+**Cons:** Introduce ejecución de notebooks, timeouts, manejo de errores de dependencias y extracción robusta de artefactos; requiere pruebas de runtime más pesadas que los unit tests actuales.
+
+**Context:** Issue #243 implementa `build_computed_metrics_block`, validación `CITA:` / `UNANCHORED:` y reprompt-once para clasificación. Mientras #C-EXEC no exista, `build_computed_metrics_block(None)` emite placeholder, el validador se deshabilita y se persiste `narrative_grounding_warning`.
+
+**Depends on / blocked by:** #C-EXEC aprobado e implementado; definir contrato exacto de `m3_metrics_summary` antes de activar validación live obligatoria.
+
+---
+
 ## TODO-230-A: Curar `challenger` para perfil `business` en `ALGORITHM_CATALOG`
 
 **What:** Hoy `get_algorithm_catalog("business", "harvard_with_eda")` devuelve solo baselines (4 entradas: 1 por familia). El frontend ya degrada el toggle "2 algoritmos" cuando esto pasa, pero el contrato ideal es exponer al menos 1-2 challengers seguros para business (p. ej. `Random Forest interpretable + SHAP`).
