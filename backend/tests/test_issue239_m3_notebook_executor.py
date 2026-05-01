@@ -66,6 +66,25 @@ print("{METRICS_MARKER}" + json.dumps({payload}))
 """
 
 
+def _plotting_import_notebook(metrics: dict[str, Any] | None = None) -> str:
+    metrics = metrics or _GOOD_METRICS
+    payload = json.dumps(metrics, sort_keys=True)
+    return f"""
+# %%
+import json
+import matplotlib
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+assert matplotlib.__version__
+assert sns.__version__
+plt.figure(figsize=(2, 1))
+plt.plot([0, 1], [0, 1])
+plt.close()
+print("{METRICS_MARKER}" + json.dumps({payload}))
+"""
+
+
 def _write_executed_marker_notebook(output_path: Path, metrics: dict[str, Any] | None = None) -> None:
     cell = nbformat.v4.new_code_cell("print('metrics')")
     cell["outputs"] = [
@@ -318,6 +337,19 @@ def test_tiny_real_runner_smoke_executes_marker() -> None:
 
     assert result.metrics_summary is not None
     assert result.metrics_summary["auc_lr"] == 0.72
+    assert result.quality_warning is None
+
+
+def test_tiny_real_runner_smoke_loads_base_plotting_stack() -> None:
+    result = execute_m3_notebook(
+        notebook_code=_plotting_import_notebook(),
+        dataset_rows=_dataset_rows(),
+        timeout_seconds=90,
+        internal_timeout_seconds=30,
+    )
+
+    assert result.metrics_summary is not None
+    assert result.metrics_summary["auc_rf"] == 0.81
     assert result.quality_warning is None
 
 
