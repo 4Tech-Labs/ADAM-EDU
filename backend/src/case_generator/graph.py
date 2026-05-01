@@ -3416,6 +3416,11 @@ _FAMILY_REQUIRED_SENTINELS: dict[str, tuple[str, ...]] = {
         "# === SECTION:comparison_table ===",
         # Issue #238 — celda de threshold tuning con matriz de costos del negocio.
         "# === SECTION:cost_matrix ===",
+        # Issue #240 — tuning + interpretabilidad avanzada (clasificacion ml_ds).
+        "# === SECTION:tuning_lr ===",
+        "# === SECTION:tuning_rf ===",
+        "# === SECTION:interp_lr ===",
+        "# === SECTION:interp_rf ===",
     ),
 }
 
@@ -3433,6 +3438,14 @@ _FAMILY_REQUIRED_APIS: dict[str, tuple[str, ...]] = {
         # tienen que aparecer en código ejecutable, no solo en markdown.
         "confusion_matrix(",
         "predict_proba(",
+        # Issue #240 — tuning + interpretabilidad avanzada para Harvard ml_ds.
+        # tuning_lr usa GridSearchCV; tuning_rf usa RandomizedSearchCV;
+        # interp_rf usa permutation_importance + PartialDependenceDisplay.
+        # Todos deben aparecer como call site / import en código ejecutable.
+        "GridSearchCV(",
+        "RandomizedSearchCV(",
+        "permutation_importance(",
+        "PartialDependenceDisplay",
     ),
 }
 

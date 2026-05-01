@@ -2873,6 +2873,368 @@ try:
 except Exception as e:
     print(f"⚠️ Cost matrix + threshold tuning falló: {{e}}")
 
+# %% [markdown]
+# ### 3.0.7 — Tuning hiperparámetros LogisticRegression (Issue #240)
+# El `C` default no es óptimo. `GridSearchCV(scoring="roc_auc")` barre
+# `C ∈ [0.01, 0.1, 1, 10]` con `StratifiedKFold(5)` y refit del best
+# estimator sobre `X_train` completo.
+#
+# **Modo rápido automático** (mitiga el budget exec-time #239) — cascada
+# evaluada de mayor a menor para que las ramas sean alcanzables:
+#   * `len(X_train) > 5000` → SKIP tuning, usar defaults `C=1.0` con
+#     `class_weight="balanced"` y print pedagógico (barrido completo
+#     excede budget exec-time)
+#   * `len(X_train) > 2000` → `cv=3` (en vez de 5), grilla completa
+#   * resto (`<= 2000`) → `cv=5`, grilla completa
+#
+# Cada celda hace self-bootstrap (Rule 6 cell isolation): si los splits
+# `X_train/X_test/y_train/y_test` no existen en globals, se recrean con
+# `random_state=42`. Imports explícitos por celda — no depender de imports
+# previos (regresión PR #244 punto 3).
+
+# %%
+# === SECTION:tuning_lr ===
+try:
+    import numpy as np
+    import pandas as pd
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import Pipeline
+
+    if not is_binary:
+        print("Tuning LR omitido: target no es binario.")
+    else:
+        # Self-bootstrap (Rule 6): recrear splits si no existen.
+        if "X_train" not in globals() or "y_train" not in globals():
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_raw, y, test_size=0.2, random_state=42,
+                stratify=y if y.value_counts().min() >= 2 else None,
+            )
+        n_train = len(X_train)
+        # Cascada de mayor a menor — orden importa para que las ramas
+        # reducidas sean alcanzables (>5000 ⊂ >2000).
+        if n_train > 5000:
+            print(
+                f"⚠️ Modo rápido: dataset con {{n_train}} filas (> 5000) — "
+                f"se omite GridSearchCV y se entrena LogisticRegression con "
+                f"defaults (C=1.0, class_weight='balanced'). Razonamiento: "
+                f"el barrido 4 valores × 5 folds excedería el budget exec-time."
+            )
+            best_lr = Pipeline([
+                ("scaler", StandardScaler(with_mean=False)),
+                ("clf", LogisticRegression(C=1.0, class_weight="balanced",
+                                           max_iter=2000, random_state=42)),
+            ])
+            best_lr.fit(X_train, y_train)
+            best_lr_params = {{"C": 1.0, "note": "skipped tuning (n>5000)"}}
+            best_lr_score = float("nan")
+        else:
+            cv_splits = 3 if n_train > 2000 else 5
+            base_pipe_lr = Pipeline([
+                ("scaler", StandardScaler(with_mean=False)),
+                ("clf", LogisticRegression(class_weight="balanced",
+                                           max_iter=2000, random_state=42)),
+            ])
+            grid_lr = {{"clf__C": [0.01, 0.1, 1, 10]}}
+            cv_lr = StratifiedKFold(n_splits=cv_splits, shuffle=True, random_state=42)
+            search_lr = GridSearchCV(
+                base_pipe_lr, grid_lr, cv=cv_lr,
+                scoring="roc_auc", n_jobs=-1, refit=True,
+            )
+            search_lr.fit(X_train, y_train)
+            best_lr = search_lr.best_estimator_
+            best_lr_params = dict(search_lr.best_params_)
+            best_lr_score = float(search_lr.best_score_)
+            print(
+                f"Best LR params: {{best_lr_params}} | "
+                f"best CV ROC-AUC: {{best_lr_score:.4f}}"
+            )
+except Exception as e:
+    print(f"⚠️ Tuning LR falló: {{e}}")
+
+# %% [markdown]
+# ### 3.0.8 — Tuning hiperparámetros RandomForest (Issue #240)
+# `RandomizedSearchCV(n_iter=10)` cubre el espacio `max_depth × min_samples_leaf
+# × n_estimators` sin barrer la grilla cartesiana entera. Mismo `scoring=
+# "roc_auc"` para que LR y RF sean comparables 1:1.
+#
+# **Modo rápido** — cascada de mayor a menor (orden importa, >5000 ⊂ >2000):
+#   * `> 5000 filas` → SKIP, defaults `n_estimators=200`
+#   * `> 2000 filas` → `n_iter=5, cv=3`
+#   * resto (`<= 2000`) → `n_iter=10, cv=5`
+
+# %%
+# === SECTION:tuning_rf ===
+try:
+    import numpy as np
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, train_test_split
+
+    if not is_binary:
+        print("Tuning RF omitido: target no es binario.")
+    else:
+        if "X_train" not in globals() or "y_train" not in globals():
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_raw, y, test_size=0.2, random_state=42,
+                stratify=y if y.value_counts().min() >= 2 else None,
+            )
+        n_train = len(X_train)
+        # Cascada de mayor a menor — orden importa para alcanzabilidad.
+        if n_train > 5000:
+            print(
+                f"⚠️ Modo rápido: dataset con {{n_train}} filas (> 5000) — "
+                f"se omite RandomizedSearchCV y se entrena RandomForest con "
+                f"defaults (n_estimators=200, class_weight='balanced')."
+            )
+            best_rf = RandomForestClassifier(
+                n_estimators=200, class_weight="balanced",
+                random_state=42, n_jobs=-1,
+            )
+            best_rf.fit(X_train, y_train)
+            best_rf_params = {{"note": "skipped tuning (n>5000)"}}
+            best_rf_score = float("nan")
+        else:
+            n_iter_rf = 5 if n_train > 2000 else 10
+            cv_splits_rf = 3 if n_train > 2000 else 5
+            param_dist_rf = {{
+                "max_depth": [None, 5, 10, 20],
+                "min_samples_leaf": [1, 5, 20],
+                "n_estimators": [100, 200],
+            }}
+            search_rf = RandomizedSearchCV(
+                RandomForestClassifier(class_weight="balanced",
+                                       random_state=42, n_jobs=-1),
+                param_distributions=param_dist_rf,
+                n_iter=n_iter_rf,
+                cv=cv_splits_rf,
+                scoring="roc_auc",
+                random_state=42,
+                n_jobs=-1,
+                refit=True,
+            )
+            search_rf.fit(X_train, y_train)
+            best_rf = search_rf.best_estimator_
+            best_rf_params = dict(search_rf.best_params_)
+            best_rf_score = float(search_rf.best_score_)
+            print(
+                f"Best RF params: {{best_rf_params}} | "
+                f"best CV ROC-AUC: {{best_rf_score:.4f}}"
+            )
+except Exception as e:
+    print(f"⚠️ Tuning RF falló: {{e}}")
+
+# %% [markdown]
+# ### 3.0.9 — Interpretabilidad LR: odds ratios + CI bootstrap + VIF (Issue #240)
+# Coeficientes en log-odds son ilegibles para el negocio. Convertimos a
+# odds ratios (`np.exp(coef_)`) e incluimos intervalos de confianza
+# bootstrap (`B=200`, `np.random.default_rng(42)`).
+#
+# **VIF (Variance Inflation Factor)** detecta multicolinealidad. Para evitar
+# añadir `statsmodels` como dependencia (decisión #240, sin nuevas deps),
+# usamos fallback manual `1/(1-R²)` con `LinearRegression` de sklearn:
+# regresar cada feature contra todas las demás y medir R².
+
+# %%
+# === SECTION:interp_lr ===
+try:
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    from sklearn.linear_model import LogisticRegression, LinearRegression
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import Pipeline
+
+    if not is_binary:
+        print("Interpretabilidad LR omitida: target no es binario.")
+    else:
+        if "X_train" not in globals() or "y_train" not in globals():
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_raw, y, test_size=0.2, random_state=42,
+                stratify=y if y.value_counts().min() >= 2 else None,
+            )
+        if "best_lr" not in globals():
+            best_lr = Pipeline([
+                ("scaler", StandardScaler(with_mean=False)),
+                ("clf", LogisticRegression(C=1.0, class_weight="balanced",
+                                           max_iter=2000, random_state=42)),
+            ])
+            best_lr.fit(X_train, y_train)
+            print("⚠️ best_lr no encontrado en globals — fallback a Pipeline LR default.")
+
+        # 1) Odds ratios ordenados.
+        clf_lr = best_lr.named_steps.get("clf", best_lr) if hasattr(best_lr, "named_steps") else best_lr
+        if not hasattr(clf_lr, "coef_"):
+            print("⚠️ best_lr no expone coef_ — saltando odds ratios.")
+        else:
+            feature_names_lr = (
+                list(X_train.columns) if hasattr(X_train, "columns")
+                else [f"f{{i}}" for i in range(clf_lr.coef_.shape[1])]
+            )
+            odds_ratios = np.exp(clf_lr.coef_.ravel())
+            or_df = pd.DataFrame(
+                {{"feature": feature_names_lr, "odds_ratio": odds_ratios}}
+            ).sort_values("odds_ratio", ascending=False)
+            print("Top 10 odds ratios:")
+            print(or_df.head(10).to_string(index=False))
+
+            # 2) CI bootstrap (B=200) para los top-10.
+            rng_or = np.random.default_rng(42)
+            B_boot = 200
+            top_features_or = or_df.head(10)["feature"].tolist()
+            top_idx_or = [feature_names_lr.index(f) for f in top_features_or]
+            boot_or = np.empty((B_boot, len(top_idx_or)))
+            n_boot = len(X_train)
+            X_arr = X_train.values if hasattr(X_train, "values") else np.asarray(X_train)
+            y_arr = y_train.values if hasattr(y_train, "values") else np.asarray(y_train)
+            for b in range(B_boot):
+                idx_b = rng_or.integers(0, n_boot, size=n_boot)
+                try:
+                    lr_b = LogisticRegression(C=1.0, class_weight="balanced",
+                                              max_iter=1000, random_state=42)
+                    lr_b.fit(X_arr[idx_b], y_arr[idx_b])
+                    boot_or[b, :] = np.exp(lr_b.coef_.ravel()[top_idx_or])
+                except Exception:
+                    boot_or[b, :] = np.nan
+            ci_low = np.nanpercentile(boot_or, 2.5, axis=0)
+            ci_high = np.nanpercentile(boot_or, 97.5, axis=0)
+            ci_df = pd.DataFrame({{
+                "feature": top_features_or,
+                "odds_ratio": or_df.head(10)["odds_ratio"].values,
+                "ci_low_2.5": ci_low,
+                "ci_high_97.5": ci_high,
+            }})
+            print("\nCI bootstrap (B=200) sobre top-10 odds ratios:")
+            print(ci_df.to_string(index=False))
+
+            # 3) VIF manual 1/(1-R²) — fallback sin statsmodels.
+            #    Para cada feature numérica, regresar todas las demás contra ella.
+            #    VIF >= 5 sugiere colinealidad; >= 10 problema serio.
+            if hasattr(X_train, "columns"):
+                numeric_cols_vif = [
+                    c for c in feature_names_lr
+                    if pd.api.types.is_numeric_dtype(X_train[c])
+                ]
+            else:
+                numeric_cols_vif = list(feature_names_lr)
+            vif_rows = []
+            for col in numeric_cols_vif[:15]:  # cap para budget exec-time
+                others = [c for c in numeric_cols_vif if c != col]
+                if not others:
+                    continue
+                try:
+                    if hasattr(X_train, "columns"):
+                        Xj = X_train[others].values
+                        yj = X_train[col].values
+                    else:
+                        j_idx = numeric_cols_vif.index(col)
+                        Xj = np.delete(X_arr, j_idx, axis=1)
+                        yj = X_arr[:, j_idx]
+                    lin_vif = LinearRegression()
+                    lin_vif.fit(Xj, yj)
+                    r2 = float(lin_vif.score(Xj, yj))
+                    vif_val = float("inf") if r2 >= 0.999 else 1.0 / (1.0 - r2)
+                except Exception:
+                    vif_val = float("nan")
+                vif_rows.append({{"feature": col, "VIF": vif_val}})
+            if vif_rows:
+                vif_df = pd.DataFrame(vif_rows).sort_values("VIF", ascending=False)
+                print("\nVIF manual (fallback sin statsmodels):")
+                print(vif_df.to_string(index=False))
+                if (vif_df["VIF"] >= 10).any():
+                    print(
+                        "⚠️ VIF >= 10 detectado — posible multicolinealidad seria; "
+                        "considerar drop de features redundantes antes de productivizar."
+                    )
+except Exception as e:
+    print(f"⚠️ Interpretabilidad LR falló: {{e}}")
+
+# %% [markdown]
+# ### 3.0.10 — Interpretabilidad RF: permutation importance + PDP top-2 (Issue #240)
+# `feature_importances_` está sesgado a features de alta cardinalidad.
+# `permutation_importance` mide el drop real de score al permutar cada
+# feature en `X_test`. Después graficamos PDP sobre las top-2 features
+# por permutation importance — esto cubre la "shape" de la relación.
+#
+# **NOTA SHAP:** la celda SHAP global ya está cubierta por la Regla J
+# (per algoritmo, con fallback ladder feature_importances_ → coef_ →
+# permutation_importance). NO duplicar aquí.
+
+# %%
+# === SECTION:interp_rf ===
+try:
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.inspection import permutation_importance, PartialDependenceDisplay
+    from sklearn.model_selection import train_test_split
+
+    if not is_binary:
+        print("Interpretabilidad RF omitida: target no es binario.")
+    else:
+        if "X_train" not in globals() or "y_train" not in globals():
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_raw, y, test_size=0.2, random_state=42,
+                stratify=y if y.value_counts().min() >= 2 else None,
+            )
+        if "best_rf" not in globals():
+            best_rf = RandomForestClassifier(
+                n_estimators=200, class_weight="balanced",
+                random_state=42, n_jobs=-1,
+            )
+            best_rf.fit(X_train, y_train)
+            print("⚠️ best_rf no encontrado en globals — fallback a RandomForest default.")
+
+        # Modo rápido: reducir n_repeats si test grande.
+        n_test = len(X_test)
+        n_repeats_perm = 5 if n_test > 5000 else 10
+        perm = permutation_importance(
+            best_rf, X_test, y_test,
+            n_repeats=n_repeats_perm, random_state=42, n_jobs=-1,
+        )
+        feature_names_rf = (
+            list(X_test.columns) if hasattr(X_test, "columns")
+            else [f"f{{i}}" for i in range(X_test.shape[1])]
+        )
+        perm_df = pd.DataFrame({{
+            "feature": feature_names_rf,
+            "importance_mean": perm.importances_mean,
+            "importance_std": perm.importances_std,
+        }}).sort_values("importance_mean", ascending=False)
+        print("Top 10 permutation importance (RF):")
+        print(perm_df.head(10).to_string(index=False))
+
+        # Atomic charting (REGLA L): UNA figura, UN show.
+        plt.figure(figsize=(8, 5))
+        top10_perm = perm_df.head(10).iloc[::-1]
+        plt.barh(
+            top10_perm["feature"], top10_perm["importance_mean"],
+            xerr=top10_perm["importance_std"],
+        )
+        plt.xlabel("Permutation importance (drop en score)")
+        plt.title("Top 10 features (RF) — permutation importance")
+        plt.tight_layout(); plt.show()
+
+        # PDP top-2 features. Figura DEDICADA, separada del barplot.
+        top2_pdp = perm_df.head(2)["feature"].tolist()
+        if len(top2_pdp) >= 1:
+            fig_pdp, ax_pdp = plt.subplots(figsize=(10, 4), ncols=len(top2_pdp))
+            try:
+                PartialDependenceDisplay.from_estimator(
+                    best_rf, X_test, features=top2_pdp, ax=ax_pdp,
+                )
+                plt.tight_layout(); plt.show()
+            except Exception as _pdp_e:
+                plt.close(fig_pdp)
+                print(
+                    f"⚠️ PDP falló (probablemente feature categórica sin "
+                    f"encoding compatible): {{_pdp_e}}"
+                )
+except Exception as e:
+    print(f"⚠️ Interpretabilidad RF falló: {{e}}")
+
 ## Para CADA familia en {familias_meta}, y para CADA algoritmo dentro del campo
 ## "algoritmos" de esa familia, emite las siguientes celdas EN ORDEN (no
 ## colapses dos algoritmos en un solo bloque, no mezcles plots heterogéneos

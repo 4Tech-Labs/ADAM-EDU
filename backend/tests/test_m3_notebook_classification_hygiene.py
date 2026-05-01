@@ -139,6 +139,8 @@ def test_prompt_still_renders_with_existing_substitution_vars() -> None:
 # PR #244 review: contract is now 7 sentinels (ROC and PR split into separate
 # cells per Rule L atomic-charting + Rule 6 cell isolation).
 # Issue #238: 8th sentinel ``cost_matrix`` added for business-cost threshold tuning.
+# Issue #240: 4 more sentinels (tuning_lr/tuning_rf/interp_lr/interp_rf) for
+# Harvard ml_ds tuning + advanced interpretability.
 _REQUIRED_SENTINELS = (
     "# === SECTION:dummy_baseline ===",
     "# === SECTION:pipeline_lr ===",
@@ -148,6 +150,10 @@ _REQUIRED_SENTINELS = (
     "# === SECTION:pr_curves ===",
     "# === SECTION:comparison_table ===",
     "# === SECTION:cost_matrix ===",
+    "# === SECTION:tuning_lr ===",
+    "# === SECTION:tuning_rf ===",
+    "# === SECTION:interp_lr ===",
+    "# === SECTION:interp_rf ===",
 )
 
 _REQUIRED_API_TOKENS = (
@@ -163,15 +169,22 @@ _REQUIRED_API_TOKENS = (
     # Issue #238 — cost matrix cell uses both APIs in executable code.
     "confusion_matrix(",
     "predict_proba(",
+    # Issue #240 — tuning + interpretability avanzada.
+    "GridSearchCV(",
+    "RandomizedSearchCV(",
+    "permutation_importance(",
+    "PartialDependenceDisplay",
 )
 
 
 def test_prompt_emits_eight_mandatory_sentinels_for_classification() -> None:
-    """Las 8 sentinelas son contractuales: el validador rechaza el notebook
+    """Las 12 sentinelas son contractuales: el validador rechaza el notebook
     si falta cualquiera. El prompt DEBE instruir al LLM a emitirlas.
     PR #244 review: ROC y PR ahora viven en celdas separadas (Regla L +
     Regla 6). El antiguo ``roc_pr_curves`` ya NO debe aparecer.
-    Issue #238: añadida la 8ª sentinela ``cost_matrix``."""
+    Issue #238: añadida la 8ª sentinela ``cost_matrix``.
+    Issue #240: añadidas las 4 sentinelas de tuning + interpretabilidad
+    (``tuning_lr``, ``tuning_rf``, ``interp_lr``, ``interp_rf``)."""
     for sentinel in _REQUIRED_SENTINELS:
         assert sentinel in M3_NOTEBOOK_ALGO_PROMPT, f"falta sentinela {sentinel!r}"
     assert "# === SECTION:roc_pr_curves ===" not in M3_NOTEBOOK_ALGO_PROMPT, (
@@ -236,6 +249,8 @@ def test_validator_passes_when_all_required_present() -> None:
         "from sklearn.compose import ColumnTransformer\n"
         "from sklearn.preprocessing import StandardScaler, OneHotEncoder\n"
         "from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split\n"
+        "from sklearn.model_selection import GridSearchCV, RandomizedSearchCV\n"
+        "from sklearn.inspection import permutation_importance, PartialDependenceDisplay\n"
         "from sklearn.metrics import roc_curve, precision_recall_curve, confusion_matrix\n"
         "model = DummyClassifier(strategy='most_frequent')\n"
         "X_tr, X_te, y_tr, y_te = train_test_split(X, y, random_state=42)\n"
@@ -243,6 +258,10 @@ def test_validator_passes_when_all_required_present() -> None:
         "prec, rec, _ = precision_recall_curve(y, scores)\n"
         "proba = model.predict_proba(X_te)[:, 1]\n"
         "tn, fp, fn, tp = confusion_matrix(y, (proba >= 0.5).astype(int)).ravel()\n"
+        "search_lr = GridSearchCV(model, {}, cv=3).fit(X, y)\n"
+        "search_rf = RandomizedSearchCV(model, {}, n_iter=2).fit(X, y)\n"
+        "perm = permutation_importance(model, X_te, y_te)\n"
+        "PartialDependenceDisplay.from_estimator(model, X_te, [0])\n"
     )
     assert _validate_notebook_family_consistency("clasificacion", code) == []
 
@@ -255,6 +274,7 @@ def test_validator_rejects_required_apis_only_present_in_comments() -> None:
     cheating = "\n".join(_REQUIRED_SENTINELS) + "\n" + (
         "# DummyClassifier StratifiedKFold cross_val_score ColumnTransformer\n"
         "# roc_curve( precision_recall_curve( train_test_split( confusion_matrix( predict_proba(\n"
+        "# GridSearchCV( RandomizedSearchCV( permutation_importance( PartialDependenceDisplay\n"
         "x = 1\n"
     )
     violations = _validate_notebook_family_consistency("clasificacion", cheating)
