@@ -131,6 +131,51 @@ def test_validator_preserves_sign_for_model_interpretability_numbers() -> None:
     )
 
 
+def test_block_accepts_numpy_scalar_metric_values() -> None:
+    """numpy.float64/int64 from notebook execution must not be silently dropped.
+
+    Regression guard for the isinstance(value, int | float) bug: pandas/sklearn
+    almost always return numpy scalars for AUC/F1/coefficients/importances. If
+    those types fall through `_format_metric_value` the metrics block becomes
+    empty, anchors are []  and any number in the M3/M4/M5 prose is flagged
+    UNANCHORED, which then escalates to RuntimeError after one reprompt.
+    """
+    np = pytest.importorskip("numpy")
+
+    summary = {
+        "auc_lr": np.float64(0.7234),
+        "n_train": np.int64(1500),
+        "top_features": [
+            {"name": "tenure_months", "coefficient": np.float64(-0.42)},
+            {"name": "support_calls", "importance": np.float64(0.31)},
+        ],
+    }
+
+    block = build_computed_metrics_block(summary)
+
+    assert "auc_lr: 0.7234" in block
+    assert "auc_lr_pct: 72.34%" in block
+    assert "n_train: 1500.0000" in block
+    assert "top_feature_1_coefficient: -0.4200" in block
+    assert "top_feature_2_importance: 0.3100" in block
+
+    # Anchors round-trip: a prose AUC near 72% must NOT be flagged.
+    violations = validate_narrative_grounding("El AUC fue 72%.", block)
+    assert violations == []
+
+
+def test_block_drops_non_finite_numpy_values() -> None:
+    """NaN/Inf must never reach the prompt block as fake anchors."""
+    np = pytest.importorskip("numpy")
+
+    block = build_computed_metrics_block(
+        {"auc_lr": np.float64("nan"), "f1_macro": np.float64("inf")}
+    )
+
+    assert "nan" not in block.lower()
+    assert "inf" not in block.lower()
+
+
 def test_validator_isolates_business_number_in_mixed_clause() -> None:
     """Mixed line ``ROI 35% y AUC 72%`` must only validate the AUC number.
 

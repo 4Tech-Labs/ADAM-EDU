@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping, Sequence
+from numbers import Real
 from typing import Any
 
 
@@ -92,9 +93,9 @@ def build_computed_metrics_block(metrics_summary: dict | None) -> str:
             if isinstance(name, str):
                 lines.append(f"{prefix}_name: {_sanitize_label(name)}")
             for metric_name in ("coefficient", "coef", "importance"):
-                metric_value = item.get(metric_name)
-                if isinstance(metric_value, int | float) and not isinstance(metric_value, bool):
-                    lines.append(f"{prefix}_{metric_name}: {_format_float(float(metric_value))}")
+                metric_value = _coerce_real(item.get(metric_name))
+                if metric_value is not None:
+                    lines.append(f"{prefix}_{metric_name}: {_format_float(metric_value)}")
 
     return "\n".join(lines) if lines else "metrics_summary: sin métricas numéricas"
 
@@ -144,11 +145,32 @@ def _within_tolerance(found: float, anchor: float) -> bool:
     return False
 
 
-def _format_metric_value(key: str, value: Any) -> list[str]:
+def _coerce_real(value: Any) -> float | None:
+    """Return ``value`` as ``float`` when it is a real-numeric scalar.
+
+    Accepts CPython ``int``/``float`` plus any ``numbers.Real`` subclass
+    (including ``numpy.float64``/``numpy.int64`` and ``decimal.Decimal``-
+    compatible reals) so notebook-derived metrics produced by pandas/sklearn
+    are not silently dropped from the grounding block. ``bool`` is excluded
+    explicitly because Python booleans are ``Real`` but never represent a
+    metric value here. NaN/Inf are rejected so they never reach prompt text.
+    """
     if isinstance(value, bool):
-        return []
-    if isinstance(value, int | float):
+        return None
+    if not isinstance(value, Real):
+        return None
+    try:
         numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
+
+
+def _format_metric_value(key: str, value: Any) -> list[str]:
+    numeric = _coerce_real(value)
+    if numeric is not None:
         lines = [f"{key}: {_format_float(numeric)}"]
         if 0 <= numeric <= 1:
             lines.append(f"{key}_pct: {numeric * 100:.2f}%")
