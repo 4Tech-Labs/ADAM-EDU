@@ -3250,7 +3250,23 @@ def _select_narrative_prompt(
 ) -> tuple[str, str, bool, dict[str, str]]:
     family: str | None = None
     if state.get("studentProfile") == "ml_ds":
-        family, _legacy_warning = _resolve_primary_family(state.get("algoritmos", []))
+        family, legacy_warning = _resolve_primary_family(state.get("algoritmos", []))
+        # Mirror the m3_notebook_generator dispatcher: when neither the canonical
+        # catalog nor the legacy resolver places the first algorithm, fall back to
+        # 'clasificacion' so M3-content/M4/M5 narratives keep grounding on for
+        # ml_ds jobs with legacy/unknown algos instead of silently degrading to
+        # the default prompt with no validation.
+        if family is None:
+            family = "clasificacion"
+            logger.warning(
+                "[narrative_grounding] family unresolved; defaulting to clasificacion",
+                extra={
+                    "case_id": state.get("case_id"),
+                    "node": node_name,
+                    "algoritmos": state.get("algoritmos", []),
+                    "legacy_warning": legacy_warning,
+                },
+            )
     metrics_block, grounding_enabled, grounding_update = (
         _prepare_classification_narrative_grounding(state, family, node_name)
     )

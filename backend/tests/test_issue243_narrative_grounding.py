@@ -308,3 +308,37 @@ def test_grounding_disabled_when_summary_absent(monkeypatch: pytest.MonkeyPatch)
     assert update["m4_content"] == "Según el estudio, el modelo logró 87%."
     assert update["narrative_grounding_warning"] == NARRATIVE_GROUNDING_WARNING
     assert len(fake_llm.prompts) == 1
+
+
+def test_select_narrative_prompt_falls_back_to_clasificacion_for_unresolved_algo() -> None:
+    """ml_ds + an algo that neither catalog nor legacy resolver can map must
+    still pick the clasificacion prompt (mirrors the m3_notebook_generator
+    fallback) so grounding stays on instead of degrading to ``default_prompt``.
+    """
+
+    state = {
+        "studentProfile": "ml_ds",
+        "algoritmos": ["zzz_unknown_algo_xyz_legacy_999"],
+        "case_id": "test-case",
+    }
+    prompt_by_family = {"clasificacion": "CLF_PROMPT"}
+
+    prompt, _block, _enabled, _update = graph_module._select_narrative_prompt(
+        state,  # type: ignore[arg-type]
+        "test_node",
+        prompt_by_family,
+        "DEFAULT_PROMPT",
+    )
+
+    assert prompt == "CLF_PROMPT"
+
+
+def test_build_computed_metrics_block_handles_non_string_keys_without_typeerror() -> None:
+    """``sorted(...)`` over a dict with mixed-type keys must not raise; the
+    formatter already coerces keys with ``str(...)`` so the sort key must be
+    equally tolerant."""
+
+    block = build_computed_metrics_block({"auc_lr": 0.71, 1: 0.42})
+
+    assert "auc_lr" in block
+    assert "0.71" in block

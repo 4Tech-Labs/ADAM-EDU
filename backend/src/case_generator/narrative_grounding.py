@@ -79,7 +79,11 @@ def build_computed_metrics_block(metrics_summary: dict | None) -> str:
         raise TypeError("metrics_summary must be a dict or None")
 
     lines: list[str] = []
-    for key in sorted(k for k in metrics_summary if k != "top_features"):
+    # Sort by ``str(key)`` so non-string or mixed-type keys never raise
+    # ``TypeError`` during ordering. The downstream ``_format_metric_value``
+    # call already coerces the key with ``str(...)``; sorting must be equally
+    # tolerant to keep the formatter robust against arbitrary notebook output.
+    for key in sorted((k for k in metrics_summary if k != "top_features"), key=str):
         value = metrics_summary[key]
         lines.extend(_format_metric_value(_sanitize_key(str(key)), value))
 
