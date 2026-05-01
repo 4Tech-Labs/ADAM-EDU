@@ -25,6 +25,7 @@ from case_generator.m3_notebook_execution import (
     scrub_notebook_for_safe_execution,
 )
 from case_generator.prompts import M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
+from case_generator.prompts import M3_NOTEBOOK_BASE_TEMPLATE
 
 
 _GOOD_METRICS = {
@@ -100,10 +101,22 @@ def test_metrics_marker_contract_is_atomic_with_executor_parser() -> None:
     "source",
     [
         "import os\nos.system('echo pwn')",
+        "from os import system\nsystem('echo pwn')",
+        "import os\nos.execv('/bin/echo', ['echo'])",
+        "import os\nos.spawnv(os.P_NOWAIT, '/bin/echo', ['echo'])",
         "import subprocess\nsubprocess.run(['echo', 'pwn'])",
         "import requests\nrequests.get('https://example.com')",
+        "import http.client\nhttp.client.HTTPConnection('example.com')",
+        "import ftplib\nftplib.FTP('example.com')",
+        "import smtplib\nsmtplib.SMTP('example.com')",
+        "import importlib\nimportlib.import_module('subprocess')",
+        "from importlib import import_module\nimport_module('subprocess')",
         "eval('1 + 1')",
         "open('../secret.txt').read()",
+        "import io\nio.open('../secret.txt').read()",
+        "from io import open as io_open\nio_open('../secret.txt').read()",
+        "from pathlib import Path\nPath('../secret.txt').read_text()",
+        "from pathlib import Path\np = Path('../secret.txt')\np.open().read()",
     ],
 )
 def test_scrub_rejects_dangerous_generated_code(source: str) -> None:
@@ -111,6 +124,20 @@ def test_scrub_rejects_dangerous_generated_code(source: str) -> None:
         scrub_notebook_for_safe_execution(f"# %%\n{source}\n")
 
     assert excinfo.value.kind == "unsafe_code"
+
+
+def test_scrub_allows_base_template_upload_scaffold() -> None:
+    scrub_notebook_for_safe_execution(M3_NOTEBOOK_BASE_TEMPLATE)
+
+
+def test_metrics_summary_cell_imports_numpy_and_pandas_locally() -> None:
+    _, metrics_section = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION.split(
+        "# === SECTION:metrics_summary_json ===",
+        1,
+    )
+
+    assert "import numpy as np" in metrics_section
+    assert "import pandas as pd" in metrics_section
 
 
 def test_execute_uses_sandboxed_subprocess_env(monkeypatch: pytest.MonkeyPatch) -> None:

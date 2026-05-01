@@ -3387,6 +3387,8 @@ except Exception as e:
 # %%
 # === SECTION:metrics_summary_json ===
 import json as _json_m3_metrics
+import numpy as np
+import pandas as pd
 
 def _adam_metric_float(value):
   try:

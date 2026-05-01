@@ -28,11 +28,62 @@ RUNNER_TIMEOUT_SECONDS = 180
 RUNNER_INTERNAL_TIMEOUT_SECONDS = 150
 MAX_DIAGNOSTIC_CHARS = 4000
 
-_DENIED_IMPORT_ROOTS = {"subprocess", "requests", "httpx", "urllib", "socket"}
+_DENIED_IMPORT_ROOTS = {
+    "aiohttp",
+    "builtins",
+    "ftplib",
+    "glob",
+    "http",
+    "httpx",
+    "imaplib",
+    "importlib",
+    "nntplib",
+    "os",
+    "pathlib",
+    "poplib",
+    "requests",
+    "shutil",
+    "smtplib",
+    "socket",
+    "socketserver",
+    "ssl",
+    "subprocess",
+    "telnetlib",
+    "tempfile",
+    "urllib",
+    "urllib3",
+    "websocket",
+    "xmlrpc",
+}
 _DENIED_CALL_NAMES = {"eval", "exec", "__import__"}
+_DENIED_IMPORTED_SYMBOLS = {
+    ("io", "FileIO"),
+    ("io", "open"),
+}
 _DENIED_ATTRIBUTE_CALLS = {
+    ("importlib", "import_module"),
+    ("io", "FileIO"),
+    ("io", "open"),
+    ("os", "execl"),
+    ("os", "execle"),
+    ("os", "execlp"),
+    ("os", "execlpe"),
+    ("os", "execv"),
+    ("os", "execve"),
+    ("os", "execvp"),
+    ("os", "execvpe"),
+    ("os", "fork"),
+    ("os", "forkpty"),
     ("os", "system"),
     ("os", "popen"),
+    ("os", "spawnl"),
+    ("os", "spawnle"),
+    ("os", "spawnlp"),
+    ("os", "spawnlpe"),
+    ("os", "spawnv"),
+    ("os", "spawnve"),
+    ("os", "spawnvp"),
+    ("os", "spawnvpe"),
     ("subprocess", "run"),
     ("subprocess", "call"),
     ("subprocess", "check_call"),
@@ -42,6 +93,17 @@ _DENIED_ATTRIBUTE_CALLS = {
     ("requests", "post"),
     ("httpx", "get"),
     ("httpx", "post"),
+}
+_DENIED_FILE_METHODS = {
+    "glob",
+    "iterdir",
+    "open",
+    "read_bytes",
+    "read_text",
+    "rglob",
+    "unlink",
+    "write_bytes",
+    "write_text",
 }
 
 
@@ -176,6 +238,8 @@ def _scrub_code_cell(source: str) -> None:
             kind="syntax_error",
         ) from exc
 
+    import_aliases: dict[str, str] = {}
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -186,6 +250,8 @@ def _scrub_code_cell(source: str) -> None:
                         diagnostics=source,
                         kind="unsafe_code",
                     )
+                local_name = alias.asname or root
+                import_aliases[local_name] = root
         elif isinstance(node, ast.ImportFrom):
             root = _root_name(node.module)
             if root in _DENIED_IMPORT_ROOTS:
@@ -194,6 +260,13 @@ def _scrub_code_cell(source: str) -> None:
                     diagnostics=source,
                     kind="unsafe_code",
                 )
+            for alias in node.names:
+                if (root, alias.name) in _DENIED_IMPORTED_SYMBOLS:
+                    raise M3NotebookExecutionError(
+                        f"Denied import in generated notebook: {root}.{alias.name}",
+                        diagnostics=source,
+                        kind="unsafe_code",
+                    )
         elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name):
                 if node.func.id in _DENIED_CALL_NAMES:
@@ -209,15 +282,22 @@ def _scrub_code_cell(source: str) -> None:
                         kind="unsafe_code",
                     )
             call_root, call_attr = _attribute_call_name(node.func)
-            if call_root is not None and call_attr is not None and call_root in _DENIED_IMPORT_ROOTS:
+            canonical_root = import_aliases.get(call_root or "", call_root or "")
+            if call_root is not None and call_attr is not None and canonical_root in _DENIED_IMPORT_ROOTS:
                 raise M3NotebookExecutionError(
-                    f"Denied network/process call in generated notebook: {call_root}.{call_attr}",
+                    f"Denied network/process call in generated notebook: {canonical_root}.{call_attr}",
                     diagnostics=source,
                     kind="unsafe_code",
                 )
-            if call_root is not None and call_attr is not None and (call_root, call_attr) in _DENIED_ATTRIBUTE_CALLS:
+            if call_attr in _DENIED_FILE_METHODS:
                 raise M3NotebookExecutionError(
-                    f"Denied call in generated notebook: {call_root}.{call_attr}",
+                    f"Denied file operation in generated notebook: {call_attr}",
+                    diagnostics=source,
+                    kind="unsafe_code",
+                )
+            if call_root is not None and call_attr is not None and (canonical_root, call_attr) in _DENIED_ATTRIBUTE_CALLS:
+                raise M3NotebookExecutionError(
+                    f"Denied call in generated notebook: {canonical_root}.{call_attr}",
                     diagnostics=source,
                     kind="unsafe_code",
                 )
