@@ -67,6 +67,69 @@ describe("toCanonicalCaseOutput", () => {
         expect(result.content.m5QuestionsSolutions).toHaveLength(1);
     });
 
+    it("preserves valid issue242 pregunta eje and teacher rubrics", () => {
+        const rubric = [
+            { criterio: "Evidencia", descriptor: "Usa métricas del caso.", peso: 35 },
+            { criterio: "Decisión", descriptor: "Formula una acción defendible.", peso: 35 },
+            { criterio: "Riesgo", descriptor: "Reconoce trade-offs operativos.", peso: 30 },
+        ];
+        const detail = createSubmissionDetailResponse({
+            case_view: {
+                content: {
+                    preguntaEje: "¿Qué umbral minimiza el costo de error sin bloquear crecimiento?",
+                    caseQuestions: [
+                        {
+                            numero: 1,
+                            titulo: "Pregunta eje",
+                            enunciado: "Conecta M1 con M3.",
+                            solucion_esperada: "Debe justificar la decisión con métricas.",
+                            rubric,
+                        },
+                    ],
+                    edaQuestions: [
+                        {
+                            numero: 1,
+                            titulo: "Lectura EDA",
+                            enunciado: "Interpreta el gráfico principal.",
+                            task_type: "text_response",
+                            rubric,
+                        },
+                    ],
+                },
+            },
+        });
+
+        const result = toCanonicalCaseOutput(detail);
+
+        expect(result.content.preguntaEje).toBe("¿Qué umbral minimiza el costo de error sin bloquear crecimiento?");
+        expect(result.content.caseQuestions?.[0]?.rubric).toEqual(rubric);
+        expect(result.content.edaQuestions?.[0]?.rubric).toEqual(rubric);
+    });
+
+    it("drops malformed teacher rubrics from persisted case_view", () => {
+        const detail = createSubmissionDetailResponse({
+            case_view: {
+                content: {
+                    caseQuestions: [
+                        {
+                            numero: 1,
+                            titulo: "Pregunta segura",
+                            enunciado: "Describe la situación principal del caso.",
+                            rubric: [
+                                { criterio: "Evidencia", descriptor: "Usa métricas.", peso: 50 },
+                                { criterio: "Decisión", descriptor: "Formula una acción.", peso: 40 },
+                            ],
+                        },
+                    ],
+                },
+            },
+        });
+
+        const result = toCanonicalCaseOutput(detail);
+
+        expect(result.content.caseQuestions?.[0]?.rubric).toBeUndefined();
+    });
+
     it("defaults studentProfile to business and derives EDA case type from modules", () => {
         const detail = createSubmissionDetailResponse({
             case_view: {

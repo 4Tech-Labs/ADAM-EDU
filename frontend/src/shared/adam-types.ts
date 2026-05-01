@@ -18,6 +18,12 @@ export interface EDAChartSpec {
 }
 
 // Question contracts rendered in the current teacher preview.
+export interface RubricItem {
+    criterio: string;
+    descriptor: string;
+    peso: number;
+}
+
 export interface PreguntaMinimalista {
     numero: number;
     titulo: string;
@@ -28,6 +34,7 @@ export interface PreguntaMinimalista {
     m4_section_ref?: string;        // sección M4 que fundamenta la pregunta
     modules_integrated?: string[];  // módulos integrados en preguntas M5
     is_solucion_docente_only?: boolean; // M5: siempre true — solucion_esperada filtrada del payload al estudiante
+    rubric?: RubricItem[];          // teacher-only assessment metadata
 }
 
 // Teacher-only M5 solutions kept separate from the student-facing payload.
@@ -55,6 +62,7 @@ export interface EDASocraticQuestion {
     chart_ref?: string;
     exhibit_ref?: string;
     task_type: "text_response" | "notebook_task";
+    rubric?: RubricItem[];          // teacher-only assessment metadata
 }
 
 export type CaseType = "harvard_only" | "harvard_with_eda";
@@ -109,6 +117,7 @@ export interface CaseFormData {
 // Canonical output contract consumed by the current preview.
 export interface CaseContent {
     instructions?: string;
+    preguntaEje?: string;
     narrative?: string;
     financialExhibit?: string;
     operatingExhibit?: string;

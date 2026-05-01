@@ -8,6 +8,7 @@ import type {
     EDASolucionEsperada,
     M5QuestionSolution,
     PreguntaMinimalista,
+    RubricItem,
     StudentProfile,
     TeacherCaseSubmissionDetailModule,
     TeacherCaseSubmissionDetailQuestion,
@@ -48,6 +49,41 @@ function readStringArray(value: unknown): string[] | undefined {
 
     const items = value.filter((item): item is string => typeof item === "string");
     return items.length > 0 ? items : undefined;
+}
+
+function sanitizeRubricItem(value: unknown): RubricItem | null {
+    if (!isRecord(value)) {
+        return null;
+    }
+
+    const criterio = readString(value.criterio);
+    const descriptor = readString(value.descriptor);
+    const peso = readFiniteNumber(value.peso);
+
+    if (!criterio || !descriptor || peso === undefined || !Number.isInteger(peso) || peso <= 0) {
+        return null;
+    }
+
+    return { criterio, descriptor, peso };
+}
+
+function sanitizeRubric(value: unknown): RubricItem[] | undefined {
+    if (!Array.isArray(value)) {
+        return undefined;
+    }
+
+    const parsedItems = value.map((entry) => sanitizeRubricItem(entry));
+
+    if (parsedItems.some((entry) => entry === null)) {
+        return undefined;
+    }
+
+    const items = parsedItems as RubricItem[];
+    const totalWeight = items.reduce((sum, item) => sum + item.peso, 0);
+
+    return items.length >= 3 && items.length <= 4 && totalWeight === 100
+        ? items
+        : undefined;
 }
 
 function isCaseType(value: unknown): value is CaseType {
@@ -176,6 +212,7 @@ function sanitizeMinimalQuestion(value: unknown): PreguntaMinimalista | null {
         m4_section_ref: readString(value.m4_section_ref),
         modules_integrated: readStringArray(value.modules_integrated),
         is_solucion_docente_only: value.is_solucion_docente_only === true ? true : undefined,
+        rubric: sanitizeRubric(value.rubric),
     };
 }
 
@@ -213,6 +250,7 @@ function sanitizeQuestion(value: unknown): QuestionLike | null {
                 chart_ref: readString(value.chart_ref),
                 exhibit_ref: readString(value.exhibit_ref),
                 task_type: taskType,
+                rubric: sanitizeRubric(value.rubric),
             };
         }
     }
@@ -342,6 +380,7 @@ function buildContent(detail: TeacherCaseSubmissionDetailResponse, source: Recor
 
     return {
         instructions: readString(source.instructions),
+        preguntaEje: readString(source.preguntaEje),
         narrative: readString(source.narrative),
         financialExhibit: readString(source.financialExhibit),
         operatingExhibit: readString(source.operatingExhibit),
