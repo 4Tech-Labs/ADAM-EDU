@@ -293,6 +293,7 @@ def test_case_architect_prompt_still_renders_with_existing_placeholders() -> Non
         course_level="pregrado",
         max_investment_pct=10,
         student_profile="ml_ds",
+        primary_family="clasificacion",
     )
     assert "Coherencia título↔target" in rendered
     assert "case-test-228" in rendered

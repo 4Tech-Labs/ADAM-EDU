@@ -22,6 +22,16 @@ export function M1StoryReader({ result, content, md, renderPreguntas }: CaseModu
                         </p>
                     </div>
                 )}
+                {content.preguntaEje && (
+                    <div className="my-4 rounded-md border border-sky-200 bg-sky-50 px-4 py-3">
+                        <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.12em] text-sky-700">
+                            Pregunta eje directiva
+                        </p>
+                        <p className="type-body-sm font-semibold text-slate-800 leading-relaxed">
+                            {content.preguntaEje}
+                        </p>
+                    </div>
+                )}
                 <hr style={{ border: "none", height: "1.5px", background: "linear-gradient(to right, #cbd5e1, transparent)", margin: "1.5rem 0" }} />
             </div>
 

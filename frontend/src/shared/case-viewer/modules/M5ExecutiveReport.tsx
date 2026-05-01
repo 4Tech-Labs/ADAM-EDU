@@ -30,7 +30,11 @@ export function M5ExecutiveReport({ content, md, isEDA, isMLDS, renderPreguntas 
 
             {/* Informe de Resolución — brief del caso + reglas para el estudiante */}
             {md.m5Content && (
-                <div className="prose-case mb-10" dangerouslySetInnerHTML={{ __html: md.m5Content }} />
+                <div
+                    data-testid="m5-executive-content"
+                    className="prose-case mb-10"
+                    dangerouslySetInnerHTML={{ __html: md.m5Content }}
+                />
             )}
 
             {/* 3 preguntas de Junta Directiva con respuestas modelo para el docente */}

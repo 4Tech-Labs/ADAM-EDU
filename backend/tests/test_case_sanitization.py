@@ -23,6 +23,7 @@ def _build_canonical_output() -> dict[str, object]:
         "authoring_job_id": "job-123",
         "content": {
             "instructions": "Lee y responde.",
+            "preguntaEje": "¿Debe la Junta priorizar retención selectiva?",
             "narrative": "Narrativa del caso",
             "caseQuestions": [
                 {
@@ -30,6 +31,11 @@ def _build_canonical_output() -> dict[str, object]:
                     "titulo": "Pregunta 1",
                     "enunciado": "Describe la situacion.",
                     "solucion_esperada": "Solucion docente M1",
+                    "rubric": [
+                        {"criterio": "Evidencia", "descriptor": "Cita Exhibits relevantes", "peso": 40},
+                        {"criterio": "Criterio", "descriptor": "Explica el trade-off", "peso": 35},
+                        {"criterio": "Decision", "descriptor": "Formula una postura", "peso": 25},
+                    ],
                     "prompt_trace": "internal",
                 }
             ],
@@ -66,7 +72,9 @@ def _build_canonical_output() -> dict[str, object]:
 def test_build_teacher_case_review_payload_keeps_solucion_esperada() -> None:
     payload = build_teacher_case_review_payload(_build_canonical_output())
 
+    assert payload["content"]["preguntaEje"] == "¿Debe la Junta priorizar retención selectiva?"
     assert payload["content"]["caseQuestions"][0]["solucion_esperada"] == "Solucion docente M1"
+    assert payload["content"]["caseQuestions"][0]["rubric"][0]["criterio"] == "Evidencia"
     assert payload["content"]["edaQuestions"][0]["solucion_esperada"] == {
         "teoria": "Teoria",
         "ejemplo": "Ejemplo",
@@ -102,5 +110,7 @@ def test_student_sanitizer_still_removes_teacher_only_fields() -> None:
 
     serialized = str(payload)
     assert "solucion_esperada" not in serialized
+    assert "rubric" not in serialized
+    assert payload["content"]["preguntaEje"] == "¿Debe la Junta priorizar retención selectiva?"
     assert "m5QuestionsSolutions" not in payload["content"]
     assert "teachingNote" not in payload["content"]

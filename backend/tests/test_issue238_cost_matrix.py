@@ -1,7 +1,8 @@
 """Issue #238 — matriz de costos del negocio + threshold tuning en M3 (familia clasificacion).
 
 Cubre:
-  * `BusinessCostMatrix` Pydantic model: campos > 0, finitos, currency normalizada
+    * `BusinessCostMatrix` Pydantic model: campos > 0, finitos, currency normalizada,
+        cap superior, ratio plausible y allowlist mínima ISO 4217 (#242)
   * `DatasetSchemaRequired.business_cost_matrix` opcional, default None
   * `_validate_business_cost_matrix` helper en graph.py:
       - dict válido pasa intacto (con normalización)
@@ -103,6 +104,21 @@ def test_business_cost_matrix_rejects_non_finite() -> None:
         BusinessCostMatrix(fp_cost=float("inf"), fn_cost=5.0)
     with pytest.raises(ValidationError):
         BusinessCostMatrix(fp_cost=10.0, fn_cost=float("nan"))
+
+
+def test_business_cost_matrix_rejects_unsupported_currency() -> None:
+    with pytest.raises(ValidationError, match="currency"):
+        BusinessCostMatrix(fp_cost=10.0, fn_cost=50.0, currency="dollars")
+
+
+def test_business_cost_matrix_rejects_absurd_cost_cap() -> None:
+    with pytest.raises(ValidationError):
+        BusinessCostMatrix(fp_cost=1_000_000_001.0, fn_cost=50.0, currency="USD")
+
+
+def test_business_cost_matrix_rejects_absurd_ratio() -> None:
+    with pytest.raises(ValidationError, match="ratio"):
+        BusinessCostMatrix(fp_cost=1.0, fn_cost=1001.0, currency="USD")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

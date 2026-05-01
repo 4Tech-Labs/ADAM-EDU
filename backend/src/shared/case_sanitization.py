@@ -21,6 +21,7 @@ _ALLOWED_ROOT_FIELDS = (
 
 _ALLOWED_CONTENT_FIELDS = (
     "instructions",
+    "preguntaEje",
     "narrative",
     "financialExhibit",
     "operatingExhibit",
@@ -58,6 +59,7 @@ _QUESTION_FIELD_WHITELIST = (
 
 _TEACHER_QUESTION_FIELD_WHITELIST = _QUESTION_FIELD_WHITELIST + (
     "solucion_esperada",
+    "rubric",
 )
 
 _QUESTION_ARRAY_FIELDS = (

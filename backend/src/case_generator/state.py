@@ -85,6 +85,7 @@ class ADAMState(CanonicalInputState):
     # ── Documentos generados por case_architect ────────
     titulo: str                  # nombre empresa + problema central
     doc1_instrucciones: str      # instrucciones_estudiante
+    pregunta_eje: NotRequired[str | None]  # Issue #242 — pregunta directiva central ml_ds + clasificacion
 
     # ── Exhibits generados por case_architect ──────────
     doc1_anexo_financiero: str   # Exhibit 1 — Datos Financieros

@@ -7,7 +7,12 @@ that feed the teacher preview and downstream synthesis steps.
 import math
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+_SUPPORTED_COST_CURRENCIES = frozenset({"USD", "EUR", "GBP", "COP", "MXN", "BRL", "CLP", "PEN", "ARS"})
+_MAX_BUSINESS_COST = 1_000_000_000.0
+_MAX_BUSINESS_COST_RATIO = 1_000.0
 
 
 # ═══════════════════════════════════════════════════════
@@ -133,8 +138,7 @@ class DatasetSchemaRequired(BaseModel):
     )
     # Issue #238 — matriz de costos del negocio para threshold tuning en M3.
     # Solo aplica cuando family == "clasificacion"; para otras familias debe
-    # quedar None. Validación estricta (ratios, ISO 4217, cross-family) está
-    # deferred a #242 (ver TODOS.md).
+    # quedar None. Issue #242 endurece validación estricta de costos/currency.
     business_cost_matrix: Optional["BusinessCostMatrix"] = Field(
         default=None,
         description=(
@@ -153,14 +157,17 @@ class BusinessCostMatrix(BaseModel):
     construya una curva de costo total vs threshold y elija el óptimo en
     lugar de quedarse con el default 0.5.
 
-    Validación strict-mode (Issue #238 scope reducido):
+        Validación strict-mode:
       * fp_cost > 0 y finito
       * fn_cost > 0 y finito
-      * currency normalizada vía .upper().strip() (sin enforcement ISO 4217)
+            * cada costo <= 1e9
+            * ratio fp/fn plausible dentro de 1000:1 y 1:1000
+            * currency normalizada y validada contra catálogo ISO 4217 mínimo
     """
 
     fp_cost: float = Field(
         gt=0,
+        le=_MAX_BUSINESS_COST,
         description=(
             "Costo de un falso positivo en la moneda indicada por `currency`. "
             "Ej: en churn, costo de regalar una retención a un cliente que no "
@@ -169,6 +176,7 @@ class BusinessCostMatrix(BaseModel):
     )
     fn_cost: float = Field(
         gt=0,
+        le=_MAX_BUSINESS_COST,
         description=(
             "Costo de un falso negativo en la moneda indicada por `currency`. "
             "Ej: en churn, costo de perder un cliente porque no se le ofreció "
@@ -178,8 +186,8 @@ class BusinessCostMatrix(BaseModel):
     currency: str = Field(
         default="USD",
         description=(
-            "Código de moneda (string libre, normalizado a mayúsculas). "
-            "No se valida contra ISO 4217 en este scope (#242)."
+            "Código de moneda ISO 4217 soportado: USD/EUR/GBP/COP/MXN/BRL/CLP/PEN/ARS. "
+            "Se normaliza a mayúsculas."
         ),
     )
 
@@ -196,7 +204,18 @@ class BusinessCostMatrix(BaseModel):
         normalized = (v or "").strip().upper()
         if not normalized:
             return "USD"
+        if normalized not in _SUPPORTED_COST_CURRENCIES:
+            supported = ", ".join(sorted(_SUPPORTED_COST_CURRENCIES))
+            raise ValueError(f"currency must be one of: {supported}")
         return normalized
+
+    @model_validator(mode="after")
+    def _validate_cost_ratio(self) -> "BusinessCostMatrix":
+        high = max(self.fp_cost, self.fn_cost)
+        low = min(self.fp_cost, self.fn_cost)
+        if high / low > _MAX_BUSINESS_COST_RATIO:
+            raise ValueError("fp_cost/fn_cost ratio must be within 1000:1")
+        return self
 
 
 # Issue #238 — resuelve la forward reference declarada en DatasetSchemaRequired
@@ -246,6 +265,13 @@ class CaseArchitectOutput(BaseModel):
     )
     instrucciones_estudiante: str = Field(
         description="Instrucciones para el estudiante — máx 150 palabras"
+    )
+    pregunta_eje: Optional[str] = Field(
+        default=None,
+        description=(
+            "Pregunta directiva central del caso. Solo aplica para studentProfile='ml_ds' "
+            "y familia de clasificación; debe formular una decisión gerencial, no técnica."
+        ),
     )
     anexo_financiero: str = Field(
         description=(
@@ -368,6 +394,47 @@ class EDAAnnotateOnlyOutput(BaseModel):
     )
 
 
+class RubricItem(BaseModel):
+    """Teacher-only scoring criterion attached to generated questions."""
+
+    criterio: str = Field(
+        min_length=3,
+        max_length=80,
+        description="Criterio breve de evaluación docente",
+    )
+    descriptor: str = Field(
+        min_length=8,
+        max_length=240,
+        description="Descriptor observable de una respuesta satisfactoria",
+    )
+    peso: int = Field(
+        ge=1,
+        le=100,
+        description="Peso porcentual entero del criterio dentro de la pregunta",
+    )
+
+    @field_validator("criterio", "descriptor")
+    @classmethod
+    def _strip_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("rubric text must not be empty")
+        return stripped
+
+
+def _validate_optional_rubric(
+    rubric: Optional[list[RubricItem]],
+) -> Optional[list[RubricItem]]:
+    if rubric is None:
+        return None
+    if not 3 <= len(rubric) <= 4:
+        raise ValueError("rubric must contain 3 to 4 items")
+    total_weight = sum(item.peso for item in rubric)
+    if total_weight != 100:
+        raise ValueError("rubric weights must sum to 100")
+    return rubric
+
+
 # ═══════════════════════════════════════════════════════
 # DOCUMENTO 3 — Preguntas EDA (1 agente)
 # ═══════════════════════════════════════════════════════
@@ -385,6 +452,21 @@ class PreguntaMinimalista(BaseModel):
     m3_section_ref: Optional[str] = None       # M3
     m4_section_ref: Optional[str] = None       # M4
     modules_integrated: Optional[list[str]] = None  # M5
+    rubric: Optional[list[RubricItem]] = Field(
+        default=None,
+        description=(
+            "Rúbrica docente opcional. Solo se expone a docentes; cuando existe, "
+            "contiene 3-4 criterios con pesos enteros que suman 100."
+        ),
+    )
+
+    @field_validator("rubric")
+    @classmethod
+    def _validate_rubric(
+        cls,
+        rubric: Optional[list[RubricItem]],
+    ) -> Optional[list[RubricItem]]:
+        return _validate_optional_rubric(rubric)
 
 class GeneradorPreguntasOutput(BaseModel):
     """Salida estructurada combinada para los nodos generadores de preguntas."""
@@ -427,6 +509,21 @@ class PreguntaM5(BaseModel):
         default=True,
         description="Siempre True — solucion_esperada se filtra del payload al estudiante"
     )
+    rubric: Optional[list[RubricItem]] = Field(
+        default=None,
+        description=(
+            "Rúbrica docente opcional. Solo se expone a docentes; cuando existe, "
+            "contiene 3-4 criterios con pesos enteros que suman 100."
+        ),
+    )
+
+    @field_validator("rubric")
+    @classmethod
+    def _validate_rubric(
+        cls,
+        rubric: Optional[list[RubricItem]],
+    ) -> Optional[list[RubricItem]]:
+        return _validate_optional_rubric(rubric)
 
 
 class GeneradorPreguntasM5Output(BaseModel):
@@ -468,6 +565,21 @@ class EDASocraticQuestion(BaseModel):
         default="text_response",
         description="Tipo de tarea: siempre text_response — M2 no genera notebook"
     )
+    rubric: Optional[list[RubricItem]] = Field(
+        default=None,
+        description=(
+            "Rúbrica docente opcional. Solo se expone a docentes; cuando existe, "
+            "contiene 3-4 criterios con pesos enteros que suman 100."
+        ),
+    )
+
+    @field_validator("rubric")
+    @classmethod
+    def _validate_rubric(
+        cls,
+        rubric: Optional[list[RubricItem]],
+    ) -> Optional[list[RubricItem]]:
+        return _validate_optional_rubric(rubric)
 
 
 class EDAQuestionsOutput(BaseModel):
