@@ -116,8 +116,9 @@ describe("toCanonicalCaseOutput", () => {
                             titulo: "Pregunta segura",
                             enunciado: "Describe la situación principal del caso.",
                             rubric: [
-                                { criterio: "Evidencia", descriptor: "Usa métricas.", peso: 50 },
+                                { criterio: "   ", descriptor: "Usa métricas.", peso: 30 },
                                 { criterio: "Decisión", descriptor: "Formula una acción.", peso: 40 },
+                                { criterio: "Riesgo", descriptor: "Describe el trade-off.", peso: 30 },
                             ],
                         },
                     ],

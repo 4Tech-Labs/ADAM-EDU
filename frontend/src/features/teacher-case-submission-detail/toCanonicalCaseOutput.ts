@@ -56,11 +56,22 @@ function sanitizeRubricItem(value: unknown): RubricItem | null {
         return null;
     }
 
-    const criterio = readString(value.criterio);
-    const descriptor = readString(value.descriptor);
+    const criterio = readString(value.criterio)?.trim();
+    const descriptor = readString(value.descriptor)?.trim();
     const peso = readFiniteNumber(value.peso);
 
-    if (!criterio || !descriptor || peso === undefined || !Number.isInteger(peso) || peso <= 0) {
+    if (
+        !criterio
+        || !descriptor
+        || criterio.length < 3
+        || criterio.length > 80
+        || descriptor.length < 8
+        || descriptor.length > 240
+        || peso === undefined
+        || !Number.isInteger(peso)
+        || peso <= 0
+        || peso > 100
+    ) {
         return null;
     }
 
