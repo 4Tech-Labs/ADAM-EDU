@@ -108,6 +108,7 @@ from case_generator.suggest_service import (
 from case_generator.narrative_grounding import (
     NARRATIVE_GROUNDING_WARNING,
     build_computed_metrics_block,
+    has_metric_anchors,
     validate_narrative_grounding,
 )
 from case_generator.tools_and_schemas import (
@@ -3227,13 +3228,14 @@ def _prepare_classification_narrative_grounding(
 
     metrics_summary = state.get("m3_metrics_summary")
     metrics_block = build_computed_metrics_block(metrics_summary)
-    if metrics_summary is None:
+    if metrics_summary is None or not has_metric_anchors(metrics_block):
         logger.warning(
-            "[narrative_grounding] m3_metrics_summary ausente",
+            "[narrative_grounding] m3_metrics_summary ausente o sin anclas numericas",
             extra={
                 "case_id": state.get("case_id"),
                 "node": node_name,
                 "family": family,
+                "reason": "missing" if metrics_summary is None else "anchorless",
             },
         )
         return metrics_block, False, {

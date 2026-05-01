@@ -34,6 +34,14 @@ _MODEL_METRIC_CONTEXT_RE = re.compile(
     r"especificidad|prevalencia|prevalence|baseline|dummy|coeficiente|coefficient|"
     r"importancia|importance|feature|variable|shap|permutation)\b"
 )
+_ADJACENT_MODEL_METRIC_NUMBER_RE = re.compile(
+    r"(?i)"
+    r"(?<![A-Za-z_])"
+    r"(?:auc|roc|f1|accuracy|exactitud|precision|precisión|recall|sensibilidad|"
+    r"especificidad|prevalencia|prevalence|baseline|dummy|coeficiente|coefficient|"
+    r"importancia|importance|shap|permutation)"
+    r"\s*(?:=|:)?\s*(?P<value>[+-]?\d+(?:[.,]\d+)?)\s*%?"
+)
 # Clause-level boundaries: sentence punctuation plus list connectors. Used to
 # scope model-metric keyword detection to the immediate clause around a number
 # so business figures ("ROI 35% y AUC 72%") in the same sentence as a model
@@ -120,11 +128,7 @@ def validate_narrative_grounding(prose: str, metrics_block: str) -> list[str]:
     violations = [f"CITA: {match.group(0)}" for match in _CITATION_RE.finditer(prose)]
     anchors = _extract_anchor_numbers(metrics_block)
     numeric_prose = _strip_structural_numbers_for_numeric_anchoring(prose)
-    for match in _NUMBER_RE.finditer(numeric_prose):
-        if not _is_model_metric_number(numeric_prose, match):
-            continue
-        raw_number = match.group(1).replace(",", ".")
-        found = float(raw_number)
+    for raw_number, found in _iter_model_metric_numbers(numeric_prose):
         if not any(_within_tolerance(found, anchor) for anchor in anchors):
             violations.append(f"UNANCHORED: {raw_number}")
     return violations
@@ -193,6 +197,39 @@ def _extract_anchor_numbers(metrics_block: str) -> list[float]:
         for match in _NUMBER_RE.finditer(value):
             anchors.append(float(match.group(1).replace(",", ".")))
     return anchors
+
+
+def has_metric_anchors(metrics_block: str) -> bool:
+    """Return True when a computed metrics block contains numeric anchors."""
+    if _FALLBACK_MARKER in metrics_block:
+        return False
+    return bool(_extract_anchor_numbers(metrics_block))
+
+
+def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float]]:
+    matches: list[tuple[int, str, float]] = []
+    consumed_spans: list[tuple[int, int]] = []
+
+    for match in _ADJACENT_MODEL_METRIC_NUMBER_RE.finditer(prose):
+        raw_number = match.group("value").replace(",", ".")
+        value_span = match.span("value")
+        matches.append((value_span[0], raw_number, float(raw_number)))
+        consumed_spans.append(value_span)
+
+    for match in _NUMBER_RE.finditer(prose):
+        value_span = match.span(1)
+        if any(_spans_overlap(value_span, consumed) for consumed in consumed_spans):
+            continue
+        if not _is_model_metric_number(prose, match):
+            continue
+        raw_number = match.group(1).replace(",", ".")
+        matches.append((value_span[0], raw_number, float(raw_number)))
+
+    return [(raw_number, found) for _start, raw_number, found in sorted(matches)]
+
+
+def _spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] < right[1] and right[0] < left[1]
 
 
 def _is_model_metric_number(prose: str, match: re.Match[str]) -> bool:

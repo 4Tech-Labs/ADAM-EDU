@@ -205,6 +205,27 @@ def test_validator_accepts_number_within_tolerance() -> None:
     assert validate_narrative_grounding("El AUC fue ≈71%.", block) == []
 
 
+def test_validator_flags_adjacent_metric_number() -> None:
+    block = build_computed_metrics_block({"auc_lr": 0.7234})
+
+    assert "UNANCHORED: 95" in validate_narrative_grounding("AUC95%.", block)
+    assert "UNANCHORED: 95" in validate_narrative_grounding("accuracy95%.", block)
+
+
+def test_validator_accepts_adjacent_metric_number_within_tolerance() -> None:
+    block = build_computed_metrics_block({"auc_lr": 0.953})
+
+    assert validate_narrative_grounding("AUC95%.", block) == []
+
+
+def test_validator_deduplicates_adjacent_metric_number_matches() -> None:
+    block = build_computed_metrics_block({"f1_macro": 0.71})
+
+    violations = validate_narrative_grounding("F1=0.87.", block)
+
+    assert violations == ["UNANCHORED: 0.87"]
+
+
 def test_validator_flags_citation_patterns() -> None:
     block = build_computed_metrics_block(SUMMARY)
 
@@ -306,6 +327,24 @@ def test_grounding_disabled_when_summary_absent(monkeypatch: pytest.MonkeyPatch)
     update = graph_module.m4_content_generator(_base_state(metrics_summary=None), config={})
 
     assert update["m4_content"] == "Según el estudio, el modelo logró 87%."
+    assert update["narrative_grounding_warning"] == NARRATIVE_GROUNDING_WARNING
+    assert len(fake_llm.prompts) == 1
+
+
+def test_grounding_disabled_when_summary_has_no_numeric_anchors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_llm = _FakeLLM(["El AUC fue 87%."])
+    monkeypatch.setattr(graph_module, "_get_writer_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(
+        graph_module.Configuration,
+        "from_runnable_config",
+        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+    )
+
+    update = graph_module.m4_content_generator(_base_state(metrics_summary={}), config={})
+
+    assert update["m4_content"] == "El AUC fue 87%."
     assert update["narrative_grounding_warning"] == NARRATIVE_GROUNDING_WARNING
     assert len(fake_llm.prompts) == 1
 

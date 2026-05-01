@@ -2,11 +2,14 @@
 - adds classification-only narrative grounding helpers for Issue 243: `build_computed_metrics_block` and `validate_narrative_grounding`
 - injects `{computed_metrics_block}` only into M3-content, M4, and M5 classification prompt variants
 - rejects external citations (`CITA:`) and unanchored generated model-metric numbers (`UNANCHORED:`), with one reprompt before failing the job
-- persists `narrative_grounding_warning` and disables validation when #C-EXEC has not yet populated `m3_metrics_summary`
+- persists `narrative_grounding_warning` and disables validation when #C-EXEC has not yet populated `m3_metrics_summary` or the summary has no numeric anchors
 - documents the partial DoD and tracks the notebook executor follow-up in `TODOS.md`
 
 ## Pre-Landing Review
-Pre-Landing Review: No issues found after addressing the fourth review pass:
+Pre-Landing Review: No issues found after addressing the fifth review pass:
+- CRITICAL (5th pass): fixed adjacent metric-number bypasses such as `AUC95%`, `accuracy95%`, and `F1=0.87` so glued model-metric claims are validated and flagged as `UNANCHORED` when not anchored. Added regression tests `test_validator_flags_adjacent_metric_number`, `test_validator_accepts_adjacent_metric_number_within_tolerance`, and `test_validator_deduplicates_adjacent_metric_number_matches`.
+- INFORMATIONAL (5th pass): `_prepare_classification_narrative_grounding` now treats anchorless summaries such as `{}` as degraded/missing metrics: validation is disabled and `narrative_grounding_warning` is persisted, matching the `None` path. Added regression test `test_grounding_disabled_when_summary_has_no_numeric_anchors`.
+- INFORMATIONAL (5th pass): reindented the new narrative grounding prompt constants and family dictionaries in `prompts.py` to standard 4-space continuation indentation for Ruff/pycodestyle compatibility.
 - INFORMATIONAL (4th pass): `_select_narrative_prompt` now mirrors the `m3_notebook_generator` family fallback. When `studentProfile == "ml_ds"` and the first algorithm cannot be resolved by the canonical catalog or the legacy resolver, family defaults to `"clasificacion"` (with a `logger.warning` carrying `case_id`/`node`/`algoritmos`/`legacy_warning`) instead of leaving family `None` and silently degrading M3-content/M4/M5 to the default prompt with grounding off. Test `test_select_narrative_prompt_falls_back_to_clasificacion_for_unresolved_algo`.
 - INFORMATIONAL (4th pass): `build_computed_metrics_block` now sorts metric keys with `key=str` so dicts containing non-string or mixed-type keys never raise `TypeError` during ordering. The downstream formatter already coerces keys with `str(...)`; sorting now matches that tolerance. Test `test_build_computed_metrics_block_handles_non_string_keys_without_typeerror`.
 - CRITICAL (3rd pass): replaced `isinstance(value, int | float)` checks in `_format_metric_value` and the top-features loop with a `numbers.Real`-based `_coerce_real(...)` helper. NumPy scalar types (`numpy.float64`/`numpy.int64`) returned by pandas/sklearn from #C-EXEC notebooks are no longer silently dropped from `computed_metrics_block`; NaN/Inf are explicitly rejected so they never reach prompt text. New regression tests `test_block_accepts_numpy_scalar_metric_values` and `test_block_drops_non_finite_numpy_values`.
@@ -67,7 +70,7 @@ M3-content receives fallback/manual computed_metrics_block until #C-EXEC lands; 
 Numeric anchoring accepts +/-2 percentage points for percentage-like values and +/-2% relative tolerance for scalar values. Business figures from M2, Exhibits, or M4 remain valid context and are not blocked by the model-metric validator. Structural references such as M1-M6 labels, section numbers, parenthetical years, non-metric date ranges, and fixed writing-rule phrases are stripped only for numeric anchoring; citation detection still runs on the raw prose first.
 
 ## Validation Evidence
-- [x] `uv run --directory backend pytest -q` (`607 passed, 13 skipped, 1 warning`)
+- [x] `uv run --directory backend pytest -q` (`611 passed, 13 skipped, 1 warning`)
 - [x] `uv run --directory backend mypy src` (`Success: no issues found in 47 source files`)
 - [x] `npm --prefix frontend run test -- --run` (`57 files passed`, `418 tests passed`)
 - [x] `npm --prefix frontend run lint`
