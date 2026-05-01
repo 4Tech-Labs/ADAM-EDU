@@ -111,6 +111,9 @@ def test_metrics_marker_contract_is_atomic_with_executor_parser() -> None:
         "import smtplib\nsmtplib.SMTP('example.com')",
         "import importlib\nimportlib.import_module('subprocess')",
         "from importlib import import_module\nimport_module('subprocess')",
+        "getattr(__builtins__, '__import__')('os')",
+        "globals()['__builtins__']['__import__']('os')",
+        "locals()['__builtins__']['__import__']('os')",
         "eval('1 + 1')",
         "open('../secret.txt').read()",
         "import io\nio.open('../secret.txt').read()",
@@ -282,7 +285,16 @@ def test_graph_executor_fails_closed_without_dataset() -> None:
         graph_module.m3_notebook_executor(_executor_state(doc7_dataset=[]), {})
 
 
-def test_graph_executor_repompts_once_after_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resume_skip_treats_quality_warning_as_executor_completion() -> None:
+    state = {
+        "m3_metrics_summary": None,
+        "m3_quality_warning": "m3_quality_marker_missing: notebook executed without marker",
+    }
+
+    assert graph_module._checkpoint_has_node_output("m3_notebook_executor", state)
+
+
+def test_graph_executor_reprompts_once_after_crash(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"execute": 0, "generate": 0}
 
     def fake_execute(**kwargs: Any) -> M3NotebookExecutionResult:

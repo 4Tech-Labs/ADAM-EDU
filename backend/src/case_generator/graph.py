@@ -4683,6 +4683,11 @@ def _artifact_cached_output_for_node(node_name: str, state: ADAMState) -> dict[s
 
 
 def _checkpoint_has_node_output(node_name: str, state: ADAMState) -> bool:
+    if node_name == "m3_notebook_executor":
+        return _is_resumable_state_value(
+            state.get("m3_metrics_summary")
+        ) or _is_resumable_state_value(state.get("m3_quality_warning"))
+
     required_keys = _RESUME_NODE_REQUIRED_OUTPUTS.get(node_name, ())
     if not required_keys:
         return False

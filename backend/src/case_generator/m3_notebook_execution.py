@@ -55,7 +55,20 @@ _DENIED_IMPORT_ROOTS = {
     "websocket",
     "xmlrpc",
 }
-_DENIED_CALL_NAMES = {"eval", "exec", "__import__"}
+_DENIED_CALL_NAMES = {
+    "__import__",
+    "compile",
+    "delattr",
+    "dir",
+    "eval",
+    "exec",
+    "getattr",
+    "globals",
+    "locals",
+    "setattr",
+    "vars",
+}
+_DENIED_NAME_REFERENCES = {"__builtins__"}
 _DENIED_IMPORTED_SYMBOLS = {
     ("io", "FileIO"),
     ("io", "open"),
@@ -267,7 +280,20 @@ def _scrub_code_cell(source: str) -> None:
                         diagnostics=source,
                         kind="unsafe_code",
                     )
+        elif isinstance(node, ast.Name):
+            if node.id in _DENIED_NAME_REFERENCES:
+                raise M3NotebookExecutionError(
+                    f"Denied builtins reference in generated notebook: {node.id}",
+                    diagnostics=source,
+                    kind="unsafe_code",
+                )
         elif isinstance(node, ast.Call):
+            if isinstance(node.func, (ast.Call, ast.Subscript)):
+                raise M3NotebookExecutionError(
+                    "Denied dynamic callable in generated notebook.",
+                    diagnostics=source,
+                    kind="unsafe_code",
+                )
             if isinstance(node.func, ast.Name):
                 if node.func.id in _DENIED_CALL_NAMES:
                     raise M3NotebookExecutionError(
