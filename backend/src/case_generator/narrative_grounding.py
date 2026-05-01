@@ -130,6 +130,22 @@ def validate_narrative_grounding(prose: str, metrics_block: str) -> list[str]:
     return violations
 
 
+def contextualize_grounding_violations(prose: str, violations: list[str]) -> list[str]:
+    """Attach prior-output fragments to UNANCHORED violations for reprompts."""
+    contextualized: list[str] = []
+    for violation in violations:
+        raw_number = _extract_unanchored_raw_number(violation)
+        if raw_number is None:
+            contextualized.append(violation)
+            continue
+        fragment = _find_fragment_containing_number(prose, raw_number)
+        if fragment is None:
+            contextualized.append(violation)
+            continue
+        contextualized.append(f'{violation} -> "{fragment}"')
+    return contextualized
+
+
 def _within_tolerance(found: float, anchor: float) -> bool:
     """Return True when ``found`` is close enough to ``anchor``.
 
@@ -226,6 +242,52 @@ def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float]]:
 
 def _spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
     return left[0] < right[1] and right[0] < left[1]
+
+
+def _extract_unanchored_raw_number(violation: str) -> str | None:
+    prefix = "UNANCHORED: "
+    if not violation.startswith(prefix):
+        return None
+    raw_number = violation[len(prefix):].strip()
+    return raw_number or None
+
+
+def _find_fragment_containing_number(prose: str, raw_number: str) -> str | None:
+    match = _find_number_match(prose, raw_number)
+    if match is None:
+        return None
+    start, end = _sentence_bounds(prose, match.start(), match.end())
+    fragment = " ".join(prose[start:end].strip().split())
+    if len(fragment) <= 240:
+        return fragment
+    window_start = max(start, match.start() - 90)
+    window_end = min(end, match.end() + 90)
+    compact = " ".join(prose[window_start:window_end].strip().split())
+    return f"...{compact}..." if compact else None
+
+
+def _find_number_match(prose: str, raw_number: str) -> re.Match[str] | None:
+    escaped = re.escape(raw_number)
+    integer_number = raw_number.split(".", 1)[0]
+    candidates = [escaped]
+    if "." in raw_number:
+        candidates.append(re.escape(raw_number.replace(".", ",")))
+    if integer_number != raw_number:
+        candidates.append(re.escape(integer_number))
+    pattern = r"(?<!\d)(?:" + "|".join(dict.fromkeys(candidates)) + r")\s*%?"
+    return re.search(pattern, prose)
+
+
+def _sentence_bounds(prose: str, start: int, end: int) -> tuple[int, int]:
+    left_candidates = [prose.rfind(boundary, 0, start) for boundary in ".!?\n"]
+    left = max(left_candidates)
+    seg_start = 0 if left == -1 else left + 1
+    right_positions = [
+        position for boundary in ".!?\n"
+        if (position := prose.find(boundary, end)) != -1
+    ]
+    seg_end = min(right_positions) + 1 if right_positions else len(prose)
+    return seg_start, seg_end
 
 
 def _is_model_metric_number(prose: str, match: re.Match[str]) -> bool:

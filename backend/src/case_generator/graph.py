@@ -110,6 +110,7 @@ from case_generator.suggest_service import (
 from case_generator.narrative_grounding import (
     NARRATIVE_GROUNDING_WARNING,
     build_computed_metrics_block,
+    contextualize_grounding_violations,
     has_metric_anchors,
     validate_narrative_grounding,
 )
@@ -284,6 +285,29 @@ def _get_architect_llm(
         rate_limiter=_rate_limiter,
     )
     return primary.with_fallbacks([pro_fallback_medium, flash_fallback])
+
+
+def _get_m4_llm(temperature: float = 0.5):
+    """High-reasoning Pro chain for M4 narrative impact analysis.
+
+    M4 has to translate notebook/model evidence into executive ROI, risk, and
+    deployment language. Keep it on Gemini Pro but do not reuse the architect
+    helper because M4 should not receive Code Execution tools.
+    """
+    common_kwargs = dict(
+        model="gemini-3.1-pro-preview",
+        temperature=temperature,
+        max_retries=2,
+        max_output_tokens=24576,
+        api_key=os.getenv("GEMINI_API_KEY"),
+        rate_limiter=_rate_limiter,
+    )
+    primary = ChatGoogleGenerativeAI(thinking_level="high", **common_kwargs)
+    pro_fallback_medium = ChatGoogleGenerativeAI(
+        thinking_level="medium",
+        **common_kwargs,
+    )
+    return primary.with_fallbacks([pro_fallback_medium])
 
 
 def _get_chart_llm(
@@ -3521,7 +3545,8 @@ def _invoke_narrative_with_grounding(
     if not violations:
         return prose
 
-    bullet_list = "\n".join(f"- {violation}" for violation in violations)
+    contextualized_violations = contextualize_grounding_violations(prose, violations)
+    bullet_list = "\n".join(f"- {violation}" for violation in contextualized_violations)
     print(
         f"[{node_name}] Violaciones narrative grounding detectadas: "
         f"{violations}. Reprompt explícito (1/1)."
@@ -4409,8 +4434,7 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     Si no hay M2/M3, el prompt usa fallback basado en Exhibits del M1.
     """
     try:
-        cfg = Configuration.from_runnable_config(config)
-        llm = _get_writer_llm(cfg.writer_model, temperature=0.5, thinking_level="medium")
+        llm = _get_m4_llm(temperature=0.5)
 
         context = _build_base_context(state)
         context.update({
