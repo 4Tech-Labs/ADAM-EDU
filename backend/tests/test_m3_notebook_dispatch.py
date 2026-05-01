@@ -78,11 +78,17 @@ CLEAN_CLASSIFICATION_CODE = """
 # === SECTION:pr_curves ===
 # === SECTION:comparison_table ===
 # === SECTION:cost_matrix ===
+# === SECTION:tuning_lr ===
+# === SECTION:tuning_rf ===
+# === SECTION:interp_lr ===
+# === SECTION:interp_rf ===
 from sklearn.dummy import DummyClassifier
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score, confusion_matrix, roc_curve, precision_recall_curve
 from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+from sklearn.inspection import permutation_importance, PartialDependenceDisplay
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y)
 model = LogisticRegression().fit(X_train, y_train)
@@ -91,6 +97,10 @@ fpr, tpr, _ = roc_curve(y_test, model.predict_proba(X_test)[:, 1])
 prec, rec, _ = precision_recall_curve(y_test, model.predict_proba(X_test)[:, 1])
 proba = model.predict_proba(X_test)[:, 1]
 tn, fp, fn, tp = confusion_matrix(y_test, (proba >= 0.5).astype(int)).ravel()
+search_lr = GridSearchCV(model, {}, cv=3).fit(X_train, y_train)
+search_rf = RandomizedSearchCV(model, {}, n_iter=2).fit(X_train, y_train)
+perm = permutation_importance(model, X_test, y_test)
+PartialDependenceDisplay.from_estimator(model, X_test, [0])
 """
 
 CLEAN_CLUSTERING_CODE = """
