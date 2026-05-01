@@ -93,6 +93,13 @@ def test_prompt_declares_quick_mode_thresholds() -> None:
             )
 
 
+def test_prompt_bounds_parallel_jobs_for_executor_budget() -> None:
+    """Issue #239 executes notebooks in backend; generated code must not fan out."""
+    p = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
+    assert "n_jobs=-1" not in p
+    assert "n_jobs=1" in p
+
+
 def test_prompt_declares_is_binary_guard_in_each_new_cell() -> None:
     """Cada celda nueva tiene un guard `if not is_binary:` antes del fit."""
     p = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
@@ -156,8 +163,8 @@ def test_required_sentinels_extended_for_classification_only() -> None:
     cls = set(_FAMILY_REQUIRED_SENTINELS["clasificacion"])
     for sentinel in _NEW_SENTINELS:
         assert sentinel in cls
-    assert len(_FAMILY_REQUIRED_SENTINELS["clasificacion"]) == 12, (
-        f"expected 12 sentinels (8 prev + 4 new), got "
+    assert len(_FAMILY_REQUIRED_SENTINELS["clasificacion"]) == 13, (
+        f"expected 13 sentinels (8 prev + 4 issue240 + metrics summary), got "
         f"{len(_FAMILY_REQUIRED_SENTINELS['clasificacion'])}"
     )
     assert set(_FAMILY_REQUIRED_SENTINELS) == {"clasificacion"}

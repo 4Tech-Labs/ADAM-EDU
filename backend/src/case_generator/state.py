@@ -142,7 +142,8 @@ class ADAMState(CanonicalInputState):
     m3_charts: NotRequired[list[dict]]   # Solo ml_ds — gráficos de validación algorítmica (pendiente implementación)
     m3_questions: NotRequired[list[dict]]
     m3_notebook_code: NotRequired[str]   # Jupytext Percent — Experiment Engineer (ml_ds + visual_plus_notebook ÚNICAMENTE)
-    m3_metrics_summary: NotRequired[dict[str, Any] | None]   # Futuro #C-EXEC — métricas ejecutadas del notebook M3
+    m3_metrics_summary: NotRequired[dict[str, Any] | None]   # Issue #239 — métricas ejecutadas del notebook M3
+    m3_quality_warning: NotRequired[str]                      # Issue #239 — warning no bloqueante del gate de calidad M3
     narrative_grounding_warning: NotRequired[str]             # Issue #243 — warning cuando falta m3_metrics_summary
     m4_content: NotRequired[str]
     m4_charts: NotRequired[list[dict]]   # Ambos perfiles — gráficos financieros

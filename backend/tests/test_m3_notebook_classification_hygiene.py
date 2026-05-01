@@ -141,6 +141,7 @@ def test_prompt_still_renders_with_existing_substitution_vars() -> None:
 # Issue #238: 8th sentinel ``cost_matrix`` added for business-cost threshold tuning.
 # Issue #240: 4 more sentinels (tuning_lr/tuning_rf/interp_lr/interp_rf) for
 # Harvard ml_ds tuning + advanced interpretability.
+# Issue #239: metrics_summary_json sentinel added atomically with the executor.
 _REQUIRED_SENTINELS = (
     "# === SECTION:dummy_baseline ===",
     "# === SECTION:pipeline_lr ===",
@@ -154,6 +155,7 @@ _REQUIRED_SENTINELS = (
     "# === SECTION:tuning_rf ===",
     "# === SECTION:interp_lr ===",
     "# === SECTION:interp_rf ===",
+    "# === SECTION:metrics_summary_json ===",
 )
 
 _REQUIRED_API_TOKENS = (
@@ -177,14 +179,15 @@ _REQUIRED_API_TOKENS = (
 )
 
 
-def test_prompt_emits_eight_mandatory_sentinels_for_classification() -> None:
-    """Las 12 sentinelas son contractuales: el validador rechaza el notebook
+def test_prompt_emits_mandatory_sentinels_for_classification() -> None:
+    """Las sentinelas son contractuales: el validador rechaza el notebook
     si falta cualquiera. El prompt DEBE instruir al LLM a emitirlas.
     PR #244 review: ROC y PR ahora viven en celdas separadas (Regla L +
     Regla 6). El antiguo ``roc_pr_curves`` ya NO debe aparecer.
     Issue #238: añadida la 8ª sentinela ``cost_matrix``.
     Issue #240: añadidas las 4 sentinelas de tuning + interpretabilidad
-    (``tuning_lr``, ``tuning_rf``, ``interp_lr``, ``interp_rf``)."""
+    (``tuning_lr``, ``tuning_rf``, ``interp_lr``, ``interp_rf``).
+    Issue #239: añadida ``metrics_summary_json`` junto al executor."""
     for sentinel in _REQUIRED_SENTINELS:
         assert sentinel in M3_NOTEBOOK_ALGO_PROMPT, f"falta sentinela {sentinel!r}"
     assert "# === SECTION:roc_pr_curves ===" not in M3_NOTEBOOK_ALGO_PROMPT, (
