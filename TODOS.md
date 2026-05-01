@@ -612,3 +612,53 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 **Cons:** Test relativamente acoplado a la forma exacta del rendering. Si se cambia el formato de `data_gap_warnings_block` el test rompe — lo cual es deseable.
 
 **Context:** Issue #238 dejó este test fuera de scope porque requiere fixturizar todo el state del grafo. Se puede hacer con un state minimal y una llamada directa al renderizador interno sin invocar al LLM.
+
+## TODO-237-A: Migrar familia `regresion` a builder Python-determinista
+
+**What:** Replicar el patrón de Issue #237 (`datagen/eda_charts_classification.py` + dispatch en `eda_chart_generator`) para la familia `regresion`. Charts: histograma del target, scatter target vs top-3 numéricas, residuales OLS, QQ-plot, heatmap de correlación, missingness.
+
+**Why:** Cerrar el gap de `zero LLM-fabricated numbers` para el resto de familias ml_ds.
+
+**Pros:** Misma garantía de determinismo. Cons: requiere snapshot tests adicionales y annotate-only prompt afinado para regresión.
+
+**Context:** El builder reutiliza `_resolve_primary_family` y `EDA_ANNOTATE_ONLY_PROMPT` ya extraídos.
+
+---
+
+## TODO-237-B: Migrar familia `clustering` a builder Python-determinista
+
+**What:** Builder con: silhouette por k, elbow (inertia), PCA 2D coloreado por cluster predicho con KMeans random_state=42, distribución por cluster, distancia intra-cluster, missingness.
+
+**Why:** Mismo objetivo de #237 para clustering ml_ds.
+
+**Context:** Importante: la elección de k debe venir de `dataset_schema_required` o un default conservador (k=3) — NO del LLM.
+
+---
+
+## TODO-237-C: Migrar familia `serie_temporal` a builder Python-determinista
+
+**What:** Charts: serie cruda, descomposición STL (trend/seasonal/residual), ACF/PACF, missingness temporal, rolling mean, distribución del target.
+
+**Why:** Cerrar #237 para todas las familias ml_ds.
+
+**Context:** Necesita `statsmodels` como nueva dep o cálculo manual con scipy/numpy. Decidir en planning antes de empezar.
+
+---
+
+## TODO-237-D: Renderizar `anchored_question` en el preview del docente
+
+**What:** El schema `EDAChartSpec` ahora expone `anchored_question: Optional[str]` (Issue #237). El builder Python aún no lo puebla para los 6 charts de clasificación. Falta: (1) escribir las 6 preguntas socráticas ancladas como constantes en `datagen/eda_charts_classification.py`, (2) agregarlas al payload, (3) renderizarlas en `PlotlyChartsRenderer.tsx` debajo de `description`.
+
+**Why:** Cerrar la pieza pedagógica del DoD original de #237.
+
+**Context:** El campo es Optional y back-compat — no rompe charts existentes que no lo populen.
+
+---
+
+## TODO-237-E: Telemetría `data_source` en logs de jobs
+
+**What:** Emitir un log estructurado por job con la distribución `data_source` final del array `doc2_eda_charts` (cuántos `python_builder` vs `llm_json`). Permite verificar en producción que el path Python se activa solo para ml_ds + clasificación y NO se cae al fallback LLM por bugs silenciosos.
+
+**Why:** Observabilidad del switch del path determinista.
+
+**Context:** Hoy logueamos via `logger.info` en `_eda_classification_python_path`. Falta consolidarlo a un campo del job en `authoring_jobs.task_payload` o en un campo dedicado del snapshot final.

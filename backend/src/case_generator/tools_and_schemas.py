@@ -290,13 +290,23 @@ class CaseArchitectOutput(BaseModel):
 
 
 class EDAChartSpec(BaseModel):
-    """Structured Plotly chart specification rendered by the teacher preview."""
+    """Structured Plotly chart specification rendered by the teacher preview.
+
+    Issue #237: añadidos `data_source` y `anchored_question` opcionales para
+    distinguir el path Python-determinista (familia clasificación) del path
+    LLM-JSON original. Ambos son back-compat (frontend ignora claves extra).
+    """
     id: str = Field(description="ID único snake_case (ej: 'revenue_trend_q3')")
     title: str = Field(description="Título orientado al insight")
     subtitle: str = Field(description="Insight clave en una línea")
     description: Optional[str] = Field(default=None, description="Explicación básica de métricas")
     library: Literal["plotly"] = Field(description="Siempre 'plotly'")
     chart_type: str = Field(
+        # Issue #237 review: NO incluir `bar` en la descripción visible al
+        # LLM. El path LLM-JSON tiene un prompt que prohíbe `bar`; sólo el
+        # builder Python-determinista (clasificación ml_ds) lo emite, y
+        # ese path no pasa por with_structured_output() así que la
+        # descripción no necesita anunciarlo.
         description="scatter|heatmap|violin|box"
     )
     traces: list[dict] = Field(
@@ -313,14 +323,48 @@ class EDAChartSpec(BaseModel):
         default=None,
         description="Por qué este tipo de gráfico es el adecuado para este dato específico"
     )
+    # Issue #237 — observabilidad/contrato; opcionales para back-compat.
+    data_source: Optional[Literal["python_builder", "llm_json"]] = Field(
+        default=None,
+        description="Origen del payload del chart: 'python_builder' (deterministico, familia clasificación) o 'llm_json' (path LLM original).",
+    )
+    anchored_question: Optional[str] = Field(
+        default=None,
+        description="Pregunta socrática anclada al chart (Issue #237). Renderizado UI = follow-up.",
+    )
 
 
 
 class EDAChartGeneratorOutput(BaseModel):
-    """Salida del EDA Chart Generator — 3 charts JSON (Documento 2)."""
+    """Salida del EDA Chart Generator — 3 a 6 charts según path de generación.
+
+    Path LLM-JSON original (business y otras familias ml_ds): 3 charts.
+    Path Python-determinista (Issue #237, ml_ds + clasificación): 6 charts.
+    El cap final lo aplica el nodo `eda_chart_generator` en `graph.py`.
+    """
 
     charts: list[EDAChartSpec] = Field(
-        description="Exactamente 3 charts estructurados para visualización"
+        description="Entre 3 y 6 charts estructurados para visualización (depende del path)."
+    )
+
+
+class EDAAnnotateOnlyAnnotation(BaseModel):
+    """Issue #237 — un par (description, notes) por chart para el annotate-only path."""
+
+    id: str = Field(description="ID del chart al que pertenece la anotación (debe coincidir con un chart del builder)")
+    description: str = Field(default="", description="Descripción pedagógica ≤500 chars")
+    notes: str = Field(default="", description="Notas pedagógicas ≤300 chars")
+
+
+class EDAAnnotateOnlyOutput(BaseModel):
+    """Issue #237 — salida del LLM en el path Python-determinista de clasificación.
+
+    El LLM SOLO escribe `description` y `notes` por chart. Cualquier otro campo
+    devuelto por el modelo se descarta en el merge defensivo del nodo.
+    """
+
+    annotations: list[EDAAnnotateOnlyAnnotation] = Field(
+        description="Una entrada por chart Python-construido (≤6)"
     )
 
 
