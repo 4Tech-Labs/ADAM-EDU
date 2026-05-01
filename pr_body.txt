@@ -6,7 +6,9 @@
 - documents the partial DoD and tracks the notebook executor follow-up in `TODOS.md`
 
 ## Pre-Landing Review
-Pre-Landing Review: No issues found after fixing the two critical review findings from the first pass.
+Pre-Landing Review: No issues found after addressing the second review pass:
+- CRITICAL: tightened `_is_model_metric_number` from line-scope to clause-scope (sentence punctuation + list connectors `y/o/and/or`) so business figures sharing a sentence with a model-metric mention (e.g. `ROI 35% y AUC 72%`) are no longer transitively flagged as `UNANCHORED`. New regression test `test_validator_isolates_business_number_in_mixed_clause` covers the mixed-clause case.
+- INFORMATIONAL: synced `AGENTS.md`, `CLAUDE.md`, and `backend/src/case_generator/AGENTS.md` to state grounding is gated by `studentProfile == "ml_ds"` AND `family == "clasificacion"` (matching the actual `_select_narrative_prompt` behavior).
 
 ## Eval Results
 Prompt-related code changed, but this repository has no `test/evals` or `*eval*` suites configured. No eval suite was available to run.
@@ -62,7 +64,7 @@ M3-content receives fallback/manual computed_metrics_block until #C-EXEC lands; 
 Numeric anchoring accepts +/-2 percentage points for percentage-like values and +/-2% relative tolerance for scalar values. Business figures from M2, Exhibits, or M4 remain valid context and are not blocked by the model-metric validator. Structural references such as M1-M6 labels, section numbers, parenthetical years, non-metric date ranges, and fixed writing-rule phrases are stripped only for numeric anchoring; citation detection still runs on the raw prose first.
 
 ## Validation Evidence
-- [x] `uv run --directory backend pytest -q` (`602 passed, 13 skipped, 1 warning`)
+- [x] `uv run --directory backend pytest -q` (`603 passed, 13 skipped, 1 warning`)
 - [x] `uv run --directory backend mypy src` (`Success: no issues found in 47 source files`)
 - [x] `npm --prefix frontend run test -- --run` (`57 files passed`, `418 tests passed`)
 - [x] `npm --prefix frontend run lint`

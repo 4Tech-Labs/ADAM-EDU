@@ -131,6 +131,29 @@ def test_validator_preserves_sign_for_model_interpretability_numbers() -> None:
     )
 
 
+def test_validator_isolates_business_number_in_mixed_clause() -> None:
+    """Mixed line ``ROI 35% y AUC 72%`` must only validate the AUC number.
+
+    Regression guard for the line-scope false positive: the previous heuristic
+    would treat any number on the same line as a metric keyword as model-metric,
+    flagging legitimate business figures (ROI/NPV/payback) sharing a sentence
+    with AUC/F1 mentions and triggering RuntimeError after reprompt.
+    """
+    block = build_computed_metrics_block({"auc_lr": 0.7234})
+
+    violations = validate_narrative_grounding("ROI 35% y AUC 72%.", block)
+
+    # AUC 72 is anchored to 0.7234 (~72.34%), within ±2pp tolerance.
+    # ROI 35 must NOT be evaluated as a model metric and must not appear.
+    assert violations == []
+    assert not any("35" in v for v in violations)
+
+    # Sanity: an unanchored AUC value in the same mixed-clause shape still flags.
+    bad_violations = validate_narrative_grounding("ROI 35% y AUC 87%.", block)
+    assert "UNANCHORED: 87" in bad_violations
+    assert not any("UNANCHORED: 35" == v for v in bad_violations)
+
+
 def test_validator_accepts_number_within_tolerance() -> None:
     block = build_computed_metrics_block({"auc_lr": 0.7234})
 

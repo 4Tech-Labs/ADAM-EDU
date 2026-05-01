@@ -33,6 +33,14 @@ _MODEL_METRIC_CONTEXT_RE = re.compile(
     r"especificidad|prevalencia|prevalence|baseline|dummy|coeficiente|coefficient|"
     r"importancia|importance|feature|variable|shap|permutation)\b"
 )
+# Clause-level boundaries: sentence punctuation plus list connectors. Used to
+# scope model-metric keyword detection to the immediate clause around a number
+# so business figures ("ROI 35% y AUC 72%") in the same sentence as a model
+# metric are not transitively flagged as unanchored.
+_CLAUSE_BOUNDARY_RE = re.compile(
+    r"[.,;:\n\u2014\u2013]|\s+(?:y|o|and|or)\s+",
+    flags=re.IGNORECASE,
+)
 _DATE_RANGE_RE = re.compile(r"\b(?:19|20)\d{2}\s*[-–]\s*(?:19|20)\d{2}\b")
 _PAREN_YEAR_RE = re.compile(r"\((?:19|20)\d{2}\)")
 _MODULE_REF_RE = re.compile(r"\bM[1-6]\b", flags=re.IGNORECASE)
@@ -162,12 +170,24 @@ def _extract_anchor_numbers(metrics_block: str) -> list[float]:
 
 
 def _is_model_metric_number(prose: str, match: re.Match[str]) -> bool:
-    line_start = prose.rfind("\n", 0, match.start()) + 1
-    line_end = prose.find("\n", match.end())
-    if line_end == -1:
-        line_end = len(prose)
-    line = prose[line_start:line_end]
-    return bool(_MODEL_METRIC_CONTEXT_RE.search(line))
+    """Return True when the matched number sits in the same clause as a model-metric keyword.
+
+    A clause is bounded by sentence punctuation (``.``, ``;``, ``:``, em/en
+    dashes, newline), commas, and Spanish/English list connectors (``y``,
+    ``o``, ``and``, ``or``). Restricting the keyword search to the clause
+    around the number prevents false UNANCHORED violations when the same
+    sentence mixes a legitimate model metric ("AUC 72%") with business figures
+    ("ROI 35%"), a pattern that occurs in M4 ml_ds Harvard prose.
+    """
+    start = match.start()
+    end = match.end()
+    seg_start = 0
+    for boundary in _CLAUSE_BOUNDARY_RE.finditer(prose, 0, start):
+        seg_start = boundary.end()
+    forward = _CLAUSE_BOUNDARY_RE.search(prose, end)
+    seg_end = forward.start() if forward else len(prose)
+    segment = prose[seg_start:seg_end]
+    return bool(_MODEL_METRIC_CONTEXT_RE.search(segment))
 
 
 def _strip_structural_numbers_for_numeric_anchoring(prose: str) -> str:

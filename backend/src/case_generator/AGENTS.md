@@ -42,7 +42,7 @@ These files require extra caution because small edits can change generated outpu
 
 ## Narrative Grounding (Issue #243)
 
-- Narrative grounding applies only when `family == "clasificacion"` for M3-content, M4, and M5. The other three families keep their existing prompt strings and must not receive `{computed_metrics_block}`.
+- Narrative grounding applies only when `studentProfile == "ml_ds"` AND `family == "clasificacion"` for M3-content, M4, and M5. The other three families and the `business` profile keep their existing prompt strings and must not receive `{computed_metrics_block}`.
 - Until #C-EXEC provides `m3_metrics_summary`, `build_computed_metrics_block(None)` emits a clear fallback placeholder, validation is disabled for that run, and `narrative_grounding_warning` is persisted.
 - `validate_narrative_grounding` rejects citations with `CITA:` and unanchored model-metric numbers with `UNANCHORED:`. Business numbers from M2, Exhibits, or M4 are allowed. Numeric tolerance is ±2 percentage points for percentage-like values and ±2% relative for scalar values.
 - The narrative nodes reprompt once with the `CITA:` / `UNANCHORED:` bullet list. A second violation raises `RuntimeError` so the job fails instead of shipping fabricated metrics.
