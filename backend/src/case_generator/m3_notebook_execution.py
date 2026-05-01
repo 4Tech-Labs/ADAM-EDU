@@ -10,18 +10,22 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import logging
 import math
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
 import pandas as pd
 
+
+logger = logging.getLogger(__name__)
 
 METRICS_MARKER = "ADAM_M3_METRICS_SUMMARY_JSON="
 RUNNER_TIMEOUT_SECONDS = 180
@@ -539,6 +543,10 @@ def execute_m3_notebook(
             diagnostics = _bounded_diagnostic(
                 _process_output_text(exc.stdout) + "\n" + _process_output_text(exc.stderr)
             )
+            logger.error(
+                "M3 notebook subprocess timed out. diagnostics=%s",
+                diagnostics or "<empty>",
+            )
             raise M3NotebookExecutionError(
                 "M3 notebook execution timed out.",
                 diagnostics=diagnostics,
@@ -547,6 +555,11 @@ def execute_m3_notebook(
 
         diagnostics = _bounded_diagnostic((completed.stdout or "") + "\n" + (completed.stderr or ""))
         if completed.returncode != 0:
+            logger.error(
+                "M3 notebook subprocess failed. returncode=%s diagnostics=%s",
+                completed.returncode,
+                diagnostics or "<empty>",
+            )
             raise M3NotebookExecutionError(
                 "M3 notebook execution failed.",
                 diagnostics=diagnostics,
@@ -596,7 +609,7 @@ def _runner_main(argv: Iterable[str] | None = None) -> int:
     try:
         _run_notebook(Path(args.input), Path(args.output), args.timeout)
     except Exception as exc:  # pragma: no cover - exercised through subprocess tests.
-        print(_bounded_diagnostic(f"{type(exc).__name__}: {exc}"), file=sys.stderr)
+        print(_bounded_diagnostic(traceback.format_exc() or f"{type(exc).__name__}: {exc}"), file=sys.stderr)
         return 1
     return 0
 

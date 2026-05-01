@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -230,6 +231,36 @@ def test_execute_timeout_raises_bounded_error() -> None:
     assert excinfo.value.kind == "timeout"
     assert excinfo.value.diagnostics is not None
     assert len(excinfo.value.diagnostics) <= 4000
+
+
+def test_execute_logs_subprocess_diagnostics_before_crash_error(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    execution_logger = logging.getLogger("case_generator.m3_notebook_execution")
+    monkeypatch.setattr(execution_logger, "disabled", False)
+    monkeypatch.setattr(execution_logger, "propagate", True)
+    caplog.set_level(logging.ERROR, logger=execution_logger.name)
+
+    def fake_runner(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stdout="kernel stdout before crash",
+            stderr="CellExecutionError: NameError: name 'feature_cols' is not defined",
+        )
+
+    with pytest.raises(M3NotebookExecutionError) as excinfo:
+        execute_m3_notebook(
+            notebook_code=_minimal_notebook(),
+            dataset_rows=_dataset_rows(),
+            subprocess_runner=fake_runner,
+        )
+
+    assert excinfo.value.kind == "crash"
+    assert "kernel stdout before crash" in caplog.text
+    assert "CellExecutionError: NameError" in caplog.text
+    assert "returncode=1" in caplog.text
 
 
 def test_success_without_marker_stores_warning_and_no_metrics() -> None:
