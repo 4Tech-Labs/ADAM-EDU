@@ -64,13 +64,33 @@ def test_prompt_emits_four_new_api_tokens() -> None:
 
 
 def test_prompt_declares_quick_mode_thresholds() -> None:
-    """Modo rápido obligatorio: >2000 skip, >5000 reduced. Ambos umbrales
-    deben aparecer en el segmento del prompt posterior a `cost_matrix`."""
+    """Modo rápido obligatorio: cascada de mayor a menor.
+    `> 5000` (SKIP) DEBE evaluarse antes que `> 2000` (reduced) en cada
+    celda de tuning, si no la rama reducida es inalcanzable (regresión
+    detectada en review #247)."""
     p = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
     cost_idx = p.index("# === SECTION:cost_matrix ===")
     after = p[cost_idx:]
-    assert "> 2000" in after, "modo rápido >2000 (skip tuning) ausente"
-    assert "> 5000" in after, "modo rápido >5000 (cv/n_iter reducidos) ausente"
+    assert "> 2000" in after, "modo rápido >2000 ausente"
+    assert "> 5000" in after, "modo rápido >5000 ausente"
+
+    # Assert estructural: en cada celda de tuning, el primer `if n_train > X`
+    # debe ser `> 5000`, no `> 2000` (orden de cascada correcto).
+    for sentinel in ("# === SECTION:tuning_lr ===", "# === SECTION:tuning_rf ==="):
+        start = p.index(sentinel)
+        rest = p[start:]
+        nxt = rest.find("# === SECTION:", len(sentinel))
+        cell = rest[:nxt] if nxt > 0 else rest
+        idx_5000 = cell.find("if n_train > 5000")
+        idx_2000 = cell.find("if n_train > 2000")
+        assert idx_5000 > 0, (
+            f"{sentinel}: falta `if n_train > 5000` como primera rama de cascada"
+        )
+        if idx_2000 > 0:
+            assert idx_5000 < idx_2000, (
+                f"{sentinel}: `if n_train > 5000` debe evaluarse ANTES de "
+                f"`if n_train > 2000` (si no la rama >5000 es inalcanzable)"
+            )
 
 
 def test_prompt_declares_is_binary_guard_in_each_new_cell() -> None:

@@ -2879,10 +2879,13 @@ except Exception as e:
 # `C ∈ [0.01, 0.1, 1, 10]` con `StratifiedKFold(5)` y refit del best
 # estimator sobre `X_train` completo.
 #
-# **Modo rápido automático** (mitiga el budget exec-time #239):
-#   * `len(X_train) > 5000` → `cv=3` (en vez de 5)
-#   * `len(X_train) > 2000` → SKIP tuning, usar defaults `C=1.0` con
-#     `class_weight="balanced"` y print pedagógico
+# **Modo rápido automático** (mitiga el budget exec-time #239) — cascada
+# evaluada de mayor a menor para que las ramas sean alcanzables:
+#   * `len(X_train) > 5000` → SKIP tuning, usar defaults `C=1.0` con
+#     `class_weight="balanced"` y print pedagógico (barrido completo
+#     excede budget exec-time)
+#   * `len(X_train) > 2000` → `cv=3` (en vez de 5), grilla completa
+#   * resto (`<= 2000`) → `cv=5`, grilla completa
 #
 # Cada celda hace self-bootstrap (Rule 6 cell isolation): si los splits
 # `X_train/X_test/y_train/y_test` no existen en globals, se recrean con
@@ -2909,9 +2912,11 @@ try:
                 stratify=y if y.value_counts().min() >= 2 else None,
             )
         n_train = len(X_train)
-        if n_train > 2000:
+        # Cascada de mayor a menor — orden importa para que las ramas
+        # reducidas sean alcanzables (>5000 ⊂ >2000).
+        if n_train > 5000:
             print(
-                f"⚠️ Modo rápido: dataset con {{n_train}} filas (> 2000) — "
+                f"⚠️ Modo rápido: dataset con {{n_train}} filas (> 5000) — "
                 f"se omite GridSearchCV y se entrena LogisticRegression con "
                 f"defaults (C=1.0, class_weight='balanced'). Razonamiento: "
                 f"el barrido 4 valores × 5 folds excedería el budget exec-time."
@@ -2922,10 +2927,10 @@ try:
                                            max_iter=2000, random_state=42)),
             ])
             best_lr.fit(X_train, y_train)
-            best_lr_params = {{"C": 1.0, "note": "skipped tuning (quick mode)"}}
+            best_lr_params = {{"C": 1.0, "note": "skipped tuning (n>5000)"}}
             best_lr_score = float("nan")
         else:
-            cv_splits = 3 if n_train > 5000 else 5
+            cv_splits = 3 if n_train > 2000 else 5
             base_pipe_lr = Pipeline([
                 ("scaler", StandardScaler(with_mean=False)),
                 ("clf", LogisticRegression(class_weight="balanced",
@@ -2954,7 +2959,10 @@ except Exception as e:
 # × n_estimators` sin barrer la grilla cartesiana entera. Mismo `scoring=
 # "roc_auc"` para que LR y RF sean comparables 1:1.
 #
-# Modo rápido: `> 5000 filas` → `n_iter=5, cv=3`; `> 2000 filas` → SKIP.
+# **Modo rápido** — cascada de mayor a menor (orden importa, >5000 ⊂ >2000):
+#   * `> 5000 filas` → SKIP, defaults `n_estimators=200`
+#   * `> 2000 filas` → `n_iter=5, cv=3`
+#   * resto (`<= 2000`) → `n_iter=10, cv=5`
 
 # %%
 # === SECTION:tuning_rf ===
@@ -2972,9 +2980,10 @@ try:
                 stratify=y if y.value_counts().min() >= 2 else None,
             )
         n_train = len(X_train)
-        if n_train > 2000:
+        # Cascada de mayor a menor — orden importa para alcanzabilidad.
+        if n_train > 5000:
             print(
-                f"⚠️ Modo rápido: dataset con {{n_train}} filas (> 2000) — "
+                f"⚠️ Modo rápido: dataset con {{n_train}} filas (> 5000) — "
                 f"se omite RandomizedSearchCV y se entrena RandomForest con "
                 f"defaults (n_estimators=200, class_weight='balanced')."
             )
@@ -2983,11 +2992,11 @@ try:
                 random_state=42, n_jobs=-1,
             )
             best_rf.fit(X_train, y_train)
-            best_rf_params = {{"note": "skipped tuning (quick mode)"}}
+            best_rf_params = {{"note": "skipped tuning (n>5000)"}}
             best_rf_score = float("nan")
         else:
-            n_iter_rf = 5 if n_train > 5000 else 10
-            cv_splits_rf = 3 if n_train > 5000 else 5
+            n_iter_rf = 5 if n_train > 2000 else 10
+            cv_splits_rf = 3 if n_train > 2000 else 5
             param_dist_rf = {{
                 "max_depth": [None, 5, 10, 20],
                 "min_samples_leaf": [1, 5, 20],
