@@ -164,6 +164,15 @@ _TRANSIENT_PROVIDER_UNAVAILABLE_MARKERS = (
     "connection aborted",
     "network is unreachable",
 )
+_UNSAFE_NOTEBOOK_ERROR_CODE = "m3_notebook_unsafe_code"
+_UNSAFE_NOTEBOOK_ERROR_MARKERS = (
+    "denied call in generated notebook",
+    "denied import in generated notebook",
+    "denied network/process call in generated notebook",
+    "denied unsafe open(...) path in generated notebook",
+    "denied dynamic callable in generated notebook",
+    "denied builtins reference in generated notebook",
+)
 
 _DURABLE_CHECKPOINT_ERROR_MESSAGE = (
     "No se pudo inicializar la persistencia durable del proceso de generacion. "
@@ -184,6 +193,10 @@ def _classify_failure_status(error_code: str | None) -> str:
     if error_code in _RESUMABLE_FAILURE_CODES:
         return AUTHORING_JOB_STATUS_FAILED_RESUMABLE
     return AUTHORING_JOB_STATUS_FAILED
+
+
+def _is_generated_notebook_unsafe_error(error_text: str) -> bool:
+    return any(marker in error_text for marker in _UNSAFE_NOTEBOOK_ERROR_MARKERS)
 
 
 def _resolve_job_grounding_snapshot(
@@ -1061,7 +1074,10 @@ class AuthoringService:
                     logger.error("AuthoringService: LangGraph raised exception for Job %s", job_id, exc_info=True)
                     error_trace = traceback.format_exc()
                     error_str = error_trace.lower()
-                    if any(marker in error_str for marker in _TRANSIENT_TIMEOUT_MARKERS):
+                    if _is_generated_notebook_unsafe_error(error_str):
+                        error_code = _UNSAFE_NOTEBOOK_ERROR_CODE
+                        error_msg = error_trace
+                    elif any(marker in error_str for marker in _TRANSIENT_TIMEOUT_MARKERS):
                         error_code = "llm_timeout"
                         error_msg = (
                             "Nuestros servidores de IA estan a maxima capacidad y el tiempo de espera se agoto. "

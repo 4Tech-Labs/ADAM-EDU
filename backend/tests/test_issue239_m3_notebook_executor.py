@@ -15,6 +15,7 @@ import nbformat
 import pytest
 
 import case_generator.graph as graph_module
+from case_generator.core.authoring import _classify_failure_status, _is_generated_notebook_unsafe_error
 from case_generator.m3_notebook_execution import (
     METRICS_MARKER,
     M3NotebookExecutionError,
@@ -26,6 +27,7 @@ from case_generator.m3_notebook_execution import (
 )
 from case_generator.prompts import M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
 from case_generator.prompts import M3_NOTEBOOK_BASE_TEMPLATE
+from shared.models import AUTHORING_JOB_STATUS_FAILED, AUTHORING_JOB_STATUS_FAILED_RESUMABLE
 
 
 _GOOD_METRICS = {
@@ -131,6 +133,30 @@ def test_scrub_rejects_dangerous_generated_code(source: str) -> None:
 
 def test_scrub_allows_base_template_upload_scaffold() -> None:
     scrub_notebook_for_safe_execution(M3_NOTEBOOK_BASE_TEMPLATE)
+
+
+def test_scrub_allows_rendered_classification_prompt_jupytext_contract() -> None:
+    rendered_prompt = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION.format(
+        m3_content="contenido m3",
+        algoritmos='["Logistic Regression", "Random Forest"]',
+        familias_meta='[{"familia": "clasificacion", "prerequisito": "target binario"}]',
+        case_title="Caso Test",
+        output_language="es",
+        dataset_contract_block="(sin contrato)",
+        data_gap_warnings_block="(sin brechas)",
+    )
+    jupytext_start = rendered_prompt.index("# %%")
+
+    assert "globals()" not in rendered_prompt
+    scrub_notebook_for_safe_execution(rendered_prompt[jupytext_start:])
+
+
+def test_unsafe_notebook_code_failure_is_not_resumable() -> None:
+    error_text = "M3NotebookExecutionError: Denied call in generated notebook: globals".lower()
+
+    assert _is_generated_notebook_unsafe_error(error_text)
+    assert _classify_failure_status("m3_notebook_unsafe_code") == AUTHORING_JOB_STATUS_FAILED
+    assert _classify_failure_status("llm_provider_unavailable") == AUTHORING_JOB_STATUS_FAILED_RESUMABLE
 
 
 def test_metrics_summary_cell_imports_numpy_and_pandas_locally() -> None:

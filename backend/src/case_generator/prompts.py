@@ -3032,7 +3032,7 @@ except Exception as e:
 #   * resto (`<= 2000`) → `cv=5`, grilla completa
 #
 # Cada celda hace self-bootstrap (Rule 6 cell isolation): si los splits
-# `X_train/X_test/y_train/y_test` no existen en globals, se recrean con
+# `X_train/X_test/y_train/y_test` no existen en el kernel, se recrean con
 # `random_state=42`. Imports explícitos por celda — no depender de imports
 # previos (regresión PR #244 punto 3).
 
@@ -3050,7 +3050,10 @@ try:
         print("Tuning LR omitido: target no es binario.")
     else:
         # Self-bootstrap (Rule 6): recrear splits si no existen.
-        if "X_train" not in globals() or "y_train" not in globals():
+        try:
+            X_train
+            y_train
+        except NameError:
             X_train, X_test, y_train, y_test = train_test_split(
                 X_raw, y, test_size=0.2, random_state=42,
                 stratify=y if y.value_counts().min() >= 2 else None,
@@ -3118,7 +3121,10 @@ try:
     if not is_binary:
         print("Tuning RF omitido: target no es binario.")
     else:
-        if "X_train" not in globals() or "y_train" not in globals():
+        try:
+            X_train
+            y_train
+        except NameError:
             X_train, X_test, y_train, y_test = train_test_split(
                 X_raw, y, test_size=0.2, random_state=42,
                 stratify=y if y.value_counts().min() >= 2 else None,
@@ -3193,19 +3199,24 @@ try:
     if not is_binary:
         print("Interpretabilidad LR omitida: target no es binario.")
     else:
-        if "X_train" not in globals() or "y_train" not in globals():
+        try:
+            X_train
+            y_train
+        except NameError:
             X_train, X_test, y_train, y_test = train_test_split(
                 X_raw, y, test_size=0.2, random_state=42,
                 stratify=y if y.value_counts().min() >= 2 else None,
             )
-        if "best_lr" not in globals():
+        try:
+            best_lr
+        except NameError:
             best_lr = Pipeline([
                 ("scaler", StandardScaler(with_mean=False)),
                 ("clf", LogisticRegression(C=1.0, class_weight="balanced",
                                            max_iter=2000, random_state=42)),
             ])
             best_lr.fit(X_train, y_train)
-            print("⚠️ best_lr no encontrado en globals — fallback a Pipeline LR default.")
+            print("⚠️ best_lr no encontrado en el kernel — fallback a Pipeline LR default.")
 
         # 1) Odds ratios ordenados.
         clf_lr = best_lr.named_steps.get("clf", best_lr) if hasattr(best_lr, "named_steps") else best_lr
@@ -3249,7 +3260,7 @@ try:
                 "ci_low_2.5": ci_low,
                 "ci_high_97.5": ci_high,
             }})
-            print("\nCI bootstrap (B=200) sobre top-10 odds ratios:")
+            print("\\nCI bootstrap (B=200) sobre top-10 odds ratios:")
             print(ci_df.to_string(index=False))
 
             # 3) VIF manual 1/(1-R²) — fallback sin statsmodels.
@@ -3284,7 +3295,7 @@ try:
                 vif_rows.append({{"feature": col, "VIF": vif_val}})
             if vif_rows:
                 vif_df = pd.DataFrame(vif_rows).sort_values("VIF", ascending=False)
-                print("\nVIF manual (fallback sin statsmodels):")
+                print("\\nVIF manual (fallback sin statsmodels):")
                 print(vif_df.to_string(index=False))
                 if (vif_df["VIF"] >= 10).any():
                     print(
@@ -3318,18 +3329,23 @@ try:
     if not is_binary:
         print("Interpretabilidad RF omitida: target no es binario.")
     else:
-        if "X_train" not in globals() or "y_train" not in globals():
+        try:
+            X_train
+            y_train
+        except NameError:
             X_train, X_test, y_train, y_test = train_test_split(
                 X_raw, y, test_size=0.2, random_state=42,
                 stratify=y if y.value_counts().min() >= 2 else None,
             )
-        if "best_rf" not in globals():
+        try:
+            best_rf
+        except NameError:
             best_rf = RandomForestClassifier(
                 n_estimators=200, class_weight="balanced",
                 random_state=42, n_jobs=1,
             )
             best_rf.fit(X_train, y_train)
-            print("⚠️ best_rf no encontrado en globals — fallback a RandomForest default.")
+            print("⚠️ best_rf no encontrado en el kernel — fallback a RandomForest default.")
 
         # Modo rápido: reducir n_repeats si test grande.
         n_test = len(X_test)
@@ -3399,15 +3415,23 @@ def _adam_metric_float(value):
 
 _metrics_summary = {{}}
 try:
-  if "y" in globals() and y is not None:
-    _classes = sorted(pd.Series(y).dropna().unique().tolist())
+  try:
+    _adam_y = y
+  except NameError:
+    _adam_y = None
+  if _adam_y is not None:
+    _classes = sorted(pd.Series(_adam_y).dropna().unique().tolist())
     if len(_classes) == 2:
       _positive = _classes[-1]
-      _metrics_summary["prevalence"] = _adam_metric_float((pd.Series(y) == _positive).mean())
+      _metrics_summary["prevalence"] = _adam_metric_float((pd.Series(_adam_y) == _positive).mean())
 
   _comparison_by_model = {{}}
-  if "comparison" in globals() and isinstance(comparison, pd.DataFrame):
-    for _, _row in comparison.iterrows():
+  try:
+    _adam_comparison = comparison
+  except NameError:
+    _adam_comparison = None
+  if isinstance(_adam_comparison, pd.DataFrame):
+    for _, _row in _adam_comparison.iterrows():
       _model_name = str(_row.get("model", ""))
       if "Dummy" in _model_name:
         _comparison_by_model["dummy"] = _row
@@ -3438,14 +3462,22 @@ try:
       _metrics_summary["f1_macro"] = _adam_metric_float(_best_row.get("f1_macro"))
 
   _top_features = []
-  if "perm_df" in globals() and isinstance(perm_df, pd.DataFrame):
-    for _, _row in perm_df.head(5).iterrows():
+  try:
+    _adam_perm_df = perm_df
+  except NameError:
+    _adam_perm_df = None
+  try:
+    _adam_or_df = or_df
+  except NameError:
+    _adam_or_df = None
+  if isinstance(_adam_perm_df, pd.DataFrame):
+    for _, _row in _adam_perm_df.head(5).iterrows():
       _name = str(_row.get("feature", ""))
       _importance = _adam_metric_float(_row.get("importance_mean"))
       if _name and _importance is not None:
         _top_features.append({{"name": _name, "importance": _importance}})
-  elif "or_df" in globals() and isinstance(or_df, pd.DataFrame):
-    for _, _row in or_df.head(5).iterrows():
+  elif isinstance(_adam_or_df, pd.DataFrame):
+    for _, _row in _adam_or_df.head(5).iterrows():
       _name = str(_row.get("feature", ""))
       _odds_ratio = _adam_metric_float(_row.get("odds_ratio"))
       if _name and _odds_ratio is not None and _odds_ratio > 0:
@@ -3497,6 +3529,7 @@ try:
     # 7. NO emitas plots en esta celda — la visualización va en 2b/2c/2d.
     # 8. Asigna `model`, `X`, `X_test`, `y_test`, `y_pred` a nombres reutilizables
     #    para que las celdas 2b/2c/2d puedan referirse a ellos sin re-entrenar.
+    pass
 except Exception as e:
     print(f"⚠️ Error: {{e}}")
 
