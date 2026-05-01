@@ -1607,6 +1607,51 @@ case_id: {case_id} | student_profile: {student_profile} | output_language: {outp
 """
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# NARRATIVE GROUNDING — Issue #243 (Solo familia clasificación)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK = """\
+
+# Grounding computado del notebook M3 (Issue #243 — solo clasificación)
+{computed_metrics_block}
+
+# Prohibición literal de grounding narrativo
+NUNCA cites estudios externos, papers, autores ni estadísticas de industria. Razona EXCLUSIVAMENTE sobre `{{computed_metrics_block}}` y el contexto del caso. Si un número no está en `{{computed_metrics_block}}`, NO lo escribas.
+"""
+
+M3_CONTENT_PROMPT_CLASSIFICATION = (
+  M3_EXPERIMENT_PROMPT + _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK
+)
+M4_PROMPT_CLASSIFICATION = (
+  M4_CONTENT_GENERATOR_PROMPT + _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK
+)
+M5_PROMPT_CLASSIFICATION = (
+  M5_CONTENT_GENERATOR_PROMPT + _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK
+)
+
+M3_CONTENT_PROMPT_BY_FAMILY: dict[str, str] = {
+  "clasificacion": M3_CONTENT_PROMPT_CLASSIFICATION,
+  "regresion": M3_EXPERIMENT_PROMPT,
+  "clustering": M3_EXPERIMENT_PROMPT,
+  "serie_temporal": M3_EXPERIMENT_PROMPT,
+}
+
+M4_PROMPT_BY_FAMILY: dict[str, str] = {
+  "clasificacion": M4_PROMPT_CLASSIFICATION,
+  "regresion": M4_CONTENT_GENERATOR_PROMPT,
+  "clustering": M4_CONTENT_GENERATOR_PROMPT,
+  "serie_temporal": M4_CONTENT_GENERATOR_PROMPT,
+}
+
+M5_PROMPT_BY_FAMILY: dict[str, str] = {
+  "clasificacion": M5_PROMPT_CLASSIFICATION,
+  "regresion": M5_CONTENT_GENERATOR_PROMPT,
+  "clustering": M5_CONTENT_GENERATOR_PROMPT,
+  "serie_temporal": M5_CONTENT_GENERATOR_PROMPT,
+}
+
+
 M5_QUESTIONS_GENERATOR_PROMPT = """\
 # Your Identity
 Eres el Comité Evaluador de la Junta Directiva en ADAM, especializado en evaluar síntesis
