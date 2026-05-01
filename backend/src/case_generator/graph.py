@@ -89,9 +89,12 @@ from case_generator.prompts import (
     M3_AUDIT_QUESTIONS_PROMPT,
     M3_EXPERIMENT_QUESTIONS_PROMPT,
     M3_NOTEBOOK_BASE_TEMPLATE,
+    M3_CONTENT_PROMPT_BY_FAMILY,
     PROMPT_BY_FAMILY,
+    M4_PROMPT_BY_FAMILY,
     M4_CONTENT_GENERATOR_PROMPT,
     M4_CHART_GENERATOR_PROMPT,
+    M5_PROMPT_BY_FAMILY,
     M5_CONTENT_GENERATOR_PROMPT,
     TEACHING_NOTE_PART1_PROMPT,
     TEACHING_NOTE_PART2_PROMPT,
@@ -101,6 +104,12 @@ from case_generator.suggest_service import (
     family_of,
     get_dispatch_meta,
     resolve_legacy_family,
+)
+from case_generator.narrative_grounding import (
+    NARRATIVE_GROUNDING_WARNING,
+    build_computed_metrics_block,
+    has_metric_anchors,
+    validate_narrative_grounding,
 )
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
@@ -3208,6 +3217,117 @@ def _resolve_primary_family(
             return legacy[0], legacy[1]
     return None, None
 
+
+def _prepare_classification_narrative_grounding(
+    state: ADAMState,
+    family: str | None,
+    node_name: str,
+) -> tuple[str, bool, dict[str, str]]:
+    if family != "clasificacion":
+        return "", False, {}
+
+    metrics_summary = state.get("m3_metrics_summary")
+    metrics_block = build_computed_metrics_block(metrics_summary)
+    if metrics_summary is None or not has_metric_anchors(metrics_block):
+        logger.warning(
+            "[narrative_grounding] m3_metrics_summary ausente o sin anclas numericas",
+            extra={
+                "case_id": state.get("case_id"),
+                "node": node_name,
+                "family": family,
+                "reason": "missing" if metrics_summary is None else "anchorless",
+            },
+        )
+        return metrics_block, False, {
+            "narrative_grounding_warning": NARRATIVE_GROUNDING_WARNING
+        }
+    return metrics_block, True, {}
+
+
+def _select_narrative_prompt(
+    state: ADAMState,
+    node_name: str,
+    prompt_by_family: dict[str, str],
+    default_prompt: str,
+) -> tuple[str, str, bool, dict[str, str]]:
+    family: str | None = None
+    if state.get("studentProfile") == "ml_ds":
+        family, legacy_warning = _resolve_primary_family(state.get("algoritmos", []))
+        # Mirror the m3_notebook_generator dispatcher: when neither the canonical
+        # catalog nor the legacy resolver places the first algorithm, fall back to
+        # 'clasificacion' so M3-content/M4/M5 narratives keep grounding on for
+        # ml_ds jobs with legacy/unknown algos instead of silently degrading to
+        # the default prompt with no validation.
+        if family is None:
+            family = "clasificacion"
+            logger.warning(
+                "[narrative_grounding] family unresolved; defaulting to clasificacion",
+                extra={
+                    "case_id": state.get("case_id"),
+                    "node": node_name,
+                    "algoritmos": state.get("algoritmos", []),
+                    "legacy_warning": legacy_warning,
+                },
+            )
+    metrics_block, grounding_enabled, grounding_update = (
+        _prepare_classification_narrative_grounding(state, family, node_name)
+    )
+    return (
+        prompt_by_family.get(family or "", default_prompt),
+        metrics_block,
+        grounding_enabled,
+        grounding_update,
+    )
+
+
+def _invoke_narrative_with_grounding(
+    *,
+    node_name: str,
+    llm: Any,
+    prompt: str,
+    metrics_block: str,
+    grounding_enabled: bool,
+) -> str:
+    response = llm.invoke(prompt)
+    prose = sanitize_markdown(_extract_text(response))
+    if not grounding_enabled:
+        return prose
+
+    violations = validate_narrative_grounding(prose, metrics_block)
+    if not violations:
+        return prose
+
+    bullet_list = "\n".join(f"- {violation}" for violation in violations)
+    print(
+        f"[{node_name}] Violaciones narrative grounding detectadas: "
+        f"{violations}. Reprompt explícito (1/1)."
+    )
+    reprompt = (
+        prompt
+        + "\n\n# CORRECCIÓN OBLIGATORIA DE GROUNDING NARRATIVO\n"
+        + "Tu salida anterior violó el contrato de grounding. Reescribe la "
+        + "salida COMPLETA sin citas externas y corrigiendo las métricas "
+        + "de rendimiento o interpretabilidad del modelo no ancladas al "
+        + "bloque de métricas incluido arriba. Violaciones detectadas:\n"
+        + bullet_list
+    )
+    response2 = llm.invoke(reprompt)
+    prose = sanitize_markdown(_extract_text(response2))
+    violations2 = validate_narrative_grounding(prose, metrics_block)
+    if violations2:
+        logger.error(
+            "[%s] Reprompt narrative grounding falló — violations=%s",
+            node_name,
+            violations2,
+        )
+        raise RuntimeError(
+            f"{node_name} narrative grounding falló incluso tras un reprompt: "
+            f"{violations2}. Job marcado como fallido para evitar narrativa "
+            "con números o citas no ancladas."
+        )
+    print(f"[{node_name}] Reprompt narrative grounding OK")
+    return prose
+
 # Issue 4.1 — M3 CONTENT GENERATOR
 def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """M3 bifurcado por perfil:
@@ -3226,8 +3346,16 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         })
 
         profile = state.get("studentProfile", "business")
+        grounding_update: dict[str, str] = {}
+        metrics_block = ""
+        grounding_enabled = False
         if profile == "ml_ds":
-            prompt = M3_EXPERIMENT_PROMPT
+            prompt, metrics_block, grounding_enabled, grounding_update = _select_narrative_prompt(
+                state,
+                "m3_content_generator",
+                M3_CONTENT_PROMPT_BY_FAMILY,
+                M3_EXPERIMENT_PROMPT,
+            )
             tag = "m3_experiment_engineer"
             m3_mode = "experiment"
             # ml_ds: el m3_content alimenta directamente el prompt del notebook
@@ -3267,10 +3395,23 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             # Flash-medium con fallback a 2.5-flash (ya en _get_writer_llm) basta.
             llm = _get_writer_llm(cfg.writer_model, temperature=0.6, thinking_level="medium")
 
-        response = llm.invoke(prompt.format(**context))
-        m3 = sanitize_markdown(_extract_text(response))
+        context["computed_metrics_block"] = metrics_block
+        m3 = _invoke_narrative_with_grounding(
+            node_name="m3_content_generator",
+            llm=llm,
+            prompt=prompt.format(**context),
+            metrics_block=metrics_block,
+            grounding_enabled=grounding_enabled,
+        )
         print(f"[{tag}] {len(m3)} chars | m3_mode={m3_mode}")
-        return {"m3_content": m3, "m3_mode": m3_mode, "current_agent": "m3_content_generator"}
+        return {
+            "m3_content": m3,
+            "m3_mode": m3_mode,
+            "current_agent": "m3_content_generator",
+            **grounding_update,
+        }
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error("[m3_content_generator] ERROR: %s", e, exc_info=True)
         return {"m3_content": "[M3_NOT_EXECUTED]", "m3_mode": "audit"}
@@ -3800,11 +3941,31 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "contexto_m3": state.get("m3_content", "") or "[M3_NOT_EXECUTED]",
             "anexo_financiero": state.get("doc1_anexo_financiero", ""),
         })
+        prompt_template, metrics_block, grounding_enabled, grounding_update = (
+            _select_narrative_prompt(
+                state,
+                "m4_content_generator",
+                M4_PROMPT_BY_FAMILY,
+                M4_CONTENT_GENERATOR_PROMPT,
+            )
+        )
+        context["computed_metrics_block"] = metrics_block
 
-        response = llm.invoke(M4_CONTENT_GENERATOR_PROMPT.format(**context))
-        m4 = sanitize_markdown(_extract_text(response))
+        m4 = _invoke_narrative_with_grounding(
+            node_name="m4_content_generator",
+            llm=llm,
+            prompt=prompt_template.format(**context),
+            metrics_block=metrics_block,
+            grounding_enabled=grounding_enabled,
+        )
         print(f"[m4_content_generator] {len(m4)} chars")
-        return {"m4_content": m4, "current_agent": "m4_content_generator"}
+        return {
+            "m4_content": m4,
+            "current_agent": "m4_content_generator",
+            **grounding_update,
+        }
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error("[m4_content_generator] ERROR: %s", e, exc_info=True)
         return {"m4_content": "[M4_GENERATION_ERROR]", "current_agent": "m4_content_generator"}
@@ -3939,11 +4100,31 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "contexto_m3": state.get("m3_content", "") or "[M3_NOT_EXECUTED]",
             "contexto_m4": state.get("m4_content", "") or "",
         })
+        prompt_template, metrics_block, grounding_enabled, grounding_update = (
+            _select_narrative_prompt(
+                state,
+                "m5_content_generator",
+                M5_PROMPT_BY_FAMILY,
+                M5_CONTENT_GENERATOR_PROMPT,
+            )
+        )
+        context["computed_metrics_block"] = metrics_block
 
-        response = llm.invoke(M5_CONTENT_GENERATOR_PROMPT.format(**context))
-        m5 = sanitize_markdown(_extract_text(response))
+        m5 = _invoke_narrative_with_grounding(
+            node_name="m5_content_generator",
+            llm=llm,
+            prompt=prompt_template.format(**context),
+            metrics_block=metrics_block,
+            grounding_enabled=grounding_enabled,
+        )
         print(f"[m5_content_generator] {len(m5)} chars")
-        return {"m5_content": m5, "current_agent": "m5_content_generator"}
+        return {
+            "m5_content": m5,
+            "current_agent": "m5_content_generator",
+            **grounding_update,
+        }
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error("[m5_content_generator] ERROR: %s", e, exc_info=True)
         return {"m5_content": "[M5_GENERATION_ERROR]", "current_agent": "m5_content_generator"}
