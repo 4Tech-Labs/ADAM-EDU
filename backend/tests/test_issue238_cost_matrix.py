@@ -303,8 +303,8 @@ def test_validator_safe_subset_does_not_leak_extra_keys(graph_logs) -> None:
 def test_required_sentinels_include_cost_matrix() -> None:
     sentinels = _FAMILY_REQUIRED_SENTINELS["clasificacion"]
     assert "# === SECTION:cost_matrix ===" in sentinels
-    # Issue #240 amplía a 12 (8 previas + tuning_lr/tuning_rf/interp_lr/interp_rf).
-    assert len(sentinels) == 12
+    # Issue #239 amplía a 13 con metrics_summary_json, en el mismo diff que el executor.
+    assert len(sentinels) == 13
 
 
 def test_required_apis_include_confusion_matrix_and_predict_proba() -> None:

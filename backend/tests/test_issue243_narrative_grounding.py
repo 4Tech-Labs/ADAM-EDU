@@ -1,7 +1,7 @@
 """Issue #243 — narrative grounding for classification narratives.
 
 Pure/unit coverage only: no notebook execution, no network, no DB. The tests
-lock the executable half of #243 until #C-EXEC can populate real
+lock the narrative half of #243 around externally populated
 ``m3_metrics_summary`` values.
 """
 

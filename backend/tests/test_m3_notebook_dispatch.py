@@ -82,6 +82,7 @@ CLEAN_CLASSIFICATION_CODE = """
 # === SECTION:tuning_rf ===
 # === SECTION:interp_lr ===
 # === SECTION:interp_rf ===
+# === SECTION:metrics_summary_json ===
 from sklearn.dummy import DummyClassifier
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression

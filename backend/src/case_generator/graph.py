@@ -13,8 +13,8 @@ Subgrafos:
             → eda_text_analyst → eda_chart_generator
             → eda_questions_generator → eda_phase2_sync
             (M2 NO genera notebook — único notebook del sistema es M3 para ml_ds)
-  m3_flow: m3_content_generator → [m3_questions_generator ∥ m3_notebook_generator] → m3_sync
-           (m3_notebook_generator: noop si output_depth != "visual_plus_notebook")
+    m3_flow: m3_content_generator → [m3_questions_generator ∥ (m3_notebook_generator → m3_notebook_executor)] → m3_sync
+                     (m3_notebook_generator/executor: noop si output_depth != "visual_plus_notebook")
   m4_flow: m4_content → [m4_questions ∥ m4_charts] → m4_sync
   synthesis_flow: [m5_content ∥ teaching_note_part1]
                   → sync1 → m5_questions → teaching_note_part2 → sync2
@@ -34,7 +34,7 @@ Modelos:
     - _get_m5_llm                          : Pro -> gemini-3-flash-preview -> gemini-2.5-flash
     - schema_designer (M2 inline)          : Pro-medium -> Pro-low -> gemini-3-flash-preview
     - m3_content_generator (ml_ds inline)  : Pro-medium -> Pro-low -> gemini-3-flash-preview
-    - m3_notebook_generator (inline)       : Pro-medium -> Pro-low -> gemini-3-flash-preview
+    - m3_notebook_generator/executor       : Pro-medium -> Pro-low -> gemini-3-flash-preview
   Python puro (0 tokens): data_generator, data_validator, barriers sync
 
 Resiliencia (v9):
@@ -56,6 +56,7 @@ import re
 import threading
 import time
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -111,6 +112,11 @@ from case_generator.narrative_grounding import (
     build_computed_metrics_block,
     has_metric_anchors,
     validate_narrative_grounding,
+)
+from case_generator.m3_notebook_execution import (
+    M3NotebookExecutionError,
+    execute_m3_notebook,
+    format_execution_failure_for_prompt,
 )
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
@@ -3938,6 +3944,9 @@ _FAMILY_REQUIRED_SENTINELS: dict[str, tuple[str, ...]] = {
         "# === SECTION:tuning_rf ===",
         "# === SECTION:interp_lr ===",
         "# === SECTION:interp_rf ===",
+        # Issue #239 — executor/parser contract. This sentinel must ship in
+        # the same diff as the executor that parses the emitted marker.
+        "# === SECTION:metrics_summary_json ===",
     ),
 }
 
@@ -4071,6 +4080,190 @@ def _validate_notebook_family_consistency(family: str, code: str) -> list[str]:
     return violations
 
 
+@dataclass(frozen=True)
+class _M3NotebookGenerationContext:
+    llm: Any
+    family: str
+    base_template: str
+    prompt: str
+    algoritmos_raw: list[str]
+
+
+def _get_m3_notebook_llm(cfg: Configuration) -> Any:
+    _nb_common = dict(
+        model=cfg.architect_model,
+        temperature=0.3,
+        max_retries=2,
+        max_output_tokens=24576,
+        api_key=os.getenv("GEMINI_API_KEY"),
+        rate_limiter=_rate_limiter,
+    )
+    nb_primary = ChatGoogleGenerativeAI(thinking_level="medium", **_nb_common)
+    nb_pro_low = ChatGoogleGenerativeAI(thinking_level="low", **_nb_common)
+    nb_flash = ChatGoogleGenerativeAI(
+        model=cfg.writer_model,
+        temperature=0.3,
+        thinking_level="medium",
+        max_retries=2,
+        max_output_tokens=24576,
+        api_key=os.getenv("GEMINI_API_KEY"),
+        rate_limiter=_rate_limiter,
+    )
+    return nb_primary.with_fallbacks([nb_pro_low, nb_flash])
+
+
+def _prepare_m3_notebook_generation_context(
+    state: ADAMState,
+    config: RunnableConfig,
+) -> _M3NotebookGenerationContext:
+    cfg = Configuration.from_runnable_config(config)
+    llm = _get_m3_notebook_llm(cfg)
+
+    context = _build_base_context(state)
+    case_title = state.get("titulo", "Caso de Estudio") or "Caso de Estudio"
+    # Use .replace() — NOT .format() — because the template contains Python code
+    # with curly braces (dict comprehensions, f-strings) that .format() misparses.
+    base_template = M3_NOTEBOOK_BASE_TEMPLATE.replace("{case_title}", case_title)
+
+    algoritmos_raw = _extract_state_algoritmos(state)
+    family, legacy_warning = _resolve_primary_family(algoritmos_raw)
+    if family is None or family not in PROMPT_BY_FAMILY:
+        print(
+            f"[m3_notebook_generator] Familia no resuelta para algoritmos="
+            f"{algoritmos_raw!r} — usando fallback 'clasificacion'"
+        )
+        family = "clasificacion"
+        legacy_warning = (
+            f"Algoritmos {algoritmos_raw!r} no mapearon a ninguna familia "
+            f"del catálogo Issue #233; se generó notebook con plantilla de clasificación."
+        )
+
+    print(f"[m3_notebook_generator] Familia despachada: {family!r} (algoritmos={algoritmos_raw!r})")
+
+    meta = get_dispatch_meta(family)
+    familias_meta = [
+        {
+            "familia": meta["familia"],
+            "family_label": meta["family_label"],
+            "algoritmos": list(algoritmos_raw) if algoritmos_raw else [meta["familia"]],
+            "visualizacion": meta["visualizacion"],
+            "prerequisito": meta["prerequisito"],
+            "fragments_hint": meta["fragments_hint"],
+        }
+    ]
+
+    contract_block = _format_dataset_contract_block(
+        state.get("dataset_schema_required")
+    )
+    gap_warnings = list(state.get("data_gap_warnings") or [])
+    if legacy_warning:
+        gap_warnings.append(legacy_warning)
+    gaps_block = _format_data_gap_warnings_block(
+        gap_warnings,
+        empty_message="(sin brechas detectadas — schema cubre el contrato)",
+    )
+
+    prompt = PROMPT_BY_FAMILY[family].format(
+        m3_content=(state.get("m3_content", "") or "")[:2000],
+        algoritmos=json.dumps(algoritmos_raw, ensure_ascii=False),
+        familias_meta=json.dumps(familias_meta, ensure_ascii=False),
+        case_title=case_title,
+        output_language=context.get("output_language", "es"),
+        dataset_contract_block=contract_block,
+        data_gap_warnings_block=gaps_block,
+    )
+    return _M3NotebookGenerationContext(
+        llm=llm,
+        family=family,
+        base_template=base_template,
+        prompt=prompt,
+        algoritmos_raw=algoritmos_raw,
+    )
+
+
+def _build_m3_notebook_validation_correction(family: str, violations: list[str]) -> str:
+    missing = [v.removeprefix("FALTANTE: ") for v in violations if v.startswith("FALTANTE: ")]
+    prohibited_hits = [v for v in violations if not v.startswith("FALTANTE: ")]
+    corrective_blocks: list[str] = ["\n\n# CORRECCIÓN OBLIGATORIA"]
+    if prohibited_hits:
+        corrective_blocks.append(
+            f"# Tu salida anterior emitió código ejecutable de OTRAS familias prohibidas para '{family}'.\n"
+            "# Releé la sección 'Lista NEGRA' del prompt y reescribe la salida COMPLETA\n"
+            "# usando EXCLUSIVAMENTE la API estable declarada para esta familia.\n"
+            "# Los nombres prohibidos pueden aparecer en celdas markdown como advertencia pedagógica,\n"
+            "# pero NUNCA como import, call site, ni dentro de un string ejecutable."
+        )
+    if missing:
+        bullet_list = "\n".join(f"#   - {tok}" for tok in missing)
+        corrective_blocks.append(
+            "# Tu salida anterior NO incluyó artefactos pedagógicos OBLIGATORIOS\n"
+            f"# para la familia '{family}'. Reescribe la salida COMPLETA asegurándote\n"
+            "# de que aparezcan literalmente (sentinelas como comentario Python al inicio\n"
+            "# de la celda correspondiente; identificadores como import o call real):\n"
+            f"{bullet_list}"
+        )
+    return "\n".join(corrective_blocks)
+
+
+def _invoke_m3_notebook_algo_section(
+    *,
+    llm: Any,
+    prompt: str,
+    family: str,
+    node_name: str,
+    execution_correction: str | None = None,
+) -> str:
+    prompt_with_context = prompt if not execution_correction else prompt + "\n\n" + execution_correction
+    response = llm.invoke(prompt_with_context)
+    algo_section = sanitize_markdown(_extract_text(response))
+    print(f"[{node_name}] Sección módulos LLM (1ª pasada): {len(algo_section)} chars")
+
+    violations = _validate_notebook_family_consistency(family, algo_section)
+    if not violations:
+        return algo_section
+
+    missing = [v.removeprefix("FALTANTE: ") for v in violations if v.startswith("FALTANTE: ")]
+    prohibited_hits = [v for v in violations if not v.startswith("FALTANTE: ")]
+    print(
+        f"[{node_name}] Violación de familia detectada (familia={family}, "
+        f"prohibited={prohibited_hits}, faltantes={missing}). Reprompt explícito (1/1)."
+    )
+    reprompt = prompt_with_context + _build_m3_notebook_validation_correction(family, violations)
+    response2 = llm.invoke(reprompt)
+    algo_section = sanitize_markdown(_extract_text(response2))
+    violations2 = _validate_notebook_family_consistency(family, algo_section)
+    if violations2:
+        logger.error(
+            "[%s] Reprompt falló — familia=%s violations=%s",
+            node_name, family, violations2,
+        )
+        raise RuntimeError(
+            f"M3 notebook generator no satisfizo la familia "
+            f"'{family}' incluso tras un reprompt: {violations2}. "
+            f"Job marcado como fallido para evitar shipping de notebook roto."
+        )
+    print(f"[{node_name}] Reprompt OK — familia={family}, chars={len(algo_section)}")
+    return algo_section
+
+
+def _generate_m3_notebook_code(
+    state: ADAMState,
+    config: RunnableConfig,
+    *,
+    node_name: str,
+    execution_correction: str | None = None,
+) -> tuple[str, str]:
+    generation_context = _prepare_m3_notebook_generation_context(state, config)
+    algo_section = _invoke_m3_notebook_algo_section(
+        llm=generation_context.llm,
+        prompt=generation_context.prompt,
+        family=generation_context.family,
+        node_name=node_name,
+        execution_correction=execution_correction,
+    )
+    return generation_context.base_template + "\n\n" + algo_section, generation_context.family
+
+
 def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """Genera el notebook del Experiment Engineer — ÚNICO notebook del sistema.
 
@@ -4103,189 +4296,11 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
         return {}
 
     try:
-        cfg = Configuration.from_runnable_config(config)
-
-        # Notebook generator es el ÚNICO nodo del sistema que emite código Python
-        # ejecutable en Colab. Cualquier alucinación o truncamiento se traduce en
-        # un error visible al estudiante. Por eso usa cadena Pro resiliente:
-        #   1) Pro thinking_level="medium" — primario. Subir a "high" arriesga
-        #      truncar el Jupytext (muchas llaves, varios bloques try/except por
-        #      familia algorítmica) por consumo de reasoning interno.
-        #   2) Pro thinking_level="low"    — fallback transitorio sin degradar de
-        #      modelo (cubre rate-limit, 5xx puntual, parser error de una vuelta).
-        #   3) Flash thinking_level="medium" — red de seguridad final ante
-        #      incidente global de Pro. Mantenemos "medium" en Flash porque el
-        #      output es código y la consistencia importa más que la latencia.
-        # Modelos vía Configuration para respetar overrides por env var
-        # (ARCHITECT_MODEL / WRITER_MODEL) — el path notebook es el más sensible,
-        # imprescindible que los rollouts/canaries lleguen también aquí.
-        # max_output_tokens=24576 da margen para reasoning (~3-8k) + Jupytext de
-        # 3 celdas × N familias (~6-12k chars) sin truncamiento silencioso.
-        _nb_common = dict(
-            model=cfg.architect_model,
-            temperature=0.3,
-            max_retries=2,
-            max_output_tokens=24576,
-            api_key=os.getenv("GEMINI_API_KEY"),
-            rate_limiter=_rate_limiter,
+        final_notebook, _family = _generate_m3_notebook_code(
+            state,
+            config,
+            node_name="m3_notebook_generator",
         )
-        nb_primary = ChatGoogleGenerativeAI(thinking_level="medium", **_nb_common)
-        nb_pro_low = ChatGoogleGenerativeAI(thinking_level="low", **_nb_common)
-        nb_flash = ChatGoogleGenerativeAI(
-            model=cfg.writer_model,
-            temperature=0.3,
-            thinking_level="medium",
-            max_retries=2,
-            max_output_tokens=24576,
-            api_key=os.getenv("GEMINI_API_KEY"),
-            rate_limiter=_rate_limiter,
-        )
-        llm = nb_primary.with_fallbacks([nb_pro_low, nb_flash])
-
-        context = _build_base_context(state)
-        case_title = state.get("titulo", "Caso de Estudio") or "Caso de Estudio"
-        # Use .replace() — NOT .format() — because the template contains Python code
-        # with curly braces (dict comprehensions, f-strings) that .format() misparses.
-        base_template = M3_NOTEBOOK_BASE_TEMPLATE.replace("{case_title}", case_title)
-
-        # ── Family dispatch (Issue #233) ─────────────────────────────────────
-        # The teacher form (Issue #230) guarantees algoritmos share a family
-        # in contrast mode. We resolve the first algorithm to its family,
-        # falling back to the legacy substring map for historical jobs.
-        # Issue #237 — single resolution chain via ``_resolve_primary_family``
-        # so EDA chart dispatch shares the exact same precedence.
-        algoritmos_raw: list[str] = state.get("algoritmos", [])
-        family, legacy_warning = _resolve_primary_family(algoritmos_raw)
-        if family is None or family not in PROMPT_BY_FAMILY:
-            print(
-                f"[m3_notebook_generator] Familia no resuelta para algoritmos="
-                f"{algoritmos_raw!r} — usando fallback 'clasificacion'"
-            )
-            family = "clasificacion"
-            legacy_warning = (
-                f"Algoritmos {algoritmos_raw!r} no mapearon a ninguna familia "
-                f"del catálogo Issue #233; se generó notebook con plantilla de clasificación."
-            )
-
-        print(f"[m3_notebook_generator] Familia despachada: {family!r} (algoritmos={algoritmos_raw!r})")
-
-        # Single-entry familias_meta: the prompt expects a list with metadata
-        # for the active family; we collapse to one entry because per-family
-        # dispatch makes multi-family notebooks impossible by construction.
-        meta = get_dispatch_meta(family)
-        familias_meta = [
-            {
-                "familia": meta["familia"],
-                "family_label": meta["family_label"],
-                "algoritmos": list(algoritmos_raw) if algoritmos_raw else [meta["familia"]],
-                "visualizacion": meta["visualizacion"],
-                "prerequisito": meta["prerequisito"],
-                "fragments_hint": meta["fragments_hint"],
-            }
-        ]
-
-        algo_section = ""
-        try:
-            # Issue #225 — pasa contrato + brechas al prompt para CONTRACT-FIRST
-            # target resolution. Si no hay contrato/brechas, los bloques quedan
-            # con texto neutro y el LLM aplica la lógica alias-first heredada.
-            contract_block = _format_dataset_contract_block(
-                state.get("dataset_schema_required")
-            )
-            gap_warnings = list(state.get("data_gap_warnings") or [])
-            if legacy_warning:
-                gap_warnings.append(legacy_warning)
-            gaps_block = _format_data_gap_warnings_block(
-                gap_warnings,
-                empty_message="(sin brechas detectadas — schema cubre el contrato)",
-            )
-
-            prompt_template = PROMPT_BY_FAMILY[family]
-
-            def _render(template: str) -> str:
-                return template.format(
-                    m3_content=(state.get("m3_content", "") or "")[:2000],
-                    algoritmos=json.dumps(algoritmos_raw, ensure_ascii=False),
-                    familias_meta=json.dumps(familias_meta, ensure_ascii=False),
-                    case_title=case_title,
-                    output_language=context.get("output_language", "es"),
-                    dataset_contract_block=contract_block,
-                    data_gap_warnings_block=gaps_block,
-                )
-
-            prompt = _render(prompt_template)
-            response = llm.invoke(prompt)
-            algo_section = sanitize_markdown(_extract_text(response))
-            print(f"[m3_notebook_generator] Sección módulos LLM (1ª pasada): {len(algo_section)} chars")
-
-            # Issue #233 + #236 — post-LLM family-consistency check + reprompt-once.
-            # Violations come pre-tagged: bare strings = prohibited cross-family
-            # tokens (don't echo back to avoid amplification); ``"FALTANTE: ..."``
-            # = required Harvard-quality artefacts missing (DO echo so the LLM
-            # has a precise fixing target).
-            violations = _validate_notebook_family_consistency(family, algo_section)
-            if violations:
-                missing = [v.removeprefix("FALTANTE: ") for v in violations if v.startswith("FALTANTE: ")]
-                prohibited_hits = [v for v in violations if not v.startswith("FALTANTE: ")]
-                print(
-                    f"[m3_notebook_generator] Violación de familia detectada (familia={family}, "
-                    f"prohibited={prohibited_hits}, faltantes={missing}). Reprompt explícito (1/1)."
-                )
-                corrective_blocks: list[str] = ["\n\n# CORRECCIÓN OBLIGATORIA"]
-                if prohibited_hits:
-                    # Belt-and-suspenders against reprompt amplification: we do
-                    # NOT echo the offending prohibited tokens (the LLM might
-                    # politely repeat them and re-trip the validator). Refer
-                    # the model to the prompt's own ``Lista NEGRA`` section.
-                    corrective_blocks.append(
-                        f"# Tu salida anterior emitió código ejecutable de OTRAS familias prohibidas para '{family}'.\n"
-                        "# Releé la sección 'Lista NEGRA' del prompt y reescribe la salida COMPLETA\n"
-                        "# usando EXCLUSIVAMENTE la API estable declarada para esta familia.\n"
-                        "# Los nombres prohibidos pueden aparecer en celdas markdown como advertencia pedagógica,\n"
-                        "# pero NUNCA como import, call site, ni dentro de un string ejecutable."
-                    )
-                if missing:
-                    # For FALTANTE we DO echo: the LLM needs to know exactly
-                    # what to add. Sentinels are emitted verbatim.
-                    bullet_list = "\n".join(f"#   - {tok}" for tok in missing)
-                    corrective_blocks.append(
-                        "# Tu salida anterior NO incluyó artefactos pedagógicos OBLIGATORIOS\n"
-                        f"# para la familia '{family}'. Reescribe la salida COMPLETA asegurándote\n"
-                        "# de que aparezcan literalmente (sentinelas como comentario Python al inicio\n"
-                        "# de la celda correspondiente; identificadores como import o call real):\n"
-                        f"{bullet_list}"
-                    )
-                reprompt = prompt + "\n".join(corrective_blocks)
-                response2 = llm.invoke(reprompt)
-                algo_section = sanitize_markdown(_extract_text(response2))
-                violations2 = _validate_notebook_family_consistency(family, algo_section)
-                if violations2:
-                    logger.error(
-                        "[m3_notebook_generator] Reprompt falló — familia=%s violations=%s",
-                        family, violations2,
-                    )
-                    raise RuntimeError(
-                        f"M3 notebook generator no satisfizo la familia "
-                        f"'{family}' incluso tras un reprompt: {violations2}. "
-                        f"Job marcado como fallido para evitar shipping de notebook roto."
-                    )
-                print(
-                    f"[m3_notebook_generator] Reprompt OK — familia={family}, "
-                    f"chars={len(algo_section)}"
-                )
-        except RuntimeError:
-            # Re-raise to fail the job — the validator policy demands it.
-            raise
-        except Exception as e:
-            logger.error("[m3_notebook_generator] Error en LLM módulos: %s", e, exc_info=True)
-            algo_section = (
-                "# %% [markdown]\n"
-                "# ## Módulos Experimentales\n"
-                "# ⚠️ Hubo un error generando los bloques de código.\n"
-                "# Revisa el contenido del Módulo 3 para el diseño de los algoritmos."
-            )
-
-        final_notebook = base_template + "\n\n" + algo_section
         print(f"[m3_notebook_generator] Notebook ensamblado: {len(final_notebook)} chars")
         return {"m3_notebook_code": final_notebook, "current_agent": "m3_notebook_generator"}
     except RuntimeError:
@@ -4295,6 +4310,96 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
     except Exception as e:
         logger.error("[m3_notebook_generator] ERROR: %s", e, exc_info=True)
         return {"m3_notebook_code": "# ⚠️ Error generando notebook M3. Revisa el Módulo 3."}
+
+
+def m3_notebook_executor(state: ADAMState, config: RunnableConfig) -> dict:
+    """Execute and validate the M3 classification notebook in a subprocess."""
+
+    output_depth = state.get("output_depth", "")
+    if output_depth != "visual_plus_notebook":
+        return {}
+
+    profile, family = _resolve_generation_focus(
+        state,
+        default_unresolved_ml_ds_to_classification=True,
+    )
+    if profile != "ml_ds" or family != "clasificacion":
+        return {}
+
+    case_id = state.get("case_id") or "unknown"
+    dataset_rows = state.get("doc7_dataset") or []
+    if not isinstance(dataset_rows, list) or not dataset_rows:
+        logger.error(
+            "[m3_notebook_executor] missing doc7_dataset; failing closed",
+            extra={"case_id": case_id, "family": family},
+        )
+        raise RuntimeError(
+            "m3_notebook_executor requiere doc7_dataset para ejecutar el notebook "
+            "de clasificación. Job marcado como fallido para evitar métricas inventadas."
+        )
+
+    notebook_code = str(state.get("m3_notebook_code") or "")
+    if not notebook_code.strip():
+        raise RuntimeError(
+            "m3_notebook_executor no recibió m3_notebook_code. "
+            "Job marcado como fallido para evitar shipping de notebook roto."
+        )
+
+    code_was_corrected = False
+    for attempt in (1, 2):
+        try:
+            logger.info(
+                "[m3_notebook_executor] attempt=%s start",
+                attempt,
+                extra={"case_id": case_id, "family": family},
+            )
+            result = execute_m3_notebook(
+                notebook_code=notebook_code,
+                dataset_rows=cast(list[dict[str, Any]], dataset_rows),
+            )
+            logger.info(
+                "[m3_notebook_executor] attempt=%s success warning=%s",
+                attempt,
+                result.quality_warning,
+                extra={"case_id": case_id, "family": family},
+            )
+            update: dict[str, Any] = {
+                "current_agent": "m3_notebook_executor",
+                "m3_metrics_summary": result.metrics_summary,
+            }
+            if result.quality_warning:
+                update["m3_quality_warning"] = result.quality_warning
+            if code_was_corrected:
+                update["m3_notebook_code"] = notebook_code
+            return update
+        except M3NotebookExecutionError as exc:
+            logger.warning(
+                "[m3_notebook_executor] attempt=%s failed kind=%s",
+                attempt,
+                exc.kind,
+                extra={"case_id": case_id, "family": family},
+            )
+            if attempt == 2:
+                raise RuntimeError(
+                    "m3_notebook_executor falló incluso tras un reprompt de corrección. "
+                    "Job marcado como fallido para evitar shipping de notebook roto."
+                ) from exc
+
+            correction = format_execution_failure_for_prompt(exc)
+            notebook_code, corrected_family = _generate_m3_notebook_code(
+                state,
+                config,
+                node_name="m3_notebook_executor",
+                execution_correction=correction,
+            )
+            if corrected_family != "clasificacion":
+                raise RuntimeError(
+                    f"m3_notebook_executor recibió corrección para familia {corrected_family!r}; "
+                    "se esperaba 'clasificacion'."
+                )
+            code_was_corrected = True
+
+    raise RuntimeError("m3_notebook_executor alcanzó un estado imposible de ejecución.")
 
 
 # Issue 4.4 — M4 CONTENT GENERATOR
@@ -4534,6 +4639,7 @@ _RESUME_NODE_REQUIRED_OUTPUTS: dict[str, tuple[str, ...]] = {
     "m3_content_generator": ("m3_content", "m3_mode"),
     "m3_questions_generator": ("m3_questions",),
     "m3_notebook_generator": ("m3_notebook_code",),
+    "m3_notebook_executor": ("m3_metrics_summary",),
     "m4_content_generator": ("m4_content",),
     "m4_questions_generator": ("m4_questions",),
     "m4_chart_generator": ("m4_charts",),
@@ -4667,8 +4773,8 @@ def m3_sync(state: ADAMState) -> dict:
 
 # --- 2. SUBGRAFO: M3 ---
 # business: m3_content (Auditor) → m3_questions_generator → m3_sync → END
-# ml_ds:    m3_content (Experiment Engineer) → [m3_questions ∥ m3_notebook] → m3_sync → END
-# m3_notebook_generator es noop para business.
+# ml_ds:    m3_content (Experiment Engineer) → [m3_questions ∥ (m3_notebook → executor)] → m3_sync → END
+# m3_notebook_generator/executor son noop para business y non-notebook depth.
 m3_builder = StateGraph(ADAMState)
 m3_builder.add_node(
     "m3_content_generator",
@@ -4685,13 +4791,18 @@ m3_builder.add_node(
     _with_resume_skip("m3_notebook_generator", m3_notebook_generator),
     retry_policy=standard_retry,
 )
+m3_builder.add_node(
+    "m3_notebook_executor",
+    _with_resume_skip("m3_notebook_executor", m3_notebook_executor),
+)
 m3_builder.add_node("m3_sync", m3_sync)
 
 m3_builder.add_edge(START, "m3_content_generator")
 m3_builder.add_edge("m3_content_generator", "m3_questions_generator")
 m3_builder.add_edge("m3_content_generator", "m3_notebook_generator")
 m3_builder.add_edge("m3_questions_generator", "m3_sync")
-m3_builder.add_edge("m3_notebook_generator", "m3_sync")
+m3_builder.add_edge("m3_notebook_generator", "m3_notebook_executor")
+m3_builder.add_edge("m3_notebook_executor", "m3_sync")
 m3_builder.add_edge("m3_sync", END)
 
 m3_graph = m3_builder.compile()

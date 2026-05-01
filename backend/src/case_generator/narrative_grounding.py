@@ -1,13 +1,9 @@
 """Narrative grounding helpers for classification narratives (Issue #243).
 
-This module deliberately does not execute notebooks. Until #C-EXEC lands, the
-only supported contract is a pure ``m3_metrics_summary`` -> prompt block
-formatter plus a prose validator that rejects academic citations and numbers
-not anchored to that block.
-
-TODO(#C-EXEC): once ``m3_notebook_executor`` exists, populate
-``m3_metrics_summary`` from executed notebook outputs (AUC/F1/prevalence/top
-features) before M3/M4/M5 narrative validation runs.
+This module deliberately does not execute notebooks. Issue #239 populates
+``m3_metrics_summary`` upstream in ``m3_notebook_executor``; this module keeps
+the pure formatter plus a prose validator that rejects academic citations and
+numbers not anchored to that block.
 """
 
 from __future__ import annotations
@@ -71,8 +67,8 @@ def build_computed_metrics_block(metrics_summary: dict | None) -> str:
     tokens so future notebook-derived column names can cross the LLM boundary
     without turning into arbitrary narrative instructions.
 
-    When ``metrics_summary`` is missing, #C-EXEC has not produced executable
-    notebook metrics yet. The returned placeholder is pedagogically explicit and
+    When ``metrics_summary`` is missing, the executor did not produce usable
+    notebook metrics. The returned placeholder is pedagogically explicit and
     contains no fake numbers; callers should disable validation for that run and
     persist ``NARRATIVE_GROUNDING_WARNING``.
     """

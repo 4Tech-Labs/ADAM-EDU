@@ -102,6 +102,7 @@ _GRAPH_AGENT_TO_CANONICAL_STEP = {
     "m3_content_generator": "m3_content_generator",
     "m3_questions_generator": "m3_content_generator",
     "m3_notebook_generator": "m3_content_generator",
+    "m3_notebook_executor": "m3_content_generator",
     "m4_content_generator": "m4_content_generator",
     "m4_chart_generator": "m4_content_generator",
     "m4_questions_generator": "m4_content_generator",

@@ -4,19 +4,51 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
-## TODO-243-A: Ejecutar notebook M3 y poblar `m3_metrics_summary` (#C-EXEC)
+## TODO-239-A: Two-pass M3-content grounding con métricas ejecutadas
 
-**What:** Implementar `m3_notebook_executor` con `nbclient` para ejecutar el notebook M3 de clasificación y poblar `m3_metrics_summary` con métricas reales: AUC LR/RF/Dummy, F1, prevalencia y top features con coeficiente/importancia.
+**What:** Evaluar un rediseño two-pass donde M3-content pueda recibir métricas ejecutadas del notebook, no solo M4/M5.
 
-**Why:** Issue #243 solo puede cerrar su DoD completo cuando M3-content, M4 y M5 reciban métricas derivadas de ejecución real. El PR actual deja activo el contrato y el fallback, pero no ejecuta notebooks.
+**Why:** Issue #239 ejecuta el notebook después de `m3_content_generator` porque el notebook depende del contenido M3. M4/M5 ya pueden usar `m3_metrics_summary`, pero M3-content necesitaría una segunda pasada o un grafo distinto.
 
-**Pros:** Desbloquea grounding narrativo real, permite rechazar números fabricados con evidencia ejecutada y mejora la credibilidad académica del caso Harvard ml_ds.
+**Pros:** M3-content también podría citar resultados reales del experimento y cerrar completamente el ciclo narrativo-ejecutable.
 
-**Cons:** Introduce ejecución de notebooks, timeouts, manejo de errores de dependencias y extracción robusta de artefactos; requiere pruebas de runtime más pesadas que los unit tests actuales.
+**Cons:** Rompe la simplicidad actual del flujo M3 y puede duplicar llamadas LLM; requiere plan de arquitectura dedicado.
 
-**Context:** Issue #243 implementa `build_computed_metrics_block`, validación `CITA:` / `UNANCHORED:` para métricas del modelo y reprompt-once para clasificación. Mientras #C-EXEC no exista, `build_computed_metrics_block(None)` emite placeholder, el validador se deshabilita y se persiste `narrative_grounding_warning`.
+**Context:** El orden actual queda `m3_content_generator -> m3_notebook_generator -> m3_notebook_executor -> m3_sync`. Cambiarlo para retroalimentar M3-content debe evitar ciclos implícitos y métricas inventadas.
 
-**Depends on / blocked by:** #C-EXEC aprobado e implementado; definir contrato exacto de `m3_metrics_summary` antes de activar validación live obligatoria.
+**Depends on / blocked by:** Issue #239 estabilizado en producción y métricas ejecutadas confiables.
+
+---
+
+## TODO-239-B: Ejecución y métricas para familias no-clasificación
+
+**What:** Extender ejecución/parseo de notebooks a `regresion`, `clustering` y `serie_temporal`, con schemas de métricas específicos por familia.
+
+**Why:** Issue #239 limita ejecución real a `ml_ds + clasificacion` para no romper contratos de prompts ni validar métricas incorrectas en familias con semánticas distintas.
+
+**Pros:** Grounding narrativo real para todos los perfiles técnicos; QA ejecutable más amplio.
+
+**Cons:** Requiere diseñar métricas, sentinelas y gates por familia sin reintroducir el prompt monolítico.
+
+**Context:** El dispatcher M3 ya es per-family. La extensión debe mantener `PROMPT_BY_FAMILY` con 4 familias canónicas y no añadir `{computed_metrics_block}` a business.
+
+**Depends on / blocked by:** Telemetría de Issue #239 y plan-eng-review específico para métricas no-clasificación.
+
+---
+
+## TODO-239-C: Aislamiento OS/proceso más fuerte para notebooks ejecutados
+
+**What:** Evaluar una capa de aislamiento adicional para el runner de notebooks: límites de memoria/proceso, bloqueo de red a nivel OS/container o ejecución en worker dedicado.
+
+**Why:** Issue #239 usa subprocess, entorno mínimo, `-I`, `TemporaryDirectory`, AST scrub y timeouts. Eso es suficiente para el MVP, pero no equivale a sandbox OS completo.
+
+**Pros:** Reduce riesgo residual ante código generado inesperado y mejora postura de producción a escala.
+
+**Cons:** Cambia despliegue/infra y puede afectar latencia/costo; requiere ADR si modifica arquitectura operativa.
+
+**Context:** No introducir colas/orquestadores nuevos ni fanout manual sin ADR. Cualquier cambio debe respetar Supabase Realtime como infraestructura de progreso.
+
+**Depends on / blocked by:** Métricas de operación de Issue #239 y definición de presupuesto de latencia/costo.
 
 ---
 
