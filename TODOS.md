@@ -600,35 +600,6 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
-## TODO-238-A: Validadores estrictos para BusinessCostMatrix (#242)
-
-**What:** Endurecer `BusinessCostMatrix` (`case_generator/tools_and_schemas.py`) con validación estricta de:
-  * ratio plausible `fp_cost`/`fn_cost` (rechazar > 1000:1 o < 1:1000 — casi siempre error del LLM)
-  * `currency` contra catálogo ISO 4217 mínimo (USD/EUR/GBP/COP/MXN/BRL/CLP/PEN/ARS)
-  * cap superior absoluto en cada costo (e.g. 1e9) para evitar valores delirantes que rompan el plot
-
-**Why:** Hoy el helper `_validate_business_cost_matrix` solo nulifica costos negativos / no finitos / cross-family. Un LLM que emita `fp_cost=1e15` o `currency='dollars '` pasa el validador y rompe el plot del notebook M3.
-
-**Pros:** Más capas de defensa contra LLM drift; warnings más accionables para el docente.
-
-**Cons:** Reglas demasiado estrictas pueden rechazar casos legítimos (e.g. fraude bancario donde fn_cost realmente es 1000× fp_cost). Necesita evidencia empírica antes de fijar el umbral.
-
-**Context:** Issue #238 (PR cerrando esto) implementó la validación mínima viable (campos > 0, finitos, currency normalizada). El hardening completo se difirió a #242 para no agregar superficie de revisión a #238.
-
----
-
-## TODO-238-B: Test de rendering del bloque de warnings de matriz de costos en prompts downstream (#242)
-
-**What:** Añadir un test de integración que verifique que `business_cost_matrix_missing` / `_invalid` / `_wrong_family` / `_unknown_family` emitidos por `case_architect` aparecen efectivamente en `data_gap_warnings_block` cuando se renderiza el prompt de `schema_designer`, `m3_content_generator`, `m3_notebook_generator` y demás consumidores listados en `graph.py:1010`.
-
-**Why:** El helper `_validate_business_cost_matrix` añade strings al `data_gap_warnings` del state, pero hoy no hay test que confirme que esos strings llegan al prompt final del LLM (el rendering vive en `graph.py:1010` con `"\n".join(f"- {w}" for w in ...)`).
-
-**Pros:** Cierra el ciclo end-to-end del warning sanitizado; previene regresiones cuando se refactorice el rendering de gaps.
-
-**Cons:** Test relativamente acoplado a la forma exacta del rendering. Si se cambia el formato de `data_gap_warnings_block` el test rompe — lo cual es deseable.
-
-**Context:** Issue #238 dejó este test fuera de scope porque requiere fixturizar todo el state del grafo. Se puede hacer con un state minimal y una llamada directa al renderizador interno sin invocar al LLM.
-
 ## TODO-237-A: Migrar familia `regresion` a builder Python-determinista
 
 **What:** Replicar el patrón de Issue #237 (`datagen/eda_charts_classification.py` + dispatch en `eda_chart_generator`) para la familia `regresion`. Charts: histograma del target, scatter target vs top-3 numéricas, residuales OLS, QQ-plot, heatmap de correlación, missingness.

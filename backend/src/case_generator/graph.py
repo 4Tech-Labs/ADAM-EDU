@@ -725,9 +725,15 @@ def _build_base_context(state: ADAMState) -> dict:
     for preferred in grounding_generation_hints.get("preferred_techniques", []):
         if isinstance(preferred, str) and preferred and preferred not in algoritmos:
             algoritmos.append(preferred)
+    _profile_for_focus, primary_family = _resolve_generation_focus(
+        state,
+        default_unresolved_ml_ds_to_classification=True,
+    )
 
     return {
         "student_profile": profile,
+        "primary_family": primary_family or "desconocida",
+        "pregunta_eje": state.get("pregunta_eje") or "(no aplica)",
         "output_language": state.get("output_language", "es"),
         "case_id": case_id,
         "course_level": course,
@@ -814,27 +820,18 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         )
         contract_dict = _infer_leakage_risk_from_naming(contract_dict)
 
-        # Issue #238 — valida la matriz de costos del negocio para threshold
-        # tuning en M3. Resolvemos la familia desde task_payload.algoritmos
-        # (mismo orden que el dispatcher M3): family_of(name) → fallback
-        # resolve_legacy_family(name) → None si no hay algoritmos. La política
-        # es degrade-with-warning (no reprompts en M1).
-        task_payload_obj = state.get("task_payload") or {}
-        algoritmos_list: list = []
-        if isinstance(task_payload_obj, dict):
-            algoritmos_list = task_payload_obj.get("algoritmos") or []
-        family_resolved: str | None = None
-        if algoritmos_list:
-            primary_algo = str(algoritmos_list[0])
-            family_resolved = family_of(primary_algo)
-            if family_resolved is None:
-                legacy = resolve_legacy_family(primary_algo)
-                if legacy is not None:
-                    family_resolved = legacy[0]
+        # Issue #238/#242 — valida matriz de costos y pregunta_eje con la misma
+        # resolución de familia que usan los dispatchers downstream.
+        profile_resolved, family_resolved = _resolve_generation_focus(state)
         contract_dict, cost_warnings = _validate_business_cost_matrix(
             contract_dict, family_resolved, result.titulo
         )
         coherence_warnings = list(coherence_warnings) + cost_warnings
+        pregunta_eje = _sanitize_pregunta_eje(
+            result.pregunta_eje,
+            profile=profile_resolved,
+            family=family_resolved,
+        )
 
         return {
             "current_agent": "case_architect",
@@ -842,6 +839,7 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             "industria": result.industria,
             "company_profile": result.company_profile,
             "dilema_brief": result.dilema_brief,
+            "pregunta_eje": pregunta_eje,
             "doc1_instrucciones": result.instrucciones_estudiante,
             "doc1_anexo_financiero": result.anexo_financiero,
             "doc1_anexo_operativo": result.anexo_operativo,
@@ -1043,9 +1041,9 @@ def eda_text_analyst(state: ADAMState, config: RunnableConfig) -> dict:
             # Issue #225 — brechas dilema↔dataset detectadas por validador.
             # Si está vacío, el bloque indica al LLM que el dataset cubre el
             # contrato y no debe inventar advertencias metodológicas.
-            "data_gap_warnings_block": (
-                "\n".join(f"- {w}" for w in (state.get("data_gap_warnings") or []))
-                or "(sin brechas detectadas — el dataset cubre el contrato dilema↔datos)"
+            "data_gap_warnings_block": _format_data_gap_warnings_block(
+                state.get("data_gap_warnings") or [],
+                empty_message="(sin brechas detectadas — el dataset cubre el contrato dilema↔datos)",
             ),
         })
 
@@ -2238,6 +2236,16 @@ def _format_dataset_contract_block(contract: dict | None) -> str:
         return "(contrato corrupto — aplica las reglas heurísticas)"
 
 
+def _format_data_gap_warnings_block(
+    warnings: list[str] | tuple[str, ...] | None,
+    *,
+    empty_message: str,
+) -> str:
+    if not warnings:
+        return empty_message
+    return "\n".join(f"- {warning}" for warning in warnings)
+
+
 def _validate_schema_against_contract(
     schema: dict, contract: dict | None
 ) -> tuple[list[str], list[str]]:
@@ -3218,6 +3226,61 @@ def _resolve_primary_family(
     return None, None
 
 
+def _extract_state_algoritmos(state: ADAMState) -> list[str]:
+    """Read algorithm picks from canonical state, with task_payload fallback."""
+    raw_algoritmos = state.get("algoritmos") or []
+    if not raw_algoritmos:
+        task_payload = state.get("task_payload") or {}
+        if isinstance(task_payload, dict):
+            raw_algoritmos = task_payload.get("algoritmos") or []
+    if not isinstance(raw_algoritmos, list):
+        return []
+    return [str(algorithm) for algorithm in raw_algoritmos if str(algorithm).strip()]
+
+
+def _resolve_generation_focus(
+    state: ADAMState,
+    *,
+    default_unresolved_ml_ds_to_classification: bool = False,
+) -> tuple[str, str | None]:
+    """Return normalized ``(student_profile, primary_family)`` for graph gates."""
+    profile = str(state.get("studentProfile", "business") or "business").strip()
+    family, _legacy_warning = _resolve_primary_family(_extract_state_algoritmos(state))
+    if (
+        family is None
+        and default_unresolved_ml_ds_to_classification
+        and profile == "ml_ds"
+    ):
+        family = "clasificacion"
+    return profile, family
+
+
+def _is_ml_ds_classification(
+    state: ADAMState,
+    *,
+    default_unresolved_ml_ds_to_classification: bool = False,
+) -> bool:
+    profile, family = _resolve_generation_focus(
+        state,
+        default_unresolved_ml_ds_to_classification=default_unresolved_ml_ds_to_classification,
+    )
+    return profile == "ml_ds" and family == "clasificacion"
+
+
+def _sanitize_pregunta_eje(
+    pregunta_eje: str | None,
+    *,
+    profile: str,
+    family: str | None,
+) -> str | None:
+    if profile != "ml_ds" or family != "clasificacion":
+        return None
+    if pregunta_eje is None:
+        return None
+    normalized = " ".join(str(pregunta_eje).split())
+    return normalized or None
+
+
 def _prepare_classification_narrative_grounding(
     state: ADAMState,
     family: str | None,
@@ -3251,8 +3314,9 @@ def _select_narrative_prompt(
     default_prompt: str,
 ) -> tuple[str, str, bool, dict[str, str]]:
     family: str | None = None
-    if state.get("studentProfile") == "ml_ds":
-        family, legacy_warning = _resolve_primary_family(state.get("algoritmos", []))
+    profile, resolved_family = _resolve_generation_focus(state)
+    if profile == "ml_ds":
+        family = resolved_family
         # Mirror the m3_notebook_generator dispatcher: when neither the canonical
         # catalog nor the legacy resolver places the first algorithm, fall back to
         # 'clasificacion' so M3-content/M4/M5 narratives keep grounding on for
@@ -3265,8 +3329,7 @@ def _select_narrative_prompt(
                 extra={
                     "case_id": state.get("case_id"),
                     "node": node_name,
-                    "algoritmos": state.get("algoritmos", []),
-                    "legacy_warning": legacy_warning,
+                    "algoritmos": _extract_state_algoritmos(state),
                 },
             )
     metrics_block, grounding_enabled, grounding_update = (
@@ -3327,6 +3390,134 @@ def _invoke_narrative_with_grounding(
         )
     print(f"[{node_name}] Reprompt narrative grounding OK")
     return prose
+
+
+_M5_DECISION_MATRIX_COLUMNS = ("acción", "KPI esperado", "riesgo", "modelo soporte")
+
+
+def _split_markdown_table_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped or "|" not in stripped:
+        return []
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in stripped.split("|")]
+
+
+def _is_markdown_separator_row(cells: list[str]) -> bool:
+    if not cells:
+        return False
+    for cell in cells:
+        compact = cell.replace(" ", "")
+        if re.fullmatch(r":?-{3,}:?", compact) is None:
+            return False
+    return True
+
+
+def _normalize_m5_matrix_header(cells: list[str]) -> tuple[str, ...]:
+    return tuple(" ".join(cell.lower().split()) for cell in cells)
+
+
+def _validate_m5_decision_matrix(markdown: str) -> list[str]:
+    """Validate the Issue #242 M5 decision matrix Markdown contract."""
+    expected = tuple(column.lower() for column in _M5_DECISION_MATRIX_COLUMNS)
+    lines = markdown.splitlines()
+    for line_index, line in enumerate(lines):
+        header_cells = _split_markdown_table_row(line)
+        if _normalize_m5_matrix_header(header_cells) != expected:
+            continue
+        if line_index + 1 >= len(lines):
+            return ["missing_separator: la tabla no tiene fila separadora Markdown"]
+        separator_cells = _split_markdown_table_row(lines[line_index + 1])
+        if len(separator_cells) != len(expected) or not _is_markdown_separator_row(separator_cells):
+            return ["invalid_separator: usa una fila Markdown tipo |---|---|---|---|"]
+
+        row_count = 0
+        malformed_rows: list[int] = []
+        for data_index, data_line in enumerate(lines[line_index + 2 :], start=line_index + 3):
+            data_cells = _split_markdown_table_row(data_line)
+            if not data_cells:
+                break
+            if _is_markdown_separator_row(data_cells):
+                continue
+            if len(data_cells) != len(expected):
+                malformed_rows.append(data_index)
+                continue
+            row_count += 1
+
+        violations: list[str] = []
+        if malformed_rows:
+            violations.append(f"malformed_rows: filas con columnas inválidas {malformed_rows}")
+        if not 4 <= row_count <= 6:
+            violations.append(
+                f"row_count: la matriz debe tener 4-6 filas de datos; tiene {row_count}"
+            )
+        return violations
+
+    return [
+        "missing_matrix: falta tabla Markdown con columnas exactas "
+        "acción | KPI esperado | riesgo | modelo soporte"
+    ]
+
+
+def _invoke_m5_content_with_contract(
+    *,
+    llm: Any,
+    prompt: str,
+    metrics_block: str,
+    grounding_enabled: bool,
+    require_decision_matrix: bool,
+) -> str:
+    prose = _invoke_narrative_with_grounding(
+        node_name="m5_content_generator",
+        llm=llm,
+        prompt=prompt,
+        metrics_block=metrics_block,
+        grounding_enabled=grounding_enabled,
+    )
+    if not require_decision_matrix:
+        return prose
+
+    matrix_violations = _validate_m5_decision_matrix(prose)
+    if not matrix_violations:
+        return prose
+
+    bullet_list = "\n".join(f"- {violation}" for violation in matrix_violations)
+    print(
+        "[m5_content_generator] Matriz de decisión M5 inválida. "
+        "Reprompt explícito (1/1)."
+    )
+    reprompt = (
+        prompt
+        + "\n\n# CORRECCIÓN OBLIGATORIA DE MATRIZ DE DECISIÓN M5\n"
+        + "Reescribe la salida COMPLETA manteniendo el contrato de grounding "
+        + "narrativo y agregando una tabla Markdown de matriz de decisión con "
+        + "exactamente estas columnas: acción | KPI esperado | riesgo | modelo soporte. "
+        + "La tabla debe tener entre 4 y 6 filas de datos. Violaciones detectadas:\n"
+        + bullet_list
+    )
+    response = llm.invoke(reprompt)
+    corrected = sanitize_markdown(_extract_text(response))
+    grounding_violations = (
+        validate_narrative_grounding(corrected, metrics_block)
+        if grounding_enabled
+        else []
+    )
+    corrected_matrix_violations = _validate_m5_decision_matrix(corrected)
+    if grounding_violations or corrected_matrix_violations:
+        logger.error(
+            "[m5_content_generator] Reprompt M5 falló — grounding=%s matrix=%s",
+            grounding_violations,
+            corrected_matrix_violations,
+        )
+        raise RuntimeError(
+            "m5_content_generator falló validación de matriz de decisión o "
+            "grounding tras un reprompt. Job marcado como fallido."
+        )
+    print("[m5_content_generator] Reprompt matriz de decisión OK")
+    return corrected
 
 # Issue 4.1 — M3 CONTENT GENERATOR
 def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
@@ -3819,10 +4010,9 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
             gap_warnings = list(state.get("data_gap_warnings") or [])
             if legacy_warning:
                 gap_warnings.append(legacy_warning)
-            gaps_block = (
-                "\n".join(f"- {w}" for w in gap_warnings)
-                if gap_warnings
-                else "(sin brechas detectadas — schema cubre el contrato)"
+            gaps_block = _format_data_gap_warnings_block(
+                gap_warnings,
+                empty_message="(sin brechas detectadas — schema cubre el contrato)",
             )
 
             prompt_template = PROMPT_BY_FAMILY[family]
@@ -4110,12 +4300,15 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         )
         context["computed_metrics_block"] = metrics_block
 
-        m5 = _invoke_narrative_with_grounding(
-            node_name="m5_content_generator",
+        m5 = _invoke_m5_content_with_contract(
             llm=llm,
             prompt=prompt_template.format(**context),
             metrics_block=metrics_block,
             grounding_enabled=grounding_enabled,
+            require_decision_matrix=_is_ml_ds_classification(
+                state,
+                default_unresolved_ml_ds_to_classification=True,
+            ),
         )
         print(f"[m5_content_generator] {len(m5)} chars")
         return {

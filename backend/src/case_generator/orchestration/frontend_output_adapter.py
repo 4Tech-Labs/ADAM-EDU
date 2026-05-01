@@ -15,6 +15,8 @@ def adapter_legacy_to_canonical_output(state: dict) -> dict:
     # Doc 1 -> Narrative Blocks
     if state.get("doc1_instrucciones"):
         content["instructions"] = state["doc1_instrucciones"]
+    if state.get("pregunta_eje"):
+        content["preguntaEje"] = state["pregunta_eje"]
     if state.get("doc1_narrativa"):
         content["narrative"] = state["doc1_narrativa"]
     if state.get("doc1_anexo_financiero"):

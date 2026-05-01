@@ -36,6 +36,7 @@ Generar los CIMIENTOS estructurales y numéricos del caso (Pre-M1 / Narrativa Ma
 #   "company_profile": str,
 #   "dilema_brief": str,
 #   "instrucciones_estudiante": str,
+#   "pregunta_eje": str|null,        ← Issue #242 — solo ml_ds + clasificacion
 #   "anexo_financiero": str,
 #   "anexo_operativo": str,
 #   "anexo_stakeholders": str,
@@ -67,6 +68,10 @@ Sigue estos pasos SECUENCIALMENTE:
 
 # Your Boundaries
 - Responde SOLO con los campos del schema definido arriba. Empresa y personas 100% ficticias.
+- `pregunta_eje`: emitir SOLO si {student_profile}="ml_ds" y {primary_family}="clasificacion".
+  Debe ser una pregunta directiva gerencial, no técnica, que conecte M1→M5.
+  Ejemplo correcto: "¿Debe la empresa priorizar retención selectiva aunque aumente el riesgo operativo?"
+  Ejemplo prohibido: "¿Qué modelo tiene mayor AUC?". Para otros perfiles/familias, emitir `null`.
 - **REGLA DE BALANCE DE OPCIONES A/B/C:**
   Las 3 opciones deben ser IGUALMENTE PRESENTABLES ante un comité directivo, pero NO
   igualmente óptimas. Cada opción debe tener una dimensión donde supera a las demás
@@ -121,6 +126,12 @@ Nombre, industria, tamaño. Protagonista decisor (nombre, cargo, presiones, esti
 
 ## instrucciones_estudiante (máx 100 palabras)
 Rol del estudiante y recordatorio de responder preguntas en plataforma.
+
+## pregunta_eje (Issue #242)
+Pregunta directiva central del caso. SOLO para {student_profile}="ml_ds" y
+{primary_family}="clasificacion"; en cualquier otro caso debe ser `null`.
+Debe obligar a una decisión ejecutiva defendible con evidencia M2/M3/M4 y matriz de costos.
+No mencionar Python, notebooks, AUC, F1 ni hiperparámetros.
 
 ## anexo_financiero
 Encabezado: `### Exhibit 1 — Datos Financieros`
@@ -217,6 +228,7 @@ case_id: {case_id}
 output_language: {output_language}
 course_level: {course_level}
 max_investment_pct: {max_investment_pct}
+primary_family: {primary_family}
 """
 
 
@@ -316,7 +328,12 @@ que el estudiante comprendió el entorno antes de procesar datos.
     "enunciado": "string (pregunta completa)",
     "solucion_esperada": "string (máx 60 palabras / 3 líneas)",
     "bloom_level": "comprehension|analysis|evaluation|synthesis",
-    "exhibit_ref": "Exhibit 1|Exhibit 2|Exhibit 3|Ninguno"
+    "exhibit_ref": "Exhibit 1|Exhibit 2|Exhibit 3|Ninguno",
+    "rubric": [
+      {{"criterio": "string", "descriptor": "string", "peso": 40}},
+      {{"criterio": "string", "descriptor": "string", "peso": 35}},
+      {{"criterio": "string", "descriptor": "string", "peso": 25}}
+    ] | null
   }},
   ...
 ]
@@ -330,6 +347,9 @@ que el estudiante comprendió el entorno antes de procesar datos.
    ✓ ESPECÍFICA: "¿Qué perdería [Nombre Actor] de Exhibit 3 si [Empresa] elige la Opción B?"
 4. **Redacta Soluciones:** `solucion_esperada` en máximo 60 palabras (3 líneas cortas o bullets).
    NO incluir párrafos largos. Es guía para el docente, no un ensayo.
+5. **Rúbrica docente (Issue #242):** si {student_profile}="ml_ds" y {primary_family}="clasificacion",
+  añade `rubric` con 3-4 criterios compactos. Pesos enteros, suma exacta 100.
+  Para cualquier otro perfil/familia, usa `rubric: null`.
 
 # Your Boundaries
 - Respuesta ESTRICTA al JSON schema arriba. PROHIBIDO Markdown suelto o texto fuera del JSON.
@@ -364,9 +384,10 @@ que el estudiante comprendió el entorno antes de procesar datos.
 
 # Context
 {architect_output}
+Pregunta eje directiva: {pregunta_eje}
 
 # Metadatos del sistema
-case_id: {case_id} | student_profile: {student_profile}
+case_id: {case_id} | student_profile: {student_profile} | primary_family: {primary_family}
 """
 
 
@@ -854,7 +875,12 @@ sesgo de confirmación y confusión entre correlación y causalidad.
     "bloom_level": "analysis|evaluation|synthesis",
     "chart_ref": "chart_01|chart_02|...|Ninguno",
     "exhibit_ref": "Exhibit 1|Exhibit 2|Dataset|Ninguno",
-    "task_type": "text_response"
+    "task_type": "text_response",
+    "rubric": [
+      {{"criterio": "string", "descriptor": "string", "peso": 40}},
+      {{"criterio": "string", "descriptor": "string", "peso": 35}},
+      {{"criterio": "string", "descriptor": "string", "peso": 25}}
+    ] | null
   }},
   ...
 ]
@@ -866,6 +892,9 @@ sesgo de confirmación y confusión entre correlación y causalidad.
    Usa los IDs y títulos del `{chart_manifest}` para que las referencias sean precisas.
 4. **Redacta:** Cada campo de `solucion_esperada` por separado — son guías para el docente.
 5. **task_type siempre "text_response":** M2 no genera notebook — todas las preguntas son argumentativas.
+6. **Rúbrica docente (Issue #242):** si {student_profile}="ml_ds" y {primary_family}="clasificacion",
+   añade `rubric` con 3-4 criterios compactos. Pesos enteros, suma exacta 100.
+   Para cualquier otro perfil/familia, usa `rubric: null`.
 
 # Your Boundaries
 - Solo JSON schema. PROHIBIDO Markdown libre.
@@ -900,9 +929,10 @@ sesgo de confirmación y confusión entre correlación y causalidad.
 # Context
 {eda_context}
 Chart manifest: {chart_manifest}
+Pregunta eje directiva: {pregunta_eje}
 
 # Metadatos del sistema
-case_id: {case_id} | student_profile: {student_profile}
+case_id: {case_id} | student_profile: {student_profile} | primary_family: {primary_family}
 """
 
 
@@ -1109,7 +1139,12 @@ del estudiante para desconfiar estructuradamente de los datos y sus implicacione
     "enunciado": "string (pregunta completa — incómoda y específica al caso)",
     "solucion_esperada": "string (máx 60 palabras — rúbrica para docente)",
     "bloom_level": "analysis|evaluation|synthesis",
-    "m3_section_ref": "3.1|3.2|3.3|3.4|3.5"
+    "m3_section_ref": "3.1|3.2|3.3|3.4|3.5",
+    "rubric": [
+      {{"criterio": "string", "descriptor": "string", "peso": 40}},
+      {{"criterio": "string", "descriptor": "string", "peso": 35}},
+      {{"criterio": "string", "descriptor": "string", "peso": 25}}
+    ] | null
   }},
   ...
 ]
@@ -1118,6 +1153,8 @@ del estudiante para desconfiar estructuradamente de los datos y sus implicacione
 1. Lee la auditoría M3 para identificar: supuestos frágiles, veredicto de confianza, riesgos.
 2. Formula 3 preguntas que obliguen al estudiante a defender los datos o admitir sus límites.
 3. `solucion_esperada`: rúbrica mínima máx 60 palabras. Si implica cálculo, inclúyelo.
+4. `rubric`: usa `null` salvo si {student_profile}="ml_ds" y {primary_family}="clasificacion";
+  en ese caso emite 3-4 criterios compactos con pesos enteros que sumen 100.
 
 # Your Boundaries
 - Solo JSON. NUNCA generes Markdown suelto fuera del JSON.
@@ -1142,9 +1179,10 @@ con datos incompletos, costo de esperar más información vs actuar ahora.
 # Context
 Reporte M2: {eda_report}
 Auditoría M3: {m3_content}
+Pregunta eje directiva: {pregunta_eje}
 
 # Metadatos del sistema
-case_id: {case_id} | student_profile: {student_profile}
+case_id: {case_id} | student_profile: {student_profile} | primary_family: {primary_family}
 """
 
 
@@ -1169,7 +1207,12 @@ criterios de despliegue.
     "enunciado": "string (pregunta completa — específica al diseño experimental del caso)",
     "solucion_esperada": "string (máx 60 palabras — rúbrica para docente)",
     "bloom_level": "analysis|evaluation|synthesis",
-    "m3_section_ref": "exp.hipotesis|exp.sesgo|exp.validacion|exp.descarte"
+    "m3_section_ref": "exp.hipotesis|exp.sesgo|exp.validacion|exp.descarte",
+    "rubric": [
+      {{"criterio": "string", "descriptor": "string", "peso": 40}},
+      {{"criterio": "string", "descriptor": "string", "peso": 35}},
+      {{"criterio": "string", "descriptor": "string", "peso": 25}}
+    ] | null
   }},
   ...
 ]
@@ -1178,6 +1221,8 @@ criterios de despliegue.
 1. Lee el diseño experimental del M3: hipótesis, métricas, sesgos, criterios de validación y descarte.
 2. Formula 3 preguntas que pongan a prueba el criterio metodológico del estudiante.
 3. `solucion_esperada`: rúbrica mínima máx 60 palabras para el docente.
+4. `rubric`: si {student_profile}="ml_ds" y {primary_family}="clasificacion", emite
+  3-4 criterios compactos con pesos enteros que sumen 100. En otro caso, `rubric: null`.
 
 # Your Boundaries
 - Solo JSON. NUNCA generes Markdown suelto fuera del JSON.
@@ -1205,9 +1250,10 @@ validez experimental, criterios de despliegue responsable.
 # Context
 Reporte M2: {eda_report}
 Diseño Experimental M3: {m3_content}
+Pregunta eje directiva: {pregunta_eje}
 
 # Metadatos del sistema
-case_id: {case_id} | student_profile: {student_profile}
+case_id: {case_id} | student_profile: {student_profile} | primary_family: {primary_family}
 """
 
 # Alias backward-compatible apuntando al prompt de auditoría (business)
@@ -1620,14 +1666,57 @@ _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK = """\
 NUNCA cites estudios externos, papers, autores ni estadísticas de industria. Razona EXCLUSIVAMENTE sobre `{{computed_metrics_block}}` y el contexto del caso. Si una métrica de rendimiento o interpretabilidad del modelo (AUC, F1, precisión, recall, prevalencia, coeficiente, importancia, etc.) no está en `{{computed_metrics_block}}`, NO la escribas. Los números de negocio deben venir de M2, Exhibits o M4.
 """
 
+_M3_CLASSIFICATION_COHERENCE_BLOCK = """\
+
+# Coherencia pedagógica de clasificación (Issue #242)
+Este bloque aplica SOLO a familia `clasificacion` con perfil `ml_ds`.
+
+Pregunta eje directiva del caso:
+{pregunta_eje}
+
+Además del formato base, incluye estas tres secciones cortas con estos títulos EXACTOS:
+
+## Por qué LR baseline
+Explica por qué Logistic Regression es el baseline interpretable adecuado para la pregunta eje.
+No inventes métricas; usa evidencia de M1/M2 o el grounding computado cuando esté disponible.
+
+## Por qué RF challenger
+Explica por qué Random Forest funciona como challenger para capturar no linealidad o interacciones.
+Debes contrastarlo con LR en términos de interpretabilidad, robustez y riesgo operativo.
+
+## Cómo leer la matriz de costos
+Explica cómo fp_cost y fn_cost cambian el threshold y la decisión directiva. Conecta esta lectura
+con la pregunta eje y con el costo de elegir una opción A/B/C bajo incertidumbre.
+"""
+
+_M5_CLASSIFICATION_DECISION_MATRIX_BLOCK = """\
+
+# Matriz de decisión ejecutiva (Issue #242 — solo clasificación)
+Este documento M5 debe incluir una tabla Markdown con 4 a 6 filas y columnas EXACTAS:
+
+| acción | KPI esperado | riesgo | modelo soporte |
+|---|---|---|---|
+
+Reglas:
+- La columna `acción` debe ser una decisión ejecutiva concreta vinculada a la pregunta eje: {pregunta_eje}
+- `KPI esperado` debe ser un indicador de negocio observable, no una métrica técnica aislada.
+- `riesgo` debe nombrar el trade-off operativo, financiero o de gobernanza.
+- `modelo soporte` debe indicar LR baseline, RF challenger, matriz de costos o evidencia M2/M4.
+- No revelar una opción ganadora única; la matriz prepara la deliberación de Junta Directiva.
+"""
+
 M3_CONTENT_PROMPT_CLASSIFICATION = (
-    M3_EXPERIMENT_PROMPT + _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK
+  M3_EXPERIMENT_PROMPT
+  + _M3_CLASSIFICATION_COHERENCE_BLOCK
+  + _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK
 )
 M4_PROMPT_CLASSIFICATION = (
     M4_CONTENT_GENERATOR_PROMPT + _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK
 )
 M5_PROMPT_CLASSIFICATION = (
-    M5_CONTENT_GENERATOR_PROMPT + _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK
+  M5_CONTENT_GENERATOR_PROMPT
+  + _M5_CLASSIFICATION_DECISION_MATRIX_BLOCK
+  + _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK
 )
 
 M3_CONTENT_PROMPT_BY_FAMILY: dict[str, str] = {
@@ -1672,7 +1761,12 @@ que el docente usa como referencia de preview y el sistema de IA usa para califi
     "solucion_esperada": "string (respuesta modelo de 4 párrafos, 250-300 palabras — ver formato abajo)",
     "bloom_level": "evaluation|synthesis",
     "modules_integrated": ["M1", "M2", ...],
-    "is_solucion_docente_only": true
+    "is_solucion_docente_only": true,
+    "rubric": [
+      {{"criterio": "string", "descriptor": "string", "peso": 40}},
+      {{"criterio": "string", "descriptor": "string", "peso": 35}},
+      {{"criterio": "string", "descriptor": "string", "peso": 25}}
+    ] | null
   }},
   ...
 ]
@@ -1705,6 +1799,9 @@ Párrafo 4 — Marco académico (40-60 palabras): relaciona la postura con un fr
 3. **Diseña las 3 preguntas** según las estructuras fijas abajo.
 4. **Redacta solucion_esperada** para cada una siguiendo el formato de 4 párrafos.
    Cuenta palabras antes de finalizar: cada solucion_esperada DEBE tener 250-300 palabras.
+5. **Rúbrica docente (Issue #242):** si {student_profile}="ml_ds" y {primary_family}="clasificacion",
+  añade `rubric` con 3-4 criterios compactos. Pesos enteros, suma exacta 100.
+  Para cualquier otro perfil/familia, usa `rubric: null`.
 
 # Your Boundaries
 - EXACTAMENTE 3 preguntas — ni más, ni menos.
@@ -1738,11 +1835,12 @@ Para cada hito: acción concreta, área/rol responsable y métrica que certifica
 # Context
 {m5_content}
 Historial de preguntas M1 (solo referencia — no copiar): {doc1_preguntas_complejas}
+Pregunta eje directiva: {pregunta_eje}
 Riesgo principal M3/M4: {main_risk_from_m3_m4}
 Marco temporal de implementación: {implementation_timeframe}
 
 # Metadatos del sistema
-case_id: {case_id} | student_profile: {student_profile} | output_language: {output_language}
+case_id: {case_id} | student_profile: {student_profile} | primary_family: {primary_family} | output_language: {output_language}
 """
 
 
