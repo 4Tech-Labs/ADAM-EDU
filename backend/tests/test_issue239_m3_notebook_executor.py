@@ -23,6 +23,7 @@ from case_generator.m3_notebook_execution import (
     build_m3_quality_warning,
     execute_m3_notebook,
     extract_metrics_summary_from_text,
+    format_execution_failure_for_prompt,
     scrub_notebook_for_safe_execution,
 )
 from case_generator.prompts import M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
@@ -145,10 +146,25 @@ def test_scrub_allows_rendered_classification_prompt_jupytext_contract() -> None
         dataset_contract_block="(sin contrato)",
         data_gap_warnings_block="(sin brechas)",
     )
-    jupytext_start = rendered_prompt.index("# %%")
+    jupytext_start = rendered_prompt.index("# %%\n# === SECTION:dummy_baseline ===")
 
-    assert "globals()" not in rendered_prompt
+    assert "globals()" not in rendered_prompt[jupytext_start:]
+    assert "try/except NameError" in rendered_prompt
     scrub_notebook_for_safe_execution(rendered_prompt[jupytext_start:])
+
+
+def test_unsafe_failure_prompt_bans_runtime_introspection() -> None:
+    correction = format_execution_failure_for_prompt(
+        M3NotebookExecutionError(
+            "Denied call in generated notebook: globals",
+            diagnostics='if "X_train" not in globals(): pass',
+            kind="unsafe_code",
+        )
+    )
+
+    assert "PROHIBIDO usar globals()" in correction
+    assert "try/except NameError" in correction
+    assert "__builtins__" in correction
 
 
 def test_unsafe_notebook_code_failure_is_not_resumable() -> None:
@@ -344,6 +360,40 @@ def test_graph_executor_reprompts_once_after_crash(monkeypatch: pytest.MonkeyPat
     assert result["m3_notebook_code"] == "corrected notebook"
     assert result["m3_metrics_summary"] == _GOOD_METRICS
     assert result["current_agent"] == "m3_notebook_executor"
+
+
+def test_graph_executor_unsafe_globals_reprompt_names_safe_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"execute": 0, "generate": 0}
+
+    def fake_execute(**kwargs: Any) -> M3NotebookExecutionResult:
+        calls["execute"] += 1
+        if calls["execute"] == 1:
+            raise M3NotebookExecutionError(
+                "Denied call in generated notebook: globals",
+                diagnostics='if "X_train" not in globals(): pass',
+                kind="unsafe_code",
+            )
+        assert kwargs["notebook_code"] == "corrected notebook without globals"
+        return M3NotebookExecutionResult(_GOOD_METRICS, None)
+
+    def fake_generate(*_args: Any, **kwargs: Any) -> tuple[str, str]:
+        calls["generate"] += 1
+        correction = kwargs["execution_correction"]
+        assert "PROHIBIDO usar globals()" in correction
+        assert "try/except NameError" in correction
+        assert "__builtins__" in correction
+        return "corrected notebook without globals", "clasificacion"
+
+    monkeypatch.setattr(graph_module, "execute_m3_notebook", fake_execute)
+    monkeypatch.setattr(graph_module, "_generate_m3_notebook_code", fake_generate)
+
+    result = graph_module.m3_notebook_executor(_executor_state(), {})
+
+    assert calls == {"execute": 2, "generate": 1}
+    assert result["m3_notebook_code"] == "corrected notebook without globals"
+    assert result["m3_metrics_summary"] == _GOOD_METRICS
 
 
 def test_graph_executor_second_crash_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

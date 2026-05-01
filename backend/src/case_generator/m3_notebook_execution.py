@@ -158,7 +158,7 @@ def format_execution_failure_for_prompt(error: M3NotebookExecutionError) -> str:
     """Return a bounded correction block for the LLM reprompt."""
 
     detail = _bounded_diagnostic(error.diagnostics or str(error), limit=1800)
-    return (
+    correction = (
         "# CORRECCION OBLIGATORIA POR EJECUCION DEL NOTEBOOK\n"
         "# El notebook anterior fallo al ejecutarse en un kernel limpio.\n"
         "# Reescribe la continuacion COMPLETA del notebook manteniendo el mismo contrato,\n"
@@ -167,6 +167,20 @@ def format_execution_failure_for_prompt(error: M3NotebookExecutionError) -> str:
         "# Diagnostico acotado:\n"
         f"# {detail.replace(chr(10), chr(10) + '# ')}\n"
     )
+    if error.kind == "unsafe_code":
+        correction += (
+            "# REGLA DE SEGURIDAD OBLIGATORIA PARA ESTA CORRECCION:\n"
+            "# PROHIBIDO usar globals(), locals(), vars(), getattr(...), __builtins__,\n"
+            "# __import__, eval(...) o exec(...) en cualquier celda ejecutable.\n"
+            "# Si necesitas comprobar si una variable existe, usa try/except NameError.\n"
+            "# Ejemplo permitido:\n"
+            "# try:\n"
+            "#     X_train\n"
+            "#     y_train\n"
+            "# except NameError:\n"
+            "#     # recrear splits con train_test_split(...)\n"
+        )
+    return correction
 
 
 def jupytext_percent_to_notebook(notebook_code: str) -> Any:

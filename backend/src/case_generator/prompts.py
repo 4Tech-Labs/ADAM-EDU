@@ -2324,6 +2324,11 @@ Genera SOLO la continuación del notebook, empezando después de la Sección 3 d
    una columna por alias. Siempre debes implementar un Fallback Heurístico por tipo de dato
    (df.select_dtypes) antes de rendirte. Solo imprime REQUISITO FALTANTE si df.select_dtypes()
    devuelve vacío para el tipo de dato estrictamente necesario.
+8. PROHIBIDO usar introspección dinámica o escapes de runtime en celdas ejecutables:
+  `globals()`, `locals()`, `vars()`, `getattr(...)`, `__builtins__`, `__import__`,
+  `eval(...)`, `exec(...)`. Si necesitas saber si una variable existe, usa SIEMPRE
+  `try/except NameError` explícito, por ejemplo:
+  `try: X_train` → `except NameError: recrear X_train/X_test/y_train/y_test`.
 
 # Reglas de API ESTABLE (anti-alucinación de librerías)
 A. Usa SOLO API documentada y estable de scikit-learn ≥ 1.0:
