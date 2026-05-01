@@ -50,6 +50,8 @@ describe("PreguntaCard", () => {
             />,
         );
 
+        expect(screen.getByText("Ocultar solución esperada y rúbrica")).toBeInTheDocument();
+        expect(screen.getByText("Solución Esperada y Rúbrica — Solo Docentes")).toBeInTheDocument();
         expect(screen.getByText("Rúbrica docente")).toBeInTheDocument();
         expect(screen.getByText("Conexión con la pregunta eje")).toBeInTheDocument();
         expect(screen.getAllByText("35%")).toHaveLength(2);

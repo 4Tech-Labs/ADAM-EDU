@@ -55,9 +55,18 @@ export function PreguntaCard({
     const isSocratic = isEDASocraticQuestion(p);
     const hasSolution = p.solucion_esperada !== undefined && p.solucion_esperada !== null;
     const rubric = Array.isArray(p.rubric) && p.rubric.length > 0 ? p.rubric : null;
+    const hasRubric = rubric !== null;
     const hasTeacherDetails = hasSolution || rubric !== null;
-    const teacherDetailsLabel = hasSolution ? "solución esperada" : "rúbrica docente";
-    const teacherDetailsTitle = hasSolution ? "Solución Esperada — Solo Docentes" : "Rúbrica Docente — Solo Docentes";
+    const teacherDetailsLabel = hasSolution && hasRubric
+        ? "solución esperada y rúbrica"
+        : hasSolution
+            ? "solución esperada"
+            : "rúbrica docente";
+    const teacherDetailsTitle = hasSolution && hasRubric
+        ? "Solución Esperada y Rúbrica — Solo Docentes"
+        : hasSolution
+            ? "Solución Esperada — Solo Docentes"
+            : "Rúbrica Docente — Solo Docentes";
 
     useEffect(() => {
         setShowSolucion(showExpectedSolutions);

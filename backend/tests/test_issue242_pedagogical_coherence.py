@@ -69,6 +69,16 @@ class _FakeStructuredLLM:
         return _FakeStructuredInvoker(self, schema)
 
 
+class _FailingStructuredInvoker:
+    def invoke(self, prompt: str):
+        raise ValueError("structured parse failed")
+
+
+class _FailingStructuredLLM:
+    def with_structured_output(self, schema: type) -> _FailingStructuredInvoker:
+        return _FailingStructuredInvoker()
+
+
 def _valid_rubric() -> list[RubricItem]:
     return [
         RubricItem(criterio="Evidencia", descriptor="Cita datos relevantes del caso", peso=40),
@@ -115,6 +125,24 @@ def _valid_question_payload(*, rubric: list[dict[str, object]] | None) -> dict[s
         "solucion_esperada": "Debe citar evidencia y trade-offs.",
         "bloom_level": "evaluation",
         "rubric": rubric,
+    }
+
+
+def _classification_state() -> dict[str, object]:
+    return {
+        "studentProfile": "ml_ds",
+        "algoritmos": ["Logistic Regression"],
+        "task_payload": {"algoritmos": ["Logistic Regression"]},
+        "titulo": "RetenCo",
+        "company_profile": "Empresa ficticia",
+        "dilema_brief": "Dilema ejecutivo",
+        "doc1_anexo_financiero": "Exhibit 1",
+        "doc1_anexo_operativo": "Exhibit 2",
+        "doc1_anexo_stakeholders": "Exhibit 3",
+        "doc2_eda": "EDA",
+        "m3_content": "M3",
+        "m5_content": "M5",
+        "doc1_preguntas": [],
     }
 
 
@@ -273,8 +301,60 @@ def test_question_output_allows_missing_rubric_outside_classification_contract()
     assert len(fake_llm.prompts) == 1
 
 
+@pytest.mark.parametrize(
+    ("node_name", "llm_factory_name"),
+    [
+        ("case_questions", "_get_writer_llm"),
+        ("eda_questions_generator", "_get_writer_llm"),
+        ("m3_questions_generator", "_get_writer_llm"),
+        ("m5_questions_generator", "_get_m5_llm"),
+    ],
+)
+def test_issue242_question_nodes_fail_closed_on_structured_output_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    node_name: str,
+    llm_factory_name: str,
+) -> None:
+    monkeypatch.setattr(
+        graph_module,
+        llm_factory_name,
+        lambda *args, **kwargs: _FailingStructuredLLM(),
+    )
+
+    node = getattr(graph_module, node_name)
+
+    with pytest.raises(ValueError, match="structured parse failed"):
+        node(_classification_state(), {})  # type: ignore[arg-type]
+
+
+def test_question_parse_errors_still_degrade_outside_classification_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        graph_module,
+        "_get_writer_llm",
+        lambda *args, **kwargs: _FailingStructuredLLM(),
+    )
+
+    result = graph_module.case_questions(  # type: ignore[arg-type]
+        {**_classification_state(), "studentProfile": "business"},
+        {},
+    )
+
+    assert result == {"doc1_preguntas": []}
+
+
 def test_m5_decision_matrix_validator_accepts_exact_contract() -> None:
     assert graph_module._validate_m5_decision_matrix(_valid_m5_matrix()) == []
+
+
+def test_m5_decision_matrix_validator_accepts_accentless_header_aliases() -> None:
+    markdown = _valid_m5_matrix().replace(
+        "| acción | KPI esperado | riesgo | modelo soporte |",
+        "| accion | indicador esperado | riesgo principal | modelo de soporte |",
+    )
+
+    assert graph_module._validate_m5_decision_matrix(markdown) == []
 
 
 @pytest.mark.parametrize(
@@ -282,7 +362,7 @@ def test_m5_decision_matrix_validator_accepts_exact_contract() -> None:
     [
         ("Sin tabla", "missing_matrix"),
         (
-            "| accion | KPI esperado | riesgo | modelo soporte |\n|---|---|---|---|\n| A | B | C | D |\n| A | B | C | D |\n| A | B | C | D |\n| A | B | C | D |",
+            "| decisión | KPI esperado | riesgo | modelo soporte |\n|---|---|---|---|\n| A | B | C | D |\n| A | B | C | D |\n| A | B | C | D |\n| A | B | C | D |",
             "missing_matrix",
         ),
         (

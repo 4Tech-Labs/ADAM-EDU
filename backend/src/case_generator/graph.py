@@ -55,6 +55,7 @@ import random
 import re
 import threading
 import time
+import unicodedata
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -969,6 +970,8 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
     except RuntimeError:
         raise
     except Exception as e:
+        if _should_fail_closed_issue242_question_contract(state, "case_questions", e):
+            raise
         logger.error("[case_questions] ERROR tras reintentos: %s", e, exc_info=True)
         return {"doc1_preguntas": []}  # Degradación graceful — pipeline continúa sin preguntas M1
 
@@ -1576,6 +1579,8 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     except RuntimeError:
         raise
     except Exception as e:
+        if _should_fail_closed_issue242_question_contract(state, "eda_questions_generator", e):
+            raise
         logger.error("[eda_questions_generator] ERROR tras reintentos: %s", e, exc_info=True)
         return {"doc2_preguntas_eda": [], "current_agent": "doc3_generation"}  # Degradación graceful — sin preguntas EDA
 
@@ -3173,6 +3178,8 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         if any(code in err_msg for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED")):
             logger.warning("[m5_questions_generator] ERROR TRANSITORIO (reintentando): %s", err_msg)
             raise
+        if _should_fail_closed_issue242_question_contract(state, "m5_questions_generator", e):
+            raise
         logger.error("[m5_questions_generator] ERROR: %s", e, exc_info=True)
         return {"m5_questions": [], "current_agent": "m5_questions_generator"}
 
@@ -3306,6 +3313,22 @@ def _issue242_contract_required(state: ADAMState) -> bool:
         state,
         default_unresolved_ml_ds_to_classification=True,
     )
+
+
+def _should_fail_closed_issue242_question_contract(
+    state: ADAMState,
+    node_name: str,
+    error: Exception,
+) -> bool:
+    if not _issue242_contract_required(state):
+        return False
+    logger.error(
+        "[%s] ERROR con contrato de rúbrica Issue #242 obligatorio; fallando cerrado: %s",
+        node_name,
+        error,
+        exc_info=True,
+    )
+    return True
 
 
 def _invoke_case_architect_with_contract(
@@ -3525,6 +3548,18 @@ def _invoke_narrative_with_grounding(
 
 
 _M5_DECISION_MATRIX_COLUMNS = ("acción", "KPI esperado", "riesgo", "modelo soporte")
+_M5_DECISION_MATRIX_HEADER_ALIASES = {
+    "accion": "accion",
+    "accion ejecutiva": "accion",
+    "accion recomendada": "accion",
+    "kpi esperado": "kpi esperado",
+    "indicador esperado": "kpi esperado",
+    "riesgo": "riesgo",
+    "riesgo principal": "riesgo",
+    "modelo soporte": "modelo soporte",
+    "modelo de soporte": "modelo soporte",
+    "soporte modelo": "modelo soporte",
+}
 
 
 def _split_markdown_table_row(line: str) -> list[str]:
@@ -3548,13 +3583,23 @@ def _is_markdown_separator_row(cells: list[str]) -> bool:
     return True
 
 
+def _normalize_m5_matrix_header_cell(cell: str) -> str:
+    compact = " ".join(cell.lower().split())
+    without_accents = "".join(
+        char
+        for char in unicodedata.normalize("NFKD", compact)
+        if not unicodedata.combining(char)
+    )
+    return _M5_DECISION_MATRIX_HEADER_ALIASES.get(without_accents, without_accents)
+
+
 def _normalize_m5_matrix_header(cells: list[str]) -> tuple[str, ...]:
-    return tuple(" ".join(cell.lower().split()) for cell in cells)
+    return tuple(_normalize_m5_matrix_header_cell(cell) for cell in cells)
 
 
 def _validate_m5_decision_matrix(markdown: str) -> list[str]:
     """Validate the Issue #242 M5 decision matrix Markdown contract."""
-    expected = tuple(column.lower() for column in _M5_DECISION_MATRIX_COLUMNS)
+    expected = _normalize_m5_matrix_header(list(_M5_DECISION_MATRIX_COLUMNS))
     lines = markdown.splitlines()
     for line_index, line in enumerate(lines):
         header_cells = _split_markdown_table_row(line)
@@ -3778,6 +3823,8 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     except RuntimeError:
         raise
     except Exception as e:
+        if _should_fail_closed_issue242_question_contract(state, "m3_questions_generator", e):
+            raise
         logger.error("[m3_questions_generator] ERROR: %s", e, exc_info=True)
         return {"m3_questions": [], "current_agent": "m3_questions_generator"}
 
