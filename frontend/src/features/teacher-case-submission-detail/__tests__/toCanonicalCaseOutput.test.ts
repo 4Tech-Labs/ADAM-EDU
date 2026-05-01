@@ -76,7 +76,7 @@ describe("toCanonicalCaseOutput", () => {
         const detail = createSubmissionDetailResponse({
             case_view: {
                 content: {
-                    preguntaEje: "¿Qué umbral minimiza el costo de error sin bloquear crecimiento?",
+                    preguntaEje: "  ¿Qué umbral minimiza el costo de error sin bloquear crecimiento?  ",
                     caseQuestions: [
                         {
                             numero: 1,
@@ -104,6 +104,20 @@ describe("toCanonicalCaseOutput", () => {
         expect(result.content.preguntaEje).toBe("¿Qué umbral minimiza el costo de error sin bloquear crecimiento?");
         expect(result.content.caseQuestions?.[0]?.rubric).toEqual(rubric);
         expect(result.content.edaQuestions?.[0]?.rubric).toEqual(rubric);
+    });
+
+    it("drops whitespace-only issue242 pregunta eje from persisted case_view", () => {
+        const detail = createSubmissionDetailResponse({
+            case_view: {
+                content: {
+                    preguntaEje: " \n\t ",
+                },
+            },
+        });
+
+        const result = toCanonicalCaseOutput(detail);
+
+        expect(result.content.preguntaEje).toBeUndefined();
     });
 
     it("drops malformed teacher rubrics from persisted case_view", () => {

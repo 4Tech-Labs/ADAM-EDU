@@ -38,6 +38,11 @@ function readString(value: unknown): string | undefined {
     return typeof value === "string" ? value : undefined;
 }
 
+function readNonBlankString(value: unknown): string | undefined {
+    const text = readString(value)?.trim();
+    return text ? text : undefined;
+}
+
 function readFiniteNumber(value: unknown): number | undefined {
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -391,7 +396,7 @@ function buildContent(detail: TeacherCaseSubmissionDetailResponse, source: Recor
 
     return {
         instructions: readString(source.instructions),
-        preguntaEje: readString(source.preguntaEje),
+        preguntaEje: readNonBlankString(source.preguntaEje),
         narrative: readString(source.narrative),
         financialExhibit: readString(source.financialExhibit),
         operatingExhibit: readString(source.operatingExhibit),
