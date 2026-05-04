@@ -114,9 +114,9 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
-## TODO-230-B: Consumir `algorithm_mode == "contrast"` en M3 (`m3_content_generator`)
+## TODO-230-B: Consumir `algorithm_mode == "contrast"` en narrativa M3 (`m3_content_generator`)
 
-**What:** Cuando `task_payload["algorithm_mode"] == "contrast"` y `len(algoritmos) == 2`, los prompts de M3 deben generar narrativa, secciones de modelado y conclusiones que comparen explícitamente baseline vs challenger (trade-off, métricas, interpretabilidad).
+**What:** Cuando `task_payload["algorithm_mode"] == "contrast"` y `len(algoritmos) == 2`, la narrativa de M3 debe comparar explícitamente baseline vs challenger (trade-off, métricas, interpretabilidad). El notebook M3 ya tiene routing de variantes separado; este TODO es solo para `m3_content_generator` y textos narrativos.
 
 **Why:** Hoy el grafo solo recibe `algoritmos: list[str]` y los prompts no diferencian. Para entregar el "deep contrast" prometido en la UI, M3 necesita branching consciente del modo.
 
@@ -124,21 +124,35 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 **Cons:** Toca `case_generator/graph.py` y prompts sensibles → requiere review eng + diseño.
 
-**Context:** El payload ya viaja con `algorithm_mode`; el campo solo se persiste y el grafo ignora la distinción. Crear como issue separada con plan de prompts contrast-aware.
+**Context:** El payload ya viaja con `algorithm_mode` y el notebook de clasificación lo consume para elegir `lr_only`, `rf_only` o `lr_rf_contrast`. Crear como issue separada con plan de prompts contrast-aware para narrativa.
 
 ---
 
-## TODO-230-D: Hacer mode-aware el deep dive de clasificación single
+## TODO-230-D: Hacer mode-aware la narrativa de clasificación single
 
-**What:** Ajustar los prompts/ensamble de M3/M4/M5 para que `algorithm_mode == "single"` y un único algoritmo de clasificación no emitan narrativa de contraste LR baseline / RF challenger ni secciones como "Por qué RF challenger".
+**What:** Ajustar los prompts/ensamble narrativos de M3/M4/M5 para que `algorithm_mode == "single"` y un único algoritmo de clasificación no emitan narrativa de contraste LR baseline / RF challenger ni secciones como "Por qué RF challenger".
 
-**Why:** El refactor actual solo separa prompts sin cambiar comportamiento. El bug reportado originalmente sigue siendo funcional: un deep dive de Logistic Regression puede mencionar Random Forest por el bloque de coherencia de clasificación.
+**Why:** El notebook M3 ya enruta variantes `lr_only`, `rf_only` y `lr_rf_contrast`, pero los textos narrativos de M3/M4/M5 aún pueden contener lenguaje de contraste heredado.
 
 **Pros:** Alinea el contenido generado con la intención del docente y evita ruido pedagógico cuando el caso pide foco en un solo algoritmo.
 
-**Cons:** Requiere tocar lógica/prompt assembly sensible, probablemente pasando `algorithm_mode` y/o metadata de algoritmos al bloque de clasificación. Debe hacerse en PR dedicado con review de `graph.py`.
+**Cons:** Requiere tocar lógica/prompt assembly sensible y validar grounding narrativo sin debilitar Issue #243. Debe hacerse en PR dedicado con review de `graph.py`.
 
-**Context:** Este PR extrae los prompts de clasificación a `case_generator.prompts.clasificacion` con re-exports compatibles y hashes intactos. El arreglo mode-aware debe ser el siguiente cambio funcional, no parte del refactor sin comportamiento.
+**Context:** Issue #230 notebook variants ya cubre el notebook M3 y mantiene el prompt público de clasificación como contraste por compatibilidad. Este TODO queda para el contenido visible de M3/M4/M5.
+
+---
+
+## TODO-230-E: Suite eval/golden para notebooks de clasificación por variante
+
+**What:** Diseñar una suite de evaluación/golden para comparar salidas reales de notebook `lr_only`, `rf_only` y `lr_rf_contrast` con criterios de calidad pedagógica, runtime y ausencia de fugas del modelo no seleccionado.
+
+**Why:** Los tests determinísticos protegen exports, sentinelas, chart budget, scrubber y validator, pero no juzgan si el notebook generado por LLM mantiene buen razonamiento, celdas ejecutables completas y explicaciones útiles para distintos datasets.
+
+**Pros:** Daría una señal fuerte antes de futuros cambios de prompt; permitiría detectar regresiones sutiles en single-mode sin depender solo de unit tests estructurales.
+
+**Cons:** Requiere fixtures estables, criterios de scoring y mantenimiento de baselines. Si usa live LLM, debe quedar marcado como `live_llm` opt-in por costo y flakiness.
+
+**Context:** Issue #230 introduce builders determinísticos desde el prompt legacy y routing en `m3_notebook_generator`. La eval debe cubrir al menos Logistic Regression single, Random Forest single y contraste LR/RF sobre un contrato de dataset binario pequeño y otro con edge cases de clases raras.
 
 ---
 
