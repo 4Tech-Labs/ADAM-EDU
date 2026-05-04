@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from pydantic import ValidationError
 
 from case_generator import graph as graph_module
 from case_generator.orchestration.frontend_output_adapter import (
@@ -26,6 +27,7 @@ from case_generator.prompts import (
 )
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
+    GeneradorPreguntasM5Output,
     PreguntaMinimalista,
 )
 from shared.case_sanitization import build_teacher_case_review_payload
@@ -126,6 +128,32 @@ def _valid_question_payload() -> dict[str, object]:
     }
 
 
+def _valid_m5_memo_question_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "numero": 1,
+        "titulo": "Memorándum ejecutivo",
+        "enunciado": (
+            "Redacta un memorándum ejecutivo para la Junta Directiva que tome la "
+            "decisión final del caso, use evidencia de M1-M4, responda al riesgo "
+            "principal y defina un plan de implementación."
+        ),
+        "solucion_esperada": (
+            "La recomendación debe tomar una decisión explícita, explicar el criterio "
+            "ejecutivo y conectar la postura con la pregunta eje.\n\n"
+            "La evidencia debe usar datos del caso y distinguir hallazgos de M2, M3 y M4 "
+            "sin inventar cifras.\n\n"
+            "El memo debe responder al riesgo principal con mitigación responsable y observable.\n\n"
+            "La implementación debe definir hitos, responsables y métricas dentro del plazo.\n\n"
+            "El cierre debe relacionar la decisión con un marco académico reconocido."
+        ),
+        "bloom_level": "synthesis",
+        "modules_integrated": ["M1", "M2", "M3", "M4", "M5"],
+        "is_solucion_docente_only": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _classification_state() -> dict[str, object]:
     return {
         "studentProfile": "ml_ds",
@@ -149,6 +177,33 @@ def test_question_contract_drops_legacy_rubric_metadata() -> None:
 
     assert "rubric" not in question.model_dump()
     assert not hasattr(question, "rubric")
+
+
+def test_m5_output_contract_requires_exactly_one_memo_question() -> None:
+    valid = GeneradorPreguntasM5Output.model_validate(
+        {"preguntas": [_valid_m5_memo_question_payload()]}
+    )
+
+    assert len(valid.preguntas) == 1
+    assert valid.preguntas[0].numero == 1
+
+    with pytest.raises(ValidationError):
+        GeneradorPreguntasM5Output.model_validate({"preguntas": []})
+
+    with pytest.raises(ValidationError):
+        GeneradorPreguntasM5Output.model_validate(
+            {
+                "preguntas": [
+                    _valid_m5_memo_question_payload(),
+                    _valid_m5_memo_question_payload(),
+                ]
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        GeneradorPreguntasM5Output.model_validate(
+            {"preguntas": [_valid_m5_memo_question_payload(numero=2)]}
+        )
 
 
 def test_case_architect_output_accepts_optional_pregunta_eje_and_legacy_absence() -> None:
@@ -255,6 +310,17 @@ def test_question_prompts_do_not_request_teacher_rubrics() -> None:
         assert "rúbrica para docente" not in prompt
 
 
+def test_m5_prompts_request_single_final_memo_without_legacy_three_question_copy() -> None:
+    assert "EXACTAMENTE 1 consigna" in M5_QUESTIONS_GENERATOR_PROMPT
+    assert "memorándum ejecutivo" in M5_QUESTIONS_GENERATOR_PROMPT
+    assert "decisión final" in M5_QUESTIONS_GENERATOR_PROMPT
+    assert "EXACTAMENTE 3 preguntas" not in M5_QUESTIONS_GENERATOR_PROMPT
+    assert "Las 3 preguntas" not in M5_QUESTIONS_GENERATOR_PROMPT
+    assert "Diseña las 3 preguntas" not in M5_QUESTIONS_GENERATOR_PROMPT
+    assert "3 preguntas" not in M5_CONTENT_GENERATOR_PROMPT
+    assert "una única consigna de memorándum ejecutivo" in M5_CONTENT_GENERATOR_PROMPT
+
+
 @pytest.mark.parametrize(
     ("node_name", "llm_factory_name", "expected"),
     [
@@ -268,11 +334,6 @@ def test_question_prompts_do_not_request_teacher_rubrics() -> None:
             "m3_questions_generator",
             "_get_writer_llm",
             {"m3_questions": [], "current_agent": "m3_questions_generator"},
-        ),
-        (
-            "m5_questions_generator",
-            "_get_m5_llm",
-            {"m5_questions": [], "current_agent": "m5_questions_generator"},
         ),
     ],
 )
@@ -292,6 +353,40 @@ def test_question_nodes_degrade_on_structured_output_errors(
     result = node(_classification_state(), {})  # type: ignore[arg-type]
 
     assert result == expected
+
+
+def test_m5_question_node_generates_single_final_memo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_llm = _FakeStructuredLLM(
+        [{"preguntas": [_valid_m5_memo_question_payload()]}]
+    )
+    monkeypatch.setattr(
+        graph_module,
+        "_get_m5_llm",
+        lambda *args, **kwargs: fake_llm,
+    )
+
+    result = graph_module.m5_questions_generator(_classification_state(), {})  # type: ignore[arg-type]
+
+    assert result["current_agent"] == "m5_questions_generator"
+    assert result["m5_questions"] == [_valid_m5_memo_question_payload()]
+    assert len(fake_llm.prompts) == 1
+    assert "EXACTAMENTE 1 consigna" in fake_llm.prompts[0]
+    assert "memorándum ejecutivo" in fake_llm.prompts[0]
+
+
+def test_m5_question_node_reraises_structured_output_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        graph_module,
+        "_get_m5_llm",
+        lambda *args, **kwargs: _FailingStructuredLLM(),
+    )
+
+    with pytest.raises(ValueError, match="structured parse failed"):
+        graph_module.m5_questions_generator(_classification_state(), {})  # type: ignore[arg-type]
 
 
 def test_question_parse_errors_still_degrade_outside_classification_contract(

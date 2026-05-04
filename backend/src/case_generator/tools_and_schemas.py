@@ -418,31 +418,31 @@ class GeneradorPreguntasOutput(BaseModel):
 
 
 # ═══════════════════════════════════════════════════════
-# MÓDULO 5 — Preguntas Junta Directiva (schema aislado de PreguntaMinimalista)
-# Diferencia clave: solucion_esperada sin límite de 60 palabras — es la
-# respuesta modelo completa de 4 párrafos (250-300 palabras) que el sistema
-# de IA usará como referencia de calificación comparativa.
+# MÓDULO 5 — Memorándum final (schema aislado de PreguntaMinimalista)
+# Diferencia clave: solucion_esperada sin límite de 60 palabras — es el
+# memorándum modelo que el docente usa como referencia de calificación comparativa.
 # is_solucion_docente_only = True siempre — se filtra en frontend_output_adapter.
 # ═══════════════════════════════════════════════════════
 
 class PreguntaM5(BaseModel):
-    """Pregunta del Módulo 5 — Evaluación Junta Directiva.
+    """Pregunta única del Módulo 5 — Memorándum de decisión final.
 
     Diferencias vs PreguntaMinimalista:
-      - solucion_esperada: sin límite de palabras (respuesta modelo 4 párrafos, 250-300 palabras)
+      - numero: siempre 1 (un único reto final tipo memorándum)
+      - solucion_esperada: memorándum modelo con decisión, evidencia, riesgo y plan
       - bloom_level: restringido a 'evaluation' | 'synthesis'
       - modules_integrated: requerido (siempre integra múltiples módulos)
       - is_solucion_docente_only: siempre True — frontend_output_adapter filtra este campo
     """
-    numero: int = Field(description="Número secuencial de la pregunta (1, 2 o 3)")
+    numero: Literal[1] = Field(description="Número fijo del reto final: siempre 1")
     titulo: str = Field(description="Título corto y descriptivo de la pregunta (≤8 palabras)")
-    enunciado: str = Field(description="Pregunta dirigida al estudiante en su rol de Junta Directiva")
+    enunciado: str = Field(description="Consigna dirigida al estudiante para redactar el memorándum final")
     solucion_esperada: str = Field(
         description=(
-            "Respuesta modelo completa en exactamente 4 párrafos (250-300 palabras total). "
-            "Párrafo 1: concepto teórico. Párrafo 2: aplicación a datos del caso. "
-            "Párrafo 3: implicación ejecutiva. Párrafo 4: marco académico reconocido. "
-            "Visible SOLO al docente. Usada como referencia para calificación por IA."
+            "Memorándum modelo docente-only que toma una decisión final del caso, "
+            "usa evidencia concreta de M1-M4, aborda el riesgo principal, define un "
+            "plan de implementación y explicita el razonamiento académico/gerencial. "
+            "Visible SOLO al docente. Usado como referencia para calificación por IA."
         )
     )
     bloom_level: Literal["evaluation", "synthesis"]
@@ -456,8 +456,12 @@ class PreguntaM5(BaseModel):
 
 
 class GeneradorPreguntasM5Output(BaseModel):
-    """Salida del m5_questions_generator — EXACTAMENTE 3 preguntas de Junta Directiva."""
-    preguntas: list[PreguntaM5] = Field(description="Exactamente 3 preguntas de evaluación final")
+    """Salida del m5_questions_generator — exactamente 1 memorándum final."""
+    preguntas: list[PreguntaM5] = Field(
+        min_length=1,
+        max_length=1,
+        description="Exactamente 1 consigna de memorándum de decisión final",
+    )
 
 
 # ═══════════════════════════════════════════════════════

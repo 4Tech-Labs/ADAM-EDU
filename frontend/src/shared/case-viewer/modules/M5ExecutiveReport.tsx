@@ -37,7 +37,7 @@ export function M5ExecutiveReport({ content, md, isEDA, isMLDS, renderPreguntas 
                 />
             )}
 
-            {/* 3 preguntas de Junta Directiva con respuestas modelo para el docente */}
+            {/* Memorándum final con respuesta modelo para el docente */}
             {content.m5Questions && content.m5Questions.length > 0 && (() => {
                 const solutionsMap = Object.fromEntries(
                     (content.m5QuestionsSolutions ?? []).map(s => [s.numero, s.solucion_esperada])
@@ -48,7 +48,7 @@ export function M5ExecutiveReport({ content, md, isEDA, isMLDS, renderPreguntas 
                 }));
                 return (
                     <>
-                        <div className="section-divider mb-8"><span>Preguntas — Junta Directiva</span></div>
+                        <div className="section-divider mb-8"><span>Memorándum — Decisión Final</span></div>
                         {renderPreguntas("m5", enrichedQuestions)}
                     </>
                 );

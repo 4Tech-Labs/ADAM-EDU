@@ -4,6 +4,38 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
+## TODO-M5-A: Evaluar contrato dedicado `m5Memo` para memorándum final
+
+**What:** Evaluar si M5 debe evolucionar desde el contrato compatible actual `m5Questions[0]` / `m5QuestionsSolutions[0]` hacia un artefacto explícito `m5Memo` con UI y grading propios.
+
+**Why:** El cambio actual mantiene el contrato de preguntas para minimizar riesgo de despliegue y compatibilidad con casos históricos. Si el memorándum final se vuelve una experiencia de evaluación distinta, un contrato dedicado podría expresar mejor el dominio.
+
+**Pros:** Permitiría una UI de memo más rica, validaciones semánticas específicas y un flujo de calificación diseñado para documentos ejecutivos largos en vez de tarjetas de pregunta.
+
+**Cons:** Requiere migración o compatibilidad dual, tocar backend output adapters, sanitización, student runtime, teacher submission detail y frontend preview. Aumenta la superficie de QA.
+
+**Context:** La implementación de M5 memo en este PR conserva `m5_questions` como lista de longitud 1 porque `frontend_output_adapter`, sanitizers, student/teacher reads y `renderPreguntas` ya soportan ese shape. Empezar por `m5_questions_generator`, `frontend_output_adapter`, `M5ExecutiveReport` y los fallbacks de teacher submission detail.
+
+**Depends on / blocked by:** Decisión de producto de que el memo final necesita UI/grading distinto al flujo actual de preguntas. No bloquea el rollout de M5 como una sola consigna tipo memo.
+
+---
+
+## TODO-M5-B: Suite eval/golden para calidad del memorándum M5
+
+**What:** Diseñar una suite de evaluación para el prompt de M5 memo en casos `business`, `ml_ds + clasificacion` y al menos un caso sin M2/M3 ejecutado.
+
+**Why:** Los tests determinísticos protegen schema, copy y no filtrado de soluciones, pero no juzgan si el memorándum generado toma una decisión fuerte, usa evidencia real, responde al riesgo principal y mantiene calidad pedagógica.
+
+**Pros:** Daría una señal de calidad antes de futuros cambios de prompt; ayudaría a comparar baselines y evitar regresiones sutiles de coherencia ejecutiva.
+
+**Cons:** Requiere fixtures, criterios de scoring y mantenimiento de baselines. Si usa live LLM, añade costo, latencia y potencial flakiness.
+
+**Context:** El prompt M5 ahora pide una consigna única de memorándum y una `solucion_esperada` modelo con decisión, evidencia, riesgo, implementación y criterio académico. La suite debería verificar que no invente cifras, no reintroduzca rúbricas ni términos que disparen falsos positivos conocidos del grounding narrativo.
+
+**Depends on / blocked by:** Definir harness de eval/golden estable y confirmar si la suite será puramente fixture-based o marcada como `live_llm` opt-in.
+
+---
+
 ## TODO-243-A: Excepción estrecha para umbrales prospectivos en grounding narrativo
 
 **What:** Evaluar si `validate_narrative_grounding` debe permitir números técnicos dentro de contextos explícitamente prospectivos, como "Condición mínima de éxito", "target futuro" o recomendaciones de monitoreo, sin tratarlos como métricas ejecutadas del notebook.
