@@ -135,7 +135,7 @@ def _valid_m1_question_payloads() -> list[dict[str, object]]:
     return [
         {
             "numero": 1,
-            "titulo": "Raiz del dilema",
+            "titulo": "Raíz del dilema",
             "enunciado": "¿Cuál es la causa raíz del dilema de RetenCo según Exhibit 1?",
             "solucion_esperada": "Debe distinguir síntoma operativo de causa económica usando Exhibit 1.",
             "bloom_level": "comprehension",
@@ -151,7 +151,7 @@ def _valid_m1_question_payloads() -> list[dict[str, object]]:
         },
         {
             "numero": 3,
-            "titulo": "Supuesto fragil",
+            "titulo": "Supuesto frágil",
             "enunciado": (
                 "Tu respuesta es una hipótesis inicial que revisarás con evidencia "
                 "posterior del caso. ¿Qué opción defenderías y qué supuesto verificarías?"
@@ -537,8 +537,8 @@ def test_m5_question_node_uses_complex_history_from_three_m1_questions(
     assert len(fake_llm.prompts) == 1
     prompt = fake_llm.prompts[0]
     assert "Trade-off operativo" in prompt
-    assert "Supuesto fragil" in prompt
-    assert "Raiz del dilema" not in prompt
+    assert "Supuesto frágil" in prompt
+    assert "Raíz del dilema" not in prompt
 
 
 def test_m5_question_node_reraises_structured_output_errors(
