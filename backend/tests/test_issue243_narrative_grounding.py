@@ -29,6 +29,7 @@ from case_generator.prompts import (
     M5_CONTENT_GENERATOR_PROMPT,
     M5_PROMPT_BY_FAMILY,
     M5_PROMPT_CLASSIFICATION,
+    M5_QUESTIONS_GENERATOR_PROMPT,
 )
 
 
@@ -157,6 +158,23 @@ def test_contextualization_preserves_violation_when_fragment_is_missing() -> Non
     )
 
     assert contextualized == ["UNANCHORED: 70", "CITA: paper"]
+
+
+def test_contextualizes_citation_with_prior_output_fragment() -> None:
+    prose = (
+        "La recomendación se apoya en evidencia del caso. "
+        "Según el estudio, el marco externo confirma la decisión. "
+        "La Junta debe deliberar con datos propios."
+    )
+
+    contextualized = contextualize_grounding_violations(
+        prose,
+        ["CITA: Según el estudio"],
+    )
+
+    assert contextualized == [
+        'CITA: Según el estudio -> "Según el estudio, el marco externo confirma la decisión."'
+    ]
 
 
 def test_validator_allows_business_numbers_from_case_context() -> None:
@@ -303,16 +321,31 @@ def test_validator_flags_citation_patterns() -> None:
     block = build_computed_metrics_block(SUMMARY)
 
     violations = validate_narrative_grounding(
-        "Según el estudio, la mejora coincide con Pérez et al. (2023).",
+        "Según el estudio, Segun estudio adicional, la mejora coincide con Pérez et al. (2023).",
         block,
     )
 
     citation_violations = [v for v in violations if v.startswith("CITA: ")]
-    assert len(citation_violations) == 3
+    assert len(citation_violations) == 4
     assert any("según el estudio" in v.lower() for v in citation_violations)
+    assert any("segun estudio" in v.lower() for v in citation_violations)
     assert any("et al." in v.lower() for v in citation_violations)
     assert any("(2023)" in v for v in citation_violations)
     assert all(not v.startswith("UNANCHORED: 2023") for v in violations)
+
+
+def test_validator_allows_standalone_paper_and_negative_no_citation_phrases() -> None:
+    block = build_computed_metrics_block(SUMMARY)
+
+    allowed_samples = [
+        "El comité redacta un position paper interno sin usar fuentes externas.",
+        "El estudiante debe responder sin citar papers inventados.",
+        "Marco académico: sin citar fuentes externas inventadas.",
+        "NUNCA cites estudios externos, autores ni referencias académicas fabricadas.",
+    ]
+
+    for sample in allowed_samples:
+        assert validate_narrative_grounding(sample, block) == []
 
 
 def test_validator_strips_date_ranges_but_keeps_percentages() -> None:
@@ -344,7 +377,8 @@ def test_prompts_inject_computed_metrics_block_only_for_classification() -> None
     )
 
     literal_rule = (
-        "NUNCA cites estudios externos, papers, autores ni estadísticas de industria. "
+        "NUNCA cites estudios externos, autores, referencias académicas fabricadas "
+        "ni estadísticas de industria. "
         "Razona EXCLUSIVAMENTE sobre `{computed_metrics_block}` y el contexto del caso. "
         "Si una métrica de rendimiento o interpretabilidad del modelo (AUC, F1, "
         "precisión, recall, prevalencia, coeficiente, importancia, etc.) no está "
@@ -359,6 +393,8 @@ def test_prompts_inject_computed_metrics_block_only_for_classification() -> None
         assert "computed_metrics_block" in prompt
     assert literal_rule in rendered
     assert "auc_lr: 0.7234" in rendered
+    assert "paper" not in M5_PROMPT_CLASSIFICATION.lower()
+    assert "paper" not in M5_QUESTIONS_GENERATOR_PROMPT.lower()
 
     for family in ("regresion", "clustering", "serie_temporal"):
         assert M3_CONTENT_PROMPT_BY_FAMILY[family] is M3_EXPERIMENT_PROMPT
@@ -386,6 +422,7 @@ def test_reprompt_once_then_runtime_error_on_repeat_violation(monkeypatch: pytes
 
     assert len(fake_llm.prompts) == 2
     assert "- CITA:" in fake_llm.prompts[1]
+    assert "Según el estudio, el modelo funcionó." in fake_llm.prompts[1]
 
 
 def test_reprompt_includes_unanchored_prior_output_fragment(monkeypatch: pytest.MonkeyPatch) -> None:

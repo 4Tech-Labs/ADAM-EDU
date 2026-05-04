@@ -1626,7 +1626,7 @@ defendiendo tu postura con evidencia de los módulos M1–M4.
 2. **Aplicación al caso:** Conecta el concepto con los datos y hallazgos específicos del caso.
 3. **Implicación ejecutiva:** Argumenta cómo este análisis define la decisión de la Junta.
 4. **Marco académico:** Relaciona tu postura con un framework reconocido
-   (Porter, Kahneman, Prahalad, Kotter u otro marco sólido — sin citar papers inventados).
+    (Porter, Kahneman, Prahalad, Kotter u otro marco sólido — sin citar fuentes externas inventadas).
 
 *Las preguntas aparecerán a continuación en el sistema.*
 
@@ -1663,7 +1663,7 @@ _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK = """\
 {computed_metrics_block}
 
 # Prohibición literal de grounding narrativo
-NUNCA cites estudios externos, papers, autores ni estadísticas de industria. Razona EXCLUSIVAMENTE sobre `{{computed_metrics_block}}` y el contexto del caso. Si una métrica de rendimiento o interpretabilidad del modelo (AUC, F1, precisión, recall, prevalencia, coeficiente, importancia, etc.) no está en `{{computed_metrics_block}}`, NO la escribas. Los números de negocio deben venir de M2, Exhibits o M4.
+NUNCA cites estudios externos, autores, referencias académicas fabricadas ni estadísticas de industria. Razona EXCLUSIVAMENTE sobre `{{computed_metrics_block}}` y el contexto del caso. Si una métrica de rendimiento o interpretabilidad del modelo (AUC, F1, precisión, recall, prevalencia, coeficiente, importancia, etc.) no está en `{{computed_metrics_block}}`, NO la escribas. Los números de negocio deben venir de M2, Exhibits o M4.
 """
 
 _M3_CLASSIFICATION_COHERENCE_BLOCK = """\
@@ -1789,7 +1789,7 @@ Párrafo 3 — Implicación ejecutiva (70-90 palabras): argumenta cómo este an�
 Párrafo 4 — Marco académico (40-60 palabras): relaciona la postura con un framework reconocido.
   REGLA ANTI-ALUCINACIÓN: citar SOLO frameworks ampliamente reconocidos (Porter, Kahneman,
   Prahalad, Kotter, Christensen, Osterwalder). Formato: "Según [Marco/Autor] ([concepto])..."
-  PROHIBIDO inventar títulos de papers, años específicos o autores desconocidos.
+  PROHIBIDO inventar títulos de fuentes externas, años específicos o autores desconocidos.
 
 # How You Work (Workflow)
 1. **Lee el contexto completo:** m5_content (informe de resolución), hallazgos M3/M4.
@@ -1807,7 +1807,7 @@ Párrafo 4 — Marco académico (40-60 palabras): relaciona la postura con un fr
 - EXACTAMENTE 3 preguntas — ni más, ni menos.
 - P2 DEBE usar el `{main_risk_from_m3_m4}` inyectado — es el push-back específico del caso.
 - P3 DEBE usar `{implementation_timeframe}` para un marco temporal realista.
-- solucion_esperada: NUNCA menciones papers inventados. Solo frameworks reconocidos sin año.
+- solucion_esperada: NUNCA menciones fuentes externas inventadas. Solo frameworks reconocidos sin año.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}

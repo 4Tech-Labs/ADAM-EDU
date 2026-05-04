@@ -23,7 +23,7 @@ NARRATIVE_GROUNDING_WARNING = (
 _FALLBACK_MARKER = "M3_METRICS_SUMMARY_AUSENTE"
 _NUMBER_RE = re.compile(r"(?<![A-Za-z_])([+-]?\d+(?:[.,]\d+)?)\s*%?")
 _CITATION_RE = re.compile(
-    r"(?i)(según\s+(?:el\s+)?estudio|paper|et\s+al\.|\(\d{4}\))"
+    r"(?i)(seg[uú]n\s+(?:el\s+|un\s+|una\s+)?estudios?|et\s+al\.|\(\d{4}\))"
 )
 _MODEL_METRIC_CONTEXT_RE = re.compile(
     r"(?i)"
@@ -134,14 +134,15 @@ def validate_narrative_grounding(prose: str, metrics_block: str) -> list[str]:
 
 
 def contextualize_grounding_violations(prose: str, violations: list[str]) -> list[str]:
-    """Attach prior-output fragments to UNANCHORED violations for reprompts."""
+    """Attach prior-output fragments to grounding violations for reprompts."""
     contextualized: list[str] = []
     for violation in violations:
         raw_number = _extract_unanchored_raw_number(violation)
-        if raw_number is None:
-            contextualized.append(violation)
-            continue
-        fragment = _find_fragment_containing_number(prose, raw_number)
+        fragment = (
+            _find_fragment_containing_number(prose, raw_number)
+            if raw_number is not None
+            else _find_fragment_containing_citation(prose, violation)
+        )
         if fragment is None:
             contextualized.append(violation)
             continue
@@ -255,16 +256,38 @@ def _extract_unanchored_raw_number(violation: str) -> str | None:
     return raw_number or None
 
 
+def _extract_citation_raw_text(violation: str) -> str | None:
+    prefix = "CITA: "
+    if not violation.startswith(prefix):
+        return None
+    raw_text = violation[len(prefix):].strip()
+    return raw_text or None
+
+
+def _find_fragment_containing_citation(prose: str, violation: str) -> str | None:
+    raw_text = _extract_citation_raw_text(violation)
+    if raw_text is None:
+        return None
+    match = re.search(re.escape(raw_text), prose, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    return _fragment_for_match(prose, match.start(), match.end())
+
+
 def _find_fragment_containing_number(prose: str, raw_number: str) -> str | None:
     match = _find_number_match(prose, raw_number)
     if match is None:
         return None
-    start, end = _sentence_bounds(prose, match.start(), match.end())
+    return _fragment_for_match(prose, match.start(), match.end())
+
+
+def _fragment_for_match(prose: str, match_start: int, match_end: int) -> str | None:
+    start, end = _sentence_bounds(prose, match_start, match_end)
     fragment = " ".join(prose[start:end].strip().split())
     if len(fragment) <= 240:
         return fragment
-    window_start = max(start, match.start() - 90)
-    window_end = min(end, match.end() + 90)
+    window_start = max(start, match_start - 90)
+    window_end = min(end, match_end + 90)
     compact = " ".join(prose[window_start:window_end].strip().split())
     return f"...{compact}..." if compact else None
 
