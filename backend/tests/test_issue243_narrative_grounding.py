@@ -361,6 +361,53 @@ def test_validator_strips_date_ranges_but_keeps_percentages() -> None:
     )
 
 
+def test_validator_allows_zero_metric_placeholder_when_modeling_was_skipped() -> None:
+    block = build_computed_metrics_block(
+        {
+            "modeling_status": "skipped_degenerate_target",
+            "modeling_skip_reason": "clase minoritaria con solo 1 fila",
+            "prevalence": 0.005,
+        }
+    )
+
+    assert validate_narrative_grounding(
+        "El notebook no reportó AUC: 0 ni F1: 0 porque no era válido entrenar.",
+        block,
+    ) == []
+    assert "UNANCHORED: 0" in validate_narrative_grounding(
+        "El notebook sí calculó la prevalencia, pero la prevalencia fue 0%.",
+        block,
+    )
+    assert "UNANCHORED: 87" in validate_narrative_grounding(
+        "El notebook no entrenó modelo, pero AUC 87% sería una mejora clara.",
+        block,
+    )
+
+
+def test_validator_does_not_treat_textual_skip_reason_digits_as_anchors() -> None:
+    block = build_computed_metrics_block(
+        {
+            "modeling_status": "skipped_degenerate_target",
+            "modeling_skip_reason": "clase minoritaria con solo 1 fila",
+            "prevalence": 0.005,
+        }
+    )
+
+    assert "UNANCHORED: 1" in validate_narrative_grounding(
+        "El AUC 1 sería perfecto, pero no está anclado.",
+        block,
+    )
+
+
+def test_validator_still_flags_zero_metric_when_modeling_was_not_skipped() -> None:
+    block = build_computed_metrics_block({"auc_lr": 0.7234})
+
+    assert "UNANCHORED: 0" in validate_narrative_grounding(
+        "El AUC fue 0 tras el ajuste.",
+        block,
+    )
+
+
 def test_prompts_inject_computed_metrics_block_only_for_classification() -> None:
     rendered = M4_PROMPT_CLASSIFICATION.format(
         contexto_m1="M1",
@@ -417,9 +464,10 @@ def test_reprompt_once_then_runtime_error_on_repeat_violation(monkeypatch: pytes
         MagicMock(return_value=SimpleNamespace(writer_model="fake")),
     )
 
-    with pytest.raises(RuntimeError, match="narrative grounding"):
+    with pytest.raises(RuntimeError, match="narrative grounding") as exc_info:
         graph_module.m4_content_generator(_base_state(), config={})
 
+    assert "Pérez et al. confirma el mismo resultado." in str(exc_info.value)
     assert len(fake_llm.prompts) == 2
     assert "- CITA:" in fake_llm.prompts[1]
     assert "Según el estudio, el modelo funcionó." in fake_llm.prompts[1]
@@ -560,6 +608,66 @@ def test_grounding_disabled_when_summary_has_no_numeric_anchors(
     assert update["m4_content"] == "El AUC fue 87%."
     assert update["narrative_grounding_warning"] == NARRATIVE_GROUNDING_WARNING
     assert len(fake_llm.prompts) == 1
+
+
+def test_m4_allows_zero_metric_placeholders_when_m3_modeling_was_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    m4_output = (
+        "El notebook no reportó AUC: 0 ni F1: 0 porque la clase minoritaria "
+        "no tenía soporte suficiente. La prevalencia computada fue 0.5%."
+    )
+    fake_llm = _FakeLLM([m4_output])
+    monkeypatch.setattr(graph_module, "_get_m4_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(
+        graph_module.Configuration,
+        "from_runnable_config",
+        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+    )
+
+    update = graph_module.m4_content_generator(
+        _base_state(
+            metrics_summary={
+                "modeling_status": "skipped_degenerate_target",
+                "modeling_skip_reason": "clase minoritaria con solo 1 fila",
+                "prevalence": 0.005,
+            }
+        ),
+        config={},
+    )
+
+    assert update["m4_content"] == m4_output
+    assert len(fake_llm.prompts) == 1
+
+
+def test_m4_still_reprompts_positive_metric_when_m3_modeling_was_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_llm = _FakeLLM([
+        "El notebook no entrenó modelo, pero AUC 87% sería una mejora clara.",
+        "El notebook no reportó AUC: 0 porque no era válido entrenar.",
+    ])
+    monkeypatch.setattr(graph_module, "_get_m4_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(
+        graph_module.Configuration,
+        "from_runnable_config",
+        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+    )
+
+    update = graph_module.m4_content_generator(
+        _base_state(
+            metrics_summary={
+                "modeling_status": "skipped_degenerate_target",
+                "modeling_skip_reason": "clase minoritaria con solo 1 fila",
+                "prevalence": 0.005,
+            }
+        ),
+        config={},
+    )
+
+    assert update["m4_content"] == "El notebook no reportó AUC: 0 porque no era válido entrenar."
+    assert len(fake_llm.prompts) == 2
+    assert "UNANCHORED: 87" in fake_llm.prompts[1]
 
 
 def test_m4_graph_reaches_sync_after_contextualized_reprompt(

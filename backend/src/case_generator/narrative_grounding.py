@@ -31,6 +31,9 @@ _MODEL_METRIC_CONTEXT_RE = re.compile(
     r"especificidad|prevalencia|prevalence|baseline|dummy|coeficiente|coefficient|"
     r"importancia|importance|feature|variable|shap|permutation)\b"
 )
+_SKIPPED_ZERO_PLACEHOLDER_CONTEXT_RE = re.compile(
+    r"(?i)\b(auc|roc|f1|accuracy|exactitud|precision|precisión|recall|sensibilidad|especificidad)\b"
+)
 _ADJACENT_MODEL_METRIC_NUMBER_RE = re.compile(
     r"(?i)"
     r"(?<![A-Za-z_])"
@@ -58,6 +61,11 @@ _PARAGRAPH_RULE_RE = re.compile(
     r"\b(?:regla\s+de\s+los\s+)?\d+\s+p[aá]rrafos\b",
     flags=re.IGNORECASE,
 )
+_MODELING_SKIPPED_STATUSES = {
+    "skipped_degenerate_target",
+    "skipped_non_binary_target",
+    "skipped_no_features",
+}
 
 
 def build_computed_metrics_block(metrics_summary: dict | None) -> str:
@@ -125,9 +133,16 @@ def validate_narrative_grounding(prose: str, metrics_block: str) -> list[str]:
 
     violations = [f"CITA: {match.group(0)}" for match in _CITATION_RE.finditer(prose)]
     anchors = _extract_anchor_numbers(metrics_block)
+    modeling_was_skipped = _metrics_block_declares_modeling_skipped(metrics_block)
     numeric_prose = _strip_m5_decision_matrix_kpi_cells(prose)
     numeric_prose = _strip_structural_numbers_for_numeric_anchoring(numeric_prose)
-    for raw_number, found in _iter_model_metric_numbers(numeric_prose):
+    for raw_number, found, allows_skipped_zero_placeholder in _iter_model_metric_numbers(numeric_prose):
+        if (
+            modeling_was_skipped
+            and allows_skipped_zero_placeholder
+            and math.isclose(found, 0.0, abs_tol=1e-12)
+        ):
+            continue
         if not any(_within_tolerance(found, anchor) for anchor in anchors):
             violations.append(f"UNANCHORED: {raw_number}")
     return violations
@@ -210,6 +225,8 @@ def _extract_anchor_numbers(metrics_block: str) -> list[float]:
         if ":" not in line:
             continue
         value = line.split(":", 1)[1]
+        if not re.match(r"\s*[+-]?\d", value):
+            continue
         for match in _NUMBER_RE.finditer(value):
             anchors.append(float(match.group(1).replace(",", ".")))
     return anchors
@@ -222,14 +239,29 @@ def has_metric_anchors(metrics_block: str) -> bool:
     return bool(_extract_anchor_numbers(metrics_block))
 
 
-def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float]]:
-    matches: list[tuple[int, str, float]] = []
+def _metrics_block_declares_modeling_skipped(metrics_block: str) -> bool:
+    for line in metrics_block.splitlines():
+        key, separator, value = line.partition(":")
+        if separator != ":" or key.strip().lower() != "modeling_status":
+            continue
+        return value.strip().lower() in _MODELING_SKIPPED_STATUSES
+    return False
+
+
+def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float, bool]]:
+    matches: list[tuple[int, str, float, bool]] = []
     consumed_spans: list[tuple[int, int]] = []
 
     for match in _ADJACENT_MODEL_METRIC_NUMBER_RE.finditer(prose):
         raw_number = match.group("value").replace(",", ".")
         value_span = match.span("value")
-        matches.append((value_span[0], raw_number, float(raw_number)))
+        segment = match.group(0)
+        matches.append((
+            value_span[0],
+            raw_number,
+            float(raw_number),
+            _allows_skipped_zero_placeholder(segment),
+        ))
         consumed_spans.append(value_span)
 
     for match in _NUMBER_RE.finditer(prose):
@@ -239,9 +271,18 @@ def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float]]:
         if not _is_model_metric_number(prose, match):
             continue
         raw_number = match.group(1).replace(",", ".")
-        matches.append((value_span[0], raw_number, float(raw_number)))
+        segment = _model_metric_clause(prose, value_span[0], value_span[1])
+        matches.append((
+            value_span[0],
+            raw_number,
+            float(raw_number),
+            _allows_skipped_zero_placeholder(segment),
+        ))
 
-    return [(raw_number, found) for _start, raw_number, found in sorted(matches)]
+    return [
+        (raw_number, found, allows_skipped_zero_placeholder)
+        for _start, raw_number, found, allows_skipped_zero_placeholder in sorted(matches)
+    ]
 
 
 def _spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
@@ -326,15 +367,21 @@ def _is_model_metric_number(prose: str, match: re.Match[str]) -> bool:
     sentence mixes a legitimate model metric ("AUC 72%") with business figures
     ("ROI 35%"), a pattern that occurs in M4 ml_ds Harvard prose.
     """
-    start = match.start()
-    end = match.end()
+    segment = _model_metric_clause(prose, match.start(), match.end())
+    return bool(_MODEL_METRIC_CONTEXT_RE.search(segment))
+
+
+def _model_metric_clause(prose: str, start: int, end: int) -> str:
     seg_start = 0
     for boundary in _CLAUSE_BOUNDARY_RE.finditer(prose, 0, start):
         seg_start = boundary.end()
     forward = _CLAUSE_BOUNDARY_RE.search(prose, end)
     seg_end = forward.start() if forward else len(prose)
-    segment = prose[seg_start:seg_end]
-    return bool(_MODEL_METRIC_CONTEXT_RE.search(segment))
+    return prose[seg_start:seg_end]
+
+
+def _allows_skipped_zero_placeholder(segment: str) -> bool:
+    return bool(_SKIPPED_ZERO_PLACEHOLDER_CONTEXT_RE.search(segment))
 
 
 def _strip_structural_numbers_for_numeric_anchoring(prose: str) -> str:

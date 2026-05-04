@@ -118,6 +118,7 @@ from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
     execute_m3_notebook,
     format_execution_failure_for_prompt,
+    is_m3_quality_warning_blocking,
 )
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
@@ -3538,14 +3539,15 @@ def _invoke_narrative_with_grounding(
     prose = sanitize_markdown(_extract_text(response2))
     violations2 = validate_narrative_grounding(prose, metrics_block)
     if violations2:
+        contextualized_violations2 = contextualize_grounding_violations(prose, violations2)
         logger.error(
             "[%s] Reprompt narrative grounding falló — violations=%s",
             node_name,
-            violations2,
+            contextualized_violations2,
         )
         raise RuntimeError(
             f"{node_name} narrative grounding falló incluso tras un reprompt: "
-            f"{violations2}. Job marcado como fallido para evitar narrativa "
+            f"{contextualized_violations2}. Job marcado como fallido para evitar narrativa "
             "con números o citas no ancladas."
         )
     print(f"[{node_name}] Reprompt narrative grounding OK")
@@ -4356,6 +4358,12 @@ def m3_notebook_executor(state: ADAMState, config: RunnableConfig) -> dict:
                 notebook_code=notebook_code,
                 dataset_rows=cast(list[dict[str, Any]], dataset_rows),
             )
+            if is_m3_quality_warning_blocking(result.quality_warning, result.metrics_summary):
+                raise M3NotebookExecutionError(
+                    "M3 notebook quality gate failed.",
+                    diagnostics=result.quality_warning,
+                    kind="quality_gate",
+                )
             logger.info(
                 "[m3_notebook_executor] attempt=%s success warning=%s",
                 attempt,
@@ -4681,9 +4689,7 @@ def _artifact_cached_output_for_node(node_name: str, state: ADAMState) -> dict[s
 
 def _checkpoint_has_node_output(node_name: str, state: ADAMState) -> bool:
     if node_name == "m3_notebook_executor":
-        return _is_resumable_state_value(
-            state.get("m3_metrics_summary")
-        ) or _is_resumable_state_value(state.get("m3_quality_warning"))
+        return _is_resumable_state_value(state.get("m3_metrics_summary"))
 
     required_keys = _RESUME_NODE_REQUIRED_OUTPUTS.get(node_name, ())
     if not required_keys:

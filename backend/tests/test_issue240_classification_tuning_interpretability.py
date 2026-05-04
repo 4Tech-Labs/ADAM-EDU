@@ -119,6 +119,49 @@ def test_prompt_declares_is_binary_guard_in_each_new_cell() -> None:
         )
 
 
+def test_prompt_adds_imputation_to_classification_pipelines() -> None:
+    """NaNs en features reales no deben romper LR/RF ni tuning/interp."""
+    p = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
+    assert "SimpleImputer" in p
+    assert 'SimpleImputer(strategy="median")' in p
+    assert 'SimpleImputer(strategy="most_frequent")' in p
+    assert 'OneHotEncoder(handle_unknown="ignore")' in p
+
+
+def test_prompt_uses_can_model_binary_for_rare_class_guard() -> None:
+    """Targets 199/1 deben omitirse explícitamente, no intentar AUC falsa."""
+    p = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
+    assert "can_model_binary" in p
+    assert "_min_class_boot >= 2" in p
+    assert "skipped_degenerate_target" in p
+    assert "modeling_status" in p
+
+
+def test_prompt_tuning_uses_preprocess_pipelines_not_raw_mixed_x() -> None:
+    """Tuning debe operar sobre Pipeline(preprocess, clf), no sobre strings/NaNs crudos."""
+    p = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
+    tuning_lr_idx = p.index("# === SECTION:tuning_lr ===")
+    tuning_rf_idx = p.index("# === SECTION:tuning_rf ===")
+    interp_lr_idx = p.index("# === SECTION:interp_lr ===")
+    tuning_lr_cell = p[tuning_lr_idx:tuning_rf_idx]
+    tuning_rf_cell = p[tuning_rf_idx:interp_lr_idx]
+
+    assert '("preprocess", preprocess_tune_lr)' in tuning_lr_cell
+    assert '("preprocess", preprocess_tune_rf)' in tuning_rf_cell
+    assert 'grid_lr = {{"clf__C": [0.01, 0.1, 1, 10]}}' in tuning_lr_cell
+    assert '"clf__max_depth"' in tuning_rf_cell
+    assert '"clf__min_samples_leaf"' in tuning_rf_cell
+    assert '"clf__n_estimators"' in tuning_rf_cell
+
+
+def test_prompt_initializes_algorithm_model_names_before_branching() -> None:
+    """Per-algorithm generated cells must not branch on undefined model_lr/model_rf."""
+    p = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
+    assert "model_lr = None" in p
+    assert "model_rf = None" in p
+    assert "Nunca hagas branch contra una variable de modelo no asignada" in p
+
+
 def test_prompt_uses_vif_manual_fallback_not_statsmodels() -> None:
     """VIF: fallback manual `1/(1-R²)` con LinearRegression de sklearn.
     NO añadir statsmodels como dep (D1, decisión documentada en #240)."""
