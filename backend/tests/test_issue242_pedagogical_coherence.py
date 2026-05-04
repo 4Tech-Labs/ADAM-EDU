@@ -27,6 +27,7 @@ from case_generator.prompts import (
 )
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
+    GeneradorPreguntasM1Output,
     GeneradorPreguntasM5Output,
     PreguntaMinimalista,
 )
@@ -113,8 +114,8 @@ def _valid_m5_matrix() -> str:
 """.strip()
 
 
-def _valid_question_payload() -> dict[str, object]:
-    return {
+def _valid_question_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
         "numero": 1,
         "titulo": "Decision inicial",
         "enunciado": "¿Qué decisión defenderías con la evidencia disponible?",
@@ -126,6 +127,40 @@ def _valid_question_payload() -> dict[str, object]:
             {"criterio": "Decision", "descriptor": "Formula una postura defendible", "peso": 25},
         ],
     }
+    payload.update(overrides)
+    return payload
+
+
+def _valid_m1_question_payloads() -> list[dict[str, object]]:
+    return [
+        {
+            "numero": 1,
+            "titulo": "Raiz del dilema",
+            "enunciado": "¿Cuál es la causa raíz del dilema de RetenCo según Exhibit 1?",
+            "solucion_esperada": "Debe distinguir síntoma operativo de causa económica usando Exhibit 1.",
+            "bloom_level": "comprehension",
+            "exhibit_ref": "Exhibit 1",
+        },
+        {
+            "numero": 2,
+            "titulo": "Trade-off operativo",
+            "enunciado": "¿Qué trade-off surge al cruzar stakeholders de Exhibit 3 con Exhibit 2?",
+            "solucion_esperada": "Debe conectar incentivos de dos actores con una métrica operativa concreta.",
+            "bloom_level": "analysis",
+            "exhibit_ref": "Exhibit 3",
+        },
+        {
+            "numero": 3,
+            "titulo": "Supuesto fragil",
+            "enunciado": (
+                "Tu respuesta es una hipótesis inicial que revisarás con evidencia "
+                "posterior del caso. ¿Qué opción defenderías y qué supuesto verificarías?"
+            ),
+            "solucion_esperada": "Debe elegir A/B/C, justificar con Exhibits y nombrar el supuesto crítico a validar.",
+            "bloom_level": "synthesis",
+            "exhibit_ref": "Exhibit 2",
+        },
+    ]
 
 
 def _valid_m5_memo_question_payload(**overrides: object) -> dict[str, object]:
@@ -177,6 +212,41 @@ def test_question_contract_drops_legacy_rubric_metadata() -> None:
 
     assert "rubric" not in question.model_dump()
     assert not hasattr(question, "rubric")
+
+
+def test_m1_output_contract_requires_exactly_three_numbered_questions() -> None:
+    valid = GeneradorPreguntasM1Output.model_validate(
+        {"preguntas": _valid_m1_question_payloads()}
+    )
+
+    assert [question.numero for question in valid.preguntas] == [1, 2, 3]
+
+    with pytest.raises(ValidationError):
+        GeneradorPreguntasM1Output.model_validate({"preguntas": []})
+
+    with pytest.raises(ValidationError):
+        GeneradorPreguntasM1Output.model_validate(
+            {"preguntas": _valid_m1_question_payloads()[:2]}
+        )
+
+    with pytest.raises(ValidationError):
+        GeneradorPreguntasM1Output.model_validate(
+            {
+                "preguntas": _valid_m1_question_payloads()
+                + [_valid_question_payload(numero=4)]
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        GeneradorPreguntasM1Output.model_validate(
+            {
+                "preguntas": [
+                    _valid_question_payload(numero=1),
+                    _valid_question_payload(numero=3),
+                    _valid_question_payload(numero=2),
+                ]
+            }
+        )
 
 
 def test_m5_output_contract_requires_exactly_one_memo_question() -> None:
@@ -310,6 +380,17 @@ def test_question_prompts_do_not_request_teacher_rubrics() -> None:
         assert "rúbrica para docente" not in prompt
 
 
+def test_case_questions_prompt_requests_three_balanced_m1_questions() -> None:
+    assert "EXACTAMENTE 3 preguntas" in CASE_QUESTIONS_PROMPT
+    assert "EXACTAMENTE 6 preguntas" not in CASE_QUESTIONS_PROMPT
+    assert "integer, 1-3" in CASE_QUESTIONS_PROMPT
+    assert "integer, 1-6" not in CASE_QUESTIONS_PROMPT
+    assert "P1 (comprehension)" in CASE_QUESTIONS_PROMPT
+    assert "P2 (analysis)" in CASE_QUESTIONS_PROMPT
+    assert "P3 (evaluation/synthesis)" in CASE_QUESTIONS_PROMPT
+    assert "Tu respuesta es una hipótesis inicial" in CASE_QUESTIONS_PROMPT
+
+
 def test_m5_prompts_request_single_final_memo_without_legacy_three_question_copy() -> None:
     assert "EXACTAMENTE 1 consigna" in M5_QUESTIONS_GENERATOR_PROMPT
     assert "memorándum ejecutivo" in M5_QUESTIONS_GENERATOR_PROMPT
@@ -324,7 +405,6 @@ def test_m5_prompts_request_single_final_memo_without_legacy_three_question_copy
 @pytest.mark.parametrize(
     ("node_name", "llm_factory_name", "expected"),
     [
-        ("case_questions", "_get_writer_llm", {"doc1_preguntas": []}),
         (
             "eda_questions_generator",
             "_get_writer_llm",
@@ -355,6 +435,66 @@ def test_question_nodes_degrade_on_structured_output_errors(
     assert result == expected
 
 
+def test_case_question_node_generates_exactly_three_m1_questions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_llm = _FakeStructuredLLM(
+        [{"preguntas": _valid_m1_question_payloads()}]
+    )
+    monkeypatch.setattr(
+        graph_module,
+        "_get_writer_llm",
+        lambda *args, **kwargs: fake_llm,
+    )
+
+    result = graph_module.case_questions(_classification_state(), {})  # type: ignore[arg-type]
+
+    assert len(result["doc1_preguntas"]) == 3
+    assert [q["numero"] for q in result["doc1_preguntas"]] == [1, 2, 3]
+    assert [q["bloom_level"] for q in result["doc1_preguntas"]] == [
+        "comprehension",
+        "analysis",
+        "synthesis",
+    ]
+    assert len(fake_llm.prompts) == 1
+    assert "EXACTAMENTE 3 preguntas" in fake_llm.prompts[0]
+
+
+@pytest.mark.parametrize(
+    "questions",
+    [
+        _valid_m1_question_payloads()[:2],
+        _valid_m1_question_payloads() + [_valid_question_payload(numero=4)],
+    ],
+)
+def test_case_question_node_reraises_invalid_m1_question_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    questions: list[dict[str, object]],
+) -> None:
+    fake_llm = _FakeStructuredLLM([{"preguntas": questions}])
+    monkeypatch.setattr(
+        graph_module,
+        "_get_writer_llm",
+        lambda *args, **kwargs: fake_llm,
+    )
+
+    with pytest.raises(ValidationError):
+        graph_module.case_questions(_classification_state(), {})  # type: ignore[arg-type]
+
+
+def test_case_question_node_reraises_structured_output_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        graph_module,
+        "_get_writer_llm",
+        lambda *args, **kwargs: _FailingStructuredLLM(),
+    )
+
+    with pytest.raises(ValueError, match="structured parse failed"):
+        graph_module.case_questions(_classification_state(), {})  # type: ignore[arg-type]
+
+
 def test_m5_question_node_generates_single_final_memo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -376,6 +516,31 @@ def test_m5_question_node_generates_single_final_memo(
     assert "memorándum ejecutivo" in fake_llm.prompts[0]
 
 
+def test_m5_question_node_uses_complex_history_from_three_m1_questions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_llm = _FakeStructuredLLM(
+        [{"preguntas": [_valid_m5_memo_question_payload()]}]
+    )
+    monkeypatch.setattr(
+        graph_module,
+        "_get_m5_llm",
+        lambda *args, **kwargs: fake_llm,
+    )
+
+    result = graph_module.m5_questions_generator(  # type: ignore[arg-type]
+        {**_classification_state(), "doc1_preguntas": _valid_m1_question_payloads()},
+        {},
+    )
+
+    assert result["current_agent"] == "m5_questions_generator"
+    assert len(fake_llm.prompts) == 1
+    prompt = fake_llm.prompts[0]
+    assert "Trade-off operativo" in prompt
+    assert "Supuesto fragil" in prompt
+    assert "Raiz del dilema" not in prompt
+
+
 def test_m5_question_node_reraises_structured_output_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -389,7 +554,7 @@ def test_m5_question_node_reraises_structured_output_errors(
         graph_module.m5_questions_generator(_classification_state(), {})  # type: ignore[arg-type]
 
 
-def test_question_parse_errors_still_degrade_outside_classification_contract(
+def test_case_question_parse_errors_reraise_for_all_m1_profiles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -398,12 +563,11 @@ def test_question_parse_errors_still_degrade_outside_classification_contract(
         lambda *args, **kwargs: _FailingStructuredLLM(),
     )
 
-    result = graph_module.case_questions(  # type: ignore[arg-type]
-        {**_classification_state(), "studentProfile": "business"},
-        {},
-    )
-
-    assert result == {"doc1_preguntas": []}
+    with pytest.raises(ValueError, match="structured parse failed"):
+        graph_module.case_questions(  # type: ignore[arg-type]
+            {**_classification_state(), "studentProfile": "business"},
+            {},
+        )
 
 
 def test_m5_decision_matrix_validator_accepts_exact_contract() -> None:

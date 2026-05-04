@@ -417,6 +417,28 @@ class GeneradorPreguntasOutput(BaseModel):
     preguntas: list[PreguntaMinimalista] = Field(description="Lista de preguntas generadas")
 
 
+class GeneradorPreguntasM1Output(BaseModel):
+    """Salida del case_questions — exactamente 3 preguntas M1."""
+    preguntas: list[PreguntaMinimalista] = Field(
+        min_length=3,
+        max_length=3,
+        description="Exactamente 3 preguntas pedagógicas del Módulo 1",
+    )
+
+    @field_validator("preguntas")
+    @classmethod
+    def _validate_sequential_numbers(
+        cls,
+        preguntas: list[PreguntaMinimalista],
+    ) -> list[PreguntaMinimalista]:
+        numeros = [pregunta.numero for pregunta in preguntas]
+        if numeros != [1, 2, 3]:
+            raise ValueError(
+                "Las preguntas M1 deben estar numeradas exactamente como 1, 2, 3."
+            )
+        return preguntas
+
+
 # ═══════════════════════════════════════════════════════
 # MÓDULO 5 — Memorándum final (schema aislado de PreguntaMinimalista)
 # Diferencia clave: solucion_esperada sin límite de 60 palabras — es el

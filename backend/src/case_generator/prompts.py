@@ -317,13 +317,13 @@ CASE_QUESTIONS_PROMPT = """\
 Eres el Evaluador del Módulo 1 en ADAM, un diseñador instruccional experto en casos Harvard.
 
 # Your Mission
-Generar EXACTAMENTE 6 preguntas pedagógicas usando el JSON schema provisto, que validen
+Generar EXACTAMENTE 3 preguntas pedagógicas usando el JSON schema provisto, que validen
 que el estudiante comprendió el entorno antes de procesar datos.
 
 # JSON Schema Obligatorio (respeta tipos y claves EXACTAS — sin añadir ni eliminar campos)
 [
   {{
-    "numero": 1,                        // integer, 1-6
+    "numero": 1,                        // integer, 1-3
     "titulo": "string corto (≤8 palabras)",
     "enunciado": "string (pregunta completa)",
     "solucion_esperada": "string (máx 60 palabras / 3 líneas)",
@@ -347,7 +347,7 @@ que el estudiante comprendió el entorno antes de procesar datos.
 - Respuesta ESTRICTA al JSON schema arriba. PROHIBIDO Markdown suelto o texto fuera del JSON.
 - NUNCA menciones Python, SQL, algoritmos, código.
 - Las preguntas DEBEN nombrar la empresa ficticia, sus métricas y sus Exhibits.
-- Progresión cognitiva obligatoria: P1-P2 → comprehension, P3-P4 → analysis, P5-P6 → evaluation/synthesis.
+- Progresión cognitiva obligatoria: P1 → comprehension, P2 → analysis, P3 → evaluation/synthesis.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}
@@ -358,21 +358,17 @@ que el estudiante comprendió el entorno antes de procesar datos.
   Evaluar: traducción del problema de negocio a problema de datos, variable objetivo,
   limitaciones de información disponible, hipótesis de trabajo analíticas.
 
-# Estructura de las 6 preguntas
+# Estructura de las 3 preguntas
 - **P1 (comprehension):** "¿De qué trata realmente el caso?" — diferencia entre síntoma y causa raíz.
   Referencia obligatoria a Exhibit 1 o 2.
-- **P2 (comprehension):** Qué información es incierta vs confirmada. Referencia a Exhibit específico.
-- **P3 (analysis):**
-  "business" → cruzar intereses de al menos 2 stakeholders del Exhibit 3.
-  "ml_ds" → definir variable objetivo operacionalmente con los datos disponibles.
-- **P4 (analysis):**
-  "business" → impacto financiero de NO decidir (costo de inacción).
-  "ml_ds" → identificar hipótesis de trabajo y su forma de falsación.
-- **P5 (evaluation):** Elegir entre A, B o C con información INCOMPLETA disponible en M1.
-  Justificar con datos de Exhibits (no con intuición).
-  NOTA PEDAGÓGICA: Esta es una hipótesis temprana. El estudiante SABRÁ que puede cambiar en M2-M4.
-  Incluir en el enunciado: "Tu respuesta es una hipótesis inicial que revisarás con datos en M2."
-- **P6 (synthesis):** Cuál es el supuesto más frágil del dilema y cómo lo verificarías.
+- **P2 (analysis):**
+  "business" → cruzar el interés de al menos 2 stakeholders del Exhibit 3 con una métrica de Exhibit 1 o 2.
+  "ml_ds" → definir la variable objetivo operacionalmente y formular una hipótesis falsable con los datos disponibles.
+- **P3 (evaluation/synthesis):** Elegir entre A, B o C con información INCOMPLETA disponible en M1.
+  Justificar con datos de Exhibits (no con intuición), nombrar el supuesto más frágil y proponer cómo verificarlo.
+  Usa `bloom_level`: "synthesis" si integra supuesto + verificación; "evaluation" si se centra en elegir A/B/C.
+  NOTA PEDAGÓGICA: Esta es una hipótesis temprana. El estudiante SABRÁ que puede cambiar con evidencia posterior del caso.
+  Incluir en el enunciado: "Tu respuesta es una hipótesis inicial que revisarás con evidencia posterior del caso."
 
 # Context
 {architect_output}

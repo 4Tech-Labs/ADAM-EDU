@@ -125,6 +125,7 @@ from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
     EDAAnnotateOnlyOutput,
     EDAChartGeneratorOutput,
+    GeneradorPreguntasM1Output,
     GeneradorPreguntasOutput,
     GeneradorPreguntasM5Output,
     EDAQuestionsOutput,
@@ -983,7 +984,7 @@ def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
 # NODO 2b — CASE QUESTIONS (Flash, paralelo con 2a)
 # ─────────────────────────────────────────────────────────
 def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
-    """Genera las 6 preguntas de discusión del caso."""
+    """Genera las 3 preguntas de discusión M1 del caso."""
     cfg = Configuration.from_runnable_config(config)
     # Fix M-07: 0.5 en vez de 0.7 — preguntas estructuradas Bloom L4-L6
     # requieren consistencia pedagógica, no creatividad narrativa.
@@ -1006,13 +1007,16 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
     prompt = CASE_QUESTIONS_PROMPT.format(**context)
 
     try:
-        resultado: GeneradorPreguntasOutput = llm.with_structured_output(
-            GeneradorPreguntasOutput
+        resultado: GeneradorPreguntasM1Output = llm.with_structured_output(
+            GeneradorPreguntasM1Output
         ).invoke(prompt)
         
         preguntas_dict = [p.model_dump() for p in resultado.preguntas]
         print(f"[case_questions] {len(preguntas_dict)} preguntas generadas")
     except RuntimeError:
+        raise
+    except (ValidationError, OutputParserException, ValueError) as e:
+        logger.warning("[case_questions] OUTPUT INVÁLIDO (reintentando/fallando): %s", e)
         raise
     except Exception as e:
         logger.error("[case_questions] ERROR tras reintentos: %s", e, exc_info=True)
@@ -3181,8 +3185,9 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 "analysis": 2,
             }.get(str(q.get("bloom_level", "")), 3)
         )
-        # Fallback: si no hay preguntas con bloom_level, usar las últimas 3 (P4/P5/P6
-        # son siempre analysis/evaluation/synthesis por diseño del CASE_QUESTIONS_PROMPT)
+        # Fallback histórico: si no hay bloom_level, usar las últimas 3 disponibles.
+        # Payloads nuevos de M1 tienen 3 preguntas balanceadas; el filtro anterior
+        # debe capturar las preguntas complejas por bloom_level cuando el campo existe.
         if not complex_q and all_q:
             complex_q = all_q[-3:]
 
