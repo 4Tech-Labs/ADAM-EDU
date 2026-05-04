@@ -155,11 +155,12 @@ def test_prompt_tuning_uses_preprocess_pipelines_not_raw_mixed_x() -> None:
 
 
 def test_prompt_initializes_algorithm_model_names_before_branching() -> None:
-    """Per-algorithm generated cells must not branch on undefined model_lr/model_rf."""
+    """Generated cells must not branch on undefined pipeline variables."""
     p = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
-    assert "model_lr = None" in p
-    assert "model_rf = None" in p
-    assert "Nunca hagas branch contra una variable de modelo no asignada" in p
+    assert "pipe_lr = None" in p
+    assert "pipe_rf = None" in p
+    assert "try: X_train" in p
+    assert "except NameError" in p
 
 
 def test_prompt_uses_vif_manual_fallback_not_statsmodels() -> None:

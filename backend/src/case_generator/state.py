@@ -76,6 +76,7 @@ class ADAMState(CanonicalInputState):
     industria: str
     descripcion: str
     algoritmos: list[str]    # técnicas ML/analíticas seleccionadas
+    algorithm_mode: NotRequired[str]  # "single" | "contrast" — selección docente Issue #230
     scope: str   # "narrative" | "technical"
 
     # ── Campos internos — case_architect → downstream ──

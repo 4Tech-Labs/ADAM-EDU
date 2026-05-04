@@ -1,6 +1,6 @@
 """Classification-family M3 notebook prompt."""
 
-M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION = """\
+M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LEGACY = """\
 Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para Google Colab.
 El notebook sigue la estructura pedagógica ADAM M3: Concepto → Gráfico Conceptual → Acción de Negocio.
 Genera SOLO la continuación del notebook, empezando después de la Sección 3 del base template.
@@ -1490,4 +1490,15 @@ Contexto M3 (extracto): {m3_content}
 #   dataset_contract_block, data_gap_warnings_block.
 # ════════════════════════════════════════════════════════════════════════════════
 
-__all__ = ["M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION"]
+from case_generator.prompts.clasificacion.notebooks import (
+    M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST,
+)
+
+M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION = (
+    M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST
+)
+
+__all__ = [
+    "M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION",
+    "M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LEGACY",
+]
