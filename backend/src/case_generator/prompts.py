@@ -1626,7 +1626,7 @@ defendiendo tu postura con evidencia de los módulos M1–M4.
 2. **Aplicación al caso:** Conecta el concepto con los datos y hallazgos específicos del caso.
 3. **Implicación ejecutiva:** Argumenta cómo este análisis define la decisión de la Junta.
 4. **Marco académico:** Relaciona tu postura con un framework reconocido
-   (Porter, Kahneman, Prahalad, Kotter u otro marco sólido — sin citar papers inventados).
+    (Porter, Kahneman, Prahalad, Kotter u otro marco sólido — sin citar fuentes externas inventadas).
 
 *Las preguntas aparecerán a continuación en el sistema.*
 
@@ -1663,7 +1663,7 @@ _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK = """\
 {computed_metrics_block}
 
 # Prohibición literal de grounding narrativo
-NUNCA cites estudios externos, papers, autores ni estadísticas de industria. Razona EXCLUSIVAMENTE sobre `{{computed_metrics_block}}` y el contexto del caso. Si una métrica de rendimiento o interpretabilidad del modelo (AUC, F1, precisión, recall, prevalencia, coeficiente, importancia, etc.) no está en `{{computed_metrics_block}}`, NO la escribas. Los números de negocio deben venir de M2, Exhibits o M4.
+NUNCA cites estudios externos, autores, referencias académicas fabricadas ni estadísticas de industria. Razona EXCLUSIVAMENTE sobre `{{computed_metrics_block}}` y el contexto del caso. Si una métrica de rendimiento o interpretabilidad del modelo (AUC, F1, precisión, recall, prevalencia, coeficiente, importancia, etc.) no está en `{{computed_metrics_block}}`, NO la escribas. Los números de negocio deben venir de M2, Exhibits o M4.
 """
 
 _M3_CLASSIFICATION_COHERENCE_BLOCK = """\
@@ -1789,7 +1789,7 @@ Párrafo 3 — Implicación ejecutiva (70-90 palabras): argumenta cómo este an�
 Párrafo 4 — Marco académico (40-60 palabras): relaciona la postura con un framework reconocido.
   REGLA ANTI-ALUCINACIÓN: citar SOLO frameworks ampliamente reconocidos (Porter, Kahneman,
   Prahalad, Kotter, Christensen, Osterwalder). Formato: "Según [Marco/Autor] ([concepto])..."
-  PROHIBIDO inventar títulos de papers, años específicos o autores desconocidos.
+  PROHIBIDO inventar títulos de fuentes externas, años específicos o autores desconocidos.
 
 # How You Work (Workflow)
 1. **Lee el contexto completo:** m5_content (informe de resolución), hallazgos M3/M4.
@@ -1807,7 +1807,7 @@ Párrafo 4 — Marco académico (40-60 palabras): relaciona la postura con un fr
 - EXACTAMENTE 3 preguntas — ni más, ni menos.
 - P2 DEBE usar el `{main_risk_from_m3_m4}` inyectado — es el push-back específico del caso.
 - P3 DEBE usar `{implementation_timeframe}` para un marco temporal realista.
-- solucion_esperada: NUNCA menciones papers inventados. Solo frameworks reconocidos sin año.
+- solucion_esperada: NUNCA menciones fuentes externas inventadas. Solo frameworks reconocidos sin año.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}
@@ -2561,17 +2561,23 @@ M. **PEDAGOGÍA HARVARD ml_ds — bloque comparativo OBLIGATORIO (Issue #236).**
      not None) and (y.nunique() == 2)`. Las celdas siguientes NO pueden
      asumir variables del bloque per-algoritmo (que se ejecuta DESPUÉS); usan
      `feature_cols`, `y`, `X_raw` e `is_binary` definidos aquí.
-   * **Guarda binaria consistente**: cada celda inicia con
-     `if not is_binary: print("Bloque comparativo omitido: target no
-     binario")` antes del trabajo real, dentro de su `try`. Esto garantiza
-     que un dataset multiclase NO produzca cascada de NameError ni mensajes
-     de error inútiles — solo el aviso pedagógico unificado.
-   * `ColumnTransformer` debe combinar `StandardScaler` para numéricas y
-     `OneHotEncoder(handle_unknown="ignore")` para categóricas (≤20
+   * **Guarda binaria consistente**: `dummy_baseline` fija `is_binary` y
+     `can_model_binary`. `is_binary` solo confirma 2 clases; `can_model_binary`
+     exige además `min_class >= 2` y `feature_cols` no vacío. Cada celda inicia
+     con `if not is_binary or not can_model_binary: ...` antes del trabajo real,
+     dentro de su `try`. Esto evita cascadas de fit sobre targets raros como
+     199/1, donde cualquier AUC o gráfico sería engañoso.
+   * `ColumnTransformer` debe combinar `SimpleImputer(strategy="median")` +
+     `StandardScaler` para numéricas y `SimpleImputer(strategy="most_frequent")`
+     + `OneHotEncoder(handle_unknown="ignore")` para categóricas (≤20
      cardinalidad). Particiona `feature_cols` por dtype antes del Pipeline.
-     NUNCA pre-codifiques con `pd.get_dummies` antes del split en este
-     bloque (el ColumnTransformer vive dentro del Pipeline para que el CV
-     no filtre estadísticos).
+     NUNCA pre-codifiques con `pd.get_dummies` antes del split en este bloque
+     (el ColumnTransformer vive dentro del Pipeline para que CV/hold-out no
+     filtren estadísticos).
+   * Las celdas Issue #240 (`tuning_lr`, `tuning_rf`, `interp_lr`, `interp_rf`)
+     deben entrenar y explicar modelos Pipeline con el MISMO preprocesamiento
+     robusto. PROHIBIDO usar `StandardScaler` o `RandomForestClassifier` directo
+     sobre `X_train` crudo porque puede contener strings y NaN.
    * `roc_curves` IMPORTA explícitamente `train_test_split` y construye su
      propio hold-out estratificado (`_Xtr/_Xte/_ytr/_yte`). `pr_curves` y
      `comparison_table` NO pueden depender de variables de celdas previas:
@@ -2635,8 +2641,8 @@ except Exception as e:
 ## `is_binary` a partir de `df` directamente. Las celdas siguientes NO
 ## pueden asumir variables del bloque per-algoritmo (que se ejecuta
 ## DESPUÉS de esta sección). Cada celda subsiguiente arranca con la
-## guarda `if not is_binary: print("Bloque comparativo omitido: target
-## no binario")` antes del trabajo real, dentro de su `try` aislado.
+## guarda `if not is_binary or not can_model_binary: print(...)` antes del
+## trabajo real, dentro de su `try` aislado.
 
 # %% [markdown]
 # ### 3.0.5 — Bloque comparativo Harvard
@@ -2683,12 +2689,27 @@ try:
         and df[c].isna().mean() <= 0.5
     ]
 
-    # 3) Derivar y, X_raw, is_binary. is_binary gobierna las 6 celdas siguientes.
+    # 3) Derivar y, X_raw, is_binary y can_model_binary. is_binary confirma
+    #    2 clases; can_model_binary exige soporte mínimo para train/test/CV.
     y = df[target_col] if target_col is not None else None
     X_raw = df[feature_cols] if feature_cols else None
     is_binary = bool(target_col is not None and y is not None and y.nunique(dropna=True) == 2)
+    _class_counts_boot = y.value_counts(dropna=True) if y is not None else pd.Series(dtype=int)
+    _min_class_boot = int(_class_counts_boot.min()) if len(_class_counts_boot) else 0
+    modeling_status = "ready"
+    modeling_skip_reason = ""
+    can_model_binary = bool(is_binary and X_raw is not None and len(feature_cols) > 0 and _min_class_boot >= 2)
+    if not is_binary:
+        modeling_status = "skipped_non_binary_target"
+        modeling_skip_reason = "target no binario o ausente"
+    elif X_raw is None or not feature_cols:
+        modeling_status = "skipped_no_features"
+        modeling_skip_reason = "sin features útiles tras higiene"
+    elif _min_class_boot < 2:
+        modeling_status = "skipped_degenerate_target"
+        modeling_skip_reason = f"clase minoritaria con solo {{_min_class_boot}} fila(s)"
 
-    if is_binary:
+    if can_model_binary:
         X_tr_d, X_te_d, y_tr_d, y_te_d = train_test_split(
             X_raw, y, test_size=0.2, random_state=42,
             stratify=y if y.value_counts().min() >= 2 else None,
@@ -2703,11 +2724,14 @@ try:
         print("Dummy stratified    → F1 macro:", _f1_dummy(y_te_d, dummy_st.predict(_Xte_dummy), average="macro", zero_division=0))
         print("Distribución y_train:", y_tr_d.value_counts(normalize=True).round(3).to_dict())
     else:
-        print("Bloque comparativo omitido: target no binario")
+        print(f"Bloque comparativo omitido: {{modeling_skip_reason}}")
 except Exception as e:
     # Failsafe: si el bootstrap falla, garantiza que las celdas siguientes
     # encuentren is_binary=False y emitan el aviso pedagógico estándar.
     is_binary = False
+    can_model_binary = False
+    modeling_status = "skipped_bootstrap_error"
+    modeling_skip_reason = str(e)[:200]
     print(f"⚠️ Dummy baseline falló: {{e}}")
 
 # %% [markdown]
@@ -2718,30 +2742,40 @@ except Exception as e:
 
 # %%
 # === SECTION:pipeline_lr ===
+pipe_lr = None
 try:
-    if not is_binary:
-        print("Bloque comparativo omitido: target no binario")
-    else:
-        from sklearn.pipeline import Pipeline
-        from sklearn.compose import ColumnTransformer
-        from sklearn.preprocessing import StandardScaler, OneHotEncoder
-        from sklearn.linear_model import LogisticRegression
+  if not is_binary or not can_model_binary:
+    print(f"Bloque comparativo omitido: {{modeling_skip_reason}}")
+  else:
+    from sklearn.pipeline import Pipeline
+    from sklearn.compose import ColumnTransformer
+    from sklearn.preprocessing import StandardScaler, OneHotEncoder
+    from sklearn.impute import SimpleImputer
+    from sklearn.linear_model import LogisticRegression
 
-        _num_feats = [c for c in feature_cols if c in df.select_dtypes(include=np.number).columns]
-        _cat_feats = [c for c in feature_cols if c not in _num_feats]
-        preprocess_lr = ColumnTransformer(
-            transformers=[
-                ("num", StandardScaler(), _num_feats),
-                ("cat", OneHotEncoder(handle_unknown="ignore"), _cat_feats),
-            ],
-            remainder="drop",
-        )
-        pipe_lr = Pipeline(steps=[
-            ("preprocess", preprocess_lr),
-            ("clf", LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42)),
-        ])
-        pipe_lr.fit(X_raw, y)
-        print("Pipeline LR ajustado:", pipe_lr.named_steps["clf"])
+    _num_feats = [c for c in feature_cols if c in df.select_dtypes(include=np.number).columns]
+    _cat_feats = [c for c in feature_cols if c not in _num_feats]
+    _num_pipe_lr = Pipeline(steps=[
+      ("imputer", SimpleImputer(strategy="median")),
+      ("scaler", StandardScaler()),
+    ])
+    _cat_pipe_lr = Pipeline(steps=[
+      ("imputer", SimpleImputer(strategy="most_frequent")),
+      ("onehot", OneHotEncoder(handle_unknown="ignore")),
+    ])
+    preprocess_lr = ColumnTransformer(
+      transformers=[
+        ("num", _num_pipe_lr, _num_feats),
+        ("cat", _cat_pipe_lr, _cat_feats),
+      ],
+      remainder="drop",
+    )
+    pipe_lr = Pipeline(steps=[
+      ("preprocess", preprocess_lr),
+      ("clf", LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42)),
+    ])
+    pipe_lr.fit(X_raw, y)
+    print("Pipeline LR ajustado:", pipe_lr.named_steps["clf"])
 except Exception as e:
     print(f"⚠️ Pipeline LR falló: {{e}}")
 
@@ -2750,30 +2784,40 @@ except Exception as e:
 
 # %%
 # === SECTION:pipeline_rf ===
+pipe_rf = None
 try:
-    if not is_binary:
-        print("Bloque comparativo omitido: target no binario")
-    else:
-        from sklearn.pipeline import Pipeline as _PipelineRF
-        from sklearn.compose import ColumnTransformer as _CTRF
-        from sklearn.preprocessing import StandardScaler as _StdRF, OneHotEncoder as _OheRF
-        from sklearn.ensemble import RandomForestClassifier
+  if not is_binary or not can_model_binary:
+    print(f"Bloque comparativo omitido: {{modeling_skip_reason}}")
+  else:
+    from sklearn.pipeline import Pipeline as _PipelineRF
+    from sklearn.compose import ColumnTransformer as _CTRF
+    from sklearn.preprocessing import StandardScaler as _StdRF, OneHotEncoder as _OheRF
+    from sklearn.impute import SimpleImputer as _SimpleImputerRF
+    from sklearn.ensemble import RandomForestClassifier
 
-        _num_feats_rf = [c for c in feature_cols if c in df.select_dtypes(include=np.number).columns]
-        _cat_feats_rf = [c for c in feature_cols if c not in _num_feats_rf]
-        preprocess_rf = _CTRF(
-            transformers=[
-                ("num", _StdRF(), _num_feats_rf),
-                ("cat", _OheRF(handle_unknown="ignore"), _cat_feats_rf),
-            ],
-            remainder="drop",
-        )
-        pipe_rf = _PipelineRF(steps=[
-            ("preprocess", preprocess_rf),
-            ("clf", RandomForestClassifier(n_estimators=200, class_weight="balanced", random_state=42)),
-        ])
-        pipe_rf.fit(X_raw, y)
-        print("Pipeline RF ajustado:", pipe_rf.named_steps["clf"])
+    _num_feats_rf = [c for c in feature_cols if c in df.select_dtypes(include=np.number).columns]
+    _cat_feats_rf = [c for c in feature_cols if c not in _num_feats_rf]
+    _num_pipe_rf = _PipelineRF(steps=[
+      ("imputer", _SimpleImputerRF(strategy="median")),
+      ("scaler", _StdRF()),
+    ])
+    _cat_pipe_rf = _PipelineRF(steps=[
+      ("imputer", _SimpleImputerRF(strategy="most_frequent")),
+      ("onehot", _OheRF(handle_unknown="ignore")),
+    ])
+    preprocess_rf = _CTRF(
+      transformers=[
+        ("num", _num_pipe_rf, _num_feats_rf),
+        ("cat", _cat_pipe_rf, _cat_feats_rf),
+      ],
+      remainder="drop",
+    )
+    pipe_rf = _PipelineRF(steps=[
+      ("preprocess", preprocess_rf),
+      ("clf", RandomForestClassifier(n_estimators=200, class_weight="balanced", random_state=42, n_jobs=1)),
+    ])
+    pipe_rf.fit(X_raw, y)
+    print("Pipeline RF ajustado:", pipe_rf.named_steps["clf"])
 except Exception as e:
     print(f"⚠️ Pipeline RF falló: {{e}}")
 
@@ -2786,9 +2830,9 @@ except Exception as e:
 # === SECTION:cv_scores ===
 cv_lr, cv_rf = None, None
 try:
-    if not is_binary:
-        print("Bloque comparativo omitido: target no binario")
-    else:
+  if not is_binary or not can_model_binary:
+    print(f"Bloque comparativo omitido: {{modeling_skip_reason}}")
+  else:
         from sklearn.model_selection import StratifiedKFold, cross_val_score
 
         _min_class = int(y.value_counts().min()) if y is not None and len(y) else 0
@@ -2810,9 +2854,9 @@ except Exception as e:
 # %%
 # === SECTION:roc_curves ===
 try:
-    if not is_binary:
-        print("Bloque comparativo omitido: target no binario")
-    else:
+  if not is_binary or not can_model_binary:
+    print(f"Bloque comparativo omitido: {{modeling_skip_reason}}")
+  else:
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import roc_curve, roc_auc_score
 
@@ -2846,9 +2890,9 @@ except Exception as e:
 # %%
 # === SECTION:pr_curves ===
 try:
-    if not is_binary:
-        print("Bloque comparativo omitido: target no binario")
-    else:
+  if not is_binary or not can_model_binary:
+    print(f"Bloque comparativo omitido: {{modeling_skip_reason}}")
+  else:
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import precision_recall_curve, average_precision_score
 
@@ -2882,9 +2926,9 @@ except Exception as e:
 # %%
 # === SECTION:comparison_table ===
 try:
-    if not is_binary:
-        print("Bloque comparativo omitido: target no binario")
-    else:
+  if not is_binary or not can_model_binary:
+    print(f"Bloque comparativo omitido: {{modeling_skip_reason}}")
+  else:
         import time as _time_cmp
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import f1_score as _f1_cmp, recall_score as _rec_cmp
@@ -2950,9 +2994,9 @@ except Exception as e:
 # %%
 # === SECTION:cost_matrix ===
 try:
-    if not is_binary:
-        print("Bloque comparativo omitido: target no binario")
-    else:
+  if not is_binary or not can_model_binary:
+    print(f"Bloque comparativo omitido: {{modeling_skip_reason}}")
+  else:
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import confusion_matrix
 
@@ -3044,64 +3088,77 @@ except Exception as e:
 # %%
 # === SECTION:tuning_lr ===
 try:
-    import numpy as np
-    import pandas as pd
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.pipeline import Pipeline
+  import numpy as np
+  import pandas as pd
+  from sklearn.compose import ColumnTransformer
+  from sklearn.impute import SimpleImputer
+  from sklearn.linear_model import LogisticRegression
+  from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
+  from sklearn.pipeline import Pipeline
+  from sklearn.preprocessing import StandardScaler, OneHotEncoder
 
-    if not is_binary:
-        print("Tuning LR omitido: target no es binario.")
+  if not is_binary or not can_model_binary:
+    print(f"Tuning LR omitido: {{modeling_skip_reason}}")
+  else:
+    try:
+      X_train
+      y_train
+    except NameError:
+      X_train, X_test, y_train, y_test = train_test_split(
+        X_raw, y, test_size=0.2, random_state=42,
+        stratify=y if y.value_counts().min() >= 2 else None,
+      )
+    _num_feats_tune_lr = [c for c in feature_cols if c in df.select_dtypes(include=np.number).columns]
+    _cat_feats_tune_lr = [c for c in feature_cols if c not in _num_feats_tune_lr]
+    preprocess_tune_lr = ColumnTransformer(
+      transformers=[
+        ("num", Pipeline([
+          ("imputer", SimpleImputer(strategy="median")),
+          ("scaler", StandardScaler()),
+        ]), _num_feats_tune_lr),
+        ("cat", Pipeline([
+          ("imputer", SimpleImputer(strategy="most_frequent")),
+          ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]), _cat_feats_tune_lr),
+      ],
+      remainder="drop",
+    )
+    n_train = len(X_train)
+    if n_train > 5000:
+      print(
+        f"⚠️ Modo rápido: dataset con {{n_train}} filas (> 5000) — "
+        f"se omite GridSearchCV y se entrena LogisticRegression con "
+        f"defaults (C=1.0, class_weight='balanced')."
+      )
+      best_lr = Pipeline([
+        ("preprocess", preprocess_tune_lr),
+        ("clf", LogisticRegression(C=1.0, class_weight="balanced",
+                       max_iter=2000, random_state=42)),
+      ])
+      best_lr.fit(X_train, y_train)
+      best_lr_params = {{"clf__C": 1.0, "note": "skipped tuning (n>5000)"}}
+      best_lr_score = float("nan")
     else:
-        # Self-bootstrap (Rule 6): recrear splits si no existen.
-        try:
-            X_train
-            y_train
-        except NameError:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X_raw, y, test_size=0.2, random_state=42,
-                stratify=y if y.value_counts().min() >= 2 else None,
-            )
-        n_train = len(X_train)
-        # Cascada de mayor a menor — orden importa para que las ramas
-        # reducidas sean alcanzables (>5000 ⊂ >2000).
-        if n_train > 5000:
-            print(
-                f"⚠️ Modo rápido: dataset con {{n_train}} filas (> 5000) — "
-                f"se omite GridSearchCV y se entrena LogisticRegression con "
-                f"defaults (C=1.0, class_weight='balanced'). Razonamiento: "
-                f"el barrido 4 valores × 5 folds excedería el budget exec-time."
-            )
-            best_lr = Pipeline([
-                ("scaler", StandardScaler(with_mean=False)),
-                ("clf", LogisticRegression(C=1.0, class_weight="balanced",
-                                           max_iter=2000, random_state=42)),
-            ])
-            best_lr.fit(X_train, y_train)
-            best_lr_params = {{"C": 1.0, "note": "skipped tuning (n>5000)"}}
-            best_lr_score = float("nan")
-        else:
-            cv_splits = 3 if n_train > 2000 else 5
-            base_pipe_lr = Pipeline([
-                ("scaler", StandardScaler(with_mean=False)),
-                ("clf", LogisticRegression(class_weight="balanced",
-                                           max_iter=2000, random_state=42)),
-            ])
-            grid_lr = {{"clf__C": [0.01, 0.1, 1, 10]}}
-            cv_lr = StratifiedKFold(n_splits=cv_splits, shuffle=True, random_state=42)
-            search_lr = GridSearchCV(
-                base_pipe_lr, grid_lr, cv=cv_lr,
-                scoring="roc_auc", n_jobs=1, refit=True,
-            )
-            search_lr.fit(X_train, y_train)
-            best_lr = search_lr.best_estimator_
-            best_lr_params = dict(search_lr.best_params_)
-            best_lr_score = float(search_lr.best_score_)
-            print(
-                f"Best LR params: {{best_lr_params}} | "
-                f"best CV ROC-AUC: {{best_lr_score:.4f}}"
-            )
+      cv_splits = 3 if n_train > 2000 else 5
+      base_pipe_lr = Pipeline([
+        ("preprocess", preprocess_tune_lr),
+        ("clf", LogisticRegression(class_weight="balanced",
+                       max_iter=2000, random_state=42)),
+      ])
+      grid_lr = {{"clf__C": [0.01, 0.1, 1, 10]}}
+      cv_lr = StratifiedKFold(n_splits=cv_splits, shuffle=True, random_state=42)
+      search_lr = GridSearchCV(
+        base_pipe_lr, grid_lr, cv=cv_lr,
+        scoring="roc_auc", n_jobs=1, refit=True,
+      )
+      search_lr.fit(X_train, y_train)
+      best_lr = search_lr.best_estimator_
+      best_lr_params = dict(search_lr.best_params_)
+      best_lr_score = float(search_lr.best_score_)
+      print(
+        f"Best LR params: {{best_lr_params}} | "
+        f"best CV ROC-AUC: {{best_lr_score:.4f}}"
+      )
 except Exception as e:
     print(f"⚠️ Tuning LR falló: {{e}}")
 
@@ -3119,63 +3176,89 @@ except Exception as e:
 # %%
 # === SECTION:tuning_rf ===
 try:
-    import numpy as np
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, train_test_split
+  import numpy as np
+  from sklearn.compose import ColumnTransformer
+  from sklearn.ensemble import RandomForestClassifier
+  from sklearn.impute import SimpleImputer
+  from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, train_test_split
+  from sklearn.pipeline import Pipeline
+  from sklearn.preprocessing import StandardScaler, OneHotEncoder
 
-    if not is_binary:
-        print("Tuning RF omitido: target no es binario.")
+  if not is_binary or not can_model_binary:
+    print(f"Tuning RF omitido: {{modeling_skip_reason}}")
+  else:
+    try:
+      X_train
+      y_train
+    except NameError:
+      X_train, X_test, y_train, y_test = train_test_split(
+        X_raw, y, test_size=0.2, random_state=42,
+        stratify=y if y.value_counts().min() >= 2 else None,
+      )
+    _num_feats_tune_rf = [c for c in feature_cols if c in df.select_dtypes(include=np.number).columns]
+    _cat_feats_tune_rf = [c for c in feature_cols if c not in _num_feats_tune_rf]
+    preprocess_tune_rf = ColumnTransformer(
+      transformers=[
+        ("num", Pipeline([
+          ("imputer", SimpleImputer(strategy="median")),
+          ("scaler", StandardScaler()),
+        ]), _num_feats_tune_rf),
+        ("cat", Pipeline([
+          ("imputer", SimpleImputer(strategy="most_frequent")),
+          ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]), _cat_feats_tune_rf),
+      ],
+      remainder="drop",
+    )
+    n_train = len(X_train)
+    if n_train > 5000:
+      print(
+        f"⚠️ Modo rápido: dataset con {{n_train}} filas (> 5000) — "
+        f"se omite RandomizedSearchCV y se entrena RandomForest con "
+        f"defaults (n_estimators=200, class_weight='balanced')."
+      )
+      best_rf = Pipeline([
+        ("preprocess", preprocess_tune_rf),
+        ("clf", RandomForestClassifier(
+          n_estimators=200, class_weight="balanced",
+          random_state=42, n_jobs=1,
+        )),
+      ])
+      best_rf.fit(X_train, y_train)
+      best_rf_params = {{"clf__n_estimators": 200, "note": "skipped tuning (n>5000)"}}
+      best_rf_score = float("nan")
     else:
-        try:
-            X_train
-            y_train
-        except NameError:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X_raw, y, test_size=0.2, random_state=42,
-                stratify=y if y.value_counts().min() >= 2 else None,
-            )
-        n_train = len(X_train)
-        # Cascada de mayor a menor — orden importa para alcanzabilidad.
-        if n_train > 5000:
-            print(
-                f"⚠️ Modo rápido: dataset con {{n_train}} filas (> 5000) — "
-                f"se omite RandomizedSearchCV y se entrena RandomForest con "
-                f"defaults (n_estimators=200, class_weight='balanced')."
-            )
-            best_rf = RandomForestClassifier(
-                n_estimators=200, class_weight="balanced",
-                random_state=42, n_jobs=1,
-            )
-            best_rf.fit(X_train, y_train)
-            best_rf_params = {{"note": "skipped tuning (n>5000)"}}
-            best_rf_score = float("nan")
-        else:
-            n_iter_rf = 5 if n_train > 2000 else 10
-            cv_splits_rf = 3 if n_train > 2000 else 5
-            param_dist_rf = {{
-                "max_depth": [None, 5, 10, 20],
-                "min_samples_leaf": [1, 5, 20],
-                "n_estimators": [100, 200],
-            }}
-            search_rf = RandomizedSearchCV(
-                RandomForestClassifier(class_weight="balanced",
-                                       random_state=42, n_jobs=1),
-                param_distributions=param_dist_rf,
-                n_iter=n_iter_rf,
-                cv=cv_splits_rf,
-                scoring="roc_auc",
-                random_state=42,
-                n_jobs=1,
-                refit=True,
-            )
-            search_rf.fit(X_train, y_train)
-            best_rf = search_rf.best_estimator_
-            best_rf_params = dict(search_rf.best_params_)
-            best_rf_score = float(search_rf.best_score_)
-            print(
-                f"Best RF params: {{best_rf_params}} | "
-                f"best CV ROC-AUC: {{best_rf_score:.4f}}"
-            )
+      n_iter_rf = 5 if n_train > 2000 else 10
+      cv_splits_rf = 3 if n_train > 2000 else 5
+      param_dist_rf = {{
+        "clf__max_depth": [None, 5, 10, 20],
+        "clf__min_samples_leaf": [1, 5, 20],
+        "clf__n_estimators": [100, 200],
+      }}
+      base_pipe_rf = Pipeline([
+        ("preprocess", preprocess_tune_rf),
+        ("clf", RandomForestClassifier(class_weight="balanced",
+                         random_state=42, n_jobs=1)),
+      ])
+      cv_rf_search = StratifiedKFold(n_splits=cv_splits_rf, shuffle=True, random_state=42)
+      search_rf = RandomizedSearchCV(
+        base_pipe_rf,
+        param_distributions=param_dist_rf,
+        n_iter=n_iter_rf,
+        cv=cv_rf_search,
+        scoring="roc_auc",
+        random_state=42,
+        n_jobs=1,
+        refit=True,
+      )
+      search_rf.fit(X_train, y_train)
+      best_rf = search_rf.best_estimator_
+      best_rf_params = dict(search_rf.best_params_)
+      best_rf_score = float(search_rf.best_score_)
+      print(
+        f"Best RF params: {{best_rf_params}} | "
+        f"best CV ROC-AUC: {{best_rf_score:.4f}}"
+      )
 except Exception as e:
     print(f"⚠️ Tuning RF falló: {{e}}")
 
@@ -3196,13 +3279,15 @@ try:
     import numpy as np
     import pandas as pd
     import matplotlib.pyplot as plt
+    from sklearn.compose import ColumnTransformer
+    from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LogisticRegression, LinearRegression
     from sklearn.model_selection import train_test_split
-    from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler, OneHotEncoder
 
-    if not is_binary:
-        print("Interpretabilidad LR omitida: target no es binario.")
+    if not is_binary or not can_model_binary:
+        print(f"Interpretabilidad LR omitida: {{modeling_skip_reason}}")
     else:
         try:
             X_train
@@ -3215,8 +3300,23 @@ try:
         try:
             best_lr
         except NameError:
+            _num_feats_interp_lr = [c for c in feature_cols if c in df.select_dtypes(include=np.number).columns]
+            _cat_feats_interp_lr = [c for c in feature_cols if c not in _num_feats_interp_lr]
+            preprocess_interp_lr = ColumnTransformer(
+                transformers=[
+                    ("num", Pipeline([
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler", StandardScaler()),
+                    ]), _num_feats_interp_lr),
+                    ("cat", Pipeline([
+                        ("imputer", SimpleImputer(strategy="most_frequent")),
+                        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+                    ]), _cat_feats_interp_lr),
+                ],
+                remainder="drop",
+            )
             best_lr = Pipeline([
-                ("scaler", StandardScaler(with_mean=False)),
+                ("preprocess", preprocess_interp_lr),
                 ("clf", LogisticRegression(C=1.0, class_weight="balanced",
                                            max_iter=2000, random_state=42)),
             ])
@@ -3228,11 +3328,13 @@ try:
         if not hasattr(clf_lr, "coef_"):
             print("⚠️ best_lr no expone coef_ — saltando odds ratios.")
         else:
-            feature_names_lr = (
-                list(X_train.columns) if hasattr(X_train, "columns")
-                else [f"f{{i}}" for i in range(clf_lr.coef_.shape[1])]
-            )
+            try:
+                feature_names_lr = list(best_lr.named_steps["preprocess"].get_feature_names_out())
+            except Exception:
+                feature_names_lr = [f"f{{i}}" for i in range(clf_lr.coef_.shape[1])]
             odds_ratios = np.exp(clf_lr.coef_.ravel())
+            if len(feature_names_lr) != len(odds_ratios):
+                feature_names_lr = [f"f{{i}}" for i in range(len(odds_ratios))]
             or_df = pd.DataFrame(
                 {{"feature": feature_names_lr, "odds_ratio": odds_ratios}}
             ).sort_values("odds_ratio", ascending=False)
@@ -3246,7 +3348,11 @@ try:
             top_idx_or = [feature_names_lr.index(f) for f in top_features_or]
             boot_or = np.empty((B_boot, len(top_idx_or)))
             n_boot = len(X_train)
-            X_arr = X_train.values if hasattr(X_train, "values") else np.asarray(X_train)
+            if hasattr(best_lr, "named_steps") and "preprocess" in best_lr.named_steps:
+                X_encoded = best_lr.named_steps["preprocess"].transform(X_train)
+            else:
+                X_encoded = X_train.values if hasattr(X_train, "values") else np.asarray(X_train)
+            X_arr = X_encoded
             y_arr = y_train.values if hasattr(y_train, "values") else np.asarray(y_train)
             for b in range(B_boot):
                 idx_b = rng_or.integers(0, n_boot, size=n_boot)
@@ -3269,34 +3375,28 @@ try:
             print(ci_df.to_string(index=False))
 
             # 3) VIF manual 1/(1-R²) — fallback sin statsmodels.
-            #    Para cada feature numérica, regresar todas las demás contra ella.
-            #    VIF >= 5 sugiere colinealidad; >= 10 problema serio.
-            if hasattr(X_train, "columns"):
-                numeric_cols_vif = [
-                    c for c in feature_names_lr
-                    if pd.api.types.is_numeric_dtype(X_train[c])
-                ]
-            else:
-                numeric_cols_vif = list(feature_names_lr)
+            numeric_cols_vif = list(X_train.select_dtypes(include=np.number).columns) if hasattr(X_train, "select_dtypes") else []
             vif_rows = []
-            for col in numeric_cols_vif[:15]:  # cap para budget exec-time
+            if len(numeric_cols_vif) < 2:
+              print("\\nVIF omitido: se requieren al menos 2 features numéricas.")
+            else:
+              X_vif = X_train[numeric_cols_vif].copy()
+              X_vif = X_vif.replace([np.inf, -np.inf], np.nan)
+              X_vif = X_vif.fillna(X_vif.median(numeric_only=True)).dropna(axis=1)
+              numeric_cols_vif = list(X_vif.columns)
+              for col in numeric_cols_vif[:15]:
                 others = [c for c in numeric_cols_vif if c != col]
                 if not others:
-                    continue
+                  continue
                 try:
-                    if hasattr(X_train, "columns"):
-                        Xj = X_train[others].values
-                        yj = X_train[col].values
-                    else:
-                        j_idx = numeric_cols_vif.index(col)
-                        Xj = np.delete(X_arr, j_idx, axis=1)
-                        yj = X_arr[:, j_idx]
-                    lin_vif = LinearRegression()
-                    lin_vif.fit(Xj, yj)
-                    r2 = float(lin_vif.score(Xj, yj))
-                    vif_val = float("inf") if r2 >= 0.999 else 1.0 / (1.0 - r2)
+                  Xj = X_vif[others].values
+                  yj = X_vif[col].values
+                  lin_vif = LinearRegression()
+                  lin_vif.fit(Xj, yj)
+                  r2 = float(lin_vif.score(Xj, yj))
+                  vif_val = float("inf") if r2 >= 0.999 else 1.0 / (1.0 - r2)
                 except Exception:
-                    vif_val = float("nan")
+                  vif_val = float("nan")
                 vif_rows.append({{"feature": col, "VIF": vif_val}})
             if vif_rows:
                 vif_df = pd.DataFrame(vif_rows).sort_values("VIF", ascending=False)
@@ -3328,11 +3428,15 @@ try:
     import pandas as pd
     import matplotlib.pyplot as plt
     from sklearn.ensemble import RandomForestClassifier
+    from sklearn.compose import ColumnTransformer
+    from sklearn.impute import SimpleImputer
     from sklearn.inspection import permutation_importance, PartialDependenceDisplay
     from sklearn.model_selection import train_test_split
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler, OneHotEncoder
 
-    if not is_binary:
-        print("Interpretabilidad RF omitida: target no es binario.")
+    if not is_binary or not can_model_binary:
+      print(f"Interpretabilidad RF omitida: {{modeling_skip_reason}}")
     else:
         try:
             X_train
@@ -3345,10 +3449,28 @@ try:
         try:
             best_rf
         except NameError:
-            best_rf = RandomForestClassifier(
+            _num_feats_interp_rf = [c for c in feature_cols if c in df.select_dtypes(include=np.number).columns]
+            _cat_feats_interp_rf = [c for c in feature_cols if c not in _num_feats_interp_rf]
+            preprocess_interp_rf = ColumnTransformer(
+              transformers=[
+                ("num", Pipeline([
+                  ("imputer", SimpleImputer(strategy="median")),
+                  ("scaler", StandardScaler()),
+                ]), _num_feats_interp_rf),
+                ("cat", Pipeline([
+                  ("imputer", SimpleImputer(strategy="most_frequent")),
+                  ("onehot", OneHotEncoder(handle_unknown="ignore")),
+                ]), _cat_feats_interp_rf),
+              ],
+              remainder="drop",
+            )
+            best_rf = Pipeline([
+              ("preprocess", preprocess_interp_rf),
+              ("clf", RandomForestClassifier(
                 n_estimators=200, class_weight="balanced",
                 random_state=42, n_jobs=1,
-            )
+              )),
+            ])
             best_rf.fit(X_train, y_train)
             print("⚠️ best_rf no encontrado en el kernel — fallback a RandomForest default.")
 
@@ -3420,6 +3542,17 @@ def _adam_metric_float(value):
 
 _metrics_summary = {{}}
 try:
+  try:
+    _adam_modeling_status = modeling_status
+  except NameError:
+    _adam_modeling_status = None
+  if isinstance(_adam_modeling_status, str) and _adam_modeling_status != "ready":
+    _metrics_summary["modeling_status"] = _adam_modeling_status
+    try:
+      _metrics_summary["modeling_skip_reason"] = str(modeling_skip_reason)[:300]
+    except Exception:
+      pass
+
   try:
     _adam_y = y
   except NameError:
@@ -3509,6 +3642,10 @@ print("ADAM_M3_METRICS_SUMMARY_JSON=" + _json_m3_metrics.dumps(_metrics_summary,
 ## Celda 2a — Entrenamiento + Métricas (código, SIN plots) [una por algoritmo]
 # %%
 try:
+    # Inicializa SIEMPRE el modelo antes de cualquier branch. Si usas nombres
+    # especializados, escribe `model_lr = None` / `model_rf = None` antes de
+    # preguntar `if model_lr is not None` o `if model_rf is not None`.
+    model = None
     # 1. INTENTO PRIMARIO: Buscar por alias semántico usando helpers del base template
     #    col = find_first_matching_column(df.columns, <alias_list>)
     # 2. INTENTO SECUNDARIO — FALLBACK HEURÍSTICO OBLIGATORIO si el paso 1 falla:
@@ -3534,6 +3671,9 @@ try:
     # 7. NO emitas plots en esta celda — la visualización va en 2b/2c/2d.
     # 8. Asigna `model`, `X`, `X_test`, `y_test`, `y_pred` a nombres reutilizables
     #    para que las celdas 2b/2c/2d puedan referirse a ellos sin re-entrenar.
+    # 9. Nunca hagas branch contra una variable de modelo no asignada en todos
+    #    los caminos. Patrón permitido:
+    #    `model_lr = None` → resolver datos → si todo es válido, entrenar y asignar.
     pass
 except Exception as e:
     print(f"⚠️ Error: {{e}}")

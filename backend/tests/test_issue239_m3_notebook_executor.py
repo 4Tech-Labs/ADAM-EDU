@@ -25,6 +25,7 @@ from case_generator.m3_notebook_execution import (
     execute_m3_notebook,
     extract_metrics_summary_from_text,
     format_execution_failure_for_prompt,
+    is_m3_quality_warning_blocking,
     scrub_notebook_for_safe_execution,
 )
 from case_generator.prompts import M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
@@ -390,13 +391,32 @@ def test_graph_executor_fails_closed_without_dataset() -> None:
         graph_module.m3_notebook_executor(_executor_state(doc7_dataset=[]), {})
 
 
-def test_resume_skip_treats_quality_warning_as_executor_completion() -> None:
+def test_resume_skip_requires_metrics_summary_not_quality_warning_only() -> None:
     state = {
         "m3_metrics_summary": None,
         "m3_quality_warning": "m3_quality_marker_missing: notebook executed without marker",
     }
 
-    assert graph_module._checkpoint_has_node_output("m3_notebook_executor", state)
+    assert not graph_module._checkpoint_has_node_output("m3_notebook_executor", state)
+
+
+def test_quality_warning_blocking_policy_allows_intentional_skip() -> None:
+    assert is_m3_quality_warning_blocking(
+        "m3_quality_marker_missing: notebook executed without marker",
+        None,
+    )
+    assert is_m3_quality_warning_blocking(
+        "m3_quality_auc_missing: notebook executed but no parseable AUC was emitted",
+        {"prevalence": 0.5},
+    )
+    assert not is_m3_quality_warning_blocking(
+        "m3_quality_auc_missing: notebook executed but no parseable AUC was emitted",
+        {"modeling_status": "skipped_degenerate_target", "prevalence": 0.005},
+    )
+    assert not is_m3_quality_warning_blocking(
+        "m3_quality_auc_out_of_range: best AUC 0.9950 outside [0.55, 0.99]",
+        {"auc_rf": 0.995},
+    )
 
 
 def test_graph_executor_reprompts_once_after_crash(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -423,6 +443,37 @@ def test_graph_executor_reprompts_once_after_crash(monkeypatch: pytest.MonkeyPat
     assert result["m3_notebook_code"] == "corrected notebook"
     assert result["m3_metrics_summary"] == _GOOD_METRICS
     assert result["current_agent"] == "m3_notebook_executor"
+
+
+def test_graph_executor_reprompts_once_after_missing_auc_quality_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"execute": 0, "generate": 0}
+
+    def fake_execute(**kwargs: Any) -> M3NotebookExecutionResult:
+        calls["execute"] += 1
+        if calls["execute"] == 1:
+            return M3NotebookExecutionResult(
+                {"prevalence": 0.5},
+                "m3_quality_auc_missing: notebook executed but no parseable AUC was emitted",
+            )
+        assert kwargs["notebook_code"] == "corrected notebook"
+        return M3NotebookExecutionResult(_GOOD_METRICS, None)
+
+    def fake_generate(*_args: Any, **kwargs: Any) -> tuple[str, str]:
+        calls["generate"] += 1
+        assert "quality_gate" in kwargs["execution_correction"]
+        assert "m3_quality_auc_missing" in kwargs["execution_correction"]
+        return "corrected notebook", "clasificacion"
+
+    monkeypatch.setattr(graph_module, "execute_m3_notebook", fake_execute)
+    monkeypatch.setattr(graph_module, "_generate_m3_notebook_code", fake_generate)
+
+    result = graph_module.m3_notebook_executor(_executor_state(), {})
+
+    assert calls == {"execute": 2, "generate": 1}
+    assert result["m3_notebook_code"] == "corrected notebook"
+    assert result["m3_metrics_summary"] == _GOOD_METRICS
 
 
 def test_graph_executor_unsafe_globals_reprompt_names_safe_replacement(

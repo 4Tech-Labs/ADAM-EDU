@@ -3,10 +3,10 @@
     "."
   ],
   "graphs": {
-    "agent": "./src/case_generator/graph.py:graph"
+    "agent": "case_generator.graph:get_graph"
   },
   "http": {
-    "app": "./src/shared/app.py:app"
+    "app": "shared.app:app"
   },
   "env": ".env"
 }

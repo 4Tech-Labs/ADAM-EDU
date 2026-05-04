@@ -16,6 +16,7 @@ import case_generator.graph as graph_module
 from case_generator.narrative_grounding import (
     NARRATIVE_GROUNDING_WARNING,
     build_computed_metrics_block,
+    contextualize_grounding_violations,
     validate_narrative_grounding,
 )
 from case_generator.prompts import (
@@ -28,6 +29,7 @@ from case_generator.prompts import (
     M5_CONTENT_GENERATOR_PROMPT,
     M5_PROMPT_BY_FAMILY,
     M5_PROMPT_CLASSIFICATION,
+    M5_QUESTIONS_GENERATOR_PROMPT,
 )
 
 
@@ -59,6 +61,19 @@ class _FakeLLM:
         if not self._outputs:
             raise AssertionError("Fake LLM invoked more times than expected")
         return _FakeResponse(self._outputs.pop(0))
+
+
+class _FakeStructuredLLM:
+    def __init__(self, output: object) -> None:
+        self.output = output
+        self.prompts: list[str] = []
+
+    def with_structured_output(self, _schema: object) -> "_FakeStructuredLLM":
+        return self
+
+    def invoke(self, prompt: str) -> object:
+        self.prompts.append(prompt)
+        return self.output
 
 
 def _base_state(*, metrics_summary: dict | None = SUMMARY) -> dict:
@@ -106,6 +121,76 @@ def test_validator_flags_unanchored_number() -> None:
     violations = validate_narrative_grounding("El modelo logró 87% de AUC.", block)
 
     assert "UNANCHORED: 87" in violations
+
+
+def test_contextualizes_unanchored_percent_with_prior_output_fragment() -> None:
+    prose = (
+        "El modelo conserva una base estable. "
+        "En producción, la tasa de rechazo del 70% supera el umbral operativo. "
+        "La decisión requiere monitoreo."
+    )
+
+    contextualized = contextualize_grounding_violations(prose, ["UNANCHORED: 70"])
+
+    assert contextualized == [
+        'UNANCHORED: 70 -> "En producción, la tasa de rechazo del 70% supera el umbral operativo."'
+    ]
+
+
+def test_contextualizes_decimal_comma_and_adjacent_metric_numbers() -> None:
+    prose = "El F1 fue 0,87 en validación. AUC95% quedó fuera del bloque computado."
+
+    contextualized = contextualize_grounding_violations(
+        prose,
+        ["UNANCHORED: 0.87", "UNANCHORED: 95"],
+    )
+
+    assert contextualized == [
+        'UNANCHORED: 0.87 -> "El F1 fue 0,87 en validación."',
+        'UNANCHORED: 95 -> "AUC95% quedó fuera del bloque computado."',
+    ]
+
+
+def test_contextualizes_decimal_without_falling_back_to_unrelated_integer() -> None:
+    prose = (
+        "El segmento 0 quedó como referencia histórica. "
+        "En validación, el F1 fue 0,87 fuera del bloque computado."
+    )
+
+    contextualized = contextualize_grounding_violations(
+        prose,
+        ["UNANCHORED: 0.87"],
+    )
+
+    assert contextualized == [
+        'UNANCHORED: 0.87 -> "En validación, el F1 fue 0,87 fuera del bloque computado."'
+    ]
+
+
+def test_contextualization_preserves_violation_when_fragment_is_missing() -> None:
+    contextualized = contextualize_grounding_violations(
+        "El modelo se describe sin el número conflictivo.",
+        ["UNANCHORED: 70", "CITA: paper"],
+    )
+
+    assert contextualized == ["UNANCHORED: 70", "CITA: paper"]
+
+
+def test_contextualizes_citation_with_prior_output_fragment() -> None:
+    prose = (
+        "La recomendación se apoya en evidencia del caso. "
+        "Según el estudio, el marco externo confirma la decisión. "
+        "La Junta debe deliberar con datos propios."
+    )
+
+    contextualized = contextualize_grounding_violations(
+        prose,
+        ["CITA: Según el estudio"],
+    )
+
+    assert contextualized == [
+        'CITA: Según el estudio -> "Según el estudio, el marco externo confirma la decisión."'
+    ]
 
 
 def test_validator_allows_business_numbers_from_case_context() -> None:
@@ -199,6 +284,49 @@ def test_validator_isolates_business_number_in_mixed_clause() -> None:
     assert not any("UNANCHORED: 35" == v for v in bad_violations)
 
 
+def test_validator_isolates_m5_decision_matrix_business_kpis_by_cell() -> None:
+    block = build_computed_metrics_block({"auc_lr": 0.7234})
+    prose = """
+| acción | KPI esperado | riesgo | modelo soporte |
+|---|---|---|---|
+| Piloto controlado | Reducir fuga 10% | Sesgo operativo | LR baseline |
+| Umbral ejecutivo | Ahorrar 22.50% del presupuesto | Falsos negativos | RF challenger |
+| Monitoreo mensual | Mantener prevalencia comercial 15.4% | Drift | evidencia M2/M4 |
+""".strip()
+
+    assert validate_narrative_grounding(prose, block) == []
+
+    violations = validate_narrative_grounding(
+        "| acción | KPI esperado | riesgo | modelo soporte |\n"
+        "|---|---|---|---|\n"
+        "| Piloto | Control operativo | AUC 87% | LR baseline |",
+        block,
+    )
+
+    assert "UNANCHORED: 87" in violations
+
+
+def test_validator_isolates_m5_decision_matrix_business_kpis_with_header_aliases() -> None:
+    block = build_computed_metrics_block({"auc_lr": 0.7234})
+    prose = """
+| acción recomendada | indicador esperado | riesgo principal | modelo de soporte |
+|---|---|---|---|
+| Piloto controlado | Reducir fuga 10% | Sesgo operativo | LR baseline |
+| Umbral ejecutivo | Ahorrar 22.50% del presupuesto | Falsos negativos | RF challenger |
+""".strip()
+
+    assert validate_narrative_grounding(prose, block) == []
+
+    violations = validate_narrative_grounding(
+        "| acción recomendada | indicador esperado | riesgo principal | modelo de soporte |\n"
+        "|---|---|---|---|\n"
+        "| Piloto | Control operativo | AUC 87% | LR baseline |",
+        block,
+    )
+
+    assert "UNANCHORED: 87" in violations
+
+
 def test_validator_accepts_number_within_tolerance() -> None:
     block = build_computed_metrics_block({"auc_lr": 0.7234})
 
@@ -230,16 +358,44 @@ def test_validator_flags_citation_patterns() -> None:
     block = build_computed_metrics_block(SUMMARY)
 
     violations = validate_narrative_grounding(
-        "Según el estudio, la mejora coincide con Pérez et al. (2023).",
+        "Según el estudio, Segun estudio adicional, la mejora coincide con Pérez et al. (2023).",
         block,
     )
 
     citation_violations = [v for v in violations if v.startswith("CITA: ")]
-    assert len(citation_violations) == 3
+    assert len(citation_violations) == 4
     assert any("según el estudio" in v.lower() for v in citation_violations)
+    assert any("segun estudio" in v.lower() for v in citation_violations)
     assert any("et al." in v.lower() for v in citation_violations)
     assert any("(2023)" in v for v in citation_violations)
     assert all(not v.startswith("UNANCHORED: 2023") for v in violations)
+
+
+def test_validator_flags_external_paper_citation_patterns() -> None:
+    block = build_computed_metrics_block(SUMMARY)
+
+    violations = validate_narrative_grounding(
+        "Según un paper reciente, el mercado confirma la tesis. Un paper de Gartner refuerza el plan.",
+        block,
+    )
+
+    citation_violations = [v for v in violations if v.startswith("CITA: ")]
+    assert any("según un paper" in v.lower() for v in citation_violations)
+    assert any("paper de gartner" in v.lower() for v in citation_violations)
+
+
+def test_validator_allows_standalone_paper_and_negative_no_citation_phrases() -> None:
+    block = build_computed_metrics_block(SUMMARY)
+
+    allowed_samples = [
+        "El comité redacta un position paper interno sin usar fuentes externas.",
+        "El estudiante debe responder sin citar papers inventados.",
+        "Marco académico: sin citar fuentes externas inventadas.",
+        "NUNCA cites estudios externos, autores ni referencias académicas fabricadas.",
+    ]
+
+    for sample in allowed_samples:
+        assert validate_narrative_grounding(sample, block) == []
 
 
 def test_validator_strips_date_ranges_but_keeps_percentages() -> None:
@@ -251,6 +407,53 @@ def test_validator_strips_date_ranges_but_keeps_percentages() -> None:
     ) == []
     assert "UNANCHORED: 18" in validate_narrative_grounding(
         "Durante 2019-2023, la prevalencia fue 18%.",
+        block,
+    )
+
+
+def test_validator_allows_zero_metric_placeholder_when_modeling_was_skipped() -> None:
+    block = build_computed_metrics_block(
+        {
+            "modeling_status": "skipped_degenerate_target",
+            "modeling_skip_reason": "clase minoritaria con solo 1 fila",
+            "prevalence": 0.005,
+        }
+    )
+
+    assert validate_narrative_grounding(
+        "El notebook no reportó AUC: 0 ni F1: 0 porque no era válido entrenar.",
+        block,
+    ) == []
+    assert "UNANCHORED: 0" in validate_narrative_grounding(
+        "El notebook sí calculó la prevalencia, pero la prevalencia fue 0%.",
+        block,
+    )
+    assert "UNANCHORED: 87" in validate_narrative_grounding(
+        "El notebook no entrenó modelo, pero AUC 87% sería una mejora clara.",
+        block,
+    )
+
+
+def test_validator_does_not_treat_textual_skip_reason_digits_as_anchors() -> None:
+    block = build_computed_metrics_block(
+        {
+            "modeling_status": "skipped_degenerate_target",
+            "modeling_skip_reason": "clase minoritaria con solo 1 fila",
+            "prevalence": 0.005,
+        }
+    )
+
+    assert "UNANCHORED: 1" in validate_narrative_grounding(
+        "El AUC 1 sería perfecto, pero no está anclado.",
+        block,
+    )
+
+
+def test_validator_still_flags_zero_metric_when_modeling_was_not_skipped() -> None:
+    block = build_computed_metrics_block({"auc_lr": 0.7234})
+
+    assert "UNANCHORED: 0" in validate_narrative_grounding(
+        "El AUC fue 0 tras el ajuste.",
         block,
     )
 
@@ -271,7 +474,8 @@ def test_prompts_inject_computed_metrics_block_only_for_classification() -> None
     )
 
     literal_rule = (
-        "NUNCA cites estudios externos, papers, autores ni estadísticas de industria. "
+        "NUNCA cites estudios externos, autores, referencias académicas fabricadas "
+        "ni estadísticas de industria. "
         "Razona EXCLUSIVAMENTE sobre `{computed_metrics_block}` y el contexto del caso. "
         "Si una métrica de rendimiento o interpretabilidad del modelo (AUC, F1, "
         "precisión, recall, prevalencia, coeficiente, importancia, etc.) no está "
@@ -286,6 +490,8 @@ def test_prompts_inject_computed_metrics_block_only_for_classification() -> None
         assert "computed_metrics_block" in prompt
     assert literal_rule in rendered
     assert "auc_lr: 0.7234" in rendered
+    assert "paper" not in M5_PROMPT_CLASSIFICATION.lower()
+    assert "paper" not in M5_QUESTIONS_GENERATOR_PROMPT.lower()
 
     for family in ("regresion", "clustering", "serie_temporal"):
         assert M3_CONTENT_PROMPT_BY_FAMILY[family] is M3_EXPERIMENT_PROMPT
@@ -301,27 +507,180 @@ def test_reprompt_once_then_runtime_error_on_repeat_violation(monkeypatch: pytes
         "Según el estudio, el modelo funcionó.",
         "Pérez et al. confirma el mismo resultado.",
     ])
-    monkeypatch.setattr(graph_module, "_get_writer_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(graph_module, "_get_m4_llm", lambda *args, **kwargs: fake_llm)
     monkeypatch.setattr(
         graph_module.Configuration,
         "from_runnable_config",
-        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
     )
 
-    with pytest.raises(RuntimeError, match="narrative grounding"):
+    with pytest.raises(RuntimeError, match="narrative grounding") as exc_info:
         graph_module.m4_content_generator(_base_state(), config={})
 
+    assert "Pérez et al. confirma el mismo resultado." in str(exc_info.value)
     assert len(fake_llm.prompts) == 2
     assert "- CITA:" in fake_llm.prompts[1]
+    assert "Según el estudio, el modelo funcionó." in fake_llm.prompts[1]
+
+
+def test_reprompt_includes_unanchored_prior_output_fragment(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_llm = _FakeLLM([
+        "La tasa de rechazo del 70% asociada al AUC supera el umbral operativo.",
+        "El AUC fue 72% y se mantiene dentro del bloque computado.",
+    ])
+    monkeypatch.setattr(graph_module, "_get_m4_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(
+        graph_module.Configuration,
+        "from_runnable_config",
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
+    )
+
+    update = graph_module.m4_content_generator(_base_state(), config={})
+
+    assert update["m4_content"] == "El AUC fue 72% y se mantiene dentro del bloque computado."
+    assert len(fake_llm.prompts) == 2
+    assert "UNANCHORED: 70" in fake_llm.prompts[1]
+    assert "La tasa de rechazo del 70% asociada al AUC supera el umbral operativo." in fake_llm.prompts[1]
+
+
+def test_get_m4_llm_uses_pro_high_with_pro_medium_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructed: list[dict] = []
+
+    class _FakeGemini:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+            constructed.append(kwargs)
+
+        def with_fallbacks(self, fallbacks: list[object]) -> tuple["_FakeGemini", list[object]]:
+            return self, fallbacks
+
+    monkeypatch.setattr(graph_module, "ChatGoogleGenerativeAI", _FakeGemini)
+
+    result = graph_module._get_m4_llm("pro-override", "writer-override")
+
+    assert len(constructed) == 4
+    assert result[0].kwargs["model"] == "pro-override"
+    assert result[0].kwargs["thinking_level"] == "high"
+    assert result[0].kwargs["max_output_tokens"] == 24576
+    assert constructed[1]["model"] == "pro-override"
+    assert constructed[1]["thinking_level"] == "medium"
+    assert constructed[1]["max_output_tokens"] == 24576
+    assert constructed[2]["model"] == "writer-override"
+    assert constructed[2]["max_output_tokens"] == 24576
+    assert constructed[3]["model"] == "gemini-2.5-flash"
+    assert constructed[3]["max_output_tokens"] == 24576
+
+
+def test_get_m5_llm_uses_pro_medium_with_pro_low_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructed: list[dict] = []
+
+    class _FakeGemini:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+            constructed.append(kwargs)
+
+        def with_fallbacks(self, fallbacks: list[object]) -> tuple["_FakeGemini", list[object]]:
+            return self, fallbacks
+
+    monkeypatch.setattr(graph_module, "ChatGoogleGenerativeAI", _FakeGemini)
+
+    result = graph_module._get_m5_llm("pro-override", "writer-override")
+
+    assert len(constructed) == 4
+    assert result[0].kwargs["model"] == "pro-override"
+    assert result[0].kwargs["thinking_level"] == "medium"
+    assert result[0].kwargs["max_output_tokens"] == 32768
+    assert constructed[1]["model"] == "pro-override"
+    assert constructed[1]["thinking_level"] == "low"
+    assert constructed[1]["max_output_tokens"] == 32768
+    assert constructed[2]["model"] == "writer-override"
+    assert constructed[2]["max_output_tokens"] == 32768
+    assert constructed[3]["model"] == "gemini-2.5-flash"
+    assert constructed[3]["max_output_tokens"] == 32768
+
+
+def test_m4_content_uses_configurable_pro_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_llm = _FakeLLM(["El AUC fue 72% y se mantiene dentro del bloque computado."])
+    factory_kwargs: list[dict] = []
+
+    def _fake_get_m4_llm(model: str, fallback_model: str, **kwargs: object) -> _FakeLLM:
+        factory_kwargs.append({"model": model, "fallback_model": fallback_model, **kwargs})
+        return fake_llm
+
+    monkeypatch.setattr(graph_module, "_get_m4_llm", _fake_get_m4_llm)
+    monkeypatch.setattr(
+        graph_module.Configuration,
+        "from_runnable_config",
+        MagicMock(
+            return_value=SimpleNamespace(
+                architect_model="pro-override",
+                writer_model="writer-override",
+            )
+        ),
+    )
+
+    update = graph_module.m4_content_generator(_base_state(), config={})
+
+    assert update["m4_content"] == "El AUC fue 72% y se mantiene dentro del bloque computado."
+    assert factory_kwargs == [
+        {
+            "model": "pro-override",
+            "fallback_model": "writer-override",
+            "temperature": 0.5,
+        }
+    ]
+
+
+def test_m5_content_uses_dedicated_pro_llm_and_accepts_matrix_business_kpis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    m5_output = """
+### Informe de Resolución
+
+El AUC fue 72% y sostiene una lectura prudente para Junta Directiva.
+
+| acción | KPI esperado | riesgo | modelo soporte |
+|---|---|---|---|
+| Piloto controlado | Reducir fuga 10% | Sesgo operativo | LR baseline |
+| Umbral ejecutivo | Ahorrar 22.50% del presupuesto | Falsos negativos | RF challenger |
+| Monitoreo mensual | Mantener prevalencia comercial 15.4% | Drift | evidencia M2/M4 |
+| Comité de revisión | Reducir escalamiento 8% | Fatiga operativa | matriz de costos |
+""".strip()
+    fake_llm = _FakeLLM([m5_output])
+    factory_kwargs: list[dict] = []
+
+    def _fake_get_m5_llm(model: str, fallback_model: str, **kwargs: object) -> _FakeLLM:
+        factory_kwargs.append({"model": model, "fallback_model": fallback_model, **kwargs})
+        return fake_llm
+
+    monkeypatch.setattr(graph_module, "_get_m5_llm", _fake_get_m5_llm)
+
+    update = graph_module.m5_content_generator(_base_state(), config={})
+
+    assert update["m5_content"] == m5_output
+    assert factory_kwargs == [
+        {
+            "model": "gemini-3.1-pro-preview",
+            "fallback_model": "gemini-3-flash-preview",
+            "temperature": 0.6,
+        }
+    ]
+    assert len(fake_llm.prompts) == 1
 
 
 def test_grounding_disabled_when_summary_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_llm = _FakeLLM(["Según el estudio, el modelo logró 87%."])
-    monkeypatch.setattr(graph_module, "_get_writer_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(graph_module, "_get_m4_llm", lambda *args, **kwargs: fake_llm)
     monkeypatch.setattr(
         graph_module.Configuration,
         "from_runnable_config",
-        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
     )
 
     update = graph_module.m4_content_generator(_base_state(metrics_summary=None), config={})
@@ -335,11 +694,11 @@ def test_grounding_disabled_when_summary_has_no_numeric_anchors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_llm = _FakeLLM(["El AUC fue 87%."])
-    monkeypatch.setattr(graph_module, "_get_writer_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(graph_module, "_get_m4_llm", lambda *args, **kwargs: fake_llm)
     monkeypatch.setattr(
         graph_module.Configuration,
         "from_runnable_config",
-        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
     )
 
     update = graph_module.m4_content_generator(_base_state(metrics_summary={}), config={})
@@ -347,6 +706,127 @@ def test_grounding_disabled_when_summary_has_no_numeric_anchors(
     assert update["m4_content"] == "El AUC fue 87%."
     assert update["narrative_grounding_warning"] == NARRATIVE_GROUNDING_WARNING
     assert len(fake_llm.prompts) == 1
+
+
+def test_m4_allows_zero_metric_placeholders_when_m3_modeling_was_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    m4_output = (
+        "El notebook no reportó AUC: 0 ni F1: 0 porque la clase minoritaria "
+        "no tenía soporte suficiente. La prevalencia computada fue 0.5%."
+    )
+    fake_llm = _FakeLLM([m4_output])
+    monkeypatch.setattr(graph_module, "_get_m4_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(
+        graph_module.Configuration,
+        "from_runnable_config",
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
+    )
+
+    update = graph_module.m4_content_generator(
+        _base_state(
+            metrics_summary={
+                "modeling_status": "skipped_degenerate_target",
+                "modeling_skip_reason": "clase minoritaria con solo 1 fila",
+                "prevalence": 0.005,
+            }
+        ),
+        config={},
+    )
+
+    assert update["m4_content"] == m4_output
+    assert len(fake_llm.prompts) == 1
+
+
+def test_m4_still_reprompts_positive_metric_when_m3_modeling_was_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_llm = _FakeLLM([
+        "El notebook no entrenó modelo, pero AUC 87% sería una mejora clara.",
+        "El notebook no reportó AUC: 0 porque no era válido entrenar.",
+    ])
+    monkeypatch.setattr(graph_module, "_get_m4_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(
+        graph_module.Configuration,
+        "from_runnable_config",
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
+    )
+
+    update = graph_module.m4_content_generator(
+        _base_state(
+            metrics_summary={
+                "modeling_status": "skipped_degenerate_target",
+                "modeling_skip_reason": "clase minoritaria con solo 1 fila",
+                "prevalence": 0.005,
+            }
+        ),
+        config={},
+    )
+
+    assert update["m4_content"] == "El notebook no reportó AUC: 0 porque no era válido entrenar."
+    assert len(fake_llm.prompts) == 2
+    assert "UNANCHORED: 87" in fake_llm.prompts[1]
+
+
+def test_m4_graph_reaches_sync_after_contextualized_reprompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content_llm = _FakeLLM([
+        "La tasa de rechazo del 70% asociada al AUC supera el umbral operativo.",
+        "El AUC fue 72% y se mantiene anclado al notebook ejecutado.",
+    ])
+    questions_llm = _FakeStructuredLLM(
+        SimpleNamespace(
+            preguntas=[
+                SimpleNamespace(
+                    model_dump=lambda: {
+                        "numero": 1,
+                        "titulo": "Impacto",
+                        "enunciado": "Compare A/B/C con métricas de M4.",
+                        "solucion_esperada": "Debe elegir con evidencia.",
+                        "bloom_level": "analysis",
+                        "m4_section_ref": "4.2",
+                    }
+                )
+            ]
+        )
+    )
+    chart_llm = _FakeStructuredLLM(
+        SimpleNamespace(
+            charts=[
+                SimpleNamespace(
+                    model_dump=lambda: {
+                        "id": "m4_chart_01",
+                        "title": "ROI",
+                        "subtitle": "Comparativo",
+                        "library": "plotly",
+                        "chart_type": "bar",
+                        "traces": [],
+                        "layout": {},
+                        "source": "Análisis Financiero — case_issue_243",
+                        "notes": "Mock",
+                    }
+                )
+            ]
+        )
+    )
+    monkeypatch.setattr(graph_module, "_get_m4_llm", lambda *args, **kwargs: content_llm)
+    monkeypatch.setattr(graph_module, "_get_writer_llm", lambda *args, **kwargs: questions_llm)
+    monkeypatch.setattr(graph_module, "_get_chart_llm", lambda *args, **kwargs: chart_llm)
+    monkeypatch.setattr(
+        graph_module.Configuration,
+        "from_runnable_config",
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
+    )
+
+    final_state = graph_module.m4_graph.invoke(_base_state(), config={"configurable": {}})
+
+    assert final_state["m4_content"] == "El AUC fue 72% y se mantiene anclado al notebook ejecutado."
+    assert final_state["m4_questions"]
+    assert final_state["m4_charts"]
+    assert final_state["current_agent"] in {"m4_questions_generator", "m4_chart_generator"}
+    assert "UNANCHORED: 70" in content_llm.prompts[1]
+    assert "La tasa de rechazo del 70% asociada al AUC supera el umbral operativo." in content_llm.prompts[1]
 
 
 def test_select_narrative_prompt_falls_back_to_clasificacion_for_unresolved_algo() -> None:

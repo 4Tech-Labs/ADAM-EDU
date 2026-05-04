@@ -466,7 +466,7 @@ def build_m3_quality_warning(
     metrics_summary: dict[str, Any] | None,
     marker_warning: str | None = None,
 ) -> str | None:
-    """Return the non-blocking quality warning for executed classification notebooks."""
+    """Return the quality warning for executed classification notebooks."""
 
     if marker_warning:
         return marker_warning
@@ -477,6 +477,35 @@ def build_m3_quality_warning(
     if best_auc < 0.55 or best_auc > 0.99:
         return f"m3_quality_auc_out_of_range: best AUC {best_auc:.4f} outside [0.55, 0.99]"
     return None
+
+
+def _metrics_declares_intentional_modeling_skip(metrics_summary: dict[str, Any] | None) -> bool:
+    if not metrics_summary:
+        return False
+    status = metrics_summary.get("modeling_status")
+    if not isinstance(status, str):
+        return False
+    return status in {
+        "skipped_degenerate_target",
+        "skipped_non_binary_target",
+        "skipped_no_features",
+    }
+
+
+def is_m3_quality_warning_blocking(
+    quality_warning: str | None,
+    metrics_summary: dict[str, Any] | None,
+) -> bool:
+    """Return whether a quality warning should trigger correction/fail-closed."""
+
+    if not quality_warning:
+        return False
+    warning_kind = quality_warning.split(":", 1)[0]
+    if warning_kind in {"m3_quality_marker_missing", "m3_quality_marker_invalid"}:
+        return True
+    if warning_kind == "m3_quality_auc_missing":
+        return not _metrics_declares_intentional_modeling_skip(metrics_summary)
+    return False
 
 
 def _read_output_notebook_text(output_path: Path) -> str:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from numbers import Real
 from typing import Any
@@ -22,13 +23,18 @@ NARRATIVE_GROUNDING_WARNING = (
 _FALLBACK_MARKER = "M3_METRICS_SUMMARY_AUSENTE"
 _NUMBER_RE = re.compile(r"(?<![A-Za-z_])([+-]?\d+(?:[.,]\d+)?)\s*%?")
 _CITATION_RE = re.compile(
-    r"(?i)(según\s+(?:el\s+)?estudio|paper|et\s+al\.|\(\d{4}\))"
+    r"(?i)(seg[uú]n\s+(?:el\s+|un\s+|una\s+)?(?:estudios?|papers?)|"
+    r"papers?\s+(?:recientes?|extern[oa]s?|acad[eé]micos?|cient[ií]ficos?|de\s+[\wÁÉÍÓÚÑáéíóúñ.-]+)|"
+    r"et\s+al\.|\(\d{4}\))"
 )
 _MODEL_METRIC_CONTEXT_RE = re.compile(
     r"(?i)"
     r"\b(auc|roc|f1|accuracy|exactitud|precision|precisión|recall|sensibilidad|"
     r"especificidad|prevalencia|prevalence|baseline|dummy|coeficiente|coefficient|"
     r"importancia|importance|feature|variable|shap|permutation)\b"
+)
+_SKIPPED_ZERO_PLACEHOLDER_CONTEXT_RE = re.compile(
+    r"(?i)\b(auc|roc|f1|accuracy|exactitud|precision|precisión|recall|sensibilidad|especificidad)\b"
 )
 _ADJACENT_MODEL_METRIC_NUMBER_RE = re.compile(
     r"(?i)"
@@ -43,7 +49,7 @@ _ADJACENT_MODEL_METRIC_NUMBER_RE = re.compile(
 # so business figures ("ROI 35% y AUC 72%") in the same sentence as a model
 # metric are not transitively flagged as unanchored.
 _CLAUSE_BOUNDARY_RE = re.compile(
-    r"[.,;:\n\u2014\u2013]|\s+(?:y|o|and|or)\s+",
+    r"[.,;:\n|\u2014\u2013]|\s+(?:y|o|and|or)\s+",
     flags=re.IGNORECASE,
 )
 _DATE_RANGE_RE = re.compile(r"\b(?:19|20)\d{2}\s*[-–]\s*(?:19|20)\d{2}\b")
@@ -57,6 +63,23 @@ _PARAGRAPH_RULE_RE = re.compile(
     r"\b(?:regla\s+de\s+los\s+)?\d+\s+p[aá]rrafos\b",
     flags=re.IGNORECASE,
 )
+_MODELING_SKIPPED_STATUSES = {
+    "skipped_degenerate_target",
+    "skipped_non_binary_target",
+    "skipped_no_features",
+}
+_M5_DECISION_MATRIX_HEADER_ALIASES = {
+    "accion": "accion",
+    "accion ejecutiva": "accion",
+    "accion recomendada": "accion",
+    "kpi esperado": "kpi esperado",
+    "indicador esperado": "kpi esperado",
+    "riesgo": "riesgo",
+    "riesgo principal": "riesgo",
+    "modelo soporte": "modelo soporte",
+    "modelo de soporte": "modelo soporte",
+    "soporte modelo": "modelo soporte",
+}
 
 
 def build_computed_metrics_block(metrics_summary: dict | None) -> str:
@@ -115,19 +138,45 @@ def validate_narrative_grounding(prose: str, metrics_block: str) -> list[str]:
     structural markers only (markdown heading numbers, module/section labels,
     parenthetical citation years, non-metric date ranges like ``2019-2023``, and
     fixed writing-rule phrases such as ``4 párrafos``). Business figures from
-    M2/Exhibits/M4 are allowed; only numeric claims near model performance or
-    interpretability terms must be anchored to ``metrics_block``.
+    M2/Exhibits/M4 and the M5 decision-matrix ``KPI esperado`` column are
+    allowed; only numeric claims near model performance or interpretability
+    terms must be anchored to ``metrics_block``.
     """
     if _FALLBACK_MARKER in metrics_block:
         return []
 
     violations = [f"CITA: {match.group(0)}" for match in _CITATION_RE.finditer(prose)]
     anchors = _extract_anchor_numbers(metrics_block)
-    numeric_prose = _strip_structural_numbers_for_numeric_anchoring(prose)
-    for raw_number, found in _iter_model_metric_numbers(numeric_prose):
+    modeling_was_skipped = _metrics_block_declares_modeling_skipped(metrics_block)
+    numeric_prose = _strip_m5_decision_matrix_kpi_cells(prose)
+    numeric_prose = _strip_structural_numbers_for_numeric_anchoring(numeric_prose)
+    for raw_number, found, allows_skipped_zero_placeholder in _iter_model_metric_numbers(numeric_prose):
+        if (
+            modeling_was_skipped
+            and allows_skipped_zero_placeholder
+            and math.isclose(found, 0.0, abs_tol=1e-12)
+        ):
+            continue
         if not any(_within_tolerance(found, anchor) for anchor in anchors):
             violations.append(f"UNANCHORED: {raw_number}")
     return violations
+
+
+def contextualize_grounding_violations(prose: str, violations: list[str]) -> list[str]:
+    """Attach prior-output fragments to grounding violations for reprompts."""
+    contextualized: list[str] = []
+    for violation in violations:
+        raw_number = _extract_unanchored_raw_number(violation)
+        fragment = (
+            _find_fragment_containing_number(prose, raw_number)
+            if raw_number is not None
+            else _find_fragment_containing_citation(prose, violation)
+        )
+        if fragment is None:
+            contextualized.append(violation)
+            continue
+        contextualized.append(f'{violation} -> "{fragment}"')
+    return contextualized
 
 
 def _within_tolerance(found: float, anchor: float) -> bool:
@@ -190,6 +239,8 @@ def _extract_anchor_numbers(metrics_block: str) -> list[float]:
         if ":" not in line:
             continue
         value = line.split(":", 1)[1]
+        if not re.match(r"\s*[+-]?\d", value):
+            continue
         for match in _NUMBER_RE.finditer(value):
             anchors.append(float(match.group(1).replace(",", ".")))
     return anchors
@@ -202,14 +253,29 @@ def has_metric_anchors(metrics_block: str) -> bool:
     return bool(_extract_anchor_numbers(metrics_block))
 
 
-def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float]]:
-    matches: list[tuple[int, str, float]] = []
+def _metrics_block_declares_modeling_skipped(metrics_block: str) -> bool:
+    for line in metrics_block.splitlines():
+        key, separator, value = line.partition(":")
+        if separator != ":" or key.strip().lower() != "modeling_status":
+            continue
+        return value.strip().lower() in _MODELING_SKIPPED_STATUSES
+    return False
+
+
+def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float, bool]]:
+    matches: list[tuple[int, str, float, bool]] = []
     consumed_spans: list[tuple[int, int]] = []
 
     for match in _ADJACENT_MODEL_METRIC_NUMBER_RE.finditer(prose):
         raw_number = match.group("value").replace(",", ".")
         value_span = match.span("value")
-        matches.append((value_span[0], raw_number, float(raw_number)))
+        segment = match.group(0)
+        matches.append((
+            value_span[0],
+            raw_number,
+            float(raw_number),
+            _allows_skipped_zero_placeholder(segment),
+        ))
         consumed_spans.append(value_span)
 
     for match in _NUMBER_RE.finditer(prose):
@@ -219,34 +285,114 @@ def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float]]:
         if not _is_model_metric_number(prose, match):
             continue
         raw_number = match.group(1).replace(",", ".")
-        matches.append((value_span[0], raw_number, float(raw_number)))
+        segment = _model_metric_clause(prose, value_span[0], value_span[1])
+        matches.append((
+            value_span[0],
+            raw_number,
+            float(raw_number),
+            _allows_skipped_zero_placeholder(segment),
+        ))
 
-    return [(raw_number, found) for _start, raw_number, found in sorted(matches)]
+    return [
+        (raw_number, found, allows_skipped_zero_placeholder)
+        for _start, raw_number, found, allows_skipped_zero_placeholder in sorted(matches)
+    ]
 
 
 def _spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
     return left[0] < right[1] and right[0] < left[1]
 
 
+def _extract_unanchored_raw_number(violation: str) -> str | None:
+    prefix = "UNANCHORED: "
+    if not violation.startswith(prefix):
+        return None
+    raw_number = violation[len(prefix):].strip()
+    return raw_number or None
+
+
+def _extract_citation_raw_text(violation: str) -> str | None:
+    prefix = "CITA: "
+    if not violation.startswith(prefix):
+        return None
+    raw_text = violation[len(prefix):].strip()
+    return raw_text or None
+
+
+def _find_fragment_containing_citation(prose: str, violation: str) -> str | None:
+    raw_text = _extract_citation_raw_text(violation)
+    if raw_text is None:
+        return None
+    match = re.search(re.escape(raw_text), prose, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    return _fragment_for_match(prose, match.start(), match.end())
+
+
+def _find_fragment_containing_number(prose: str, raw_number: str) -> str | None:
+    match = _find_number_match(prose, raw_number)
+    if match is None:
+        return None
+    return _fragment_for_match(prose, match.start(), match.end())
+
+
+def _fragment_for_match(prose: str, match_start: int, match_end: int) -> str | None:
+    start, end = _sentence_bounds(prose, match_start, match_end)
+    fragment = " ".join(prose[start:end].strip().split())
+    if len(fragment) <= 240:
+        return fragment
+    window_start = max(start, match_start - 90)
+    window_end = min(end, match_end + 90)
+    compact = " ".join(prose[window_start:window_end].strip().split())
+    return f"...{compact}..." if compact else None
+
+
+def _find_number_match(prose: str, raw_number: str) -> re.Match[str] | None:
+    normalized = raw_number.replace(",", ".")
+    candidates = [re.escape(normalized)]
+    if "." in normalized:
+        candidates.append(re.escape(normalized.replace(".", ",")))
+    pattern = r"(?<![\d.,])(?:" + "|".join(dict.fromkeys(candidates)) + r")\s*%?(?![\d.,])"
+    return re.search(pattern, prose)
+
+
+def _sentence_bounds(prose: str, start: int, end: int) -> tuple[int, int]:
+    left_candidates = [prose.rfind(boundary, 0, start) for boundary in ".!?\n"]
+    left = max(left_candidates)
+    seg_start = 0 if left == -1 else left + 1
+    right_positions = [
+        position for boundary in ".!?\n"
+        if (position := prose.find(boundary, end)) != -1
+    ]
+    seg_end = min(right_positions) + 1 if right_positions else len(prose)
+    return seg_start, seg_end
+
+
 def _is_model_metric_number(prose: str, match: re.Match[str]) -> bool:
     """Return True when the matched number sits in the same clause as a model-metric keyword.
 
     A clause is bounded by sentence punctuation (``.``, ``;``, ``:``, em/en
-    dashes, newline), commas, and Spanish/English list connectors (``y``,
-    ``o``, ``and``, ``or``). Restricting the keyword search to the clause
+    dashes, newline, Markdown table pipes), commas, and Spanish/English list
+    connectors (``y``, ``o``, ``and``, ``or``). Restricting the keyword search to the clause
     around the number prevents false UNANCHORED violations when the same
     sentence mixes a legitimate model metric ("AUC 72%") with business figures
     ("ROI 35%"), a pattern that occurs in M4 ml_ds Harvard prose.
     """
-    start = match.start()
-    end = match.end()
+    segment = _model_metric_clause(prose, match.start(), match.end())
+    return bool(_MODEL_METRIC_CONTEXT_RE.search(segment))
+
+
+def _model_metric_clause(prose: str, start: int, end: int) -> str:
     seg_start = 0
     for boundary in _CLAUSE_BOUNDARY_RE.finditer(prose, 0, start):
         seg_start = boundary.end()
     forward = _CLAUSE_BOUNDARY_RE.search(prose, end)
     seg_end = forward.start() if forward else len(prose)
-    segment = prose[seg_start:seg_end]
-    return bool(_MODEL_METRIC_CONTEXT_RE.search(segment))
+    return prose[seg_start:seg_end]
+
+
+def _allows_skipped_zero_placeholder(segment: str) -> bool:
+    return bool(_SKIPPED_ZERO_PLACEHOLDER_CONTEXT_RE.search(segment))
 
 
 def _strip_structural_numbers_for_numeric_anchoring(prose: str) -> str:
@@ -261,6 +407,80 @@ def _strip_structural_numbers_for_numeric_anchoring(prose: str) -> str:
     cleaned = _SECTION_REF_RE.sub(" ", cleaned)
     cleaned = _PARAGRAPH_RULE_RE.sub(" ", cleaned)
     return cleaned
+
+
+def _strip_m5_decision_matrix_kpi_cells(prose: str) -> str:
+    lines: list[str] = []
+    kpi_index: int | None = None
+    inside_m5_matrix = False
+    for line in prose.splitlines():
+        cells = _split_markdown_table_row(line)
+        if not cells:
+            inside_m5_matrix = False
+            kpi_index = None
+            lines.append(line)
+            continue
+
+        normalized_cells = [_normalize_m5_decision_matrix_header_cell(cell) for cell in cells]
+        if _is_m5_decision_matrix_header(normalized_cells):
+            inside_m5_matrix = True
+            kpi_index = normalized_cells.index("kpi esperado")
+            lines.append(line)
+            continue
+
+        if inside_m5_matrix and _is_markdown_separator_row(cells):
+            lines.append(line)
+            continue
+
+        if inside_m5_matrix and kpi_index is not None and len(cells) > kpi_index:
+            cells[kpi_index] = "KPI_ESPERADO_NEGOCIO"
+            lines.append("| " + " | ".join(cells) + " |")
+            continue
+
+        inside_m5_matrix = False
+        kpi_index = None
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _split_markdown_table_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped or "|" not in stripped:
+        return []
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in stripped.split("|")]
+
+
+def _is_markdown_separator_row(cells: list[str]) -> bool:
+    if not cells:
+        return False
+    return all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells)
+
+
+def _normalize_table_cell(cell: str) -> str:
+    compact = " ".join(cell.lower().split())
+    return "".join(
+        char
+        for char in unicodedata.normalize("NFKD", compact)
+        if not unicodedata.combining(char)
+    )
+
+
+def _normalize_m5_decision_matrix_header_cell(cell: str) -> str:
+    normalized = _normalize_table_cell(cell)
+    return _M5_DECISION_MATRIX_HEADER_ALIASES.get(normalized, normalized)
+
+
+def _is_m5_decision_matrix_header(normalized_cells: list[str]) -> bool:
+    return (
+        "accion" in normalized_cells
+        and "kpi esperado" in normalized_cells
+        and "riesgo" in normalized_cells
+        and "modelo soporte" in normalized_cells
+    )
 
 
 def _format_float(value: float) -> str:
