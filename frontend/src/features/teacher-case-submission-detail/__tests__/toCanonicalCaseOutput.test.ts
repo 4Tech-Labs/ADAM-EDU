@@ -100,10 +100,14 @@ describe("toCanonicalCaseOutput", () => {
         });
 
         const result = toCanonicalCaseOutput(detail);
+        const caseQuestion = result.content.caseQuestions?.[0];
+        const edaQuestion = result.content.edaQuestions?.[0];
 
         expect(result.content.preguntaEje).toBe("¿Qué umbral minimiza el costo de error sin bloquear crecimiento?");
-        expect(JSON.stringify(result.content.caseQuestions?.[0])).not.toContain("rubric");
-        expect(JSON.stringify(result.content.edaQuestions?.[0])).not.toContain("rubric");
+        expect(caseQuestion).toBeDefined();
+        expect(caseQuestion).not.toHaveProperty("rubric");
+        expect(edaQuestion).toBeDefined();
+        expect(edaQuestion).not.toHaveProperty("rubric");
     });
 
     it("drops whitespace-only issue242 pregunta eje from persisted case_view", () => {
@@ -141,8 +145,10 @@ describe("toCanonicalCaseOutput", () => {
         });
 
         const result = toCanonicalCaseOutput(detail);
+        const caseQuestion = result.content.caseQuestions?.[0];
 
-        expect(JSON.stringify(result.content.caseQuestions?.[0])).not.toContain("rubric");
+        expect(caseQuestion).toBeDefined();
+        expect(caseQuestion).not.toHaveProperty("rubric");
     });
 
     it("defaults studentProfile to business and derives EDA case type from modules", () => {
