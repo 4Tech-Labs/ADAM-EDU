@@ -186,6 +186,26 @@ def test_build_prompt_contrast_mode_limits_comparison_to_selected_pair() -> None
     assert "NO introduzcas terceros modelos" in prompt
 
 
+@pytest.mark.parametrize(
+    "challenger",
+    [None, "Random Forest"],
+)
+def test_build_prompt_invalid_contrast_anchor_degrades_to_single(
+    challenger: str | None,
+) -> None:
+    prompt = _build_prompt(
+        _base_req(
+            mode="contrast",
+            algorithmPrimary="ARIMA",
+            algorithmChallenger=challenger,
+        )
+    )
+    assert "Modo de algoritmos/técnicas: **single" in prompt
+    assert "Restricción crítica de modo single" in prompt
+    assert "Restricción crítica de modo contrast" not in prompt
+    assert "Challenger (misma familia)" not in prompt
+
+
 def test_build_prompt_business_anchor_uses_managerial_framing() -> None:
     prompt = _build_prompt(
         _base_req(
@@ -287,7 +307,10 @@ async def test_generate_suggestion_no_warning_when_coherent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_suggestion_uses_high_reasoning_flash_config() -> None:
+async def test_generate_suggestion_uses_high_reasoning_flash_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("STORYTELLER_MODEL", raising=False)
     llm_output = {
         "scenarioDescription": "Pronosticar demanda mensual de SKUs.",
         "guidingQuestion": "¿Cómo usar Prophet para anticipar la demanda del próximo trimestre?",
@@ -309,7 +332,7 @@ async def test_generate_suggestion_uses_high_reasoning_flash_config() -> None:
     assert kwargs["temperature"] == 0.7
     assert kwargs["thinking_level"] == "high"
     assert kwargs["max_retries"] == 2
-    assert kwargs["max_output_tokens"] == 4096
+    assert kwargs["max_output_tokens"] == 8192
 
 
 # ──────────────────────────────────────────────────────────────────────────────

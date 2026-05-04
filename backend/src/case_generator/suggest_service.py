@@ -590,7 +590,19 @@ def _build_algorithm_anchor_block(req: SuggestRequest) -> Optional[str]:
         return None
     family_label = FAMILY_LABELS.get(family, family)
     target_hint = _FAMILY_TARGET_HINT.get(family, "")
-    mode_label = "1 algoritmo (deep dive)" if req.mode == "single" else "2 algoritmos (baseline + challenger)"
+    valid_challenger = (
+        req.algorithmChallenger
+        if req.mode == "contrast"
+        and req.algorithmChallenger
+        and family_of(req.algorithmChallenger) == family
+        else None
+    )
+    effective_mode = "contrast" if valid_challenger else "single"
+    mode_label = (
+        "1 algoritmo (deep dive)"
+        if effective_mode == "single"
+        else "2 algoritmos (baseline + challenger)"
+    )
     case_scope = "Caso Harvard con EDA" if req.caseType == "harvard_with_eda" else "Caso Harvard narrativo"
     eda_scope = req.edaDepth or "sin EDA"
     unit_scope = req.topicUnit or "General"
@@ -617,13 +629,13 @@ def _build_algorithm_anchor_block(req: SuggestRequest) -> Optional[str]:
         f"- Profundidad EDA/Python: **{eda_scope}; includePythonCode={req.includePythonCode}**",
         f"- Perfil del curso: **{req.academicLevel}**",
         f"- Perfil del estudiante: **{req.studentProfile}**",
-        f"- Modo de algoritmos/técnicas: **{req.mode} — {mode_label}**",
+        f"- Modo de algoritmos/técnicas: **{effective_mode} — {mode_label}**",
         "",
         f"- Familia anclada: **{family} ({family_label})**",
         f"- Algoritmo principal: **{req.algorithmPrimary}**",
     ]
-    if req.mode == "contrast" and req.algorithmChallenger and family_of(req.algorithmChallenger) == family:
-        lines.append(f"- Challenger (misma familia): **{req.algorithmChallenger}**")
+    if valid_challenger:
+        lines.append(f"- Challenger (misma familia): **{valid_challenger}**")
     lines.extend([
         "",
         "## Reglas duras de coherencia",
@@ -636,7 +648,7 @@ def _build_algorithm_anchor_block(req: SuggestRequest) -> Optional[str]:
         f"4. {profile_guidance}",
         "5. NO sugieras técnicas de otras familias en `suggestedTechniques`.",
     ])
-    if req.mode == "single":
+    if effective_mode == "single":
         lines.extend([
             "",
             "## Restricción crítica de modo single",
@@ -647,11 +659,11 @@ def _build_algorithm_anchor_block(req: SuggestRequest) -> Optional[str]:
             "- La pregunta guía NO debe preguntar qué modelo elegir; debe preguntar cómo usar",
             f"  **{req.algorithmPrimary}** para resolver el dilema del caso.",
         ])
-    elif req.algorithmChallenger and family_of(req.algorithmChallenger) == family:
+    elif valid_challenger:
         lines.extend([
             "",
             "## Restricción crítica de modo contrast",
-            f"- Compara ÚNICAMENTE **{req.algorithmPrimary}** vs **{req.algorithmChallenger}**.",
+            f"- Compara ÚNICAMENTE **{req.algorithmPrimary}** vs **{valid_challenger}**.",
             "- NO introduzcas terceros modelos ni alternativas fuera de esa pareja.",
             "- La pregunta guía debe expresar el trade-off entre interpretabilidad, desempeño",
             "  y decisión pedagógica usando solo esos dos algoritmos.",
@@ -888,7 +900,7 @@ async def generate_suggestion(req: SuggestRequest) -> SuggestResponse:
         temperature=0.7,
         thinking_level="high",
         max_retries=2,
-        max_output_tokens=4096,
+        max_output_tokens=8192,
     )
     result = await llm.ainvoke(prompt)
 
