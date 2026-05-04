@@ -205,6 +205,9 @@ _rate_limiter = InMemoryRateLimiter(
     max_bucket_size=20,  # Burst de hasta 20 llamadas acumuladas
 )
 
+_M5_MODEL = "gemini-3.1-pro-preview"
+_M5_MAX_OUTPUT_TOKENS = 32768
+
 
 # ─── LLM Factory ────────────────────────────────────────
 
@@ -345,53 +348,26 @@ def _get_chart_llm(
     return primary.with_fallbacks([fallback])
 
 
-def _get_m5_llm(
-    model: str,
-    temperature: float = 0.5,
-    thinking_level: str = "medium",
-):
-    """LLM Pro para m5_questions_generator — preguntas de Junta Directiva.
+def _get_m5_llm(temperature: float = 0.5):
+    """Dedicated Pro chain for all Module 5 generation nodes.
 
-    Usa architect_model (Pro) porque M5 es la evaluación final integrativa:
-    3 preguntas × solucion_esperada 250-300 palabras + JSON = ~3000-4000 tokens.
-    Con thinking_level="medium" el modelo consume ~2-4K tokens de reasoning
-    adicionales — el mismo bug silencioso de _get_chart_llm aplica aquí.
-    Fix: 16384 tokens de output garantizan que las 3 solucion_esperada se completen.
-
-    Cadena de 3 fallbacks para resiliencia ante spikes 503:
-    1. gemini-3.1-pro-preview  (thinking="medium" — calidad máxima)
-    2. gemini-3-flash-preview   (thinking="minimal" — misma familia, menor costo)
-    3. gemini-2.5-flash         (sin thinking — infraestructura distinta/estable)
-    El 3er nivel cubre spikes que afectan toda la familia gemini-3-preview.
+    M5 is the final synthesis surface: content must reconcile M1-M4 evidence,
+    narrative grounding, and the decision matrix, while questions produce long
+    board-level expected answers. Keep both nodes on Gemini Pro and fall back to
+    the same model with lower reasoning so transient reasoning-budget failures
+    do not degrade the pedagogical contract to Flash.
     """
-    primary = ChatGoogleGenerativeAI(
-        model=model,
+    common_kwargs = dict(
+        model=_M5_MODEL,
         temperature=temperature,
-        thinking_level=thinking_level,
         max_retries=2,
-        max_output_tokens=16384,
+        max_output_tokens=_M5_MAX_OUTPUT_TOKENS,
         api_key=os.getenv("GEMINI_API_KEY"),
         rate_limiter=_rate_limiter,
     )
-    fallback_flash = ChatGoogleGenerativeAI(
-        model="gemini-3-flash-preview",
-        temperature=temperature,
-        thinking_level="minimal",
-        max_output_tokens=16384,
-        max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
-    # Nivel 3 — generación anterior estable; no soporta thinking_level.
-    fallback_stable = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        temperature=temperature,
-        max_output_tokens=16384,
-        max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
-    return primary.with_fallbacks([fallback_flash, fallback_stable])
+    primary = ChatGoogleGenerativeAI(thinking_level="medium", **common_kwargs)
+    pro_fallback_low = ChatGoogleGenerativeAI(thinking_level="low", **common_kwargs)
+    return primary.with_fallbacks([pro_fallback_low])
 
 
 # ─── Utilidades ─────────────────────────────────────────
@@ -3157,11 +3133,9 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     Corre DESPUÉS de synthesis_phase1_sync — necesita m5_content del state.
     """
     try:
-        cfg = Configuration.from_runnable_config(config)
         # temperature=0.5: balance entre creatividad en enunciados y consistencia estructural
-        # Usa architect_model (Pro) + 16384 tokens — M5 es evaluación final integrativa.
-        # Con thinking_level="medium" el budget de 8192 se truncaba silenciosamente.
-        llm = _get_m5_llm(cfg.architect_model, temperature=0.5)
+        # Usa Gemini Pro medium + fallback Pro low: M5 es evaluación final integrativa.
+        llm = _get_m5_llm(temperature=0.5)
 
         # Filtrar preguntas complejas de M1 (bloom Level 2/3) como historial de referencia.
         # Prioridad: synthesis → evaluation → analysis. Máx 3 para no saturar el contexto.
@@ -4593,8 +4567,7 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     y son filtradas por frontend_output_adapter antes de llegar al estudiante.
     """
     try:
-        cfg = Configuration.from_runnable_config(config)
-        llm = _get_writer_llm(cfg.writer_model, temperature=0.6, thinking_level="medium")
+        llm = _get_m5_llm(temperature=0.6)
 
         context = _build_base_context(state)
         context.update({

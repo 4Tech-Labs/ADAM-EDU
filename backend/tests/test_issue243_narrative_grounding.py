@@ -250,6 +250,28 @@ def test_validator_isolates_business_number_in_mixed_clause() -> None:
     assert not any("UNANCHORED: 35" == v for v in bad_violations)
 
 
+def test_validator_isolates_m5_decision_matrix_business_kpis_by_cell() -> None:
+    block = build_computed_metrics_block({"auc_lr": 0.7234})
+    prose = """
+| acción | KPI esperado | riesgo | modelo soporte |
+|---|---|---|---|
+| Piloto controlado | Reducir fuga 10% | Sesgo operativo | LR baseline |
+| Umbral ejecutivo | Ahorrar 22.50% del presupuesto | Falsos negativos | RF challenger |
+| Monitoreo mensual | Mantener prevalencia comercial 15.4% | Drift | evidencia M2/M4 |
+""".strip()
+
+    assert validate_narrative_grounding(prose, block) == []
+
+    violations = validate_narrative_grounding(
+        "| acción | KPI esperado | riesgo | modelo soporte |\n"
+        "|---|---|---|---|\n"
+        "| Piloto | Control operativo | AUC 87% | LR baseline |",
+        block,
+    )
+
+    assert "UNANCHORED: 87" in violations
+
+
 def test_validator_accepts_number_within_tolerance() -> None:
     block = build_computed_metrics_block({"auc_lr": 0.7234})
 
@@ -410,6 +432,63 @@ def test_get_m4_llm_uses_pro_high_with_pro_medium_fallback(
     assert constructed[1]["model"] == "gemini-3.1-pro-preview"
     assert constructed[1]["thinking_level"] == "medium"
     assert constructed[1]["max_output_tokens"] == 24576
+
+
+def test_get_m5_llm_uses_pro_medium_with_pro_low_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructed: list[dict] = []
+
+    class _FakeGemini:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+            constructed.append(kwargs)
+
+        def with_fallbacks(self, fallbacks: list[object]) -> tuple["_FakeGemini", list[object]]:
+            return self, fallbacks
+
+    monkeypatch.setattr(graph_module, "ChatGoogleGenerativeAI", _FakeGemini)
+
+    result = graph_module._get_m5_llm()
+
+    assert len(constructed) == 2
+    assert result[0].kwargs["model"] == "gemini-3.1-pro-preview"
+    assert result[0].kwargs["thinking_level"] == "medium"
+    assert result[0].kwargs["max_output_tokens"] == 32768
+    assert constructed[1]["model"] == "gemini-3.1-pro-preview"
+    assert constructed[1]["thinking_level"] == "low"
+    assert constructed[1]["max_output_tokens"] == 32768
+
+
+def test_m5_content_uses_dedicated_pro_llm_and_accepts_matrix_business_kpis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    m5_output = """
+### Informe de Resolución
+
+El AUC fue 72% y sostiene una lectura prudente para Junta Directiva.
+
+| acción | KPI esperado | riesgo | modelo soporte |
+|---|---|---|---|
+| Piloto controlado | Reducir fuga 10% | Sesgo operativo | LR baseline |
+| Umbral ejecutivo | Ahorrar 22.50% del presupuesto | Falsos negativos | RF challenger |
+| Monitoreo mensual | Mantener prevalencia comercial 15.4% | Drift | evidencia M2/M4 |
+| Comité de revisión | Reducir escalamiento 8% | Fatiga operativa | matriz de costos |
+""".strip()
+    fake_llm = _FakeLLM([m5_output])
+    factory_kwargs: list[dict] = []
+
+    def _fake_get_m5_llm(**kwargs: object) -> _FakeLLM:
+        factory_kwargs.append(kwargs)
+        return fake_llm
+
+    monkeypatch.setattr(graph_module, "_get_m5_llm", _fake_get_m5_llm)
+
+    update = graph_module.m5_content_generator(_base_state(), config={})
+
+    assert update["m5_content"] == m5_output
+    assert factory_kwargs == [{"temperature": 0.6}]
+    assert len(fake_llm.prompts) == 1
 
 
 def test_grounding_disabled_when_summary_absent(monkeypatch: pytest.MonkeyPatch) -> None:

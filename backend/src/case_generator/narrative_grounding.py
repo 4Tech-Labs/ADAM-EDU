@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from numbers import Real
 from typing import Any
@@ -43,7 +44,7 @@ _ADJACENT_MODEL_METRIC_NUMBER_RE = re.compile(
 # so business figures ("ROI 35% y AUC 72%") in the same sentence as a model
 # metric are not transitively flagged as unanchored.
 _CLAUSE_BOUNDARY_RE = re.compile(
-    r"[.,;:\n\u2014\u2013]|\s+(?:y|o|and|or)\s+",
+    r"[.,;:\n|\u2014\u2013]|\s+(?:y|o|and|or)\s+",
     flags=re.IGNORECASE,
 )
 _DATE_RANGE_RE = re.compile(r"\b(?:19|20)\d{2}\s*[-–]\s*(?:19|20)\d{2}\b")
@@ -115,15 +116,17 @@ def validate_narrative_grounding(prose: str, metrics_block: str) -> list[str]:
     structural markers only (markdown heading numbers, module/section labels,
     parenthetical citation years, non-metric date ranges like ``2019-2023``, and
     fixed writing-rule phrases such as ``4 párrafos``). Business figures from
-    M2/Exhibits/M4 are allowed; only numeric claims near model performance or
-    interpretability terms must be anchored to ``metrics_block``.
+    M2/Exhibits/M4 and the M5 decision-matrix ``KPI esperado`` column are
+    allowed; only numeric claims near model performance or interpretability
+    terms must be anchored to ``metrics_block``.
     """
     if _FALLBACK_MARKER in metrics_block:
         return []
 
     violations = [f"CITA: {match.group(0)}" for match in _CITATION_RE.finditer(prose)]
     anchors = _extract_anchor_numbers(metrics_block)
-    numeric_prose = _strip_structural_numbers_for_numeric_anchoring(prose)
+    numeric_prose = _strip_m5_decision_matrix_kpi_cells(prose)
+    numeric_prose = _strip_structural_numbers_for_numeric_anchoring(numeric_prose)
     for raw_number, found in _iter_model_metric_numbers(numeric_prose):
         if not any(_within_tolerance(found, anchor) for anchor in anchors):
             violations.append(f"UNANCHORED: {raw_number}")
@@ -294,8 +297,8 @@ def _is_model_metric_number(prose: str, match: re.Match[str]) -> bool:
     """Return True when the matched number sits in the same clause as a model-metric keyword.
 
     A clause is bounded by sentence punctuation (``.``, ``;``, ``:``, em/en
-    dashes, newline), commas, and Spanish/English list connectors (``y``,
-    ``o``, ``and``, ``or``). Restricting the keyword search to the clause
+    dashes, newline, Markdown table pipes), commas, and Spanish/English list
+    connectors (``y``, ``o``, ``and``, ``or``). Restricting the keyword search to the clause
     around the number prevents false UNANCHORED violations when the same
     sentence mixes a legitimate model metric ("AUC 72%") with business figures
     ("ROI 35%"), a pattern that occurs in M4 ml_ds Harvard prose.
@@ -323,6 +326,75 @@ def _strip_structural_numbers_for_numeric_anchoring(prose: str) -> str:
     cleaned = _SECTION_REF_RE.sub(" ", cleaned)
     cleaned = _PARAGRAPH_RULE_RE.sub(" ", cleaned)
     return cleaned
+
+
+def _strip_m5_decision_matrix_kpi_cells(prose: str) -> str:
+    lines: list[str] = []
+    kpi_index: int | None = None
+    inside_m5_matrix = False
+    for line in prose.splitlines():
+        cells = _split_markdown_table_row(line)
+        if not cells:
+            inside_m5_matrix = False
+            kpi_index = None
+            lines.append(line)
+            continue
+
+        normalized_cells = [_normalize_table_cell(cell) for cell in cells]
+        if _is_m5_decision_matrix_header(normalized_cells):
+            inside_m5_matrix = True
+            kpi_index = normalized_cells.index("kpi esperado")
+            lines.append(line)
+            continue
+
+        if inside_m5_matrix and _is_markdown_separator_row(cells):
+            lines.append(line)
+            continue
+
+        if inside_m5_matrix and kpi_index is not None and len(cells) > kpi_index:
+            cells[kpi_index] = "KPI_ESPERADO_NEGOCIO"
+            lines.append("| " + " | ".join(cells) + " |")
+            continue
+
+        inside_m5_matrix = False
+        kpi_index = None
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _split_markdown_table_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped or "|" not in stripped:
+        return []
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in stripped.split("|")]
+
+
+def _is_markdown_separator_row(cells: list[str]) -> bool:
+    if not cells:
+        return False
+    return all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in cells)
+
+
+def _normalize_table_cell(cell: str) -> str:
+    compact = " ".join(cell.lower().split())
+    return "".join(
+        char
+        for char in unicodedata.normalize("NFKD", compact)
+        if not unicodedata.combining(char)
+    )
+
+
+def _is_m5_decision_matrix_header(normalized_cells: list[str]) -> bool:
+    return (
+        "accion" in normalized_cells
+        and "kpi esperado" in normalized_cells
+        and "riesgo" in normalized_cells
+        and "modelo soporte" in normalized_cells
+    )
 
 
 def _format_float(value: float) -> str:
