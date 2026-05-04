@@ -4,6 +4,22 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
+## TODO-243-A: Excepción estrecha para umbrales prospectivos en grounding narrativo
+
+**What:** Evaluar si `validate_narrative_grounding` debe permitir números técnicos dentro de contextos explícitamente prospectivos, como "Condición mínima de éxito", "target futuro" o recomendaciones de monitoreo, sin tratarlos como métricas ejecutadas del notebook.
+
+**Why:** El hotfix de M4 evita pedir umbrales numéricos aspiracionales en el prompt, pero a largo plazo podría ser pedagógicamente útil permitir cortes futuros controlados (por ejemplo, un umbral de deploy) sin fallar la generación del caso.
+
+**Pros:** Permitiría recomendaciones de producción más específicas cuando el equipo quiera umbrales técnicos explícitos; reduce dependencia de que el LLM siempre reformule en lenguaje cualitativo.
+
+**Cons:** Una excepción amplia podría ocultar métricas de modelo inventadas y debilitar el guardrail de Issue #243. Requiere regex/contexto muy estrecho y pruebas negativas fuertes para que `El AUC fue 87%` siga fallando si no está anclado.
+
+**Context:** El fallo de producción vino de M4 `ml_ds + clasificacion`: el prompt pedía una condición mínima de éxito y Gemini emitió `AUC de 0.70`; el validador lo rechazó como `UNANCHORED` porque no estaba en `m3_metrics_summary`. La corrección inmediata cambió el prompt para pedir una condición cualitativa o anclada, dejando intacto el validador.
+
+**Depends on / blocked by:** Telemetría de M4 después del hotfix y plan-eng-review dedicado si se decide relajar el validador.
+
+---
+
 ## TODO-239-A: Two-pass M3-content grounding con métricas ejecutadas
 
 **What:** Evaluar un rediseño two-pass donde M3-content pueda recibir métricas ejecutadas del notebook, no solo M4/M5.

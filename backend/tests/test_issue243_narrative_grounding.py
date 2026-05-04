@@ -490,6 +490,8 @@ def test_prompts_inject_computed_metrics_block_only_for_classification() -> None
         assert "computed_metrics_block" in prompt
     assert literal_rule in rendered
     assert "auc_lr: 0.7234" in rendered
+    assert "umbral de métrica técnica que debe mantenerse" not in rendered
+    assert "No inventes umbrales\nnuméricos futuros de AUC/F1/recall/precisión" in rendered
     assert "paper" not in M5_PROMPT_CLASSIFICATION.lower()
     assert "paper" not in M5_QUESTIONS_GENERATOR_PROMPT.lower()
 
@@ -500,6 +502,55 @@ def test_prompts_inject_computed_metrics_block_only_for_classification() -> None
         assert "computed_metrics_block" not in M3_CONTENT_PROMPT_BY_FAMILY[family]
         assert "computed_metrics_block" not in M4_PROMPT_BY_FAMILY[family]
         assert "computed_metrics_block" not in M5_PROMPT_BY_FAMILY[family]
+
+
+def test_m4_accepts_qualitative_minimum_success_condition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    m4_output = (
+        "Condición mínima de éxito: mantener estabilidad del desempeño observado en M3 "
+        "con monitoreo continuo, retraining planificado y rollback si aparece degradación."
+    )
+    fake_llm = _FakeLLM([m4_output])
+    monkeypatch.setattr(graph_module, "_get_m4_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(
+        graph_module.Configuration,
+        "from_runnable_config",
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
+    )
+
+    update = graph_module.m4_content_generator(_base_state(), config={})
+
+    assert update["m4_content"] == m4_output
+    assert len(fake_llm.prompts) == 1
+
+
+def test_m4_reprompts_aspirational_numeric_threshold_from_prior_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bad_output = (
+        "Condición mínima de éxito futuro: ningún modelo predictivo deberá pasar a "
+        "producción hasta que un baseline interpretable supere consistentemente un AUC de 0.70 "
+        "con datos en tiempo real."
+    )
+    fixed_output = (
+        "Condición mínima de éxito: sostener el desempeño observado en M3 con monitoreo "
+        "continuo y rollback si hay degradación."
+    )
+    fake_llm = _FakeLLM([bad_output, fixed_output])
+    monkeypatch.setattr(graph_module, "_get_m4_llm", lambda *args, **kwargs: fake_llm)
+    monkeypatch.setattr(
+        graph_module.Configuration,
+        "from_runnable_config",
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
+    )
+
+    update = graph_module.m4_content_generator(_base_state(), config={})
+
+    assert update["m4_content"] == fixed_output
+    assert len(fake_llm.prompts) == 2
+    assert "UNANCHORED: 0.70" in fake_llm.prompts[1]
+    assert bad_output in fake_llm.prompts[1]
 
 
 def test_reprompt_once_then_runtime_error_on_repeat_violation(monkeypatch: pytest.MonkeyPatch) -> None:
