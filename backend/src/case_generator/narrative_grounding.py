@@ -23,7 +23,9 @@ NARRATIVE_GROUNDING_WARNING = (
 _FALLBACK_MARKER = "M3_METRICS_SUMMARY_AUSENTE"
 _NUMBER_RE = re.compile(r"(?<![A-Za-z_])([+-]?\d+(?:[.,]\d+)?)\s*%?")
 _CITATION_RE = re.compile(
-    r"(?i)(seg[uú]n\s+(?:el\s+|un\s+|una\s+)?estudios?|et\s+al\.|\(\d{4}\))"
+    r"(?i)(seg[uú]n\s+(?:el\s+|un\s+|una\s+)?(?:estudios?|papers?)|"
+    r"papers?\s+(?:recientes?|extern[oa]s?|acad[eé]micos?|cient[ií]ficos?|de\s+[\wÁÉÍÓÚÑáéíóúñ.-]+)|"
+    r"et\s+al\.|\(\d{4}\))"
 )
 _MODEL_METRIC_CONTEXT_RE = re.compile(
     r"(?i)"
@@ -65,6 +67,18 @@ _MODELING_SKIPPED_STATUSES = {
     "skipped_degenerate_target",
     "skipped_non_binary_target",
     "skipped_no_features",
+}
+_M5_DECISION_MATRIX_HEADER_ALIASES = {
+    "accion": "accion",
+    "accion ejecutiva": "accion",
+    "accion recomendada": "accion",
+    "kpi esperado": "kpi esperado",
+    "indicador esperado": "kpi esperado",
+    "riesgo": "riesgo",
+    "riesgo principal": "riesgo",
+    "modelo soporte": "modelo soporte",
+    "modelo de soporte": "modelo soporte",
+    "soporte modelo": "modelo soporte",
 }
 
 
@@ -334,14 +348,11 @@ def _fragment_for_match(prose: str, match_start: int, match_end: int) -> str | N
 
 
 def _find_number_match(prose: str, raw_number: str) -> re.Match[str] | None:
-    escaped = re.escape(raw_number)
-    integer_number = raw_number.split(".", 1)[0]
-    candidates = [escaped]
-    if "." in raw_number:
-        candidates.append(re.escape(raw_number.replace(".", ",")))
-    if integer_number != raw_number:
-        candidates.append(re.escape(integer_number))
-    pattern = r"(?<!\d)(?:" + "|".join(dict.fromkeys(candidates)) + r")\s*%?"
+    normalized = raw_number.replace(",", ".")
+    candidates = [re.escape(normalized)]
+    if "." in normalized:
+        candidates.append(re.escape(normalized.replace(".", ",")))
+    pattern = r"(?<![\d.,])(?:" + "|".join(dict.fromkeys(candidates)) + r")\s*%?(?![\d.,])"
     return re.search(pattern, prose)
 
 
@@ -410,7 +421,7 @@ def _strip_m5_decision_matrix_kpi_cells(prose: str) -> str:
             lines.append(line)
             continue
 
-        normalized_cells = [_normalize_table_cell(cell) for cell in cells]
+        normalized_cells = [_normalize_m5_decision_matrix_header_cell(cell) for cell in cells]
         if _is_m5_decision_matrix_header(normalized_cells):
             inside_m5_matrix = True
             kpi_index = normalized_cells.index("kpi esperado")
@@ -456,6 +467,11 @@ def _normalize_table_cell(cell: str) -> str:
         for char in unicodedata.normalize("NFKD", compact)
         if not unicodedata.combining(char)
     )
+
+
+def _normalize_m5_decision_matrix_header_cell(cell: str) -> str:
+    normalized = _normalize_table_cell(cell)
+    return _M5_DECISION_MATRIX_HEADER_ALIASES.get(normalized, normalized)
 
 
 def _is_m5_decision_matrix_header(normalized_cells: list[str]) -> bool:

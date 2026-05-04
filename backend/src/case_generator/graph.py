@@ -26,12 +26,13 @@ Total nodos LLM por path:
 Modelos:
   architect_model (Pro): case_architect, schema_designer
   m3 (Pro chain) : m3_content_generator (ml_ds), m3_notebook_generator
-  writer_model (Flash): m3_content_generator (business), demás nodos LLM
+    m4/m5 (Pro chain): m4_content_generator, m5_content_generator, m5_questions_generator
+    writer_model (Flash): m3_content_generator (business), demás nodos LLM y fallback operativo M4/M5
   chart_llm (Flash, 16K tokens): chart generators (M2, M3, M4)
   Cadenas de fallback (depende del nodo, no es global):
     - _get_writer_llm  / _get_chart_llm    : primary -> gemini-2.5-flash
     - _get_architect_llm                   : Pro-high -> Pro-medium -> gemini-3-flash-preview
-    - _get_m5_llm                          : Pro -> gemini-3-flash-preview -> gemini-2.5-flash
+        - _get_m4_llm / _get_m5_llm            : Pro -> Pro-low/medium -> writer_model -> gemini-2.5-flash
     - schema_designer (M2 inline)          : Pro-medium -> Pro-low -> gemini-3-flash-preview
     - m3_content_generator (ml_ds inline)  : Pro-medium -> Pro-low -> gemini-3-flash-preview
     - m3_notebook_generator/executor       : Pro-medium -> Pro-low -> gemini-3-flash-preview
@@ -291,15 +292,20 @@ def _get_architect_llm(
     return primary.with_fallbacks([pro_fallback_medium, flash_fallback])
 
 
-def _get_m4_llm(temperature: float = 0.5):
+def _get_m4_llm(
+    model: str = "gemini-3.1-pro-preview",
+    fallback_model: str = "gemini-3-flash-preview",
+    temperature: float = 0.5,
+):
     """High-reasoning Pro chain for M4 narrative impact analysis.
 
     M4 has to translate notebook/model evidence into executive ROI, risk, and
-    deployment language. Keep it on Gemini Pro but do not reuse the architect
-    helper because M4 should not receive Code Execution tools.
+    deployment language. Prefer Gemini Pro, but keep Configuration-driven
+    fallback escape hatches for preview-model outages and rollouts. Do not reuse
+    the architect helper because M4 should not receive Code Execution tools.
     """
     common_kwargs = dict(
-        model="gemini-3.1-pro-preview",
+        model=model,
         temperature=temperature,
         max_retries=2,
         max_output_tokens=24576,
@@ -311,7 +317,23 @@ def _get_m4_llm(temperature: float = 0.5):
         thinking_level="medium",
         **common_kwargs,
     )
-    return primary.with_fallbacks([pro_fallback_medium])
+    writer_fallback = ChatGoogleGenerativeAI(
+        model=fallback_model,
+        temperature=temperature,
+        max_retries=2,
+        max_output_tokens=24576,
+        api_key=os.getenv("GEMINI_API_KEY"),
+        rate_limiter=_rate_limiter,
+    )
+    stable_fallback = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        temperature=temperature,
+        max_retries=2,
+        max_output_tokens=24576,
+        api_key=os.getenv("GEMINI_API_KEY"),
+        rate_limiter=_rate_limiter,
+    )
+    return primary.with_fallbacks([pro_fallback_medium, writer_fallback, stable_fallback])
 
 
 def _get_chart_llm(
@@ -349,17 +371,21 @@ def _get_chart_llm(
     return primary.with_fallbacks([fallback])
 
 
-def _get_m5_llm(temperature: float = 0.5):
+def _get_m5_llm(
+    model: str = _M5_MODEL,
+    fallback_model: str = "gemini-3-flash-preview",
+    temperature: float = 0.5,
+):
     """Dedicated Pro chain for all Module 5 generation nodes.
 
     M5 is the final synthesis surface: content must reconcile M1-M4 evidence,
     narrative grounding, and the decision matrix, while questions produce long
-    board-level expected answers. Keep both nodes on Gemini Pro and fall back to
-    the same model with lower reasoning so transient reasoning-budget failures
-    do not degrade the pedagogical contract to Flash.
+    board-level expected answers. Prefer Gemini Pro and first fall back to the
+    same model with lower reasoning; then use configured writer/stable Flash
+    fallbacks so operations can route around preview-model incidents.
     """
     common_kwargs = dict(
-        model=_M5_MODEL,
+        model=model,
         temperature=temperature,
         max_retries=2,
         max_output_tokens=_M5_MAX_OUTPUT_TOKENS,
@@ -368,7 +394,23 @@ def _get_m5_llm(temperature: float = 0.5):
     )
     primary = ChatGoogleGenerativeAI(thinking_level="medium", **common_kwargs)
     pro_fallback_low = ChatGoogleGenerativeAI(thinking_level="low", **common_kwargs)
-    return primary.with_fallbacks([pro_fallback_low])
+    writer_fallback = ChatGoogleGenerativeAI(
+        model=fallback_model,
+        temperature=temperature,
+        max_retries=2,
+        max_output_tokens=_M5_MAX_OUTPUT_TOKENS,
+        api_key=os.getenv("GEMINI_API_KEY"),
+        rate_limiter=_rate_limiter,
+    )
+    stable_fallback = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        temperature=temperature,
+        max_retries=2,
+        max_output_tokens=_M5_MAX_OUTPUT_TOKENS,
+        api_key=os.getenv("GEMINI_API_KEY"),
+        rate_limiter=_rate_limiter,
+    )
+    return primary.with_fallbacks([pro_fallback_low, writer_fallback, stable_fallback])
 
 
 # ─── Utilidades ─────────────────────────────────────────
@@ -3134,9 +3176,10 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     Corre DESPUÉS de synthesis_phase1_sync — necesita m5_content del state.
     """
     try:
+        cfg = Configuration.from_runnable_config(config)
         # temperature=0.5: balance entre creatividad en enunciados y consistencia estructural
         # Usa Gemini Pro medium + fallback Pro low: M5 es evaluación final integrativa.
-        llm = _get_m5_llm(temperature=0.5)
+        llm = _get_m5_llm(cfg.architect_model, cfg.writer_model, temperature=0.5)
 
         # Filtrar preguntas complejas de M1 (bloom Level 2/3) como historial de referencia.
         # Prioridad: synthesis → evaluation → analysis. Máx 3 para no saturar el contexto.
@@ -4416,7 +4459,8 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     Si no hay M2/M3, el prompt usa fallback basado en Exhibits del M1.
     """
     try:
-        llm = _get_m4_llm(temperature=0.5)
+        cfg = Configuration.from_runnable_config(config)
+        llm = _get_m4_llm(cfg.architect_model, cfg.writer_model, temperature=0.5)
 
         context = _build_base_context(state)
         context.update({
@@ -4575,7 +4619,8 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     y son filtradas por frontend_output_adapter antes de llegar al estudiante.
     """
     try:
-        llm = _get_m5_llm(temperature=0.6)
+        cfg = Configuration.from_runnable_config(config)
+        llm = _get_m5_llm(cfg.architect_model, cfg.writer_model, temperature=0.6)
 
         context = _build_base_context(state)
         context.update({

@@ -151,6 +151,22 @@ def test_contextualizes_decimal_comma_and_adjacent_metric_numbers() -> None:
     ]
 
 
+def test_contextualizes_decimal_without_falling_back_to_unrelated_integer() -> None:
+    prose = (
+        "El segmento 0 quedó como referencia histórica. "
+        "En validación, el F1 fue 0,87 fuera del bloque computado."
+    )
+
+    contextualized = contextualize_grounding_violations(
+        prose,
+        ["UNANCHORED: 0.87"],
+    )
+
+    assert contextualized == [
+        'UNANCHORED: 0.87 -> "En validación, el F1 fue 0,87 fuera del bloque computado."'
+    ]
+
+
 def test_contextualization_preserves_violation_when_fragment_is_missing() -> None:
     contextualized = contextualize_grounding_violations(
         "El modelo se describe sin el número conflictivo.",
@@ -290,6 +306,27 @@ def test_validator_isolates_m5_decision_matrix_business_kpis_by_cell() -> None:
     assert "UNANCHORED: 87" in violations
 
 
+def test_validator_isolates_m5_decision_matrix_business_kpis_with_header_aliases() -> None:
+    block = build_computed_metrics_block({"auc_lr": 0.7234})
+    prose = """
+| acción recomendada | indicador esperado | riesgo principal | modelo de soporte |
+|---|---|---|---|
+| Piloto controlado | Reducir fuga 10% | Sesgo operativo | LR baseline |
+| Umbral ejecutivo | Ahorrar 22.50% del presupuesto | Falsos negativos | RF challenger |
+""".strip()
+
+    assert validate_narrative_grounding(prose, block) == []
+
+    violations = validate_narrative_grounding(
+        "| acción recomendada | indicador esperado | riesgo principal | modelo de soporte |\n"
+        "|---|---|---|---|\n"
+        "| Piloto | Control operativo | AUC 87% | LR baseline |",
+        block,
+    )
+
+    assert "UNANCHORED: 87" in violations
+
+
 def test_validator_accepts_number_within_tolerance() -> None:
     block = build_computed_metrics_block({"auc_lr": 0.7234})
 
@@ -332,6 +369,19 @@ def test_validator_flags_citation_patterns() -> None:
     assert any("et al." in v.lower() for v in citation_violations)
     assert any("(2023)" in v for v in citation_violations)
     assert all(not v.startswith("UNANCHORED: 2023") for v in violations)
+
+
+def test_validator_flags_external_paper_citation_patterns() -> None:
+    block = build_computed_metrics_block(SUMMARY)
+
+    violations = validate_narrative_grounding(
+        "Según un paper reciente, el mercado confirma la tesis. Un paper de Gartner refuerza el plan.",
+        block,
+    )
+
+    citation_violations = [v for v in violations if v.startswith("CITA: ")]
+    assert any("según un paper" in v.lower() for v in citation_violations)
+    assert any("paper de gartner" in v.lower() for v in citation_violations)
 
 
 def test_validator_allows_standalone_paper_and_negative_no_citation_phrases() -> None:
@@ -461,7 +511,7 @@ def test_reprompt_once_then_runtime_error_on_repeat_violation(monkeypatch: pytes
     monkeypatch.setattr(
         graph_module.Configuration,
         "from_runnable_config",
-        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
     )
 
     with pytest.raises(RuntimeError, match="narrative grounding") as exc_info:
@@ -482,7 +532,7 @@ def test_reprompt_includes_unanchored_prior_output_fragment(monkeypatch: pytest.
     monkeypatch.setattr(
         graph_module.Configuration,
         "from_runnable_config",
-        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
     )
 
     update = graph_module.m4_content_generator(_base_state(), config={})
@@ -508,15 +558,19 @@ def test_get_m4_llm_uses_pro_high_with_pro_medium_fallback(
 
     monkeypatch.setattr(graph_module, "ChatGoogleGenerativeAI", _FakeGemini)
 
-    result = graph_module._get_m4_llm()
+    result = graph_module._get_m4_llm("pro-override", "writer-override")
 
-    assert len(constructed) == 2
-    assert result[0].kwargs["model"] == "gemini-3.1-pro-preview"
+    assert len(constructed) == 4
+    assert result[0].kwargs["model"] == "pro-override"
     assert result[0].kwargs["thinking_level"] == "high"
     assert result[0].kwargs["max_output_tokens"] == 24576
-    assert constructed[1]["model"] == "gemini-3.1-pro-preview"
+    assert constructed[1]["model"] == "pro-override"
     assert constructed[1]["thinking_level"] == "medium"
     assert constructed[1]["max_output_tokens"] == 24576
+    assert constructed[2]["model"] == "writer-override"
+    assert constructed[2]["max_output_tokens"] == 24576
+    assert constructed[3]["model"] == "gemini-2.5-flash"
+    assert constructed[3]["max_output_tokens"] == 24576
 
 
 def test_get_m5_llm_uses_pro_medium_with_pro_low_fallback(
@@ -534,15 +588,53 @@ def test_get_m5_llm_uses_pro_medium_with_pro_low_fallback(
 
     monkeypatch.setattr(graph_module, "ChatGoogleGenerativeAI", _FakeGemini)
 
-    result = graph_module._get_m5_llm()
+    result = graph_module._get_m5_llm("pro-override", "writer-override")
 
-    assert len(constructed) == 2
-    assert result[0].kwargs["model"] == "gemini-3.1-pro-preview"
+    assert len(constructed) == 4
+    assert result[0].kwargs["model"] == "pro-override"
     assert result[0].kwargs["thinking_level"] == "medium"
     assert result[0].kwargs["max_output_tokens"] == 32768
-    assert constructed[1]["model"] == "gemini-3.1-pro-preview"
+    assert constructed[1]["model"] == "pro-override"
     assert constructed[1]["thinking_level"] == "low"
     assert constructed[1]["max_output_tokens"] == 32768
+    assert constructed[2]["model"] == "writer-override"
+    assert constructed[2]["max_output_tokens"] == 32768
+    assert constructed[3]["model"] == "gemini-2.5-flash"
+    assert constructed[3]["max_output_tokens"] == 32768
+
+
+def test_m4_content_uses_configurable_pro_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_llm = _FakeLLM(["El AUC fue 72% y se mantiene dentro del bloque computado."])
+    factory_kwargs: list[dict] = []
+
+    def _fake_get_m4_llm(model: str, fallback_model: str, **kwargs: object) -> _FakeLLM:
+        factory_kwargs.append({"model": model, "fallback_model": fallback_model, **kwargs})
+        return fake_llm
+
+    monkeypatch.setattr(graph_module, "_get_m4_llm", _fake_get_m4_llm)
+    monkeypatch.setattr(
+        graph_module.Configuration,
+        "from_runnable_config",
+        MagicMock(
+            return_value=SimpleNamespace(
+                architect_model="pro-override",
+                writer_model="writer-override",
+            )
+        ),
+    )
+
+    update = graph_module.m4_content_generator(_base_state(), config={})
+
+    assert update["m4_content"] == "El AUC fue 72% y se mantiene dentro del bloque computado."
+    assert factory_kwargs == [
+        {
+            "model": "pro-override",
+            "fallback_model": "writer-override",
+            "temperature": 0.5,
+        }
+    ]
 
 
 def test_m5_content_uses_dedicated_pro_llm_and_accepts_matrix_business_kpis(
@@ -563,8 +655,8 @@ El AUC fue 72% y sostiene una lectura prudente para Junta Directiva.
     fake_llm = _FakeLLM([m5_output])
     factory_kwargs: list[dict] = []
 
-    def _fake_get_m5_llm(**kwargs: object) -> _FakeLLM:
-        factory_kwargs.append(kwargs)
+    def _fake_get_m5_llm(model: str, fallback_model: str, **kwargs: object) -> _FakeLLM:
+        factory_kwargs.append({"model": model, "fallback_model": fallback_model, **kwargs})
         return fake_llm
 
     monkeypatch.setattr(graph_module, "_get_m5_llm", _fake_get_m5_llm)
@@ -572,7 +664,13 @@ El AUC fue 72% y sostiene una lectura prudente para Junta Directiva.
     update = graph_module.m5_content_generator(_base_state(), config={})
 
     assert update["m5_content"] == m5_output
-    assert factory_kwargs == [{"temperature": 0.6}]
+    assert factory_kwargs == [
+        {
+            "model": "gemini-3.1-pro-preview",
+            "fallback_model": "gemini-3-flash-preview",
+            "temperature": 0.6,
+        }
+    ]
     assert len(fake_llm.prompts) == 1
 
 
@@ -582,7 +680,7 @@ def test_grounding_disabled_when_summary_absent(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         graph_module.Configuration,
         "from_runnable_config",
-        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
     )
 
     update = graph_module.m4_content_generator(_base_state(metrics_summary=None), config={})
@@ -600,7 +698,7 @@ def test_grounding_disabled_when_summary_has_no_numeric_anchors(
     monkeypatch.setattr(
         graph_module.Configuration,
         "from_runnable_config",
-        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
     )
 
     update = graph_module.m4_content_generator(_base_state(metrics_summary={}), config={})
@@ -622,7 +720,7 @@ def test_m4_allows_zero_metric_placeholders_when_m3_modeling_was_skipped(
     monkeypatch.setattr(
         graph_module.Configuration,
         "from_runnable_config",
-        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
     )
 
     update = graph_module.m4_content_generator(
@@ -651,7 +749,7 @@ def test_m4_still_reprompts_positive_metric_when_m3_modeling_was_skipped(
     monkeypatch.setattr(
         graph_module.Configuration,
         "from_runnable_config",
-        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
     )
 
     update = graph_module.m4_content_generator(
@@ -718,7 +816,7 @@ def test_m4_graph_reaches_sync_after_contextualized_reprompt(
     monkeypatch.setattr(
         graph_module.Configuration,
         "from_runnable_config",
-        MagicMock(return_value=SimpleNamespace(writer_model="fake")),
+        MagicMock(return_value=SimpleNamespace(architect_model="fake-pro", writer_model="fake")),
     )
 
     final_state = graph_module.m4_graph.invoke(_base_state(), config={"configurable": {}})
