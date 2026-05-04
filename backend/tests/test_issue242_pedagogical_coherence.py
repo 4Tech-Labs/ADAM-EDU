@@ -8,23 +8,25 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from pydantic import ValidationError
 
 from case_generator import graph as graph_module
 from case_generator.orchestration.frontend_output_adapter import (
     adapter_legacy_to_canonical_output,
 )
 from case_generator.prompts import (
+    CASE_QUESTIONS_PROMPT,
+    EDA_QUESTIONS_GENERATOR_PROMPT,
+    M3_AUDIT_QUESTIONS_PROMPT,
     M3_CONTENT_PROMPT_BY_FAMILY,
     M3_EXPERIMENT_PROMPT,
+    M3_EXPERIMENT_QUESTIONS_PROMPT,
     M5_CONTENT_GENERATOR_PROMPT,
+    M5_QUESTIONS_GENERATOR_PROMPT,
     M5_PROMPT_BY_FAMILY,
 )
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
-    GeneradorPreguntasOutput,
     PreguntaMinimalista,
-    RubricItem,
 )
 from shared.case_sanitization import build_teacher_case_review_payload
 from shared.models import Assignment
@@ -79,14 +81,6 @@ class _FailingStructuredLLM:
         return _FailingStructuredInvoker()
 
 
-def _valid_rubric() -> list[RubricItem]:
-    return [
-        RubricItem(criterio="Evidencia", descriptor="Cita datos relevantes del caso", peso=40),
-        RubricItem(criterio="Criterio", descriptor="Explica el trade-off directivo", peso=35),
-        RubricItem(criterio="Decision", descriptor="Formula una postura defendible", peso=25),
-    ]
-
-
 def _valid_case_architect_payload(**overrides) -> dict[str, object]:
     payload: dict[str, object] = {
         "titulo": "RetenCo — Retención selectiva de clientes",
@@ -117,14 +111,18 @@ def _valid_m5_matrix() -> str:
 """.strip()
 
 
-def _valid_question_payload(*, rubric: list[dict[str, object]] | None) -> dict[str, object]:
+def _valid_question_payload() -> dict[str, object]:
     return {
         "numero": 1,
         "titulo": "Decision inicial",
         "enunciado": "¿Qué decisión defenderías con la evidencia disponible?",
         "solucion_esperada": "Debe citar evidencia y trade-offs.",
         "bloom_level": "evaluation",
-        "rubric": rubric,
+        "rubric": [
+            {"criterio": "Evidencia", "descriptor": "Cita datos relevantes del caso", "peso": 40},
+            {"criterio": "Criterio", "descriptor": "Explica el trade-off directivo", "peso": 35},
+            {"criterio": "Decision", "descriptor": "Formula una postura defendible", "peso": 25},
+        ],
     }
 
 
@@ -146,32 +144,11 @@ def _classification_state() -> dict[str, object]:
     }
 
 
-def test_rubric_item_and_question_contract_accept_valid_rubric() -> None:
-    question = PreguntaMinimalista(
-        numero=1,
-        titulo="Decision inicial",
-        enunciado="¿Qué decisión defenderías?",
-        solucion_esperada="Debe citar evidencia y trade-offs.",
-        rubric=_valid_rubric(),
-    )
+def test_question_contract_drops_legacy_rubric_metadata() -> None:
+    question = PreguntaMinimalista.model_validate(_valid_question_payload())
 
-    assert question.rubric is not None
-    assert sum(item.peso for item in question.rubric) == 100
-
-
-def test_question_rubric_rejects_invalid_weight_sum() -> None:
-    with pytest.raises(ValidationError, match="sum to 100"):
-        PreguntaMinimalista(
-            numero=1,
-            titulo="Decision inicial",
-            enunciado="¿Qué decisión defenderías?",
-            solucion_esperada="Debe citar evidencia.",
-            rubric=[
-                RubricItem(criterio="Uno", descriptor="Descriptor suficientemente largo", peso=40),
-                RubricItem(criterio="Dos", descriptor="Descriptor suficientemente largo", peso=40),
-                RubricItem(criterio="Tres", descriptor="Descriptor suficientemente largo", peso=10),
-            ],
-        )
+    assert "rubric" not in question.model_dump()
+    assert not hasattr(question, "rubric")
 
 
 def test_case_architect_output_accepts_optional_pregunta_eje_and_legacy_absence() -> None:
@@ -262,58 +239,48 @@ def test_case_architect_raises_after_second_missing_classification_pregunta_eje(
         )
 
 
-def test_question_output_reprompts_once_for_missing_classification_rubric() -> None:
-    rubric_payload = [item.model_dump() for item in _valid_rubric()]
-    fake_llm = _FakeStructuredLLM(
-        [
-            {"preguntas": [_valid_question_payload(rubric=None)]},
-            {"preguntas": [_valid_question_payload(rubric=rubric_payload)]},
-        ]
+def test_question_prompts_do_not_request_teacher_rubrics() -> None:
+    question_prompts = (
+        CASE_QUESTIONS_PROMPT,
+        EDA_QUESTIONS_GENERATOR_PROMPT,
+        M3_AUDIT_QUESTIONS_PROMPT,
+        M3_EXPERIMENT_QUESTIONS_PROMPT,
+        M5_QUESTIONS_GENERATOR_PROMPT,
     )
 
-    result = graph_module._invoke_question_output_with_rubric_contract(
-        llm=fake_llm,
-        output_schema=GeneradorPreguntasOutput,
-        prompt="PROMPT BASE",
-        state={"studentProfile": "ml_ds", "algoritmos": ["Logistic Regression"]},  # type: ignore[arg-type]
-        node_name="case_questions",
-    )
-
-    assert result.preguntas[0].rubric is not None
-    assert len(fake_llm.prompts) == 2
-    assert "CORRECCIÓN OBLIGATORIA DE RÚBRICAS" in fake_llm.prompts[1]
-
-
-def test_question_output_allows_missing_rubric_outside_classification_contract() -> None:
-    fake_llm = _FakeStructuredLLM(
-        [{"preguntas": [_valid_question_payload(rubric=None)]}]
-    )
-
-    result = graph_module._invoke_question_output_with_rubric_contract(
-        llm=fake_llm,
-        output_schema=GeneradorPreguntasOutput,
-        prompt="PROMPT BASE",
-        state={"studentProfile": "business", "algoritmos": ["Logistic Regression"]},  # type: ignore[arg-type]
-        node_name="case_questions",
-    )
-
-    assert result.preguntas[0].rubric is None
-    assert len(fake_llm.prompts) == 1
+    for prompt in question_prompts:
+        assert '"rubric"' not in prompt
+        assert "Rúbrica docente" not in prompt
+        assert "rúbrica mínima" not in prompt
+        assert "rúbrica para docente" not in prompt
 
 
 @pytest.mark.parametrize(
-    ("node_name", "llm_factory_name"),
+    ("node_name", "llm_factory_name", "expected"),
     [
-        ("case_questions", "_get_writer_llm"),
-        ("eda_questions_generator", "_get_writer_llm"),
-        ("m3_questions_generator", "_get_writer_llm"),
-        ("m5_questions_generator", "_get_m5_llm"),
+        ("case_questions", "_get_writer_llm", {"doc1_preguntas": []}),
+        (
+            "eda_questions_generator",
+            "_get_writer_llm",
+            {"doc2_preguntas_eda": [], "current_agent": "doc3_generation"},
+        ),
+        (
+            "m3_questions_generator",
+            "_get_writer_llm",
+            {"m3_questions": [], "current_agent": "m3_questions_generator"},
+        ),
+        (
+            "m5_questions_generator",
+            "_get_m5_llm",
+            {"m5_questions": [], "current_agent": "m5_questions_generator"},
+        ),
     ],
 )
-def test_issue242_question_nodes_fail_closed_on_structured_output_errors(
+def test_question_nodes_degrade_on_structured_output_errors(
     monkeypatch: pytest.MonkeyPatch,
     node_name: str,
     llm_factory_name: str,
+    expected: dict[str, object],
 ) -> None:
     monkeypatch.setattr(
         graph_module,
@@ -322,9 +289,9 @@ def test_issue242_question_nodes_fail_closed_on_structured_output_errors(
     )
 
     node = getattr(graph_module, node_name)
+    result = node(_classification_state(), {})  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="structured parse failed"):
-        node(_classification_state(), {})  # type: ignore[arg-type]
+    assert result == expected
 
 
 def test_question_parse_errors_still_degrade_outside_classification_contract(
@@ -440,7 +407,7 @@ def test_data_gap_warning_block_renders_cost_matrix_warnings() -> None:
     assert "- business_cost_matrix_invalid" in block
 
 
-def test_frontend_output_adapter_exposes_pregunta_eje_and_rubric() -> None:
+def test_frontend_output_adapter_exposes_pregunta_eje_and_drops_legacy_rubric() -> None:
     output = adapter_legacy_to_canonical_output(
         {
             "titulo": "Caso",
@@ -452,14 +419,14 @@ def test_frontend_output_adapter_exposes_pregunta_eje_and_rubric() -> None:
                     "titulo": "Decision",
                     "enunciado": "¿Qué harías?",
                     "solucion_esperada": "Respuesta docente",
-                    "rubric": [item.model_dump() for item in _valid_rubric()],
+                    "rubric": _valid_question_payload()["rubric"],
                 }
             ],
         }
     )["canonical_output"]
 
     assert output["content"]["preguntaEje"] == "¿Debe la Junta intervenir?"
-    assert output["content"]["caseQuestions"][0]["rubric"][0]["criterio"] == "Evidencia"
+    assert "rubric" not in output["content"]["caseQuestions"][0]
 
 
 def test_legacy_persisted_payload_without_issue242_fields_still_loads(

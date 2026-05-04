@@ -328,12 +328,7 @@ que el estudiante comprendió el entorno antes de procesar datos.
     "enunciado": "string (pregunta completa)",
     "solucion_esperada": "string (máx 60 palabras / 3 líneas)",
     "bloom_level": "comprehension|analysis|evaluation|synthesis",
-    "exhibit_ref": "Exhibit 1|Exhibit 2|Exhibit 3|Ninguno",
-    "rubric": [
-      {{"criterio": "string", "descriptor": "string", "peso": 40}},
-      {{"criterio": "string", "descriptor": "string", "peso": 35}},
-      {{"criterio": "string", "descriptor": "string", "peso": 25}}
-    ] | null
+    "exhibit_ref": "Exhibit 1|Exhibit 2|Exhibit 3|Ninguno"
   }},
   ...
 ]
@@ -347,9 +342,6 @@ que el estudiante comprendió el entorno antes de procesar datos.
    ✓ ESPECÍFICA: "¿Qué perdería [Nombre Actor] de Exhibit 3 si [Empresa] elige la Opción B?"
 4. **Redacta Soluciones:** `solucion_esperada` en máximo 60 palabras (3 líneas cortas o bullets).
    NO incluir párrafos largos. Es guía para el docente, no un ensayo.
-5. **Rúbrica docente (Issue #242):** si {student_profile}="ml_ds" y {primary_family}="clasificacion",
-  añade `rubric` con 3-4 criterios compactos. Pesos enteros, suma exacta 100.
-  Para cualquier otro perfil/familia, usa `rubric: null`.
 
 # Your Boundaries
 - Respuesta ESTRICTA al JSON schema arriba. PROHIBIDO Markdown suelto o texto fuera del JSON.
@@ -875,12 +867,7 @@ sesgo de confirmación y confusión entre correlación y causalidad.
     "bloom_level": "analysis|evaluation|synthesis",
     "chart_ref": "chart_01|chart_02|...|Ninguno",
     "exhibit_ref": "Exhibit 1|Exhibit 2|Dataset|Ninguno",
-    "task_type": "text_response",
-    "rubric": [
-      {{"criterio": "string", "descriptor": "string", "peso": 40}},
-      {{"criterio": "string", "descriptor": "string", "peso": 35}},
-      {{"criterio": "string", "descriptor": "string", "peso": 25}}
-    ] | null
+    "task_type": "text_response"
   }},
   ...
 ]
@@ -892,9 +879,6 @@ sesgo de confirmación y confusión entre correlación y causalidad.
    Usa los IDs y títulos del `{chart_manifest}` para que las referencias sean precisas.
 4. **Redacta:** Cada campo de `solucion_esperada` por separado — son guías para el docente.
 5. **task_type siempre "text_response":** M2 no genera notebook — todas las preguntas son argumentativas.
-6. **Rúbrica docente (Issue #242):** si {student_profile}="ml_ds" y {primary_family}="clasificacion",
-   añade `rubric` con 3-4 criterios compactos. Pesos enteros, suma exacta 100.
-   Para cualquier otro perfil/familia, usa `rubric: null`.
 
 # Your Boundaries
 - Solo JSON schema. PROHIBIDO Markdown libre.
@@ -1137,14 +1121,9 @@ del estudiante para desconfiar estructuradamente de los datos y sus implicacione
     "numero": 1,
     "titulo": "string corto (≤8 palabras)",
     "enunciado": "string (pregunta completa — incómoda y específica al caso)",
-    "solucion_esperada": "string (máx 60 palabras — rúbrica para docente)",
+    "solucion_esperada": "string (máx 60 palabras — guía para docente)",
     "bloom_level": "analysis|evaluation|synthesis",
-    "m3_section_ref": "3.1|3.2|3.3|3.4|3.5",
-    "rubric": [
-      {{"criterio": "string", "descriptor": "string", "peso": 40}},
-      {{"criterio": "string", "descriptor": "string", "peso": 35}},
-      {{"criterio": "string", "descriptor": "string", "peso": 25}}
-    ] | null
+    "m3_section_ref": "3.1|3.2|3.3|3.4|3.5"
   }},
   ...
 ]
@@ -1152,9 +1131,7 @@ del estudiante para desconfiar estructuradamente de los datos y sus implicacione
 # How You Work
 1. Lee la auditoría M3 para identificar: supuestos frágiles, veredicto de confianza, riesgos.
 2. Formula 3 preguntas que obliguen al estudiante a defender los datos o admitir sus límites.
-3. `solucion_esperada`: rúbrica mínima máx 60 palabras. Si implica cálculo, inclúyelo.
-4. `rubric`: usa `null` salvo si {student_profile}="ml_ds" y {primary_family}="clasificacion";
-  en ese caso emite 3-4 criterios compactos con pesos enteros que sumen 100.
+3. `solucion_esperada`: guía compacta máx 60 palabras. Si implica cálculo, inclúyelo.
 
 # Your Boundaries
 - Solo JSON. NUNCA generes Markdown suelto fuera del JSON.
@@ -1205,14 +1182,9 @@ criterios de despliegue.
     "numero": 1,
     "titulo": "string corto (≤8 palabras)",
     "enunciado": "string (pregunta completa — específica al diseño experimental del caso)",
-    "solucion_esperada": "string (máx 60 palabras — rúbrica para docente)",
+    "solucion_esperada": "string (máx 60 palabras — guía para docente)",
     "bloom_level": "analysis|evaluation|synthesis",
-    "m3_section_ref": "exp.hipotesis|exp.sesgo|exp.validacion|exp.descarte",
-    "rubric": [
-      {{"criterio": "string", "descriptor": "string", "peso": 40}},
-      {{"criterio": "string", "descriptor": "string", "peso": 35}},
-      {{"criterio": "string", "descriptor": "string", "peso": 25}}
-    ] | null
+    "m3_section_ref": "exp.hipotesis|exp.sesgo|exp.validacion|exp.descarte"
   }},
   ...
 ]
@@ -1220,9 +1192,7 @@ criterios de despliegue.
 # How You Work
 1. Lee el diseño experimental del M3: hipótesis, métricas, sesgos, criterios de validación y descarte.
 2. Formula 3 preguntas que pongan a prueba el criterio metodológico del estudiante.
-3. `solucion_esperada`: rúbrica mínima máx 60 palabras para el docente.
-4. `rubric`: si {student_profile}="ml_ds" y {primary_family}="clasificacion", emite
-  3-4 criterios compactos con pesos enteros que sumen 100. En otro caso, `rubric: null`.
+3. `solucion_esperada`: guía compacta máx 60 palabras para el docente.
 
 # Your Boundaries
 - Solo JSON. NUNCA generes Markdown suelto fuera del JSON.
@@ -1764,12 +1734,7 @@ que el docente usa como referencia de preview y el sistema de IA usa para califi
     "solucion_esperada": "string (respuesta modelo de 4 párrafos, 250-300 palabras — ver formato abajo)",
     "bloom_level": "evaluation|synthesis",
     "modules_integrated": ["M1", "M2", ...],
-    "is_solucion_docente_only": true,
-    "rubric": [
-      {{"criterio": "string", "descriptor": "string", "peso": 40}},
-      {{"criterio": "string", "descriptor": "string", "peso": 35}},
-      {{"criterio": "string", "descriptor": "string", "peso": 25}}
-    ] | null
+    "is_solucion_docente_only": true
   }},
   ...
 ]
@@ -1802,9 +1767,6 @@ Párrafo 4 — Marco académico (40-60 palabras): relaciona la postura con un fr
 3. **Diseña las 3 preguntas** según las estructuras fijas abajo.
 4. **Redacta solucion_esperada** para cada una siguiendo el formato de 4 párrafos.
    Cuenta palabras antes de finalizar: cada solucion_esperada DEBE tener 250-300 palabras.
-5. **Rúbrica docente (Issue #242):** si {student_profile}="ml_ds" y {primary_family}="clasificacion",
-  añade `rubric` con 3-4 criterios compactos. Pesos enteros, suma exacta 100.
-  Para cualquier otro perfil/familia, usa `rubric: null`.
 
 # Your Boundaries
 - EXACTAMENTE 3 preguntas — ni más, ni menos.

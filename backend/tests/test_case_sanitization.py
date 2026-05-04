@@ -74,7 +74,7 @@ def test_build_teacher_case_review_payload_keeps_solucion_esperada() -> None:
 
     assert payload["content"]["preguntaEje"] == "¿Debe la Junta priorizar retención selectiva?"
     assert payload["content"]["caseQuestions"][0]["solucion_esperada"] == "Solucion docente M1"
-    assert payload["content"]["caseQuestions"][0]["rubric"][0]["criterio"] == "Evidencia"
+    assert "rubric" not in payload["content"]["caseQuestions"][0]
     assert payload["content"]["edaQuestions"][0]["solucion_esperada"] == {
         "teoria": "Teoria",
         "ejemplo": "Ejemplo",
