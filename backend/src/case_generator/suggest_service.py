@@ -590,25 +590,79 @@ def _build_algorithm_anchor_block(req: SuggestRequest) -> Optional[str]:
         return None
     family_label = FAMILY_LABELS.get(family, family)
     target_hint = _FAMILY_TARGET_HINT.get(family, "")
+    mode_label = "1 algoritmo (deep dive)" if req.mode == "single" else "2 algoritmos (baseline + challenger)"
+    case_scope = "Caso Harvard con EDA" if req.caseType == "harvard_with_eda" else "Caso Harvard narrativo"
+    eda_scope = req.edaDepth or "sin EDA"
+    unit_scope = req.topicUnit or "General"
+    profile_guidance = (
+        "Perfil business: formula el escenario como un dilema gerencial de "
+        "decisión. El algoritmo debe aparecer como soporte analítico para una "
+        "recomendación ejecutiva, sin convertir la pregunta guía en una clase "
+        "técnica de model selection."
+        if req.studentProfile == "business"
+        else
+        "Perfil ML/DS: formula el escenario como un reto analítico donde el "
+        "modelo elegido, sus métricas y su validación sean naturalmente "
+        "necesarios para resolver el dilema."
+    )
     lines = [
         "# Anclaje del Algoritmo Elegido por el Docente",
         "El docente YA seleccionó el algoritmo en el formulario. El escenario y la",
         "pregunta guía DEBEN ser coherentes con esta elección — NO la contradigas.",
         "",
+        "## Contexto pedagógico que DEBES usar",
+        f"- Módulo del syllabus: **{req.syllabusModule}**",
+        f"- Unidad temática: **{unit_scope}**",
+        f"- Alcance del caso generado: **{case_scope}**",
+        f"- Profundidad EDA/Python: **{eda_scope}; includePythonCode={req.includePythonCode}**",
+        f"- Perfil del curso: **{req.academicLevel}**",
+        f"- Perfil del estudiante: **{req.studentProfile}**",
+        f"- Modo de algoritmos/técnicas: **{req.mode} — {mode_label}**",
+        "",
         f"- Familia anclada: **{family} ({family_label})**",
         f"- Algoritmo principal: **{req.algorithmPrimary}**",
     ]
-    if req.algorithmChallenger and family_of(req.algorithmChallenger) == family:
+    if req.mode == "contrast" and req.algorithmChallenger and family_of(req.algorithmChallenger) == family:
         lines.append(f"- Challenger (misma familia): **{req.algorithmChallenger}**")
     lines.extend([
         "",
         "## Reglas duras de coherencia",
         f"1. `problemType` en tu respuesta DEBE ser exactamente `{family}`.",
         f"2. {target_hint}",
-        "3. La narrativa, los datos disponibles y el deadline deben hacer NATURAL",
-        f"   resolver el caso con un modelo de la familia `{family}`. Si la unidad",
-        "   temática del docente sugiere otra familia, prioriza el algoritmo elegido.",
-        "4. NO sugieras técnicas de otras familias en `suggestedTechniques`.",
+        "3. La narrativa, los datos disponibles, el deadline, el módulo y la",
+        f"   unidad temática deben hacer NATURAL resolver el caso con `{req.algorithmPrimary}`.",
+        "   Si la unidad temática sugiere otra familia, prioriza el algoritmo elegido",
+        "   sin dejar de conectar el dilema con el syllabus.",
+        f"4. {profile_guidance}",
+        "5. NO sugieras técnicas de otras familias en `suggestedTechniques`.",
+    ])
+    if req.mode == "single":
+        lines.extend([
+            "",
+            "## Restricción crítica de modo single",
+            f"- Este es un deep dive de **{req.algorithmPrimary}**.",
+            "- `scenarioDescription` y `guidingQuestion` deben enfocarse SOLO en ese algoritmo.",
+            "- NO compares contra Random Forest, XGBoost, Prophet, DBSCAN, Gradient Boosting",
+            "  ni contra ningún otro algoritmo, aunque pertenezca a la misma familia.",
+            "- La pregunta guía NO debe preguntar qué modelo elegir; debe preguntar cómo usar",
+            f"  **{req.algorithmPrimary}** para resolver el dilema del caso.",
+        ])
+    elif req.algorithmChallenger and family_of(req.algorithmChallenger) == family:
+        lines.extend([
+            "",
+            "## Restricción crítica de modo contrast",
+            f"- Compara ÚNICAMENTE **{req.algorithmPrimary}** vs **{req.algorithmChallenger}**.",
+            "- NO introduzcas terceros modelos ni alternativas fuera de esa pareja.",
+            "- La pregunta guía debe expresar el trade-off entre interpretabilidad, desempeño",
+            "  y decisión pedagógica usando solo esos dos algoritmos.",
+        ])
+    lines.extend([
+        "",
+        "## Reglas de calidad para escenario y pregunta",
+        "- `scenarioDescription`: 2-4 oraciones, empresa ficticia, tensión de negocio",
+        "  basada en datos, deadline concreto y ajuste natural al algoritmo elegido.",
+        "- `guidingQuestion`: 1 oración, dilema concreto, sin respuesta obvia y alineado",
+        "  con el modo de algoritmos seleccionado por el docente.",
     ])
     return "\n".join(lines)
 
@@ -829,7 +883,13 @@ async def generate_suggestion(req: SuggestRequest) -> SuggestResponse:
     # Invoke LLM
     model_name = os.getenv("STORYTELLER_MODEL", "gemini-3-flash-preview")
     # Subimos la temperatura a 0.7 para romper el sesgo hacia clasificación/regresión
-    llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.7)
+    llm = ChatGoogleGenerativeAI(
+        model=model_name,
+        temperature=0.7,
+        thinking_level="high",
+        max_retries=2,
+        max_output_tokens=4096,
+    )
     result = await llm.ainvoke(prompt)
 
     # Parse output
