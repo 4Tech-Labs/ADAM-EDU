@@ -128,6 +128,20 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
+## TODO-230-D: Hacer mode-aware el deep dive de clasificación single
+
+**What:** Ajustar los prompts/ensamble de M3/M4/M5 para que `algorithm_mode == "single"` y un único algoritmo de clasificación no emitan narrativa de contraste LR baseline / RF challenger ni secciones como "Por qué RF challenger".
+
+**Why:** El refactor actual solo separa prompts sin cambiar comportamiento. El bug reportado originalmente sigue siendo funcional: un deep dive de Logistic Regression puede mencionar Random Forest por el bloque de coherencia de clasificación.
+
+**Pros:** Alinea el contenido generado con la intención del docente y evita ruido pedagógico cuando el caso pide foco en un solo algoritmo.
+
+**Cons:** Requiere tocar lógica/prompt assembly sensible, probablemente pasando `algorithm_mode` y/o metadata de algoritmos al bloque de clasificación. Debe hacerse en PR dedicado con review de `graph.py`.
+
+**Context:** Este PR extrae los prompts de clasificación a `case_generator.prompts.clasificacion` con re-exports compatibles y hashes intactos. El arreglo mode-aware debe ser el siguiente cambio funcional, no parte del refactor sin comportamiento.
+
+---
+
 ## TODO-230-C: Deprecar `SuggestResponse.suggestedTechniques` cuando todos los consumidores migren a `algorithmPrimary` / `algorithmChallenger`
 
 **What:** Mantener el campo `suggestedTechniques` como espejo legacy mientras dura la transición; planificar su remoción una vez que todos los consumidores (frontend + tooling externo) hayan migrado a los campos canónicos `algorithmPrimary` y `algorithmChallenger` introducidos por #230.

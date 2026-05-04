@@ -17,13 +17,24 @@ from __future__ import annotations
 
 import pytest
 
+import case_generator.prompts as prompts_pkg
+
 from case_generator.prompts import (
+    M3_CONTENT_PROMPT_BY_FAMILY,
     M3_NOTEBOOK_ALGO_PROMPT,
     M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION,
     M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING,
     M3_NOTEBOOK_ALGO_PROMPT_REGRESSION,
     M3_NOTEBOOK_ALGO_PROMPT_TIMESERIES,
+    M4_PROMPT_BY_FAMILY,
+    M5_PROMPT_BY_FAMILY,
     PROMPT_BY_FAMILY,
+)
+from case_generator.prompts.clasificacion import (
+    M3_CONTENT_PROMPT_CLASSIFICATION as CLASIFICACION_M3_CONTENT_PROMPT,
+    M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION as CLASIFICACION_M3_NOTEBOOK_PROMPT,
+    M4_PROMPT_CLASSIFICATION as CLASIFICACION_M4_PROMPT,
+    M5_PROMPT_CLASSIFICATION as CLASIFICACION_M5_PROMPT,
 )
 
 
@@ -46,6 +57,31 @@ def test_prompt_by_family_has_exactly_4_canonical_families() -> None:
 
 def test_back_compat_alias_points_to_classification() -> None:
     assert M3_NOTEBOOK_ALGO_PROMPT is M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
+
+
+def test_classification_prompts_are_reexported_from_package_root() -> None:
+    assert prompts_pkg.M3_CONTENT_PROMPT_CLASSIFICATION is CLASIFICACION_M3_CONTENT_PROMPT
+    assert prompts_pkg.M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION is CLASIFICACION_M3_NOTEBOOK_PROMPT
+    assert prompts_pkg.M4_PROMPT_CLASSIFICATION is CLASIFICACION_M4_PROMPT
+    assert prompts_pkg.M5_PROMPT_CLASSIFICATION is CLASIFICACION_M5_PROMPT
+
+
+def test_classification_dispatch_uses_subpackage_exports() -> None:
+    assert M3_CONTENT_PROMPT_BY_FAMILY["clasificacion"] is CLASIFICACION_M3_CONTENT_PROMPT
+    assert PROMPT_BY_FAMILY["clasificacion"] is CLASIFICACION_M3_NOTEBOOK_PROMPT
+    assert M4_PROMPT_BY_FAMILY["clasificacion"] is CLASIFICACION_M4_PROMPT
+    assert M5_PROMPT_BY_FAMILY["clasificacion"] is CLASIFICACION_M5_PROMPT
+
+
+def test_prompt_package_all_exports_public_symbols() -> None:
+    expected = {
+        "M3_CONTENT_PROMPT_CLASSIFICATION",
+        "M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION",
+        "M4_PROMPT_CLASSIFICATION",
+        "M5_PROMPT_CLASSIFICATION",
+        "PROMPT_BY_FAMILY",
+    }
+    assert expected <= set(prompts_pkg.__all__)
 
 
 @pytest.mark.parametrize(
