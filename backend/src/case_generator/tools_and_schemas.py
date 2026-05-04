@@ -394,47 +394,6 @@ class EDAAnnotateOnlyOutput(BaseModel):
     )
 
 
-class RubricItem(BaseModel):
-    """Teacher-only scoring criterion attached to generated questions."""
-
-    criterio: str = Field(
-        min_length=3,
-        max_length=80,
-        description="Criterio breve de evaluación docente",
-    )
-    descriptor: str = Field(
-        min_length=8,
-        max_length=240,
-        description="Descriptor observable de una respuesta satisfactoria",
-    )
-    peso: int = Field(
-        ge=1,
-        le=100,
-        description="Peso porcentual entero del criterio dentro de la pregunta",
-    )
-
-    @field_validator("criterio", "descriptor")
-    @classmethod
-    def _strip_text(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("rubric text must not be empty")
-        return stripped
-
-
-def _validate_optional_rubric(
-    rubric: Optional[list[RubricItem]],
-) -> Optional[list[RubricItem]]:
-    if rubric is None:
-        return None
-    if not 3 <= len(rubric) <= 4:
-        raise ValueError("rubric must contain 3 to 4 items")
-    total_weight = sum(item.peso for item in rubric)
-    if total_weight != 100:
-        raise ValueError("rubric weights must sum to 100")
-    return rubric
-
-
 # ═══════════════════════════════════════════════════════
 # DOCUMENTO 3 — Preguntas EDA (1 agente)
 # ═══════════════════════════════════════════════════════
@@ -444,7 +403,7 @@ class PreguntaMinimalista(BaseModel):
     numero: int = Field(description="Número secuencial de la pregunta (1, 2, 3...)")
     titulo: str = Field(description="Título corto y descriptivo de la pregunta")
     enunciado: str = Field(description="El cuerpo principal de la pregunta dirigido al estudiante")
-    solucion_esperada: str = Field(description="Respuesta, análisis o rúbrica esperada, visible solo para el docente")
+    solucion_esperada: str = Field(description="Respuesta o análisis esperado, visible solo para el docente")
     # Campos opcionales v8 — presentes según el tipo de pregunta
     bloom_level: Optional[str] = None          # M1, M2, M3, M4, M5
     exhibit_ref: Optional[str] = None          # M1 y M2
@@ -452,21 +411,6 @@ class PreguntaMinimalista(BaseModel):
     m3_section_ref: Optional[str] = None       # M3
     m4_section_ref: Optional[str] = None       # M4
     modules_integrated: Optional[list[str]] = None  # M5
-    rubric: Optional[list[RubricItem]] = Field(
-        default=None,
-        description=(
-            "Rúbrica docente opcional. Solo se expone a docentes; cuando existe, "
-            "contiene 3-4 criterios con pesos enteros que suman 100."
-        ),
-    )
-
-    @field_validator("rubric")
-    @classmethod
-    def _validate_rubric(
-        cls,
-        rubric: Optional[list[RubricItem]],
-    ) -> Optional[list[RubricItem]]:
-        return _validate_optional_rubric(rubric)
 
 class GeneradorPreguntasOutput(BaseModel):
     """Salida estructurada combinada para los nodos generadores de preguntas."""
@@ -509,21 +453,6 @@ class PreguntaM5(BaseModel):
         default=True,
         description="Siempre True — solucion_esperada se filtra del payload al estudiante"
     )
-    rubric: Optional[list[RubricItem]] = Field(
-        default=None,
-        description=(
-            "Rúbrica docente opcional. Solo se expone a docentes; cuando existe, "
-            "contiene 3-4 criterios con pesos enteros que suman 100."
-        ),
-    )
-
-    @field_validator("rubric")
-    @classmethod
-    def _validate_rubric(
-        cls,
-        rubric: Optional[list[RubricItem]],
-    ) -> Optional[list[RubricItem]]:
-        return _validate_optional_rubric(rubric)
 
 
 class GeneradorPreguntasM5Output(BaseModel):
@@ -565,21 +494,6 @@ class EDASocraticQuestion(BaseModel):
         default="text_response",
         description="Tipo de tarea: siempre text_response — M2 no genera notebook"
     )
-    rubric: Optional[list[RubricItem]] = Field(
-        default=None,
-        description=(
-            "Rúbrica docente opcional. Solo se expone a docentes; cuando existe, "
-            "contiene 3-4 criterios con pesos enteros que suman 100."
-        ),
-    )
-
-    @field_validator("rubric")
-    @classmethod
-    def _validate_rubric(
-        cls,
-        rubric: Optional[list[RubricItem]],
-    ) -> Optional[list[RubricItem]]:
-        return _validate_optional_rubric(rubric)
 
 
 class EDAQuestionsOutput(BaseModel):

@@ -1006,21 +1006,15 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
     prompt = CASE_QUESTIONS_PROMPT.format(**context)
 
     try:
-        resultado: GeneradorPreguntasOutput = _invoke_question_output_with_rubric_contract(
-            llm=llm,
-            output_schema=GeneradorPreguntasOutput,
-            prompt=prompt,
-            state=state,
-            node_name="case_questions",
-        )
+        resultado: GeneradorPreguntasOutput = llm.with_structured_output(
+            GeneradorPreguntasOutput
+        ).invoke(prompt)
         
         preguntas_dict = [p.model_dump() for p in resultado.preguntas]
         print(f"[case_questions] {len(preguntas_dict)} preguntas generadas")
     except RuntimeError:
         raise
     except Exception as e:
-        if _should_fail_closed_issue242_question_contract(state, "case_questions", e):
-            raise
         logger.error("[case_questions] ERROR tras reintentos: %s", e, exc_info=True)
         return {"doc1_preguntas": []}  # Degradación graceful — pipeline continúa sin preguntas M1
 
@@ -1609,13 +1603,9 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         prompt = EDA_QUESTIONS_GENERATOR_PROMPT.format(**context)
 
         # v9 M2-Redesign: EDAQuestionsOutput con EDASocraticQuestion (solucion_esperada = objeto)
-        resultado: EDAQuestionsOutput = _invoke_question_output_with_rubric_contract(
-            llm=llm,
-            output_schema=EDAQuestionsOutput,
-            prompt=prompt,
-            state=state,
-            node_name="eda_questions_generator",
-        )
+        resultado: EDAQuestionsOutput = llm.with_structured_output(
+            EDAQuestionsOutput
+        ).invoke(prompt)
 
         preguntas_eda_dict = [p.model_dump() for p in resultado.preguntas]
         print(f"[eda_questions_generator] {len(preguntas_eda_dict)} preguntas socráticas generadas")
@@ -1628,8 +1618,6 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     except RuntimeError:
         raise
     except Exception as e:
-        if _should_fail_closed_issue242_question_contract(state, "eda_questions_generator", e):
-            raise
         logger.error("[eda_questions_generator] ERROR tras reintentos: %s", e, exc_info=True)
         return {"doc2_preguntas_eda": [], "current_agent": "doc3_generation"}  # Degradación graceful — sin preguntas EDA
 
@@ -3205,13 +3193,9 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             # main_risk_from_m3_m4 e implementation_timeframe vienen de _build_base_context
         })
 
-        resultado: GeneradorPreguntasM5Output = _invoke_question_output_with_rubric_contract(
-            llm=llm,
-            output_schema=GeneradorPreguntasM5Output,
-            prompt=M5_QUESTIONS_GENERATOR_PROMPT.format(**context),
-            state=state,
-            node_name="m5_questions_generator",
-        )
+        resultado: GeneradorPreguntasM5Output = llm.with_structured_output(
+            GeneradorPreguntasM5Output
+        ).invoke(M5_QUESTIONS_GENERATOR_PROMPT.format(**context))
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
         print(f"[m5_questions_generator] {len(preguntas)} preguntas Junta Directiva")
@@ -3225,8 +3209,6 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # Sin este re-raise, el RetryPolicy nunca se activa porque el nodo "retorna" en lugar de "lanzar".
         if any(code in err_msg for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED")):
             logger.warning("[m5_questions_generator] ERROR TRANSITORIO (reintentando): %s", err_msg)
-            raise
-        if _should_fail_closed_issue242_question_contract(state, "m5_questions_generator", e):
             raise
         logger.error("[m5_questions_generator] ERROR: %s", e, exc_info=True)
         return {"m5_questions": [], "current_agent": "m5_questions_generator"}
@@ -3363,22 +3345,6 @@ def _issue242_contract_required(state: ADAMState) -> bool:
     )
 
 
-def _should_fail_closed_issue242_question_contract(
-    state: ADAMState,
-    node_name: str,
-    error: Exception,
-) -> bool:
-    if not _issue242_contract_required(state):
-        return False
-    logger.error(
-        "[%s] ERROR con contrato de rúbrica Issue #242 obligatorio; fallando cerrado: %s",
-        node_name,
-        error,
-        exc_info=True,
-    )
-    return True
-
-
 def _invoke_case_architect_with_contract(
     *,
     llm: Any,
@@ -3425,63 +3391,6 @@ def _invoke_case_architect_with_contract(
             "sin eje pedagógico M1-M5."
         )
     return result, profile, family, pregunta_eje
-
-
-def _question_rubric_violations(questions: list[Any]) -> list[str]:
-    violations: list[str] = []
-    for fallback_index, question in enumerate(questions, start=1):
-        numero = getattr(question, "numero", fallback_index)
-        rubric = getattr(question, "rubric", None)
-        if not rubric:
-            violations.append(f"pregunta_{numero}: rubric ausente o vacía")
-    return violations
-
-
-def _invoke_question_output_with_rubric_contract(
-    *,
-    llm: Any,
-    output_schema: type[Any],
-    prompt: str,
-    state: ADAMState,
-    node_name: str,
-) -> Any:
-    structured_llm = llm.with_structured_output(output_schema)
-    result = structured_llm.invoke(prompt)
-
-    if not _issue242_contract_required(state):
-        return result
-
-    violations = _question_rubric_violations(list(getattr(result, "preguntas", [])))
-    if not violations:
-        return result
-
-    bullet_list = "\n".join(f"- {violation}" for violation in violations)
-    logger.warning(
-        "[%s] rúbricas Issue #242 ausentes; reprompt 1/1 violations=%s",
-        node_name,
-        violations,
-        extra={"case_id": state.get("case_id")},
-    )
-    reprompt = (
-        prompt
-        + "\n\n# CORRECCIÓN OBLIGATORIA DE RÚBRICAS DOCENTES (Issue #242)\n"
-        + "Tu salida anterior omitió rúbricas requeridas para ml_ds + clasificación. "
-        + "Reescribe la respuesta COMPLETA respetando el mismo JSON schema. Cada "
-        + "pregunta debe incluir `rubric` con 3-4 criterios compactos y pesos "
-        + "enteros que sumen exactamente 100. Violaciones detectadas:\n"
-        + bullet_list
-    )
-    corrected = structured_llm.invoke(reprompt)
-    corrected_violations = _question_rubric_violations(
-        list(getattr(corrected, "preguntas", []))
-    )
-    if corrected_violations:
-        raise RuntimeError(
-            f"{node_name} no emitió rúbricas Issue #242 tras un reprompt: "
-            f"{corrected_violations}. Job marcado como fallido para evitar "
-            "preview docente sin criterios de calificación."
-        )
-    return corrected
 
 
 def _prepare_classification_narrative_grounding(
@@ -3859,13 +3768,9 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             prompt = M3_AUDIT_QUESTIONS_PROMPT
             tag = "m3_audit_questions"
 
-        resultado: GeneradorPreguntasOutput = _invoke_question_output_with_rubric_contract(
-            llm=llm,
-            output_schema=GeneradorPreguntasOutput,
-            prompt=prompt.format(**context),
-            state=state,
-            node_name="m3_questions_generator",
-        )
+        resultado: GeneradorPreguntasOutput = llm.with_structured_output(
+            GeneradorPreguntasOutput
+        ).invoke(prompt.format(**context))
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
         print(f"[{tag}] {len(preguntas)} preguntas")
@@ -3873,8 +3778,6 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     except RuntimeError:
         raise
     except Exception as e:
-        if _should_fail_closed_issue242_question_contract(state, "m3_questions_generator", e):
-            raise
         logger.error("[m3_questions_generator] ERROR: %s", e, exc_info=True)
         return {"m3_questions": [], "current_agent": "m3_questions_generator"}
 

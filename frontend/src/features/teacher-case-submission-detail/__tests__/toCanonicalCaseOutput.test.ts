@@ -67,8 +67,8 @@ describe("toCanonicalCaseOutput", () => {
         expect(result.content.m5QuestionsSolutions).toHaveLength(1);
     });
 
-    it("preserves valid issue242 pregunta eje and teacher rubrics", () => {
-        const rubric = [
+    it("preserves issue242 pregunta eje and drops legacy teacher rubrics", () => {
+        const legacyRubric = [
             { criterio: "Evidencia", descriptor: "Usa métricas del caso.", peso: 35 },
             { criterio: "Decisión", descriptor: "Formula una acción defendible.", peso: 35 },
             { criterio: "Riesgo", descriptor: "Reconoce trade-offs operativos.", peso: 30 },
@@ -83,8 +83,8 @@ describe("toCanonicalCaseOutput", () => {
                             titulo: "Pregunta eje",
                             enunciado: "Conecta M1 con M3.",
                             solucion_esperada: "Debe justificar la decisión con métricas.",
-                            rubric,
-                        },
+                            rubric: legacyRubric,
+                        } as unknown as never,
                     ],
                     edaQuestions: [
                         {
@@ -92,18 +92,22 @@ describe("toCanonicalCaseOutput", () => {
                             titulo: "Lectura EDA",
                             enunciado: "Interpreta el gráfico principal.",
                             task_type: "text_response",
-                            rubric,
-                        },
+                            rubric: legacyRubric,
+                        } as unknown as never,
                     ],
                 },
             },
         });
 
         const result = toCanonicalCaseOutput(detail);
+        const caseQuestion = result.content.caseQuestions?.[0];
+        const edaQuestion = result.content.edaQuestions?.[0];
 
         expect(result.content.preguntaEje).toBe("¿Qué umbral minimiza el costo de error sin bloquear crecimiento?");
-        expect(result.content.caseQuestions?.[0]?.rubric).toEqual(rubric);
-        expect(result.content.edaQuestions?.[0]?.rubric).toEqual(rubric);
+        expect(caseQuestion).toBeDefined();
+        expect(caseQuestion).not.toHaveProperty("rubric");
+        expect(edaQuestion).toBeDefined();
+        expect(edaQuestion).not.toHaveProperty("rubric");
     });
 
     it("drops whitespace-only issue242 pregunta eje from persisted case_view", () => {
@@ -120,7 +124,7 @@ describe("toCanonicalCaseOutput", () => {
         expect(result.content.preguntaEje).toBeUndefined();
     });
 
-    it("drops malformed teacher rubrics from persisted case_view", () => {
+    it("drops malformed legacy teacher rubrics from persisted case_view", () => {
         const detail = createSubmissionDetailResponse({
             case_view: {
                 content: {
@@ -134,15 +138,17 @@ describe("toCanonicalCaseOutput", () => {
                                 { criterio: "Decisión", descriptor: "Formula una acción.", peso: 40 },
                                 { criterio: "Riesgo", descriptor: "Describe el trade-off.", peso: 30 },
                             ],
-                        },
+                        } as unknown as never,
                     ],
                 },
             },
         });
 
         const result = toCanonicalCaseOutput(detail);
+        const caseQuestion = result.content.caseQuestions?.[0];
 
-        expect(result.content.caseQuestions?.[0]?.rubric).toBeUndefined();
+        expect(caseQuestion).toBeDefined();
+        expect(caseQuestion).not.toHaveProperty("rubric");
     });
 
     it("defaults studentProfile to business and derives EDA case type from modules", () => {
