@@ -54,4 +54,46 @@ describe("M5ExecutiveReport", () => {
         expect(within(table).getByText("Ajustar umbral de aprobación")).toBeInTheDocument();
         expect(within(table).getByText("Random Forest")).toBeInTheDocument();
     });
+
+    it("renders one final memo question with the teacher-only model answer merged", () => {
+        const renderPreguntas = vi.fn(() => <div data-testid="memo-question">Memo rendered</div>);
+
+        render(
+            <M5ExecutiveReport
+                result={result}
+                content={{
+                    m5Questions: [
+                        {
+                            numero: 1,
+                            titulo: "Memorándum ejecutivo",
+                            enunciado: "Redacta el memorándum final para la Junta Directiva.",
+                            bloom_level: "synthesis",
+                            modules_integrated: ["M1", "M4", "M5"],
+                            is_solucion_docente_only: true,
+                        },
+                    ],
+                    m5QuestionsSolutions: [
+                        {
+                            numero: 1,
+                            solucion_esperada: "Memo modelo con decisión, evidencia, riesgo y plan.",
+                        },
+                    ],
+                }}
+                md={{ m5Content: null }}
+                isEDA={false}
+                isMLDS={false}
+                renderPreguntas={renderPreguntas}
+            />,
+        );
+
+        expect(screen.getByText("Memorándum — Decisión Final")).toBeInTheDocument();
+        expect(screen.getByTestId("memo-question")).toBeInTheDocument();
+        expect(renderPreguntas).toHaveBeenCalledWith("m5", [
+            expect.objectContaining({
+                numero: 1,
+                titulo: "Memorándum ejecutivo",
+                solucion_esperada: "Memo modelo con decisión, evidencia, riesgo y plan.",
+            }),
+        ]);
+    });
 });

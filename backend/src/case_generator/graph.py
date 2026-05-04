@@ -3155,10 +3155,10 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
 # v7 — NODO: M5 QUESTIONS GENERATOR (Módulo Recomendación)
 # ─────────────────────────────────────────────────────────
 def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
-    """Genera 3 preguntas de Junta Directiva del Módulo 5.
+    """Genera la consigna única de memorándum final del Módulo 5.
 
     v9: usa GeneradorPreguntasM5Output (PreguntaM5) — solucion_esperada sin límite
-    de 60 palabras, 4 párrafos (250-300 palabras), para calificación comparativa por IA.
+    de 60 palabras, en formato memorándum modelo, para calificación comparativa por IA.
     doc1_preguntas_complejas se pasa como historial de referencia (no como fuente):
     el LLM lo usa para no repetir temas ya evaluados en M1.
     Corre DESPUÉS de synthesis_phase1_sync — necesita m5_content del state.
@@ -3198,9 +3198,12 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         ).invoke(M5_QUESTIONS_GENERATOR_PROMPT.format(**context))
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
-        print(f"[m5_questions_generator] {len(preguntas)} preguntas Junta Directiva")
+        print(f"[m5_questions_generator] {len(preguntas)} memorándum final")
         return {"m5_questions": preguntas, "current_agent": "m5_questions_generator"}
     except RuntimeError:
+        raise
+    except (ValidationError, OutputParserException, ValueError) as e:
+        logger.warning("[m5_questions_generator] OUTPUT INVÁLIDO (reintentando/fallando): %s", e)
         raise
     except Exception as e:
         err_msg = str(e)
@@ -4488,14 +4491,14 @@ def eda_phase2_sync(state: ADAMState) -> dict:
 def synthesis_phase1_sync(state: ADAMState) -> dict:
     """Fan-in 1: m5_content + teaching_note_part1 listos.
     Después de este barrier, m5_questions_generator corre primero (secuencial),
-    luego teaching_note_part2 con m5_questions disponibles.
+    luego teaching_note_part2 con la consigna M5 disponible.
     """
     print("[synthesis_phase1_sync] Barrier 1 OK — m5_content disponible")
     return {}
 
 
 def synthesis_phase2_sync(state: ADAMState) -> dict:
-    """Fan-in 2: teaching_note_part2 + m5_questions listos.
+    """Fan-in 2: teaching_note_part2 + consigna M5 listos.
     Concatena las 2 partes de la Teaching Note en doc3_teaching_note.
     """
     part1 = state.get("doc3_teaching_note_part1", "")
@@ -4509,7 +4512,7 @@ def synthesis_phase2_sync(state: ADAMState) -> dict:
 # v9 — M5 CONTENT GENERATOR: Informe de Resolución (Junta Directiva)
 # Genera el reto final VISIBLE PARA EL ESTUDIANTE con 3 secciones:
 #   Sección 1: Insight Destacado del Caso (sin spoiler — "El Dilema Directivo")
-#   Sección 2: Introducción al reto de Junta Directiva + regla de 4 párrafos
+#   Sección 2: Introducción al reto de Junta Directiva + estructura de memorándum
 #   Sección 3: Cierre del Sistema ADAM
 # is_docente_only = False: este artefacto es student-facing.
 # ─────────────────────────────────────────────────────────
@@ -4518,7 +4521,7 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
     Redeseñado en v9: el artefacto es visible para el estudiante como reto de Junta
     Directiva. Contiene Insight Destacado (sin spoiler de decisión), introducción al
-    reto y cierre del sistema. Las solucion_esperada se generan en m5_questions_generator
+    reto y cierre del sistema. La solucion_esperada se genera en m5_questions_generator
     y son filtradas por frontend_output_adapter antes de llegar al estudiante.
     """
     try:
@@ -4869,7 +4872,7 @@ eda_graph = eda_builder.compile()
 # Ref: LangGraph docs — "Compose Graphs as Subgraphs" / "How to add and use subgraphs".
 #
 # Post-sync1 es SECUENCIAL: m5_questions_generator → teaching_note_part2 → sync2.
-# Ventaja: teaching_note_part2 recibe m5_questions ya escritos en state.
+# Ventaja: teaching_note_part2 recibe la consigna M5 ya escrita en state.
 synthesis_builder = StateGraph(ADAMState)
 synthesis_builder.add_node(
     "m5_content_generator",
@@ -4902,7 +4905,7 @@ synthesis_builder.add_edge(START, "teaching_note_part1")
 synthesis_builder.add_edge("m5_content_generator", "synthesis_phase1_sync")
 synthesis_builder.add_edge("teaching_note_part1", "synthesis_phase1_sync")
 
-# Secuencial post-sync1: m5_questions disponibles para teaching_note_part2.
+# Secuencial post-sync1: consigna M5 disponible para teaching_note_part2.
 synthesis_builder.add_edge("synthesis_phase1_sync", "m5_questions_generator")
 synthesis_builder.add_edge("m5_questions_generator", "teaching_note_part2")
 synthesis_builder.add_edge("teaching_note_part2", "synthesis_phase2_sync")

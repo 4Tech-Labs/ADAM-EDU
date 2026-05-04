@@ -34,7 +34,7 @@ export interface PreguntaMinimalista {
 // El frontend las fusiona con m5Questions para la vista docente.
 export interface M5QuestionSolution {
     numero: number;
-    solucion_esperada: string;  // respuesta modelo completa de 4 párrafos (250-300 palabras)
+    solucion_esperada: string;  // memorándum modelo docente-only para la decisión final
 }
 
 // Module 2 EDA questions use a richer structured answer schema.
@@ -128,7 +128,7 @@ export interface CaseContent {
     // ── v7: preguntas de módulos de impacto y recomendación ──
     m4Questions?: PreguntaMinimalista[];         // generadas por m4_questions_generator
     m5Questions?: PreguntaMinimalista[];         // generadas por m5_questions_generator (solucion_esperada ausente — filtrada)
-    m5QuestionsSolutions?: M5QuestionSolution[]; // docente-only: solucion_esperada de M5 (4 párrafos, 250-300 palabras)
+    m5QuestionsSolutions?: M5QuestionSolution[]; // docente-only: memorándum modelo de M5
 
     // ── v8: contenido adicional de módulos ──
     m3Content?: string;
