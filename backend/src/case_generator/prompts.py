@@ -1372,7 +1372,10 @@ KPIs base obligatorios (en formato tabla Markdown):
 | ROI del modelo | X% |
 | Payback estimado | X meses |
 | Riesgo principal de producción | concept drift / sesgo / disponibilidad datos |
-Condición mínima de éxito: umbral de métrica técnica que debe mantenerse en producción.
+Condición mínima de éxito: criterio operativo cualitativo o anclado al desempeño técnico
+ya observado en M3 (estabilidad, monitoreo, retraining o rollback). No inventes umbrales
+numéricos futuros de AUC/F1/recall/precisión; si necesitas un número técnico, reutiliza
+únicamente una métrica ya reportada en M3.
 
 # Context
 Narrativa M1: {contexto_m1}
