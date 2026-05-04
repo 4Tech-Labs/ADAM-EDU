@@ -96,7 +96,7 @@ class ADAMState(CanonicalInputState):
     doc1_narrativa: str          # caso_negocio (2,500–3,000 palabras)
 
     # ── Preguntas generadas por case_questions ─────────
-    doc1_preguntas: list[dict]   # 6 preguntas serializadas de PreguntaMinimalista
+    doc1_preguntas: list[dict]   # 3 preguntas serializadas de PreguntaMinimalista
 
     # ── Documentos generados por eda_text_analyst ──────
     doc2_eda: str                # reporte EDA completo en Markdown
