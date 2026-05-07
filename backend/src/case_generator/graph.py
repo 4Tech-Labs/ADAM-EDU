@@ -98,6 +98,7 @@ from case_generator.prompts import (
     M3_EXPERIMENT_QUESTIONS_PROMPT,
     M3_NOTEBOOK_BASE_TEMPLATE,
     M3_CONTENT_PROMPT_BY_FAMILY,
+    M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
     PROMPT_BY_FAMILY,
     M4_PROMPT_BY_FAMILY,
     M4_CONTENT_GENERATOR_PROMPT,
@@ -3751,10 +3752,37 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         metrics_block = ""
         grounding_enabled = False
         if profile == "ml_ds":
+            # Resolve the classification narrative variant (lr_only / rf_only /
+            # lr_rf_contrast) so the LLM only receives sections relevant to the
+            # algorithms the teacher actually selected. This mirrors the existing
+            # notebook variant dispatch and eliminates hallucinated RF content in
+            # single-LR jobs (and vice-versa for single-RF jobs).
+            _algoritmos_raw = _extract_state_algoritmos(state)
+            _algorithm_mode = _extract_state_algorithm_mode(state)
+            _primary_family, _ = _resolve_primary_family(_algoritmos_raw)
+            if _primary_family == "clasificacion":
+                _variant, _narrative_variant_warning = _resolve_classification_notebook_variant(
+                    algorithm_mode=_algorithm_mode,
+                    algoritmos=_algoritmos_raw,
+                )
+                if _narrative_variant_warning:
+                    logger.warning(
+                        "[m3_content_generator] narrative variant fallback — "
+                        "variant=%s algoritmos=%r reason: %s",
+                        _variant,
+                        _algoritmos_raw,
+                        _narrative_variant_warning,
+                    )
+                _effective_prompt_by_family: dict[str, str] = {
+                    **M3_CONTENT_PROMPT_BY_FAMILY,
+                    "clasificacion": M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT[_variant],
+                }
+            else:
+                _effective_prompt_by_family = M3_CONTENT_PROMPT_BY_FAMILY
             prompt, metrics_block, grounding_enabled, grounding_update = _select_narrative_prompt(
                 state,
                 "m3_content_generator",
-                M3_CONTENT_PROMPT_BY_FAMILY,
+                _effective_prompt_by_family,
                 M3_EXPERIMENT_PROMPT,
             )
             tag = "m3_experiment_engineer"

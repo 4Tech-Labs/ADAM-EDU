@@ -19,6 +19,10 @@ from case_generator.prompts import (
     EDA_QUESTIONS_GENERATOR_PROMPT,
     M3_AUDIT_QUESTIONS_PROMPT,
     M3_CONTENT_PROMPT_BY_FAMILY,
+    M3_CONTENT_PROMPT_CLASSIFICATION,
+    M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
+    M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY,
+    M3_CONTENT_PROMPT_CLASSIFICATION_RF_ONLY,
     M3_EXPERIMENT_PROMPT,
     M3_EXPERIMENT_QUESTIONS_PROMPT,
     M5_CONTENT_GENERATOR_PROMPT,
@@ -725,3 +729,124 @@ def test_legacy_persisted_payload_without_issue242_fields_still_loads(
     assert "preguntaEje" not in payload["content"]
     assert "rubric" not in payload["content"]["caseQuestions"][0]
     assert payload["content"]["caseQuestions"][0]["solucion_esperada"] == "Respuesta legacy"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Issue #242 — M3 narrative variant dispatch for classification (TODO-230-D)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_m3_content_prompt_classification_by_variant_has_all_three_keys() -> None:
+    """Dispatch table must expose exactly the three canonical variant keys."""
+    assert set(M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT.keys()) == {
+        "lr_only",
+        "rf_only",
+        "lr_rf_contrast",
+    }
+
+
+def test_m3_content_prompt_classification_contrast_alias_is_canonical() -> None:
+    """lr_rf_contrast entry must be the exact same object as M3_CONTENT_PROMPT_CLASSIFICATION."""
+    assert (
+        M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT["lr_rf_contrast"]
+        is M3_CONTENT_PROMPT_CLASSIFICATION
+    )
+
+
+def test_m3_content_prompt_lr_only_contains_lr_section_and_no_rf_content() -> None:
+    """LR-only deep dive prompt must not reference RF anywhere."""
+    prompt = M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY
+
+    assert "Por qué LR para esta decisión" in prompt
+    # The prompt must never instruct the LLM to discuss RF
+    assert "Por qué RF" not in prompt
+    assert "Random Forest" not in prompt
+    assert "RF challenger" not in prompt
+    assert "Por qué LR baseline" not in prompt  # baseline/challenger framing is contrast-only
+    # Cost matrix section is always present regardless of variant
+    assert "Cómo leer la matriz de costos" in prompt
+    assert "{pregunta_eje}" in prompt
+
+
+def test_m3_content_prompt_rf_only_contains_rf_section_and_no_lr_content() -> None:
+    """RF-only deep dive prompt must not reference LR anywhere."""
+    prompt = M3_CONTENT_PROMPT_CLASSIFICATION_RF_ONLY
+
+    assert "Por qué RF para esta decisión" in prompt
+    # The prompt must never instruct the LLM to discuss LR
+    assert "Por qué LR" not in prompt
+    assert "Logistic Regression" not in prompt
+    assert "LR baseline" not in prompt
+    assert "Por qué RF challenger" not in prompt  # baseline/challenger framing is contrast-only
+    # Cost matrix section is always present regardless of variant
+    assert "Cómo leer la matriz de costos" in prompt
+    assert "{pregunta_eje}" in prompt
+
+
+def test_m3_content_prompt_contrast_contains_both_lr_and_rf_sections() -> None:
+    """LR/RF contrast prompt must keep both baseline and challenger sections."""
+    prompt = M3_CONTENT_PROMPT_CLASSIFICATION
+
+    assert "Por qué LR baseline" in prompt
+    assert "Por qué RF challenger" in prompt
+    assert "Cómo leer la matriz de costos" in prompt
+    assert "{pregunta_eje}" in prompt
+
+
+def test_m3_content_prompt_by_family_fallback_is_still_contrast() -> None:
+    """M3_CONTENT_PROMPT_BY_FAMILY['clasificacion'] must remain the contrast prompt.
+
+    This is the safe fallback used when family resolution precedes variant
+    resolution and no override dict is built (e.g., non-clasificacion families
+    or legacy rows with unresolved algorithms).
+    """
+    assert M3_CONTENT_PROMPT_BY_FAMILY["clasificacion"] is M3_CONTENT_PROMPT_CLASSIFICATION
+
+
+@pytest.mark.parametrize(
+    ("algorithm_mode", "algoritmos", "expected_variant_key"),
+    [
+        pytest.param("single", ["Logistic Regression"], "lr_only", id="single_lr"),
+        pytest.param("single", ["Random Forest"], "rf_only", id="single_rf"),
+        pytest.param(
+            "contrast", ["Logistic Regression", "Random Forest"], "lr_rf_contrast", id="contrast_lr_rf"
+        ),
+        pytest.param(None, ["Logistic Regression"], "lr_only", id="legacy_lr_only"),
+        pytest.param(None, ["Random Forest"], "rf_only", id="legacy_rf_only"),
+        pytest.param(None, ["Logistic Regression", "Random Forest"], "lr_rf_contrast", id="legacy_contrast"),
+    ],
+)
+def test_m3_narrative_dispatch_resolves_correct_variant(
+    algorithm_mode: str | None,
+    algoritmos: list[str],
+    expected_variant_key: str,
+) -> None:
+    """End-to-end dispatch chain: algorithm_mode + algoritmos → correct narrative prompt.
+
+    Tests the exact resolution path used by m3_content_generator: first resolve
+    family, then resolve classification variant, then look up the prompt in the
+    dispatch table. No LLM calls are made.
+    """
+    family, _ = graph_module._resolve_primary_family(algoritmos)
+    assert family == "clasificacion"
+
+    variant, _ = graph_module._resolve_classification_notebook_variant(
+        algorithm_mode=algorithm_mode,
+        algoritmos=algoritmos,
+    )
+    assert variant == expected_variant_key
+
+    selected_prompt = M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT[variant]
+    expected_prompt = M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT[expected_variant_key]
+    assert selected_prompt is expected_prompt
+
+
+def test_m3_narrative_lr_only_prompt_does_not_contaminate_rf_only_prompt() -> None:
+    """Variant prompts must be distinct objects — not aliased to each other."""
+    lr = M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY
+    rf = M3_CONTENT_PROMPT_CLASSIFICATION_RF_ONLY
+    contrast = M3_CONTENT_PROMPT_CLASSIFICATION
+
+    assert lr is not rf
+    assert lr is not contrast
+    assert rf is not contrast
