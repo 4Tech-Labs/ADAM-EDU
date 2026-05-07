@@ -84,6 +84,11 @@ from case_generator.prompts import (
     EDA_CHART_GENERATOR_PROMPT,
     EDA_QUESTIONS_GENERATOR_PROMPT,
     EDA_TEXT_ANALYST_PROMPT,
+    CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT,
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
+    CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
+    ClassificationNotebookVariant,
     M4_QUESTIONS_GENERATOR_PROMPT,
     M5_QUESTIONS_GENERATOR_PROMPT,
     # v8 M3 — prompts por perfil (aliases backward-compat también disponibles)
@@ -3301,6 +3306,67 @@ def _extract_state_algoritmos(state: ADAMState) -> list[str]:
     return [str(algorithm) for algorithm in raw_algoritmos if str(algorithm).strip()]
 
 
+def _extract_state_algorithm_mode(state: ADAMState) -> str | None:
+    """Read the teacher algorithm mode from graph state, with payload fallback."""
+    raw_mode = state.get("algorithm_mode")
+    if raw_mode is None:
+        task_payload = state.get("task_payload") or {}
+        if isinstance(task_payload, dict):
+            raw_mode = task_payload.get("algorithm_mode")
+    mode = str(raw_mode or "").strip().lower()
+    return mode if mode in {"single", "contrast"} else None
+
+
+def _normalize_algorithm_pick(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+
+def _resolve_classification_notebook_variant(
+    *,
+    algorithm_mode: str | None,
+    algoritmos: list[str],
+) -> tuple[ClassificationNotebookVariant, str | None]:
+    """Resolve LR-only, RF-only, or LR/RF contrast for classification notebooks.
+
+    Intake now prevents malformed current jobs, but historical rows and resumed
+    checkpoints may lack ``algorithm_mode``. Those legacy cases infer from the
+    concrete algorithm list and fall back to contrast with a warning so old jobs
+    preserve the previous broad classification behavior.
+    """
+    normalized = {_normalize_algorithm_pick(algo) for algo in algoritmos}
+    has_lr = bool({"logisticregression", "lr"} & normalized)
+    has_rf = bool({"randomforest", "rf"} & normalized)
+
+    if algorithm_mode == "single":
+        if has_lr and not has_rf:
+            return CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY, None
+        if has_rf and not has_lr:
+            return CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY, None
+        return (
+            CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
+            "Modo single de clasificación no coincidió exactamente con Logistic Regression "
+            f"o Random Forest (algoritmos={algoritmos!r}); se usó variante contraste legacy.",
+        )
+
+    if algorithm_mode == "contrast" and has_lr and has_rf:
+        return CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST, None
+
+    if algorithm_mode is None:
+        if has_lr and not has_rf:
+            return CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY, None
+        if has_rf and not has_lr:
+            return CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY, None
+        if has_lr and has_rf:
+            return CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST, None
+
+    return (
+        CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
+        "No se pudo resolver una variante específica de notebook de clasificación "
+        f"(algorithm_mode={algorithm_mode!r}, algoritmos={algoritmos!r}); "
+        "se usó variante contraste legacy.",
+    )
+
+
 def _resolve_generation_focus(
     state: ADAMState,
     *,
@@ -3930,6 +3996,84 @@ _FAMILY_REQUIRED_APIS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+_CLASSIFICATION_REQUIRED_SENTINELS_BY_VARIANT: dict[str, tuple[str, ...]] = {
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY: (
+        "# === SECTION:dummy_baseline ===",
+        "# === SECTION:pipeline_lr ===",
+        "# === SECTION:cv_scores ===",
+        "# === SECTION:roc_curves ===",
+        "# === SECTION:pr_curves ===",
+        "# === SECTION:comparison_table ===",
+        "# === SECTION:cost_matrix ===",
+        "# === SECTION:tuning_lr ===",
+        "# === SECTION:interp_lr ===",
+        "# === SECTION:metrics_summary_json ===",
+    ),
+    CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: (
+        "# === SECTION:dummy_baseline ===",
+        "# === SECTION:pipeline_rf ===",
+        "# === SECTION:cv_scores ===",
+        "# === SECTION:roc_curves ===",
+        "# === SECTION:pr_curves ===",
+        "# === SECTION:comparison_table ===",
+        "# === SECTION:cost_matrix ===",
+        "# === SECTION:tuning_rf ===",
+        "# === SECTION:interp_rf ===",
+        "# === SECTION:metrics_summary_json ===",
+    ),
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST: _FAMILY_REQUIRED_SENTINELS["clasificacion"],
+}
+
+_CLASSIFICATION_REQUIRED_APIS_BY_VARIANT: dict[str, tuple[str, ...]] = {
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY: (
+        "DummyClassifier",
+        "ColumnTransformer",
+        "StratifiedKFold",
+        "cross_val_score",
+        "roc_curve(",
+        "precision_recall_curve(",
+        "train_test_split(",
+        "confusion_matrix(",
+        "predict_proba(",
+        "GridSearchCV(",
+    ),
+    CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: (
+        "DummyClassifier",
+        "ColumnTransformer",
+        "StratifiedKFold",
+        "cross_val_score",
+        "roc_curve(",
+        "precision_recall_curve(",
+        "train_test_split(",
+        "confusion_matrix(",
+        "predict_proba(",
+        "RandomizedSearchCV(",
+        "permutation_importance(",
+        "PartialDependenceDisplay",
+    ),
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST: _FAMILY_REQUIRED_APIS["clasificacion"],
+}
+
+_CLASSIFICATION_PROHIBITED_PATTERNS_BY_VARIANT: dict[str, tuple[str, ...]] = {
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY: (
+        "RandomForestClassifier",
+        "RandomizedSearchCV(",
+        "permutation_importance(",
+        "PartialDependenceDisplay",
+        "pipe_rf",
+        "best_rf",
+        "auc_rf",
+        "RandomForest",
+    ),
+    CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: (
+        "LogisticRegression",
+        "GridSearchCV(",
+        "pipe_lr",
+        "best_lr",
+        "auc_lr",
+    ),
+}
+
 # Back-compat alias: external callers and Issue #233 unit tests may still
 # reference the legacy combined map. Keep it as a derived view so future code
 # can migrate to the explicit pair without an import break.
@@ -3985,7 +4129,11 @@ def _strip_jupytext_for_validation(notebook_text: str) -> str:
     return "\n".join(out)
 
 
-def _validate_notebook_family_consistency(family: str, code: str) -> list[str]:
+def _validate_notebook_family_consistency(
+    family: str,
+    code: str,
+    notebook_variant: str | None = None,
+) -> list[str]:
     """Return notebook violations for ``family`` (prohibited + required tokens).
 
     Two independent checks are combined into a single flat list of strings so
@@ -4023,13 +4171,30 @@ def _validate_notebook_family_consistency(family: str, code: str) -> list[str]:
     scannable = _strip_jupytext_for_validation(code)
 
     prohibited = _FAMILY_PROHIBITED_PATTERNS.get(family, ())
+    if family == "clasificacion" and notebook_variant:
+        prohibited = prohibited + _CLASSIFICATION_PROHIBITED_PATTERNS_BY_VARIANT.get(
+            notebook_variant,
+            (),
+        )
     if prohibited:
         violations.extend(p for p in prohibited if p in scannable)
 
-    sentinels = _FAMILY_REQUIRED_SENTINELS.get(family, ())
+    if family == "clasificacion" and notebook_variant:
+        sentinels = _CLASSIFICATION_REQUIRED_SENTINELS_BY_VARIANT.get(
+            notebook_variant,
+            _FAMILY_REQUIRED_SENTINELS.get(family, ()),
+        )
+    else:
+        sentinels = _FAMILY_REQUIRED_SENTINELS.get(family, ())
     violations.extend(f"FALTANTE: {token}" for token in sentinels if token not in code)
 
-    apis = _FAMILY_REQUIRED_APIS.get(family, ())
+    if family == "clasificacion" and notebook_variant:
+        apis = _CLASSIFICATION_REQUIRED_APIS_BY_VARIANT.get(
+            notebook_variant,
+            _FAMILY_REQUIRED_APIS.get(family, ()),
+        )
+    else:
+        apis = _FAMILY_REQUIRED_APIS.get(family, ())
     violations.extend(f"FALTANTE: {token}" for token in apis if token not in scannable)
 
     return violations
@@ -4039,6 +4204,7 @@ def _validate_notebook_family_consistency(family: str, code: str) -> list[str]:
 class _M3NotebookGenerationContext:
     llm: Any
     family: str
+    notebook_variant: ClassificationNotebookVariant | None
     base_template: str
     prompt: str
     algoritmos_raw: list[str]
@@ -4093,7 +4259,22 @@ def _prepare_m3_notebook_generation_context(
             f"del catálogo Issue #233; se generó notebook con plantilla de clasificación."
         )
 
-    print(f"[m3_notebook_generator] Familia despachada: {family!r} (algoritmos={algoritmos_raw!r})")
+    algorithm_mode = _extract_state_algorithm_mode(state)
+    notebook_variant: ClassificationNotebookVariant | None = None
+    prompt_template = PROMPT_BY_FAMILY[family]
+    if family == "clasificacion":
+        notebook_variant, variant_warning = _resolve_classification_notebook_variant(
+            algorithm_mode=algorithm_mode,
+            algoritmos=algoritmos_raw,
+        )
+        prompt_template = CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT[notebook_variant]
+        if variant_warning:
+            legacy_warning = f"{legacy_warning}\n{variant_warning}" if legacy_warning else variant_warning
+
+    print(
+        f"[m3_notebook_generator] Familia despachada: {family!r} "
+        f"(variant={notebook_variant!r}, mode={algorithm_mode!r}, algoritmos={algoritmos_raw!r})"
+    )
 
     meta = get_dispatch_meta(family)
     familias_meta = [
@@ -4118,7 +4299,7 @@ def _prepare_m3_notebook_generation_context(
         empty_message="(sin brechas detectadas — schema cubre el contrato)",
     )
 
-    prompt = PROMPT_BY_FAMILY[family].format(
+    prompt = prompt_template.format(
         m3_content=(state.get("m3_content", "") or "")[:2000],
         algoritmos=json.dumps(algoritmos_raw, ensure_ascii=False),
         familias_meta=json.dumps(familias_meta, ensure_ascii=False),
@@ -4130,16 +4311,26 @@ def _prepare_m3_notebook_generation_context(
     return _M3NotebookGenerationContext(
         llm=llm,
         family=family,
+        notebook_variant=notebook_variant,
         base_template=base_template,
         prompt=prompt,
         algoritmos_raw=algoritmos_raw,
     )
 
 
-def _build_m3_notebook_validation_correction(family: str, violations: list[str]) -> str:
+def _build_m3_notebook_validation_correction(
+    family: str,
+    violations: list[str],
+    notebook_variant: str | None = None,
+) -> str:
     missing = [v.removeprefix("FALTANTE: ") for v in violations if v.startswith("FALTANTE: ")]
     prohibited_hits = [v for v in violations if not v.startswith("FALTANTE: ")]
     corrective_blocks: list[str] = ["\n\n# CORRECCIÓN OBLIGATORIA"]
+    if notebook_variant:
+        corrective_blocks.append(
+            f"# Variante de notebook requerida: {notebook_variant}. "
+            "No agregues secciones, métricas ni imports de modelos fuera de esa variante."
+        )
     if prohibited_hits:
         corrective_blocks.append(
             f"# Tu salida anterior emitió código ejecutable de OTRAS familias prohibidas para '{family}'.\n"
@@ -4165,6 +4356,7 @@ def _invoke_m3_notebook_algo_section(
     llm: Any,
     prompt: str,
     family: str,
+    notebook_variant: str | None,
     node_name: str,
     execution_correction: str | None = None,
 ) -> str:
@@ -4173,7 +4365,7 @@ def _invoke_m3_notebook_algo_section(
     algo_section = sanitize_markdown(_extract_text(response))
     print(f"[{node_name}] Sección módulos LLM (1ª pasada): {len(algo_section)} chars")
 
-    violations = _validate_notebook_family_consistency(family, algo_section)
+    violations = _validate_notebook_family_consistency(family, algo_section, notebook_variant)
     if not violations:
         return algo_section
 
@@ -4183,10 +4375,14 @@ def _invoke_m3_notebook_algo_section(
         f"[{node_name}] Violación de familia detectada (familia={family}, "
         f"prohibited={prohibited_hits}, faltantes={missing}). Reprompt explícito (1/1)."
     )
-    reprompt = prompt_with_context + _build_m3_notebook_validation_correction(family, violations)
+    reprompt = prompt_with_context + _build_m3_notebook_validation_correction(
+        family,
+        violations,
+        notebook_variant,
+    )
     response2 = llm.invoke(reprompt)
     algo_section = sanitize_markdown(_extract_text(response2))
-    violations2 = _validate_notebook_family_consistency(family, algo_section)
+    violations2 = _validate_notebook_family_consistency(family, algo_section, notebook_variant)
     if violations2:
         logger.error(
             "[%s] Reprompt falló — familia=%s violations=%s",
@@ -4213,6 +4409,7 @@ def _generate_m3_notebook_code(
         llm=generation_context.llm,
         prompt=generation_context.prompt,
         family=generation_context.family,
+        notebook_variant=generation_context.notebook_variant,
         node_name=node_name,
         execution_correction=execution_correction,
     )

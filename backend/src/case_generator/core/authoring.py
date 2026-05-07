@@ -891,6 +891,7 @@ class AuthoringService:
                 "industria": payload.get("industria", "General"),
                 "studentProfile": payload.get("studentProfile", "business"),
                 "algoritmos": selected_techniques,
+                "algorithm_mode": payload.get("algorithm_mode"),
                 "edaDepth": payload.get("edaDepth"),
                 "includePythonCode": payload.get("includePythonCode", False),
                 "topicUnit": grounded_unit_title or payload.get("topicUnit", ""),
