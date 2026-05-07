@@ -20,7 +20,7 @@ NUNCA cites estudios externos, autores, referencias académicas fabricadas ni es
 # ── LR-only deep dive ────────────────────────────────────────────────────────
 _M3_CLASSIFICATION_COHERENCE_BLOCK_LR_ONLY = """\
 
-# Coherencia pedagógica de clasificación — deep dive LR (Issue #245)
+# Coherencia pedagógica de clasificación — deep dive LR (Issue #242)
 Este bloque aplica SOLO a jobs con algorithm_mode="single" y algoritmo Logistic Regression.
 
 El docente eligió un deep dive sobre un único modelo. NO menciones ni compares con Random
@@ -45,7 +45,7 @@ lectura con la pregunta eje y con el costo de elegir una opción A/B/C bajo ince
 # ── RF-only deep dive ─────────────────────────────────────────────────────────
 _M3_CLASSIFICATION_COHERENCE_BLOCK_RF_ONLY = """\
 
-# Coherencia pedagógica de clasificación — deep dive RF (Issue #245)
+# Coherencia pedagógica de clasificación — deep dive RF (Issue #242)
 Este bloque aplica SOLO a jobs con algorithm_mode="single" y algoritmo Random Forest.
 
 El docente eligió un deep dive sobre un único modelo. NO menciones ni compares con Logistic

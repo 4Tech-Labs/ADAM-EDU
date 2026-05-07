@@ -732,7 +732,7 @@ def test_legacy_persisted_payload_without_issue242_fields_still_loads(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Issue #245 — M3 narrative variant dispatch for classification
+# Issue #242 — M3 narrative variant dispatch for classification (TODO-230-D)
 # ══════════════════════════════════════════════════════════════════════════════
 
 

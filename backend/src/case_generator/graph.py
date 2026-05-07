@@ -3761,10 +3761,18 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             _algorithm_mode = _extract_state_algorithm_mode(state)
             _primary_family, _ = _resolve_primary_family(_algoritmos_raw)
             if _primary_family == "clasificacion":
-                _variant, _ = _resolve_classification_notebook_variant(
+                _variant, _narrative_variant_warning = _resolve_classification_notebook_variant(
                     algorithm_mode=_algorithm_mode,
                     algoritmos=_algoritmos_raw,
                 )
+                if _narrative_variant_warning:
+                    logger.warning(
+                        "[m3_content_generator] narrative variant fallback — "
+                        "variant=%s algoritmos=%r reason: %s",
+                        _variant,
+                        _algoritmos_raw,
+                        _narrative_variant_warning,
+                    )
                 _effective_prompt_by_family: dict[str, str] = {
                     **M3_CONTENT_PROMPT_BY_FAMILY,
                     "clasificacion": M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT[_variant],
