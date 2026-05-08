@@ -1,0 +1,227 @@
+"""Tests for M1 classification-family prompt dispatch (Issue #245).
+
+Verifies:
+  1. Dispatch tables exist and return the classification-specific prompts for
+     the "clasificacion" family key.
+  2. Non-clasificacion families fall back to the generic M1 prompts.
+  3. Each classification prompt contains the expected anchor block sentinel,
+     proving the anchor was appended and is not empty.
+  4. Each classification prompt is formattable with the full context produced
+     by ``_build_base_context`` (no KeyError at runtime).
+
+These are pure-Python unit tests — no LLM calls, no DB, no fixtures.
+"""
+
+import pytest
+
+from case_generator.prompts import (
+    CASE_ARCHITECT_PROMPT,
+    CASE_ARCHITECT_PROMPT_BY_FAMILY,
+    CASE_ARCHITECT_PROMPT_CLASSIFICATION,
+    CASE_QUESTIONS_PROMPT,
+    CASE_QUESTIONS_PROMPT_BY_FAMILY,
+    CASE_QUESTIONS_PROMPT_CLASSIFICATION,
+    CASE_WRITER_PROMPT,
+    CASE_WRITER_PROMPT_BY_FAMILY,
+    CASE_WRITER_PROMPT_CLASSIFICATION,
+)
+
+# ── Sentinel strings that MUST appear in the classification anchor blocks ─────
+# These are unique to the classification prompts; their presence proves the
+# anchor was actually appended and the string concatenation worked.
+_ARCHITECT_SENTINEL = "Instrucción de familia: Clasificación"
+_WRITER_SENTINEL = "Instrucción de familia: Clasificación"
+_QUESTIONS_SENTINEL = "Instrucción de familia: Clasificación"
+
+# ── Minimal context required by all 3 M1 prompts ─────────────────────────────
+# Matches the union of keys injected by _build_base_context() and each node's
+# context.update() call.  Keeping the values short keeps the test fast.
+_BASE_CONTEXT: dict[str, object] = {
+    # _build_base_context() keys
+    "student_profile": "ml_ds",
+    "primary_family": "clasificacion",
+    "output_language": "es",
+    "case_id": "test-uuid-0000",
+    "course_level": "grad",
+    "max_investment_pct": 8,
+    "urgency_frame": "48-96 horas",
+    "protected_columns": '["target","id","date"]',
+    "main_risk_from_m3_m4": "",
+    "is_docente_only": True,
+    "implementation_timeframe": "",
+    "industria": "fintech",
+    "industry_cagr_range": "5-8%",
+    "nombre_empresa": "AcmeCorp",
+    "dilema_hypotheses": "",
+    "output_depth": "visual_plus_notebook",
+    "algoritmos": '["LogisticRegression"]',
+    "titulo": "Test título",
+    "grounding_modules": "[]",
+    "grounding_objectives": "[]",
+    "grounding_generation_hints": "{}",
+    "grounding_course_identity": "{}",
+    # Per-node injections
+    "teacher_input": "test teacher input",
+    "architect_output": "test architect output",
+    "pregunta_eje": "¿Debe la empresa priorizar retención selectiva?",
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Dispatch tables: "clasificacion" key returns classification-specific prompts
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestDispatchTableClasificacionKey:
+    """CASE_*_PROMPT_BY_FAMILY["clasificacion"] must return the classification prompt."""
+
+    def test_architect_dispatch_returns_classification_prompt(self) -> None:
+        assert (
+            CASE_ARCHITECT_PROMPT_BY_FAMILY["clasificacion"]
+            is CASE_ARCHITECT_PROMPT_CLASSIFICATION
+        ), (
+            "CASE_ARCHITECT_PROMPT_BY_FAMILY['clasificacion'] should be "
+            "CASE_ARCHITECT_PROMPT_CLASSIFICATION"
+        )
+
+    def test_writer_dispatch_returns_classification_prompt(self) -> None:
+        assert (
+            CASE_WRITER_PROMPT_BY_FAMILY["clasificacion"]
+            is CASE_WRITER_PROMPT_CLASSIFICATION
+        ), (
+            "CASE_WRITER_PROMPT_BY_FAMILY['clasificacion'] should be "
+            "CASE_WRITER_PROMPT_CLASSIFICATION"
+        )
+
+    def test_questions_dispatch_returns_classification_prompt(self) -> None:
+        assert (
+            CASE_QUESTIONS_PROMPT_BY_FAMILY["clasificacion"]
+            is CASE_QUESTIONS_PROMPT_CLASSIFICATION
+        ), (
+            "CASE_QUESTIONS_PROMPT_BY_FAMILY['clasificacion'] should be "
+            "CASE_QUESTIONS_PROMPT_CLASSIFICATION"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Dispatch tables: non-clasificacion families fall back to generic prompts
+# ─────────────────────────────────────────────────────────────────────────────
+
+NON_CLASIFICACION_FAMILIES = ["regresion", "clustering", "serie_temporal", "desconocida"]
+
+
+class TestDispatchTableFallback:
+    """Non-clasificacion keys must fall back to the generic M1 prompts."""
+
+    @pytest.mark.parametrize("family", NON_CLASIFICACION_FAMILIES)
+    def test_architect_fallback(self, family: str) -> None:
+        result = CASE_ARCHITECT_PROMPT_BY_FAMILY.get(family, CASE_ARCHITECT_PROMPT)
+        assert result is CASE_ARCHITECT_PROMPT, (
+            f"Architect fallback for family='{family}' should be the generic prompt"
+        )
+
+    @pytest.mark.parametrize("family", NON_CLASIFICACION_FAMILIES)
+    def test_writer_fallback(self, family: str) -> None:
+        result = CASE_WRITER_PROMPT_BY_FAMILY.get(family, CASE_WRITER_PROMPT)
+        assert result is CASE_WRITER_PROMPT, (
+            f"Writer fallback for family='{family}' should be the generic prompt"
+        )
+
+    @pytest.mark.parametrize("family", NON_CLASIFICACION_FAMILIES)
+    def test_questions_fallback(self, family: str) -> None:
+        result = CASE_QUESTIONS_PROMPT_BY_FAMILY.get(family, CASE_QUESTIONS_PROMPT)
+        assert result is CASE_QUESTIONS_PROMPT, (
+            f"Questions fallback for family='{family}' should be the generic prompt"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Classification prompts contain the anchor sentinel
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestClassificationPromptsContainAnchorBlock:
+    """Each classification prompt must contain its anchor sentinel string."""
+
+    def test_architect_contains_anchor_sentinel(self) -> None:
+        assert _ARCHITECT_SENTINEL in CASE_ARCHITECT_PROMPT_CLASSIFICATION, (
+            f"CASE_ARCHITECT_PROMPT_CLASSIFICATION is missing sentinel: '{_ARCHITECT_SENTINEL}'"
+        )
+
+    def test_writer_contains_anchor_sentinel(self) -> None:
+        assert _WRITER_SENTINEL in CASE_WRITER_PROMPT_CLASSIFICATION, (
+            f"CASE_WRITER_PROMPT_CLASSIFICATION is missing sentinel: '{_WRITER_SENTINEL}'"
+        )
+
+    def test_questions_contains_anchor_sentinel(self) -> None:
+        assert _QUESTIONS_SENTINEL in CASE_QUESTIONS_PROMPT_CLASSIFICATION, (
+            f"CASE_QUESTIONS_PROMPT_CLASSIFICATION is missing sentinel: '{_QUESTIONS_SENTINEL}'"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Classification prompts are safely formattable with full context (no KeyError)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestClassificationPromptsFormattable:
+    """All classification prompts must format() without KeyError given a full context."""
+
+    def test_architect_formattable(self) -> None:
+        try:
+            CASE_ARCHITECT_PROMPT_CLASSIFICATION.format(**_BASE_CONTEXT)
+        except KeyError as exc:
+            pytest.fail(
+                f"CASE_ARCHITECT_PROMPT_CLASSIFICATION raised KeyError on format(): {exc}"
+            )
+
+    def test_writer_formattable(self) -> None:
+        try:
+            CASE_WRITER_PROMPT_CLASSIFICATION.format(**_BASE_CONTEXT)
+        except KeyError as exc:
+            pytest.fail(
+                f"CASE_WRITER_PROMPT_CLASSIFICATION raised KeyError on format(): {exc}"
+            )
+
+    def test_questions_formattable(self) -> None:
+        try:
+            CASE_QUESTIONS_PROMPT_CLASSIFICATION.format(**_BASE_CONTEXT)
+        except KeyError as exc:
+            pytest.fail(
+                f"CASE_QUESTIONS_PROMPT_CLASSIFICATION raised KeyError on format(): {exc}"
+            )
+
+    def test_generic_prompts_still_formattable(self) -> None:
+        """Regression guard: generic prompts must not break after refactor."""
+        for name, prompt in [
+            ("CASE_ARCHITECT_PROMPT", CASE_ARCHITECT_PROMPT),
+            ("CASE_WRITER_PROMPT", CASE_WRITER_PROMPT),
+            ("CASE_QUESTIONS_PROMPT", CASE_QUESTIONS_PROMPT),
+        ]:
+            try:
+                prompt.format(**_BASE_CONTEXT)
+            except KeyError as exc:
+                pytest.fail(
+                    f"{name} raised KeyError on format() after dispatch refactor: {exc}"
+                )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Classification prompts are non-empty and longer than their generic versions
+#    (the anchor block adds content)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestClassificationPromptsLongerThanGeneric:
+    """Classification prompts must be longer than their generic counterparts."""
+
+    def test_architect_classification_longer_than_generic(self) -> None:
+        assert len(CASE_ARCHITECT_PROMPT_CLASSIFICATION) > len(CASE_ARCHITECT_PROMPT), (
+            "CASE_ARCHITECT_PROMPT_CLASSIFICATION must be longer than the generic prompt "
+            "(anchor block should add content)"
+        )
+
+    def test_writer_classification_longer_than_generic(self) -> None:
+        assert len(CASE_WRITER_PROMPT_CLASSIFICATION) > len(CASE_WRITER_PROMPT), (
+            "CASE_WRITER_PROMPT_CLASSIFICATION must be longer than the generic prompt"
+        )
+
+    def test_questions_classification_longer_than_generic(self) -> None:
+        assert len(CASE_QUESTIONS_PROMPT_CLASSIFICATION) > len(CASE_QUESTIONS_PROMPT), (
+            "CASE_QUESTIONS_PROMPT_CLASSIFICATION must be longer than the generic prompt"
+        )

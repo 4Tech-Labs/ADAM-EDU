@@ -1,0 +1,22 @@
+"""M1 classification-family prompt exports.
+
+Exposes all three M1 node prompts specialized for the ``clasificacion`` algorithm family.
+Imported by ``case_generator.prompts.clasificacion`` and ultimately re-exported from
+``case_generator.prompts`` alongside the ``CASE_*_PROMPT_BY_FAMILY`` dispatch tables.
+"""
+
+from case_generator.prompts.clasificacion.M1_clasificacion.architect import (
+    CASE_ARCHITECT_PROMPT_CLASSIFICATION,
+)
+from case_generator.prompts.clasificacion.M1_clasificacion.questions import (
+    CASE_QUESTIONS_PROMPT_CLASSIFICATION,
+)
+from case_generator.prompts.clasificacion.M1_clasificacion.writer import (
+    CASE_WRITER_PROMPT_CLASSIFICATION,
+)
+
+__all__ = [
+    "CASE_ARCHITECT_PROMPT_CLASSIFICATION",
+    "CASE_WRITER_PROMPT_CLASSIFICATION",
+    "CASE_QUESTIONS_PROMPT_CLASSIFICATION",
+]

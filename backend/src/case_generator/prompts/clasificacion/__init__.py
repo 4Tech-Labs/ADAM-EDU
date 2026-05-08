@@ -1,5 +1,10 @@
 """Classification-family prompt exports."""
 
+from case_generator.prompts.clasificacion.M1_clasificacion import (
+    CASE_ARCHITECT_PROMPT_CLASSIFICATION,
+    CASE_QUESTIONS_PROMPT_CLASSIFICATION,
+    CASE_WRITER_PROMPT_CLASSIFICATION,
+)
 from case_generator.prompts.clasificacion.dataset import (
     SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
 )
@@ -26,6 +31,9 @@ from case_generator.prompts.clasificacion.notebooks import (
 )
 
 __all__ = [
+    "CASE_ARCHITECT_PROMPT_CLASSIFICATION",
+    "CASE_WRITER_PROMPT_CLASSIFICATION",
+    "CASE_QUESTIONS_PROMPT_CLASSIFICATION",
     "SCHEMA_DESIGNER_PROMPT_CLASSIFICATION",
     "M3_CONTENT_PROMPT_CLASSIFICATION",
     "M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY",
