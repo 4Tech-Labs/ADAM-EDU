@@ -18,7 +18,7 @@ Diseña el schema de un dataset sintético de CLASIFICACIÓN BINARIA para el cas
 Perfil: {student_profile} | Industria: {industria}
 Familias ML requeridas (referencia): {ml_required_families}
 
-## Contrato dataset_schema_required (Issue #225 — fuente de verdad)
+## Contrato dataset_schema_required
 {dataset_contract_block}
 
 REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):

@@ -337,7 +337,7 @@ def test_eda_text_analyst_prompt_renders_with_gap_warnings_block() -> None:
         data_gap_warnings_block="- feature 'retention_m12' marcada con riesgo de leakage",
     )
     assert "retention_m12" in out
-    assert "data_gap_warnings" in out
+    assert "Brechas" in out
 
 
 def test_m3_notebook_algo_prompt_renders_with_contract_and_gaps() -> None:

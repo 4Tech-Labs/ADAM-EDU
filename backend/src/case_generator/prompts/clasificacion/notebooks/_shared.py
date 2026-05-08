@@ -153,17 +153,17 @@ def _replace_rule_m(prompt: str, variant: ClassificationNotebookVariant) -> str:
 
 
 INTRO_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
-    "lr_only": """## Sección 3.0.5 — Deep dive Logistic Regression (Issue #230)
+    "lr_only": """## Sección 3.0.5 — Deep dive Logistic Regression
 ## Emite SOLO celdas LR. No generes código ni texto de modelos no seleccionados.
 ## Las únicas celdas con gráficos son `roc_curves` y `cost_matrix`.
 
 """,
-    "rf_only": """## Sección 3.0.5 — Deep dive Random Forest (Issue #230)
+    "rf_only": """## Sección 3.0.5 — Deep dive Random Forest
 ## Emite SOLO celdas RF. No generes código ni texto de modelos no seleccionados.
 ## Las únicas celdas con gráficos son `roc_curves` y `cost_matrix`.
 
 """,
-    "lr_rf_contrast": """## Sección 3.0.5 — Contraste Logistic Regression vs Random Forest (Issue #230)
+    "lr_rf_contrast": """## Sección 3.0.5 — Contraste Logistic Regression vs Random Forest
 ## Emite celdas LR y RF, manteniendo máximo dos gráficos totales: ROC y matriz de costos.
 
 """,
@@ -600,7 +600,7 @@ except Exception as e:
 
 RF_INTERP_TABLE_ONLY_SECTION = """
 # %% [markdown]
-# ### 3.0.10 — Interpretabilidad RF: permutation importance tabular (Issue #240)
+# ### 3.0.10 — Interpretabilidad RF: permutation importance tabular
 # Se evita un gráfico adicional para respetar el límite de dos figuras del notebook.
 
 # %%

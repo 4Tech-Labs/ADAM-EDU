@@ -234,7 +234,6 @@ def test_leakage_inference_does_not_mutate_input() -> None:
 def test_case_architect_prompt_contains_title_target_coherence_rule() -> None:
     """La regla 1bis de coherencia título↔target debe estar en el prompt."""
     assert "Coherencia título↔target" in CASE_ARCHITECT_PROMPT
-    assert "Issue #228" in CASE_ARCHITECT_PROMPT
     # Familias clave referenciadas.
     assert "churn_flag" in CASE_ARCHITECT_PROMPT
     assert "delivery_delay_minutes" in CASE_ARCHITECT_PROMPT
@@ -252,7 +251,6 @@ def test_case_architect_prompt_lists_leakage_naming_patterns() -> None:
 def test_m3_notebook_prompt_contains_atomic_cell_rule_l() -> None:
     """Regla L (Atomic Cell Charting) debe estar presente y mencionar el bug SHAP."""
     assert "Atomic Cell Charting" in M3_NOTEBOOK_ALGO_PROMPT
-    assert "Issue #228" in M3_NOTEBOOK_ALGO_PROMPT
     assert "PROHIBIDO" in M3_NOTEBOOK_ALGO_PROMPT
     assert "plt.subplots(1, N)" in M3_NOTEBOOK_ALGO_PROMPT
     # Sub-celdas 2a/2b/2c/2d deben aparecer.

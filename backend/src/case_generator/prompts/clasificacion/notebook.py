@@ -5,13 +5,13 @@ Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para
 El notebook sigue la estructura pedagógica ADAM M3: Concepto → Gráfico Conceptual → Acción de Negocio.
 Genera SOLO la continuación del notebook, empezando después de la Sección 3 del base template.
 
-# Contrato dataset_schema_required (Issue #225 — fuente canónica del target)
+# Contrato dataset_schema_required
 {dataset_contract_block}
 
-# Brechas de datos detectadas por el validador (data_gap_warnings)
+# Brechas de datos detectadas por el validador
 {data_gap_warnings_block}
 
-# Reglas CONTRACT-FIRST (Issue #225 — prioridad máxima sobre toda heurística posterior)
+# Reglas CONTRACT-FIRST
 * Si el contrato declara `target_column.name`, USA ESE NOMBRE EXACTO como variable
   objetivo en TODO el notebook. NO uses alias-matching, NO uses "último categórico"
   ni ningún fallback heurístico para elegir el target.
@@ -240,7 +240,7 @@ K. EDA Express (Sección 3.0) OBLIGATORIA antes del primer bloque de algoritmo:
    - GUARDA de tamaño mínimo: si `len(df) < 50`, imprime una ADVERTENCIA visible
      ("⚠️ Dataset pequeño (n=<N>): los modelos posteriores son ilustrativos; las métricas
      tienen alta varianza”) para que el estudiante interprete los resultados con cautela.
-L. **Atomic Cell Charting (Issue #228 — un gráfico por celda)**: cada celda de
+L. **Atomic Cell Charting**: cada celda de
    código que muestre un plot DEBE contener exactamente UN `plt.show()` y UNA
    única figura visible. Reglas operativas:
    - **PROHIBIDO** `plt.subplots(1, N)` o `plt.subplots(N, M)` para mezclar
@@ -262,7 +262,7 @@ L. **Atomic Cell Charting (Issue #228 — un gráfico por celda)**: cada celda d
      consecutivos). NUNCA mezcles SHAP con cualquier otra cosa.
    - Cada celda de visualización debe terminar con `plt.tight_layout(); plt.show()`.
 
-M. **PEDAGOGÍA HARVARD ml_ds — bloque comparativo OBLIGATORIO (Issue #236).**
+M. **PEDAGOGÍA HARVARD ml_ds — bloque comparativo OBLIGATORIO.**
    Antes del bloque per-algoritmo, emite la **Sección 3.0.5** descrita más
    abajo en "Estructura OBLIGATORIA". Esa sección contiene OCHO celdas con
    sentinelas contractuales que el validador post-LLM verifica:
@@ -273,7 +273,7 @@ M. **PEDAGOGÍA HARVARD ml_ds — bloque comparativo OBLIGATORIO (Issue #236).**
      - `# === SECTION:roc_curves ===`         → hold-out propio + curva ROC (LR vs RF) en una sola figura
      - `# === SECTION:pr_curves ===`          → curva Precision-Recall (LR vs RF) en una sola figura, reusando el hold-out
      - `# === SECTION:comparison_table ===`   → tabla pd.DataFrame final con las 7 columnas, hold-out reconstruido localmente
-     - `# === SECTION:cost_matrix ===`        → (Issue #238) curva costo-vs-threshold con confusion_matrix + predict_proba; eje Y en `currency` del contrato; línea vertical roja en threshold óptimo y línea gris en 0.5
+     - `# === SECTION:cost_matrix ===`        → curva costo-vs-threshold con confusion_matrix + predict_proba; eje Y en `currency` del contrato; línea vertical roja en threshold óptimo y línea gris en 0.5
    Reglas:
    * Las sentinelas se emiten LITERALMENTE como primera línea de su celda
      `# %%` (comentario Python). Si una sentinela falta, el job falla en
@@ -353,9 +353,8 @@ try:
 except Exception as e:
     print(f"⚠️ EDA Express falló: {{e}}")
 
-## Sección 3.0.5 — Bloque comparativo Harvard ml_ds (REGLA M, Issue #236)
-## Emite EXACTAMENTE las 8 celdas de código siguientes (Issue #238 añadió
-## la celda cost_matrix), EN ORDEN, con su
+## Sección 3.0.5 — Bloque comparativo Harvard ml_ds
+## Emite EXACTAMENTE las 8 celdas de código siguientes (la última es cost_matrix), EN ORDEN, con su
 ## sentinela como primera línea (comentario Python). Cada sentinela es
 ## contractual — el validador post-LLM rechaza el notebook y reprompt si falta.
 ## Este bloque es CASE-WIDE (una sola vez, para Logistic Regression vs
@@ -703,7 +702,7 @@ except Exception as e:
     print(f"⚠️ Tabla comparativa falló: {{e}}")
 
 # %% [markdown]
-# ### 3.0.6 — Matriz de costos del negocio + threshold tuning (Issue #238)
+# ### 3.0.6 — Matriz de costos del negocio + threshold tuning
 # El threshold default 0.5 SOLO es óptimo si FP y FN cuestan igual. En la
 # mayoría de los problemas de negocio (churn, fraude, mantenimiento) los
 # costos son asimétricos. Esta celda lee la matriz de costos del contrato
@@ -793,7 +792,7 @@ except Exception as e:
     print(f"⚠️ Cost matrix + threshold tuning falló: {{e}}")
 
 # %% [markdown]
-# ### 3.0.7 — Tuning hiperparámetros LogisticRegression (Issue #240)
+# ### 3.0.7 — Tuning hiperparámetros LogisticRegression
 # El `C` default no es óptimo. `GridSearchCV(scoring="roc_auc")` barre
 # `C ∈ [0.01, 0.1, 1, 10]` con `StratifiedKFold(5)` y refit del best
 # estimator sobre `X_train` completo.
@@ -889,7 +888,7 @@ except Exception as e:
     print(f"⚠️ Tuning LR falló: {{e}}")
 
 # %% [markdown]
-# ### 3.0.8 — Tuning hiperparámetros RandomForest (Issue #240)
+# ### 3.0.8 — Tuning hiperparámetros RandomForest
 # `RandomizedSearchCV(n_iter=10)` cubre el espacio `max_depth × min_samples_leaf
 # × n_estimators` sin barrer la grilla cartesiana entera. Mismo `scoring=
 # "roc_auc"` para que LR y RF sean comparables 1:1.
@@ -989,7 +988,7 @@ except Exception as e:
     print(f"⚠️ Tuning RF falló: {{e}}")
 
 # %% [markdown]
-# ### 3.0.9 — Interpretabilidad LR: odds ratios + CI bootstrap + VIF (Issue #240)
+# ### 3.0.9 — Interpretabilidad LR: odds ratios + CI bootstrap + VIF
 # Coeficientes en log-odds son ilegibles para el negocio. Convertimos a
 # odds ratios (`np.exp(coef_)`) e incluimos intervalos de confianza
 # bootstrap (`B=200`, `np.random.default_rng(42)`).
@@ -1137,7 +1136,7 @@ except Exception as e:
     print(f"⚠️ Interpretabilidad LR falló: {{e}}")
 
 # %% [markdown]
-# ### 3.0.10 — Interpretabilidad RF: permutation importance + PDP top-2 (Issue #240)
+# ### 3.0.10 — Interpretabilidad RF: permutation importance + PDP top-2
 # `feature_importances_` está sesgado a features de alta cardinalidad.
 # `permutation_importance` mide el drop real de score al permutar cada
 # feature en `X_test`. Después graficamos PDP sobre las top-2 features
@@ -1249,7 +1248,7 @@ except Exception as e:
     print(f"⚠️ Interpretabilidad RF falló: {{e}}")
 
 # %% [markdown]
-# ### 3.0.11 — Resumen ejecutable de métricas para grounding narrativo (Issue #239)
+# ### 3.0.11 — Resumen ejecutable de métricas para grounding narrativo
 # Esta celda emite exactamente una línea JSON estable. ADAM ejecuta el notebook
 # en backend, parsea esta marca y usa las métricas reales para anclar M4/M5.
 
@@ -1433,7 +1432,7 @@ except Exception as e:
 ## Si el algoritmo NO menciona "shap", OMITE esta celda completa (no la generes vacía).
 # %%
 try:
-    # SHAP atómico — REGLA J (Issue #228). NUNCA en subplot mixto.
+    # SHAP atómico — REGLA J. NUNCA en subplot mixto.
     # import shap
     # explainer = shap.TreeExplainer(model)
     # sample = X_test.sample(min(len(X_test), 200), random_state=42)
