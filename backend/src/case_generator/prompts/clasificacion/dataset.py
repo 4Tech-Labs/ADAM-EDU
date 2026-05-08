@@ -1,28 +1,22 @@
 """Dataset schema design prompt for the clasificacion algorithm family.
 
-This module is the landing zone for classification-specific dataset prompt
-specialization (Issue #233 / M2 per-family dispatch).
+Specialized for binary classification (churn prediction):
+- 18 fixed columns for ml_ds profile (cols 1-12 shared; cols 13-18 classification-specific)
+- ``categoria`` is always ``int`` (0/1) with a ``dependency`` on ``churn_rate``
+  so LR/RF receive a ~70%-signal binary target (AUC-ROC ≥ 0.70) instead of a
+  random categorical string.
+- n_rows = {max_rows} (600 for ml_ds) → Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV.
 
-Current state: the prompt is semantically identical to ``SCHEMA_DESIGNER_PROMPT``
-in ``prompts/__init__.py``.  The structural separation exists so that future
-iterations can tune vocabulary, target-column rules, class-imbalance constraints,
-and LR/RF-specific feature engineering *without* touching the generic prompt that
-serves all other families.
-
-# TODO: Specialize SCHEMA_DESIGNER_PROMPT_CLASSIFICATION for clasificacion
-#       (enforce binary target, class-imbalance columns, LR/RF feature vocabulary)
-#       after the per-family dispatch plumbing is confirmed stable in production.
+Do NOT diverge the 7 required placeholders or the REGLAS DE COBERTURA DEL CONTRATO
+section — both are validated by test_m2_dataset_family_dispatch.py.
 """
 
 __all__ = ["SCHEMA_DESIGNER_PROMPT_CLASSIFICATION"]
 
-# Identical to SCHEMA_DESIGNER_PROMPT until specialized in a future iteration.
-# Do NOT edit this string to patch generic schema bugs — fix SCHEMA_DESIGNER_PROMPT
-# in prompts/__init__.py and then mirror the fix here to keep them in sync until
-# divergence is intentional.
 SCHEMA_DESIGNER_PROMPT_CLASSIFICATION = """\
-Diseña el schema de un dataset sintético para el caso de negocio dado.
+Diseña el schema de un dataset sintético de CLASIFICACIÓN BINARIA para el caso de negocio dado.
 Perfil: {student_profile} | Industria: {industria}
+Familias ML requeridas (referencia): {ml_required_families}
 
 ## Contrato dataset_schema_required (Issue #225 — fuente de verdad)
 {dataset_contract_block}
@@ -36,71 +30,11 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
   el bloqueo de leakage se gestiona downstream en M3 (no la omitas aquí).
 - Las categorías de `domain_features_required` deben estar cubiertas por al menos
   una columna semánticamente alineada (puedes elegir su nombre concreto).
-- Si el contrato es `null` o `{{}}`, opera con las reglas heurísticas de abajo.
+- Si el contrato es `null` o `{{}}`, opera con el contrato de columnas fijo de abajo.
 
 ## ESTRUCTURA DE OUTPUT OBLIGATORIA (JSON puro, sin markdown, sin claves extra)
 {{
-  "columns": [
-    {{
-      "name": "period",
-      "type": "str",
-      "description": "Período temporal (ej: '2024-01')",
-      "range_min": null,
-      "range_max": null,
-      "nullable": false,
-      "trend": null,
-      "dependency": null
-    }},
-    {{
-      "name": "revenue",
-      "type": "float",
-      "description": "Ingresos del período",
-      "range_min": <revenue_anual_absoluto / {max_rows} * 0.85>,
-      "range_max": <revenue_anual_absoluto / {max_rows} * 1.15>,
-      "nullable": false,
-      "trend": "up",
-      "dependency": null
-    }},
-    {{
-      "name": "churn_rate",
-      "type": "float",
-      "description": "Tasa de abandono mensual (0.0 a 1.0)",
-      "range_min": 0.02,
-      "range_max": 0.15,
-      "nullable": false,
-      "trend": null,
-      "dependency": {{
-        "depends_on": "revenue",
-        "relationship": "inverse",
-        "noise_factor": 0.1
-      }}
-    }},
-    {{
-      "name": "retention_m1",
-      "type": "float",
-      "description": "% de usuarios retenidos de la cohorte de ese period en el mes 1",
-      "range_min": 0.65,
-      "range_max": 0.95,
-      "nullable": false,
-      "trend": null,
-      "dependency": null
-    }},
-    {{
-      "name": "retention_m3",
-      "type": "float",
-      "description": "% de usuarios retenidos en el mes 3",
-      "range_min": 0.50,
-      "range_max": 0.80,
-      "nullable": false,
-      "trend": null,
-      "dependency": {{
-        "depends_on": "retention_m1",
-        "relationship": "linear",
-        "noise_factor": 0.05
-      }}
-    }}
-    ... más columnas según perfil ...
-  ],
+  "columns": [ ... 18 columnas exactas para ml_ds, 10 para business — ver contratos abajo ... ],
   "n_rows": <VER REGLA DE FILAS ABAJO>,
   "time_granularity": "monthly",
   "constraints": {{
@@ -112,14 +46,14 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
     "tolerance_pct": 0.05,
     "revenue_column": "revenue"
   }},
-  "reasoning_summary": "<justificación en 1 línea>"
+  "reasoning_summary": "Dataset de clasificación binaria (predicción de churn) — columnas fijas por contrato de familia clasificacion. Target: categoria (int 0/1) correlado con churn_rate (noise_factor=0.30)."
 }}
 
 ## Regla de filas (n_rows)
 - Para {student_profile}="business": elige un entero ALEATORIO estrictamente entre 80 y 120. NO uses {max_rows}.
 - Para {student_profile}="ml_ds": usa exactamente {max_rows}.
 
-## Reglas para columnas
+## Reglas generales para columnas
 - type DEBE ser exactamente: "int", "float", "str", o "date" (no "string", no "integer").
 - trend: "up" (crece), "down" (decrece), "stable" (sin tendencia), o null.
 - dependency: objeto con depends_on, relationship ("linear" o "inverse"), noise_factor (0.0-1.0), o null.
@@ -132,33 +66,94 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
   (CRÍTICO: Las columnas retention_mX representan el % de usuarios de esa cohorte
   retenidos en el mes X. Son obligatorias para el heatmap de análisis de cohortes.
   Asegúrate de que range_min/max respeten: retention_m1 > retention_m3 > retention_m6 > retention_m12.)
-- Para {student_profile}="ml_ds": MÍNIMO 14 columnas, al menos 2 con nullable=true.
-  Las primeras 12 columnas son FIJAS en este orden:
-  period, revenue, costs, margin_pct, churn_rate, nps,
-  retention_m1, retention_m3, retention_m6, retention_m12,
-  customer_ltv (nullable=true), engagement_score (nullable=true).
-  A partir de la columna 13, OBLIGATORIAMENTE debes generar las columnas necesarias
-  para satisfacer las familias ML requeridas para este caso: {ml_required_families}.
-  Usa EXACTAMENTE los nombres y reglas definidos en el VOCABULARIO OBLIGATORIO de abajo.
-  Puedes superar 14 columnas (ej. 15 o 16) si las familias requeridas así lo exigen.
-  NUNCA inventes nombres fuera del vocabulario.
 
-## VOCABULARIO OBLIGATORIO para columnas ML dinámicas (ml_ds)
+## CONTRATO DE COLUMNAS PARA CLASIFICACION (ml_ds) — 18 columnas exactas
 
-  | Familia ML         | Nombres exactos permitidos          | type          | Reglas de campo                                           |
-  |--------------------|-------------------------------------|---------------|-----------------------------------------------------------|
-  | NLP / text-mining  | ticket_text  O  comentario          | "str"         | range_min=null, range_max=null, trend=null, dep=null      |
-  | Clasificación      | categoria  O  label                 | "str"         | range_min=null, range_max=null, trend=null, dep=null      |
-  | Grafos             | origen  Y  destino  (par)           | "str"         | genera AMBAS columnas; mismas reglas de nulls             |
-  | Recomendación      | usuario, producto, rating           | "str"/"float" | genera las 3; rating: range_min=-1.0, range_max=5.0       |
-  | Sentimiento        | sentiment_score                     | "float"       | range_min=-1.0, range_max=1.0, trend=null, dep=null       |
-  | Anomalías          | transaction_amount                  | "float"       | range según el caso, trend=null, dep=null                 |
+Dos casos según el valor de `dataset_contract_block` arriba:
 
-  Reglas de uso:
-  1. Genera UNA columna por cada familia listada en {ml_required_families}, respetando los nombres exactos.
-  2. Para familias que requieren par (Grafos: origen+destino) o trío (Recomendación: usuario+producto+rating), genera TODAS las columnas del grupo.
-  3. Para columnas de tipo "str": SIEMPRE range_min=null, range_max=null, trend=null, dependency=null.
-- range_min/range_max: números para columnas numéricas, null para str/date.
+**Caso A — contrato null o {{}} (sin dataset_schema_required):**
+DEBES generar EXACTAMENTE estas 18 columnas en este orden. No añadas columnas fuera de esta lista.
+
+**Caso B — contrato activo (dataset_schema_required no vacío):**
+Aplica las REGLAS DE COBERTURA DEL CONTRATO de arriba primero (cubre target + feature_columns).
+Usa las 18 columnas de abajo como base; completa con las columnas del contrato que no estén ya cubiertas.
+Puedes superar 18 columnas si el contrato lo requiere — la cobertura del contrato tiene prioridad.
+
+En AMBOS casos: NUNCA uses type="str" para "categoria" — el notebook M3 requiere int para el target binario.
+
+| # | name                    | type    | range_min | range_max | nullable | depends_on       | relationship | noise_factor |
+|---|-------------------------|---------|-----------|-----------|----------|------------------|--------------|--------------|
+| 1 | period                  | str     | null      | null      | false    | —                | —            | —            |
+| 2 | revenue                 | float   | rev*0.85  | rev*1.15  | false    | —                | —            | —            |
+| 3 | costs                   | float   | rev*0.60  | rev*0.88  | false    | —                | —            | —            |
+| 4 | margin_pct              | float   | 10.0      | 35.0      | false    | —                | —            | —            |
+| 5 | churn_rate              | float   | 0.02      | 0.15      | false    | revenue          | inverse      | 0.1          |
+| 6 | nps                     | int     | 20        | 75        | false    | —                | —            | —            |
+| 7 | retention_m1            | float   | 0.65      | 0.95      | false    | —                | —            | —            |
+| 8 | retention_m3            | float   | 0.50      | 0.80      | false    | retention_m1     | linear       | 0.05         |
+| 9 | retention_m6            | float   | 0.35      | 0.65      | false    | retention_m3     | linear       | 0.05         |
+|10 | retention_m12           | float   | 0.20      | 0.50      | false    | retention_m6     | linear       | 0.05         |
+|11 | customer_ltv            | float   | 500       | 5000      | true     | —                | —            | —            |
+|12 | engagement_score        | float   | 0.1       | 0.95      | true     | —                | —            | —            |
+|13 | days_since_last_login   | int     | 1         | 180       | false    | engagement_score | inverse      | 0.2          |
+|14 | support_tickets_count   | int     | 0         | 10        | false    | nps              | inverse      | 0.2          |
+|15 | plan_tier               | int     | 1         | 3         | false    | —                | —            | —            |
+|16 | payment_failures        | int     | 0         | 5         | false    | churn_rate       | linear       | 0.3          |
+|17 | monthly_usage_pct       | float   | 0.0       | 1.0       | false    | engagement_score | linear       | 0.1          |
+|18 | categoria               | int     | 0         | 1         | false    | churn_rate       | linear       | 0.30         |
+
+Notas críticas:
+- cols 11 y 12 (customer_ltv, engagement_score) DEBEN tener nullable=true.
+- col 18 (categoria): type="int", range_min=0, range_max=1, trend=null.
+  dependency.depends_on="churn_rate", relationship="linear", noise_factor=0.30.
+  NUNCA type="str" para categoria — convierte el target en ruido aleatorio sin señal.
+- El data_generator normaliza el padre, agrega ruido gaussiano, y redondea a int → ~70% señal → AUC ≥ 0.70.
+- revenue en col 2 y 3: rev = revenue_annual_total / {max_rows} (por fila, no anual).
+
+## Ejemplo de columnas con dependency y target (JSON listo para emitir)
+
+  {{
+    "name": "days_since_last_login",
+    "type": "int",
+    "description": "Días desde el último login del usuario",
+    "range_min": 1,
+    "range_max": 180,
+    "nullable": false,
+    "trend": null,
+    "dependency": {{
+      "depends_on": "engagement_score",
+      "relationship": "inverse",
+      "noise_factor": 0.2
+    }}
+  }},
+  {{
+    "name": "support_tickets_count",
+    "type": "int",
+    "description": "Número de tickets de soporte abiertos en el período",
+    "range_min": 0,
+    "range_max": 10,
+    "nullable": false,
+    "trend": null,
+    "dependency": {{
+      "depends_on": "nps",
+      "relationship": "inverse",
+      "noise_factor": 0.2
+    }}
+  }},
+  {{
+    "name": "categoria",
+    "type": "int",
+    "description": "Etiqueta binaria de clasificación: 0=cliente activo, 1=en riesgo de churn",
+    "range_min": 0,
+    "range_max": 1,
+    "nullable": false,
+    "trend": null,
+    "dependency": {{
+      "depends_on": "churn_rate",
+      "relationship": "linear",
+      "noise_factor": 0.30
+    }}
+  }}
 
 ## Exhibits del caso
 ### Exhibit 1 — Financiero (extrae revenue_annual_total de aquí)
