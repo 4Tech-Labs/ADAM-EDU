@@ -66,11 +66,12 @@ def test_dispatch_clasificacion_routes_to_classification_prompt() -> None:
     assert SCHEMA_DESIGNER_PROMPT_BY_FAMILY["clasificacion"] is SCHEMA_DESIGNER_PROMPT_CLASSIFICATION
 
 
-def test_dispatch_clasificacion_not_generic_prompt() -> None:
-    """The classification prompt object is distinct from the generic fallback.
-    This will fail (correctly) once the two prompts are intentionally diverged."""
-    # Currently they are identical strings but different objects — that's fine.
-    # This test guards that the dispatch key is present and resolvable.
+def test_dispatch_clasificacion_via_get_routes_to_classification_prompt() -> None:
+    """The .get() dispatch path (as used in graph.py schema_designer) resolves
+    "clasificacion" to SCHEMA_DESIGNER_PROMPT_CLASSIFICATION — not the fallback.
+    This mirrors the production call site:
+        SCHEMA_DESIGNER_PROMPT_BY_FAMILY.get(primary_family or "", SCHEMA_DESIGNER_PROMPT)
+    and guards that the key is present and the correct object is returned."""
     result = SCHEMA_DESIGNER_PROMPT_BY_FAMILY.get("clasificacion", SCHEMA_DESIGNER_PROMPT)
     assert result is SCHEMA_DESIGNER_PROMPT_CLASSIFICATION
 
