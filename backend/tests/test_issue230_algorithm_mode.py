@@ -92,17 +92,17 @@ def test_catalog_ml_ds_excludes_lstm() -> None:
 
 def test_catalog_items_are_grouped_by_family() -> None:
     families = {it["family"] for it in _items("ml_ds")}
-    # Issue #233 — canonical 4-family taxonomy. nlp/recomendacion deprecated.
-    assert families == {"clasificacion", "regresion", "clustering", "serie_temporal"}
+    # serie_temporal retired from active catalog; ARIMA/Prophet moved to legacy map.
+    assert families == {"clasificacion", "regresion", "clustering"}
     # family_label is non-empty and human-readable.
     for it in _items("ml_ds"):
         assert it["family_label"] and isinstance(it["family_label"], str)
 
 
-# Issue #233 — 4×2 catalog invariants.
-def test_catalog_has_exactly_4_families() -> None:
+# serie_temporal removed from active catalog; 3 active families remain.
+def test_catalog_has_exactly_3_families() -> None:
     families = {it["family"] for it in _items("ml_ds")}
-    assert families == {"clasificacion", "regresion", "clustering", "serie_temporal"}
+    assert families == {"clasificacion", "regresion", "clustering"}
 
 
 def test_catalog_each_family_has_max_2_algorithms() -> None:
@@ -130,17 +130,20 @@ def test_catalog_business_only_baselines() -> None:
     for it in items:
         assert it["tier"] == "baseline", f"business no debe ver challengers: {it}"
     families = {it["family"] for it in items}
-    assert families == {"clasificacion", "regresion", "clustering", "serie_temporal"}
+    assert families == {"clasificacion", "regresion", "clustering"}
 
 
-def test_catalog_ml_ds_has_8_algorithms() -> None:
-    # 4 families × 2 tiers (baseline + challenger) = 8 entries for ml_ds.
-    assert len(_items("ml_ds")) == 8
+def test_catalog_ml_ds_has_6_algorithms() -> None:
+    # 3 active families × 2 tiers (baseline + challenger) = 6 entries for ml_ds.
+    # serie_temporal (ARIMA/Prophet) retired from active catalog.
+    assert len(_items("ml_ds")) == 6
 
 
 def test_catalog_no_legacy_algorithms_exposed() -> None:
     # Issue #233 — these names were removed from the canonical catalog.
-    forbidden = {"xgboost", "ridge", "lasso", "lstm", "svm", "naive bayes"}
+    # ARIMA and Prophet are added here as they were retired from the active
+    # catalog and moved to the legacy resolver map.
+    forbidden = {"xgboost", "ridge", "lasso", "lstm", "svm", "naive bayes", "arima", "prophet"}
     names = {it["name"].lower() for it in _items("ml_ds")}
     assert names.isdisjoint(forbidden), f"algoritmos legacy reaparecieron: {names & forbidden}"
 
