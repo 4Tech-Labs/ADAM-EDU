@@ -313,3 +313,38 @@ def test_prohibited_violations_remain_bare_strings_for_back_compat() -> None:
     violations = _validate_notebook_family_consistency("clasificacion", bad)
     # El token prohibido viene SIN prefijo FALTANTE.
     assert "from sklearn.cluster import" in violations
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Prompt hygiene: no internal issue-tracker labels in LLM-visible strings
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_classification_notebook_prompt_has_no_issue_references() -> None:
+    """El prompt del notebook de clasificación NO debe contener referencias a
+    tickets internos del tipo '(Issue #N)'. Si el LLM las lee, las reproduce
+    verbatim como subtítulos de celda Markdown visibles para docentes y
+    estudiantes en producción."""
+    import re
+    from case_generator.prompts.clasificacion.notebook import (
+        M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LEGACY,
+    )
+    from case_generator.prompts.clasificacion.notebooks._shared import (
+        INTRO_BY_VARIANT,
+        RF_INTERP_TABLE_ONLY_SECTION,
+    )
+
+    _issue_pattern = re.compile(r"\(Issue #\d+")
+
+    assert not _issue_pattern.search(M3_NOTEBOOK_ALGO_PROMPT), (
+        "M3_NOTEBOOK_ALGO_PROMPT contiene una referencia a un ticket interno"
+    )
+    assert not _issue_pattern.search(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LEGACY), (
+        "M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LEGACY contiene una referencia a un ticket interno"
+    )
+    assert not _issue_pattern.search(RF_INTERP_TABLE_ONLY_SECTION), (
+        "RF_INTERP_TABLE_ONLY_SECTION contiene una referencia a un ticket interno"
+    )
+    for variant, header in INTRO_BY_VARIANT.items():
+        assert not _issue_pattern.search(header), (
+            f"INTRO_BY_VARIANT[{variant!r}] contiene una referencia a un ticket interno"
+        )

@@ -128,6 +128,37 @@ mergeado.
 
 ---
 
+## TODO-HYGIENE-A: Sanitizador post-generación de referencias de tickets
+
+**What:** Añadir un guard de runtime en los nodos de `graph.py` que procesan la salida
+del LLM para M2 (EDA narrative) y M3 (notebook content): después de recibir el texto
+del modelo, aplicar `re.sub(r"\(Issue #\d+[^)]*\)", "", text)` como paso de limpieza
+antes de persistir en el estado del job.
+
+**Why:** Los prompts ya están limpios (fix en rama `fix/strip-issue-refs-from-prompts`),
+pero los LLMs tienen memoria: un modelo puede haber sido entrenado con contenido interno
+o puede alucinar etiquetas del estilo `(Issue #XXX)` espontáneamente si ve patrones
+similares en el prompt. El sanitizador garantiza que ninguna referencia de ese tipo
+llegue jamás al output visible por docentes o estudiantes, incluso en ese escenario.
+
+**Scope:** ~10–15 líneas en los nodos relevantes de `graph.py`. Aplicar después del
+`_validate_notebook_family_consistency` / grounding checks. Sin afectar sentinelas
+(`# === SECTION:... ===`) ni la lógica de reprompt.
+
+**Pros:** Defensa en profundidad. Cierra el riesgo de regresión aunque el LLM alucine
+las etiquetas sin haberlas visto en el prompt.
+
+**Cons:** Regex post-proceso añade una pasada sobre el texto generado (muy bajo costo).
+Debe aplicarse ANTES de la validación de grounding narrativo para no interactuar con ella.
+
+**Context:** El PR `fix/strip-issue-refs-from-prompts` elimina las referencias de los
+prompts (causa raíz). Este TODO es la capa de defensa adicional runtime. Se puede
+implementar de forma independiente en un PR posterior de bajo riesgo.
+
+**Depends on / blocked by:** PR `fix/strip-issue-refs-from-prompts` mergeado.
+
+---
+
 ## TODO-243-A: Excepción estrecha para umbrales prospectivos en grounding narrativo
 
 **What:** Evaluar si `validate_narrative_grounding` debe permitir números técnicos dentro de contextos explícitamente prospectivos, como "Condición mínima de éxito", "target futuro" o recomendaciones de monitoreo, sin tratarlos como métricas ejecutadas del notebook.

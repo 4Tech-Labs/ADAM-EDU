@@ -10,7 +10,7 @@ from case_generator.prompts._shared import (
 
 _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK = """\
 
-# Grounding computado del notebook M3 (Issue #243 — solo clasificación)
+# Grounding computado del notebook M3
 {computed_metrics_block}
 
 # Prohibición literal de grounding narrativo
@@ -20,7 +20,7 @@ NUNCA cites estudios externos, autores, referencias académicas fabricadas ni es
 # ── LR-only deep dive ────────────────────────────────────────────────────────
 _M3_CLASSIFICATION_COHERENCE_BLOCK_LR_ONLY = """\
 
-# Coherencia pedagógica de clasificación — deep dive LR (Issue #242)
+# Coherencia pedagógica de clasificación — deep dive LR
 Este bloque aplica SOLO a jobs con algorithm_mode="single" y algoritmo Logistic Regression.
 
 El docente eligió un deep dive sobre un único modelo. NO menciones ni compares con Random
@@ -45,7 +45,7 @@ lectura con la pregunta eje y con el costo de elegir una opción A/B/C bajo ince
 # ── RF-only deep dive ─────────────────────────────────────────────────────────
 _M3_CLASSIFICATION_COHERENCE_BLOCK_RF_ONLY = """\
 
-# Coherencia pedagógica de clasificación — deep dive RF (Issue #242)
+# Coherencia pedagógica de clasificación — deep dive RF
 Este bloque aplica SOLO a jobs con algorithm_mode="single" y algoritmo Random Forest.
 
 El docente eligió un deep dive sobre un único modelo. NO menciones ni compares con Logistic
@@ -70,7 +70,7 @@ lectura con la pregunta eje y con el costo de elegir una opción A/B/C bajo ince
 # ── LR vs RF contrast ─────────────────────────────────────────────────────────
 _M3_CLASSIFICATION_COHERENCE_BLOCK_LR_RF_CONTRAST = """\
 
-# Coherencia pedagógica de clasificación — contraste LR vs RF (Issue #242)
+# Coherencia pedagógica de clasificación — contraste LR vs RF
 Este bloque aplica SOLO a jobs con algorithm_mode="contrast" (LR + RF) con perfil `ml_ds`.
 
 Pregunta eje directiva del caso:
@@ -93,7 +93,7 @@ con la pregunta eje y con el costo de elegir una opción A/B/C bajo incertidumbr
 
 _M5_CLASSIFICATION_DECISION_MATRIX_BLOCK = """\
 
-# Matriz de decisión ejecutiva (Issue #242 — solo clasificación)
+# Matriz de decisión ejecutiva (solo clasificación)
 Este documento M5 debe incluir una tabla Markdown con 4 a 6 filas y columnas EXACTAS:
 
 | acción | KPI esperado | riesgo | modelo soporte |

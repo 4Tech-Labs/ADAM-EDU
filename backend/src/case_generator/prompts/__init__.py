@@ -153,7 +153,7 @@ Nombre, industria, tamaño. Protagonista decisor (nombre, cargo, presiones, esti
 ## instrucciones_estudiante (máx 100 palabras)
 Rol del estudiante y recordatorio de responder preguntas en plataforma.
 
-## pregunta_eje (Issue #242)
+## pregunta_eje
 Pregunta directiva central del caso. SOLO para {student_profile}="ml_ds" y
 {primary_family}="clasificacion"; en cualquier otro caso debe ser `null`.
 Debe obligar a una decisión ejecutiva defendible con evidencia M2/M3/M4 y matriz de costos.
@@ -174,7 +174,7 @@ Encabezado: `### Exhibit 3 — Mapa de Stakeholders`
 Tabla: Actor | Interés | Incentivo | Riesgo | Postura (A/B/C)
 Mín 6 actores (mín 4 para "undergrad").
 
-## dataset_schema_required (Issue #225 — contrato dataset↔dilema)
+## dataset_schema_required
 Objeto que declara qué dataset necesita el caso para que el dilema sea respondible
 con datos. **Obligatorio cuando {student_profile}="ml_ds"**. Para "business" puedes
 emitir `null` (el pipeline mantiene el comportamiento heurístico previo).
@@ -209,7 +209,7 @@ Reglas duras:
    Ej: si el dilema es "decidir cómo retener clientes", el target NO puede ser un
    código aleatorio sin relación causal. Debe ser una variable medible y observable
    en producción (ej: `churn_flag`, `delivery_delay_minutes`, `default_60d`).
-1bis. **Coherencia título↔target (Issue #228)**: el `name` y el `role` del target
+1bis. **Coherencia título↔target**: el `name` y el `role` del target
    deben reflejar el sustantivo central del `titulo`. Mapeo de referencia
    (no exhaustivo — adapta al caso, pero respeta la familia):
      - título habla de "retención"/"churn"/"abandono"/"fidelización" → target
@@ -229,7 +229,7 @@ Reglas duras:
    Ej: al predecir `churn_flag` del mes 0, las columnas `retention_m3`, `retention_m6`,
    `retention_m12` son leakage por construcción → marcarlas siempre.
 2bis. **Naming patterns que SIEMPRE son leakage cuando el target NO es de
-   familia retención (Issue #228)**: `retention_*`, `churn_*`, `nps`, `csat`,
+   familia retención**: `retention_*`, `churn_*`, `nps`, `csat`,
    `customer_ltv`, `complaint_*`, `cancellation_*`, `*_post_event`. Si tu
    target es operativo (delay/defecto/fraude/ventas) y declaras alguna de
    estas como feature, marca `is_leakage_risk=true` SIEMPRE — el pipeline
@@ -427,7 +427,7 @@ SCHEMA_DESIGNER_PROMPT = """\
 Diseña el schema de un dataset sintético para el caso de negocio dado.
 Perfil: {student_profile} | Industria: {industria}
 
-## Contrato dataset_schema_required (Issue #225 — fuente de verdad)
+## Contrato dataset_schema_required
 {dataset_contract_block}
 
 REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
@@ -620,7 +620,7 @@ usando exclusivamente los datos del dataset y los Exhibits provistos.
 - Si una métrica no muestra tendencia clara o anomalía: repórtala como ESTABLE.
   NO fuerces un hallazgo donde los datos no lo soportan.
 
-## Brechas dilema↔dataset (Issue #225 — data_gap_warnings)
+## Brechas dilema↔dataset
 {data_gap_warnings_block}
 
 REGLAS para brechas:
@@ -713,7 +713,7 @@ sobre charts ya construidos.
 Para CADA chart en `{charts_context_json}` escribe `description` y `notes`
 que ayuden al estudiante a leer la visualización en términos de negocio.
 
-# Hard Boundaries (Issue #237)
+# Hard Boundaries
 - NO modifiques `traces`, `layout`, `source`, `id`, `title`, `subtitle`,
   `chart_type` ni ningún número del chart. Esos campos son determinísticos
   y vienen del builder Python — NO son negociables.
@@ -1904,13 +1904,13 @@ Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para
 El notebook resuelve un problema de REGRESIÓN (target numérico continuo).
 Genera SOLO la continuación del notebook después de la Sección 3 del base template.
 
-# Contrato dataset_schema_required (Issue #225 — fuente canónica del target)
+# Contrato dataset_schema_required
 {dataset_contract_block}
 
-# Brechas de datos detectadas por el validador (data_gap_warnings)
+# Brechas de datos detectadas por el validador
 {data_gap_warnings_block}
 
-# Reglas CONTRACT-FIRST (Issue #225 — prioridad máxima)
+# Reglas CONTRACT-FIRST
 * Si el contrato declara `target_column.name`, usa ese nombre EXACTO. NO uses alias-matching.
 * Si el target del contrato no está en `df.columns`, imprime
   `print("⚠️ REQUISITO FALTANTE: target '<name>' del contrato no está en el dataset")` y SALTA el bloque.
@@ -1979,7 +1979,7 @@ D. NO importes nada que no esté en: numpy, pandas, matplotlib, seaborn, sklearn
 5. One-hot ANTES del split: `X = pd.get_dummies(df[feature_cols], drop_first=True, dummy_na=False)`.
 6. Si `X.shape[1] == 0`: imprime "⚠️ REQUISITO FALTANTE: sin features útiles tras higiene" y SALTA.
 
-# Atomic Cell Charting (Issue #228 — un gráfico por celda)
+# Atomic Cell Charting
 - PROHIBIDO `plt.subplots(1, N)` o `plt.subplots(N, M)` para mezclar gráficos heterogéneos.
 - Cada celda de visualización contiene exactamente UNA `plt.figure(...)` y UN `plt.show()`.
 - Por algoritmo, parte el bloque en sub-celdas:
@@ -2107,10 +2107,10 @@ Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para
 El notebook resuelve un problema de CLUSTERING NO SUPERVISADO.
 Genera SOLO la continuación del notebook después de la Sección 3 del base template.
 
-# Contrato dataset_schema_required (Issue #225)
+# Contrato dataset_schema_required
 {dataset_contract_block}
 
-# Brechas de datos detectadas por el validador (data_gap_warnings)
+# Brechas de datos detectadas por el validador
 {data_gap_warnings_block}
 
 # Reglas CONTRACT-FIRST
@@ -2176,7 +2176,7 @@ C. NO importes nada que no esté en: numpy, pandas, matplotlib, seaborn,
 5. `X = df[feature_cols].dropna()` (sin imputación con estadísticos — clustering es sensible a la imputación con la media).
 6. Si `X.shape[1] < 2` o `X.shape[0] < 10`: imprime "⚠️ REQUISITO FALTANTE..." y SALTA.
 
-# Atomic Cell Charting (Issue #228 — un gráfico por celda)
+# Atomic Cell Charting
 - PROHIBIDO `plt.subplots(1, N)` o `plt.subplots(N, M)` para mezclar gráficos heterogéneos.
 - Cada celda de visualización contiene exactamente UNA `plt.figure(...)` y UN `plt.show()`.
 - Por algoritmo, parte el bloque en sub-celdas:
@@ -2291,10 +2291,10 @@ Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para
 El notebook resuelve un problema de SERIES TEMPORALES (forecasting).
 Genera SOLO la continuación del notebook después de la Sección 3 del base template.
 
-# Contrato dataset_schema_required (Issue #225)
+# Contrato dataset_schema_required
 {dataset_contract_block}
 
-# Brechas de datos detectadas por el validador (data_gap_warnings)
+# Brechas de datos detectadas por el validador
 {data_gap_warnings_block}
 
 # Reglas CONTRACT-FIRST
@@ -2373,7 +2373,7 @@ D. NO importes nada que no esté en: numpy, pandas, matplotlib, seaborn,
   6. `print("Split temporal:", "train hasta", df[date_col].iloc[cut-1], "→ test desde", df[date_col].iloc[cut])`
 - PROHIBIDO `train_test_split(X, y, ...)` con `random_state` — se permite SOLO `TimeSeriesSplit` para CV.
 
-# Atomic Cell Charting (Issue #228 — un gráfico por celda)
+# Atomic Cell Charting
 - PROHIBIDO `plt.subplots(1, N)` o `plt.subplots(N, M)` para mezclar gráficos heterogéneos.
 - Cada celda de visualización contiene exactamente UNA `plt.figure(...)` y UN `plt.show()`.
 - Por algoritmo, parte el bloque en sub-celdas:
