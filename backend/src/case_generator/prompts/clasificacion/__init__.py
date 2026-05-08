@@ -1,5 +1,8 @@
 """Classification-family prompt exports."""
 
+from case_generator.prompts.clasificacion.dataset import (
+    SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
+)
 from case_generator.prompts.clasificacion.narrative import (
     M3_CONTENT_PROMPT_CLASSIFICATION,
     M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
@@ -23,6 +26,7 @@ from case_generator.prompts.clasificacion.notebooks import (
 )
 
 __all__ = [
+    "SCHEMA_DESIGNER_PROMPT_CLASSIFICATION",
     "M3_CONTENT_PROMPT_CLASSIFICATION",
     "M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY",
     "M3_CONTENT_PROMPT_CLASSIFICATION_RF_ONLY",

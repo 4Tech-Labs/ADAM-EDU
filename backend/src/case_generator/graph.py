@@ -108,6 +108,7 @@ from case_generator.prompts import (
     TEACHING_NOTE_PART1_PROMPT,
     TEACHING_NOTE_PART2_PROMPT,
     SCHEMA_DESIGNER_PROMPT,
+    SCHEMA_DESIGNER_PROMPT_BY_FAMILY,
 )
 from case_generator.suggest_service import (
     family_of,
@@ -2456,6 +2457,14 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
         ", ".join(familias_detectadas) if familias_detectadas else "clasificacion"
     )
 
+    # Resolve primary family for per-family prompt dispatch (M2 dataset, Issue #233).
+    # _detect_algorithm_families is kept above for the vocabulary string; this separate
+    # call resolves the single primary family used to select the schema design prompt.
+    primary_family, _legacy_warn_schema = _resolve_primary_family(algoritmos_raw)
+    _schema_prompt = SCHEMA_DESIGNER_PROMPT_BY_FAMILY.get(
+        primary_family or "", SCHEMA_DESIGNER_PROMPT
+    )
+
     context = _build_base_context(state)
     context.update({
         "titulo": state.get("titulo", ""),
@@ -2470,7 +2479,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
             state.get("dataset_schema_required")
         ),
     })
-    prompt = SCHEMA_DESIGNER_PROMPT.format(**context)
+    prompt = _schema_prompt.format(**context)
 
     # Cadena de fallback resiliente alineada con el patrón del case_architect (M1):
     #   1) Pro thinking_level="medium" — primario (mantiene thinking; subir a "high"
