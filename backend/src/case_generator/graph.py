@@ -78,8 +78,11 @@ from case_generator.state import ADAMState
 from case_generator.configuration import Configuration
 from case_generator.prompts import (
     CASE_ARCHITECT_PROMPT,
+    CASE_ARCHITECT_PROMPT_BY_FAMILY,
     CASE_QUESTIONS_PROMPT,
+    CASE_QUESTIONS_PROMPT_BY_FAMILY,
     CASE_WRITER_PROMPT,
+    CASE_WRITER_PROMPT_BY_FAMILY,
     EDA_ANNOTATE_ONLY_PROMPT,
     EDA_CHART_GENERATOR_PROMPT,
     EDA_QUESTIONS_GENERATOR_PROMPT,
@@ -846,7 +849,9 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         }, per_field_limit=800, total_limit=2500),
     })
 
-    prompt = CASE_ARCHITECT_PROMPT.format(**context)
+    prompt = CASE_ARCHITECT_PROMPT_BY_FAMILY.get(
+        context["primary_family"], CASE_ARCHITECT_PROMPT
+    ).format(**context)
 
     try:
         result, profile_resolved, family_resolved, pregunta_eje = (
@@ -972,7 +977,9 @@ def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
         }, per_field_limit=2000, total_limit=8000),
     })
 
-    prompt = CASE_WRITER_PROMPT.format(**context)
+    prompt = CASE_WRITER_PROMPT_BY_FAMILY.get(
+        context["primary_family"], CASE_WRITER_PROMPT
+    ).format(**context)
 
     try:
         # Invocación directa de texto crudo (sin JSON schema)
@@ -1011,7 +1018,9 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
         }, per_field_limit=2000, total_limit=8000),
     })
 
-    prompt = CASE_QUESTIONS_PROMPT.format(**context)
+    prompt = CASE_QUESTIONS_PROMPT_BY_FAMILY.get(
+        context["primary_family"], CASE_QUESTIONS_PROMPT
+    ).format(**context)
 
     try:
         resultado: GeneradorPreguntasM1Output = llm.with_structured_output(

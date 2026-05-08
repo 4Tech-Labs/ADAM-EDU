@@ -22,6 +22,9 @@ from case_generator.prompts._shared import (
     M5_CONTENT_GENERATOR_PROMPT,
 )
 from case_generator.prompts.clasificacion import (
+    CASE_ARCHITECT_PROMPT_CLASSIFICATION,
+    CASE_QUESTIONS_PROMPT_CLASSIFICATION,
+    CASE_WRITER_PROMPT_CLASSIFICATION,
     CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT,
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
@@ -2491,6 +2494,22 @@ Contexto M3 (extracto): {m3_content}
 """
 
 
+# ── CASE_*_PROMPT_BY_FAMILY — dispatch tables consumed by graph.py M1 nodes
+# Keys MUST match the values returned by ``family_of(name)`` and the catalog's
+# ``family`` field in suggest_service.py.  Fallback via .get(family, GENERIC)
+# preserves the pre-Issue-#245 generic behaviour for all non-clasificacion families.
+CASE_ARCHITECT_PROMPT_BY_FAMILY: dict[str, str] = {
+    "clasificacion": CASE_ARCHITECT_PROMPT_CLASSIFICATION,
+}
+
+CASE_WRITER_PROMPT_BY_FAMILY: dict[str, str] = {
+    "clasificacion": CASE_WRITER_PROMPT_CLASSIFICATION,
+}
+
+CASE_QUESTIONS_PROMPT_BY_FAMILY: dict[str, str] = {
+    "clasificacion": CASE_QUESTIONS_PROMPT_CLASSIFICATION,
+}
+
 # ── PROMPT_BY_FAMILY — dispatch table consumed by graph.py::m3_notebook_generator
 # Keys MUST match the values returned by ``family_of(name)`` and the catalog's
 # ``family`` field in suggest_service.py.
@@ -2508,8 +2527,14 @@ M3_NOTEBOOK_ALGO_PROMPT = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION
 
 __all__ = [
   "CASE_ARCHITECT_PROMPT",
+  "CASE_ARCHITECT_PROMPT_BY_FAMILY",
+  "CASE_ARCHITECT_PROMPT_CLASSIFICATION",
   "CASE_QUESTIONS_PROMPT",
+  "CASE_QUESTIONS_PROMPT_BY_FAMILY",
+  "CASE_QUESTIONS_PROMPT_CLASSIFICATION",
   "CASE_WRITER_PROMPT",
+  "CASE_WRITER_PROMPT_BY_FAMILY",
+  "CASE_WRITER_PROMPT_CLASSIFICATION",
   "EDA_ANNOTATE_ONLY_PROMPT",
   "EDA_CHART_GENERATOR_PROMPT",
   "EDA_QUESTIONS_GENERATOR_PROMPT",
