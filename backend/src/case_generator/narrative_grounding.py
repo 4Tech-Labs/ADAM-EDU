@@ -22,6 +22,10 @@ NARRATIVE_GROUNDING_WARNING = (
 
 _FALLBACK_MARKER = "M3_METRICS_SUMMARY_AUSENTE"
 _NUMBER_RE = re.compile(r"(?<![A-Za-z_])([+-]?\d+(?:[.,]\d+)?)\s*%?")
+# Detects comma-thousands-separator integers: ``180,000``, ``1,200``, etc.
+# The integer-part ≥ 1 guard excludes Spanish-notation decimals like ``0,723``
+# (AUC 0.723) so fractional metric values are never silently skipped.
+_THOUSANDS_SEP_RE = re.compile(r"^[+-]?(\d+),\d{3}$")
 _CITATION_RE = re.compile(
     r"(?i)(seg[uú]n\s+(?:el\s+|un\s+|una\s+)?(?:estudios?|papers?)|"
     r"papers?\s+(?:recientes?|extern[oa]s?|acad[eé]micos?|cient[ií]ficos?|de\s+[\wÁÉÍÓÚÑáéíóúñ.-]+)|"
@@ -262,18 +266,56 @@ def _metrics_block_declares_modeling_skipped(metrics_block: str) -> bool:
     return False
 
 
+def _is_thousands_formatted(raw: str) -> bool:
+    """Return True when *raw* uses a comma thousands separator (not a decimal).
+
+    Matches ``NNN,000``-style integers (e.g. ``180,000``, ``1,200``) while
+    excluding Spanish-notation decimals such as ``0,723`` by requiring the
+    integer part to be ≥ 1.  This prevents business volumes in the range
+    (100, 200] from slipping past the ``> 200`` magnitude guard due to the
+    regex treating the comma as a decimal point.
+    """
+    m = _THOUSANDS_SEP_RE.match(raw)
+    if m is None:
+        return False
+    return int(m.group(1)) >= 1
+
+
 def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float, bool]]:
+    """Yield (raw_number, float_value, allows_skipped_zero) for numbers that must
+    be anchored to the computed metrics block.
+
+    Two guards protect business figures from being mis-classified as model
+    metrics:
+
+    1. **Thousands-separator guard** (applied first): raw matches like
+       ``180,000`` or ``1,200`` — where ``_NUMBER_RE`` captures the comma
+       as if it were a decimal point — are detected via ``_is_thousands_formatted``
+       and skipped unconditionally.  This prevents false positives for volumes
+       in the range (100, 200] that the magnitude guard below cannot reach.
+
+    2. **Magnitude guard**: float values > 200 are skipped.  Model performance
+       metrics (AUC, F1, recall, precision, accuracy) are bounded [0, 1] or
+       [0, 100%] and can never exceed 200.  This catches bare integers like
+       ``4500`` or ``580.000`` that carry no comma separator.
+    """
     matches: list[tuple[int, str, float, bool]] = []
     consumed_spans: list[tuple[int, int]] = []
 
     for match in _ADJACENT_MODEL_METRIC_NUMBER_RE.finditer(prose):
-        raw_number = match.group("value").replace(",", ".")
+        raw_group = match.group("value")
+        if _is_thousands_formatted(raw_group):
+            continue  # thousands-separator integer — not a model metric
+        raw_number = raw_group.replace(",", ".")
+        float_value = float(raw_number)
+        if float_value > 200:
+            continue  # business volume — not a model metric
         value_span = match.span("value")
         segment = match.group(0)
         matches.append((
             value_span[0],
             raw_number,
-            float(raw_number),
+            float_value,
             _allows_skipped_zero_placeholder(segment),
         ))
         consumed_spans.append(value_span)
@@ -282,14 +324,20 @@ def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float, bool]]:
         value_span = match.span(1)
         if any(_spans_overlap(value_span, consumed) for consumed in consumed_spans):
             continue
+        raw_group = match.group(1)
+        if _is_thousands_formatted(raw_group):
+            continue  # thousands-separator integer — not a model metric
+        raw_number = raw_group.replace(",", ".")
+        float_value = float(raw_number)
+        if float_value > 200:
+            continue  # business volume — not a model metric
         if not _is_model_metric_number(prose, match):
             continue
-        raw_number = match.group(1).replace(",", ".")
         segment = _model_metric_clause(prose, value_span[0], value_span[1])
         matches.append((
             value_span[0],
             raw_number,
-            float(raw_number),
+            float_value,
             _allows_skipped_zero_placeholder(segment),
         ))
 

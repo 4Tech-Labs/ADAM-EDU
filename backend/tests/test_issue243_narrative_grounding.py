@@ -458,6 +458,91 @@ def test_validator_still_flags_zero_metric_when_modeling_was_not_skipped() -> No
     )
 
 
+def test_validator_allows_large_business_volumes_near_metric_keywords() -> None:
+    """Regression: business volumes of any size must never be flagged UNANCHORED.
+
+    Two guards protect business figures:
+
+    1. Thousands-separator guard (``_is_thousands_formatted``): raw matches like
+       ``180,000`` or ``1,200`` — where ``_NUMBER_RE`` treats the comma as a
+       decimal point producing 180.0 or 1.2 — are detected by the pattern
+       ``/^\\d+,\\d{3}$/`` with integer-part ≥ 1 and skipped before any clause
+       analysis.  This closes the gap for volumes in the range (100, 200] that
+       the magnitude guard cannot reach.
+
+    2. Magnitude guard (``> 200``): catches bare integers like ``4500`` or
+       ``580,000`` (the latter parsed as 580.0 via the decimal-point replace).
+
+    Original production failure (Issue #243 follow-up):
+    ``UNANCHORED: 580.000`` on "580,000 envíos como baseline" — forward clause
+    extension included ``baseline`` after the figure, causing a false positive.
+    """
+    block = build_computed_metrics_block({"auc_lr": 0.7234, "f1_macro": 0.65})
+
+    # ── Magnitude guard (> 200): already covered, no regression ─────────────
+    assert validate_narrative_grounding(
+        "Para calcular el impacto financiero real, proyectamos el desempeño del modelo "
+        "sobre el volumen esperado del CyberWeek (580,000 envíos).",
+        block,
+    ) == []
+
+    assert validate_narrative_grounding(
+        "Aplicamos el modelo sobre los 580,000 envíos esperados como baseline de comparación.",
+        block,
+    ) == []
+
+    # ── Thousands-separator guard: NNN,000 where NNN ∈ (100, 200] ───────────
+    # These were the false positives NOT caught by the > 200 guard alone.
+    assert validate_narrative_grounding(
+        "Proyectamos el modelo sobre 180,000 envíos como baseline de comparación.",
+        block,
+    ) == []
+
+    assert validate_narrative_grounding(
+        "El modelo cubre los 150,000 registros baseline del periodo anterior.",
+        block,
+    ) == []
+
+    assert validate_narrative_grounding(
+        "Con 101,000 clientes activos como baseline el modelo supera el dummy.",
+        block,
+    ) == []
+
+    # ── Thousands-separator guard: 1,200 standalone ──────────────────────────
+    # 1,200 standalone (not part of 1,200,000) → parsed as 1.2 by _NUMBER_RE
+    # → not caught by > 200 guard → false positive without thousands-sep guard.
+    assert validate_narrative_grounding(
+        "Una muestra de 1,200 clientes como baseline de evaluación.",
+        block,
+    ) == []
+
+    # ── Dot notation (European) — handled by natural clause boundary ─────────
+    assert validate_narrative_grounding(
+        "Con 1.200.000 registros de clientes, el feature principal define la segmentación.",
+        block,
+    ) == []
+
+    # ── Bare integer > 200: magnitude guard ─────────────────────────────────
+    assert validate_narrative_grounding(
+        "El coeficiente de riesgo se estima sobre 4500 contratos activos.",
+        block,
+    ) == []
+
+    # ── Sanity: Spanish-notation decimal (0,723) must NOT be skipped ─────────
+    # 0,723 → integer part = 0 → NOT a thousands separator → checked normally.
+    # It passes because 0.723 is within tolerance of auc_lr=0.7234.
+    assert validate_narrative_grounding(
+        "El AUC del modelo fue 0,723 en el conjunto de prueba.",
+        block,
+    ) == []
+
+    # ── Sanity: real unanchored model metric must still be caught ────────────
+    assert "UNANCHORED: 87" in validate_narrative_grounding(
+        "El modelo logró AUC 87% en producción.",
+        block,
+    )
+
+
 def test_prompts_inject_computed_metrics_block_only_for_classification() -> None:
     rendered = M4_PROMPT_CLASSIFICATION.format(
         contexto_m1="M1",

@@ -69,7 +69,7 @@ def test_catalog_business_harvard_with_eda_has_baseline() -> None:
     assert _baselines_of("business"), "business must expose baselines"
     # Business profile may legitimately expose zero challengers.
     for it in items:
-        assert set(it.keys()) == {"name", "family", "family_label", "tier"}
+        assert set(it.keys()) == {"name", "family", "family_label", "tier", "learning_type"}
 
 
 def test_catalog_ml_ds_exposes_challengers() -> None:
@@ -310,10 +310,66 @@ def test_algorithm_catalog_endpoint_ok(client) -> None:
     items = body["items"]
     assert isinstance(items, list) and items
     for it in items:
-        assert set(it.keys()) == {"name", "family", "family_label", "tier"}
+        assert set(it.keys()) == {"name", "family", "family_label", "tier", "learning_type"}
         assert it["tier"] in {"baseline", "challenger"}
+        assert it["learning_type"] in {"supervised", "unsupervised"}
     # No LSTM in the curated catalog.
     assert not any("lstm" in it["name"].lower() for it in items)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# learning_type catalog contract (Issue #244)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_catalog_all_items_have_learning_type() -> None:
+    """Every catalog entry must expose a valid learning_type value."""
+    valid = {"supervised", "unsupervised"}
+    for it in _items("ml_ds"):
+        assert "learning_type" in it, f"missing learning_type: {it['name']}"
+        assert it["learning_type"] in valid, (
+            f"{it['name']} has unexpected learning_type={it['learning_type']!r}"
+        )
+
+
+def test_catalog_clasificacion_is_supervised() -> None:
+    items = [it for it in _items("ml_ds") if it["family"] == "clasificacion"]
+    assert items, "clasificacion family must be present"
+    for it in items:
+        assert it["learning_type"] == "supervised", (
+            f"clasificacion item {it['name']!r} must be supervised"
+        )
+
+
+def test_catalog_regresion_is_supervised() -> None:
+    items = [it for it in _items("ml_ds") if it["family"] == "regresion"]
+    assert items, "regresion family must be present"
+    for it in items:
+        assert it["learning_type"] == "supervised", (
+            f"regresion item {it['name']!r} must be supervised"
+        )
+
+
+def test_catalog_clustering_is_unsupervised() -> None:
+    items = [it for it in _items("ml_ds") if it["family"] == "clustering"]
+    assert items, "clustering family must be present"
+    for it in items:
+        assert it["learning_type"] == "unsupervised", (
+            f"clustering item {it['name']!r} must be unsupervised"
+        )
+
+
+def test_algorithm_catalog_endpoint_includes_learning_type(client) -> None:
+    """Endpoint response must include learning_type on every item (Issue #244)."""
+    resp = client.get(
+        "/api/authoring/algorithm-catalog",
+        params={"profile": "ml_ds", "case_type": "harvard_with_eda"},
+    )
+    assert resp.status_code == 200
+    for it in resp.json()["items"]:
+        assert "learning_type" in it, f"endpoint item missing learning_type: {it}"
+        assert it["learning_type"] in {"supervised", "unsupervised"}, (
+            f"unexpected learning_type value: {it['learning_type']!r}"
+        )
 
 
 def test_algorithm_catalog_endpoint_invalid_profile_422(client) -> None:

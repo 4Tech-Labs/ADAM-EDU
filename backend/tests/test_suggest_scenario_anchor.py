@@ -29,6 +29,7 @@ from case_generator.suggest_service import (
     IntentEnum,
     SuggestRequest,
     SuggestResponse,
+    _build_algorithm_anchor_block,
     _build_prompt,
     _check_scenario_family_coherence,
     generate_suggestion,
@@ -352,6 +353,44 @@ async def test_live_anchor_prophet_yields_time_series_problem_type() -> None:
     assert resp.problemType == "serie_temporal", (
         f"Expected anchored prompt to pin problemType=serie_temporal; got "
         f"{resp.problemType!r}. Warning={resp.coherenceWarning!r}"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Anchor block: paradigm declaration (Issue #244)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_anchor_block_clustering_declares_no_supervisado() -> None:
+    """Unsupervised anchor must declare NO SUPERVISADO and forbid 'predecir'."""
+    req = _base_req(algorithmPrimary="K-Means")
+    block = _build_algorithm_anchor_block(req)
+    assert block is not None, "K-Means anchor block must not be None"
+    assert "NO SUPERVISADO" in block, (
+        "Anchor block for clustering/K-Means must declare NO SUPERVISADO"
+    )
+    assert "predecir" in block.lower(), (
+        "Anchor block must list 'predecir' as a prohibited word for unsupervised"
+    )
+    # Must NOT promise a target variable
+    assert "SUPERVISADO" not in block.replace("NO SUPERVISADO", ""), (
+        "Anchor block must not mention plain SUPERVISADO for an unsupervised algorithm"
+    )
+
+
+def test_anchor_block_clasificacion_declares_supervisado() -> None:
+    """Supervised anchor must declare SUPERVISADO and require a target variable."""
+    req = _base_req(algorithmPrimary="Logistic Regression")
+    block = _build_algorithm_anchor_block(req)
+    assert block is not None, "Logistic Regression anchor block must not be None"
+    assert "SUPERVISADO" in block, (
+        "Anchor block for clasificacion/Logistic Regression must declare SUPERVISADO"
+    )
+    assert "variable objetivo" in block.lower() or "target" in block.lower(), (
+        "Supervised anchor block must reference target variable"
+    )
+    # Unsupervised prohibition must NOT appear
+    assert "NO SUPERVISADO" not in block, (
+        "Anchor block must not contain NO SUPERVISADO for a supervised algorithm"
     )
 
 

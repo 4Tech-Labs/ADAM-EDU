@@ -84,6 +84,7 @@ ALGORITHM_CATALOG: list[dict[str, object]] = [
         "family": "clasificacion",
         "family_label": FAMILY_LABELS["clasificacion"],
         "tier": "baseline",
+        "learning_type": "supervised",
         "profile_visibility": ["business", "ml_ds"],
         "prompt_key": "classification",
         "visualization": "Confusion Matrix + Feature importance (coef_)",
@@ -95,6 +96,7 @@ ALGORITHM_CATALOG: list[dict[str, object]] = [
         "family": "clasificacion",
         "family_label": FAMILY_LABELS["clasificacion"],
         "tier": "challenger",
+        "learning_type": "supervised",
         "profile_visibility": ["ml_ds"],
         "prompt_key": "classification",
         "visualization": "Confusion Matrix + Feature importance (feature_importances_)",
@@ -107,6 +109,7 @@ ALGORITHM_CATALOG: list[dict[str, object]] = [
         "family": "regresion",
         "family_label": FAMILY_LABELS["regresion"],
         "tier": "baseline",
+        "learning_type": "supervised",
         "profile_visibility": ["business", "ml_ds"],
         "prompt_key": "regression",
         "visualization": "Scatter real vs predicho con línea 45° + Residuals vs predicho",
@@ -118,6 +121,7 @@ ALGORITHM_CATALOG: list[dict[str, object]] = [
         "family": "regresion",
         "family_label": FAMILY_LABELS["regresion"],
         "tier": "challenger",
+        "learning_type": "supervised",
         "profile_visibility": ["ml_ds"],
         "prompt_key": "regression",
         "visualization": "Scatter real vs predicho con línea 45° + Feature importance",
@@ -130,6 +134,7 @@ ALGORITHM_CATALOG: list[dict[str, object]] = [
         "family": "clustering",
         "family_label": FAMILY_LABELS["clustering"],
         "tier": "baseline",
+        "learning_type": "unsupervised",
         "profile_visibility": ["business", "ml_ds"],
         "prompt_key": "clustering",
         "visualization": "Elbow method (inercia vs k) + scatter 2D PCA por cluster",
@@ -141,6 +146,7 @@ ALGORITHM_CATALOG: list[dict[str, object]] = [
         "family": "clustering",
         "family_label": FAMILY_LABELS["clustering"],
         "tier": "challenger",
+        "learning_type": "unsupervised",
         "profile_visibility": ["ml_ds"],
         "prompt_key": "clustering",
         "visualization": "k-distance plot (epsilon) + scatter 2D PCA por cluster",
@@ -380,11 +386,14 @@ def classify_tier(technique: str) -> AlgorithmTier:
 def get_algorithm_catalog(profile: str, case_type: str) -> dict[str, object]:
     """Return the canonical algorithm catalog for a (profile, case_type) pair.
 
-    Shape: ``{"items": [{"name", "family", "family_label", "tier"}, ...]}``.
+    Shape: ``{"items": [{"name", "family", "family_label", "tier", "learning_type"}, ...]}``.
 
-    - ``profile=business``: only baseline-tier items (4 algorithms).
-    - ``profile=ml_ds``: full catalog (8 algorithms = 4 families × 2 tiers).
+    - ``profile=business``: only baseline-tier items (3 algorithms — one per active family).
+    - ``profile=ml_ds``: full catalog (6 algorithms = 3 active families x 2 tiers).
     - ``case_type=harvard_only``: empty list (no algorithms picked when no EDA).
+
+    ``serie_temporal`` is retired from the active catalog; it resolves only via the
+    legacy family resolver for historical job replay and is never returned here.
     """
     if profile not in {"business", "ml_ds"}:
         raise ValueError(f"Invalid profile: {profile!r}")
@@ -402,6 +411,7 @@ def get_algorithm_catalog(profile: str, case_type: str) -> dict[str, object]:
             "family": cast(str, entry["family"]),
             "family_label": cast(str, entry["family_label"]),
             "tier": cast(str, entry["tier"]),
+            "learning_type": cast(str, entry["learning_type"]),
         })
     return {"items": items}
 
@@ -557,6 +567,39 @@ def _build_taxonomy_context(profile: str) -> str:
     return "\n".join(lines)
 
 
+# Maps each active catalog family to its learning paradigm.
+# ``supervised``:   target variable required (clasificacion, regresion).
+# ``unsupervised``:  no target — discover latent structure (clustering).
+# ``serie_temporal`` stays supervised but is retired from the active catalog;
+# kept here so legacy job replay still resolves to the correct paradigm.
+_FAMILY_LEARNING_TYPE: dict[str, str] = {
+    "clasificacion": "supervised",
+    "regresion": "supervised",
+    "clustering": "unsupervised",
+    "serie_temporal": "supervised",
+}
+
+# Fail-fast invariant: every ALGORITHM_CATALOG entry's learning_type must
+# match the family-level registry.  Without this, a future catalog edit that
+# adds or renames an entry can silently diverge from _FAMILY_LEARNING_TYPE,
+# causing the LLM suggester to receive an incorrect paradigm header.
+_learning_type_conflicts = [
+    e
+    for e in ALGORITHM_CATALOG
+    if cast(str, e["family"]) in _FAMILY_LEARNING_TYPE
+    and cast(str, e["learning_type"]) != _FAMILY_LEARNING_TYPE[cast(str, e["family"])]
+]
+if _learning_type_conflicts:
+    _conflict_details = ", ".join(
+        f"{cast(str, e['name'])!r}: catalog={cast(str, e['learning_type'])!r} "
+        f"vs registry={_FAMILY_LEARNING_TYPE[cast(str, e['family'])]!r}"
+        for e in _learning_type_conflicts
+    )
+    raise RuntimeError(
+        f"learning_type mismatch between ALGORITHM_CATALOG and _FAMILY_LEARNING_TYPE: "
+        f"{_conflict_details}. Keep both in sync or derive one from the other."
+    )
+
 _FAMILY_TARGET_HINT: dict[str, str] = {
     "clasificacion": (
         "El target debe ser una variable categórica (binaria o multiclase pequeña). "
@@ -601,6 +644,7 @@ def _build_algorithm_anchor_block(req: SuggestRequest) -> Optional[str]:
         # Truly unknown algorithm — refuse to anchor on a guess.
         return None
     family_label = FAMILY_LABELS.get(family, family)
+    learning_type = _FAMILY_LEARNING_TYPE.get(family, "supervised")
     target_hint = _FAMILY_TARGET_HINT.get(family, "")
     challenger_family = family_of(req.algorithmChallenger) if req.algorithmChallenger else None
     if not challenger_family and req.algorithmChallenger:
@@ -633,10 +677,32 @@ def _build_algorithm_anchor_block(req: SuggestRequest) -> Optional[str]:
         "modelo elegido, sus métricas y su validación sean naturalmente "
         "necesarios para resolver el dilema."
     )
+    # Build the learning paradigm header that immediately follows the section
+    # intro, so the LLM reads the supervised/unsupervised contract BEFORE any
+    # other rule.  Strings are tested verbatim in test_suggest_scenario_anchor.
+    if learning_type == "unsupervised":
+        paradigm_header = (
+            "Paradigma de aprendizaje: **NO SUPERVISADO** — "
+            "el escenario NO debe implicar una variable objetivo a predecir, "
+            "clasificar ni estimar. El dilema central es DESCUBRIR estructura "
+            "latente o agrupaciones en datos sin etiqueta. "
+            "Palabras PROHIBIDAS en el escenario o la pregunta guía: "
+            "\"predecir\", \"clasificar\", \"estimar\", \"variable objetivo\", "
+            "\"target\", \"label\"."
+        )
+    else:
+        paradigm_header = (
+            "Paradigma de aprendizaje: **SUPERVISADO** — "
+            "el escenario DEBE implicar una variable objetivo (target) "
+            "a predecir, clasificar o estimar. El dilema debe girar en torno "
+            "a esa predicción y su impacto en la decisión de negocio."
+        )
     lines = [
         "# Anclaje del Algoritmo Elegido por el Docente",
         "El docente YA seleccionó el algoritmo en el formulario. El escenario y la",
         "pregunta guía DEBEN ser coherentes con esta elección — NO la contradigas.",
+        "",
+        paradigm_header,
         "",
         "## Contexto pedagógico que DEBES usar",
         f"- Módulo del syllabus: **{req.syllabusModule}**",

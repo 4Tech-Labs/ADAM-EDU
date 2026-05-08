@@ -75,6 +75,7 @@ export interface AlgorithmCatalogItem {
     family: AlgorithmFamily;
     family_label: string;
     tier: AlgorithmTier;
+    learning_type: "supervised" | "unsupervised";
 }
 export interface AlgorithmCatalog {
     profile: StudentProfile;

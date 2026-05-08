@@ -1613,6 +1613,7 @@ class AlgorithmCatalogItem(BaseModel):
     family: str
     family_label: str
     tier: Literal["baseline", "challenger"]
+    learning_type: Literal["supervised", "unsupervised"]
 
 
 class AlgorithmCatalogResponse(BaseModel):
