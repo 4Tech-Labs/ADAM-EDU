@@ -177,7 +177,7 @@ def test_classification_prompt_specifies_categoria_as_int() -> None:
 
 
 def test_classification_fallback_schema_categoria_is_int_with_dependency() -> None:
-    """_build_fallback_schema for ml_ds must produce ``categoria`` as int 0/1
+    """_build_fallback_schema for ml_ds+clasificacion must produce ``categoria`` as int 0/1
     with a dependency on ``churn_rate``.
 
     The fallback runs when the primary LLM call fails (503, timeout, JSON parse
@@ -190,13 +190,15 @@ def test_classification_fallback_schema_categoria_is_int_with_dependency() -> No
     """
     from case_generator.graph import _build_fallback_schema  # noqa: PLC0415
 
-    result = _build_fallback_schema(state={}, max_rows=600, profile="ml_ds")  # type: ignore[arg-type]
+    result = _build_fallback_schema(  # type: ignore[arg-type]
+        state={}, max_rows=600, profile="ml_ds", primary_family="clasificacion"
+    )
 
     columns_by_name = {col["name"]: col for col in result["columns"]}
 
     # --- categoria presence and type ---
     assert "categoria" in columns_by_name, (
-        "_build_fallback_schema must include a 'categoria' column for ml_ds"
+        "_build_fallback_schema must include a 'categoria' column for ml_ds+clasificacion"
     )
     cat = columns_by_name["categoria"]
     assert cat["type"] == "int", (
@@ -222,3 +224,40 @@ def test_classification_fallback_schema_categoria_is_int_with_dependency() -> No
         "'ticket_text' is not part of the 18-column classification contract "
         "and must not appear in the ml_ds fallback schema"
     )
+
+
+@pytest.mark.parametrize("family", ["regresion", "clustering", "serie_temporal", ""])
+def test_non_clasificacion_fallback_schema_has_no_classification_columns(family: str) -> None:
+    """_build_fallback_schema for non-clasificacion ml_ds families must NOT emit
+    classification-specific columns (``categoria``, ``plan_tier``, ``payment_failures``,
+    etc.) that would cause regression/clustering M3 notebooks to fail.
+
+    These families' M3 notebooks derive their target from the base schema
+    (e.g. ``revenue`` for regresion; no target column for clustering).
+    The generic ml_ds baseline (customer_ltv + engagement_score, cols 11–12) is
+    still expected so downstream prompt augmentation works correctly.
+    """
+    from case_generator.graph import _build_fallback_schema  # noqa: PLC0415
+
+    result = _build_fallback_schema(  # type: ignore[arg-type]
+        state={}, max_rows=200, profile="ml_ds", primary_family=family
+    )
+    cols_by_name = {col["name"]: col for col in result["columns"]}
+
+    # Classification-specific columns must not appear for non-clasificacion families.
+    for classification_col in ("categoria", "plan_tier", "payment_failures",
+                               "days_since_last_login", "support_tickets_count",
+                               "monthly_usage_pct"):
+        assert classification_col not in cols_by_name, (
+            f"family={family!r}: classification column {classification_col!r} must not "
+            "appear in non-clasificacion fallback schema"
+        )
+
+    # Generic ml_ds baseline (customer_ltv + engagement_score) should still be present.
+    assert "customer_ltv" in cols_by_name, (
+        f"family={family!r}: fallback schema must still include 'customer_ltv'"
+    )
+    assert "engagement_score" in cols_by_name, (
+        f"family={family!r}: fallback schema must still include 'engagement_score'"
+    )
+    assert result["n_rows"] == 200

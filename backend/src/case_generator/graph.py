@@ -1863,8 +1863,16 @@ def _validate_and_correct_dataset(
 # HELPER — _build_fallback_schema (sin LLM, regex sobre Exhibit 1)
 # ─────────────────────────────────────────────────────────
 
-def _build_fallback_schema(state: ADAMState, max_rows: int, profile: str) -> dict:
-    """Schema mínimo si schema_designer falla. Extrae revenue con regex del Exhibit 1."""
+def _build_fallback_schema(
+    state: ADAMState, max_rows: int, profile: str, primary_family: str = "clasificacion"
+) -> dict:
+    """Schema mínimo si schema_designer falla. Extrae revenue con regex del Exhibit 1.
+
+    ``primary_family`` gates the ml_ds column extension: only "clasificacion" gets the
+    18-column binary-target schema; all other ml_ds families receive the 12-column
+    generic baseline (cols 1–10 + customer_ltv + engagement_score) so their M3
+    notebooks do not receive a classification-specific target.
+    """
     financial_text = state.get("doc1_anexo_financiero", "")
 
     revenue_match = re.search(r'[\$€]?\s*([\d,]+(?:\.\d+)?)\s*[Mm]', financial_text)
@@ -1892,7 +1900,7 @@ def _build_fallback_schema(state: ADAMState, max_rows: int, profile: str) -> dic
         {"name": "retention_m12", "type": "float", "description": "Retención cohorte mes 12", "range_min": 0.20, "range_max": 0.50, "nullable": False, "trend": None, "dependency": {"depends_on": "retention_m6", "relationship": "linear", "noise_factor": 0.05}},
     ]
 
-    if profile == "ml_ds":
+    if profile == "ml_ds" and primary_family == "clasificacion":
         # Columns 11–18 for clasificacion: binary churn target with signal.
         # customer_ltv / engagement_score keep nullable=True (5% null ratio);
         # cols 13–18 are fixed classification features; categoria is the binary
@@ -1907,6 +1915,15 @@ def _build_fallback_schema(state: ADAMState, max_rows: int, profile: str) -> dic
             {"name": "payment_failures",        "type": "int",   "description": "Número de fallos de pago en los últimos 3 meses",   "range_min": 0,    "range_max": 5,    "nullable": False, "trend": None, "dependency": {"depends_on": "churn_rate",       "relationship": "linear",  "noise_factor": 0.3}},
             {"name": "monthly_usage_pct",       "type": "float", "description": "Porcentaje de uso mensual del producto (0-1)",      "range_min": 0.0,  "range_max": 1.0,  "nullable": False, "trend": None, "dependency": {"depends_on": "engagement_score", "relationship": "linear",  "noise_factor": 0.1}},
             {"name": "categoria",               "type": "int",   "description": "Etiqueta binaria de clasificación: 0=activo, 1=en riesgo de churn", "range_min": 0, "range_max": 1, "nullable": False, "trend": None, "dependency": {"depends_on": "churn_rate", "relationship": "linear", "noise_factor": 0.30}},
+        ])
+    elif profile == "ml_ds":
+        # Generic ml_ds baseline (cols 11–12) for non-clasificacion families
+        # (regresion, clustering, serie_temporal, or unresolved primary_family).
+        # No classification target here — M3 prompts for those families derive
+        # their target from the base columns (e.g. revenue for regresion).
+        base_columns.extend([
+            {"name": "customer_ltv",     "type": "float", "description": "Customer lifetime value estimado",         "range_min": 500, "range_max": 5000, "nullable": True,  "trend": "up", "dependency": None},
+            {"name": "engagement_score", "type": "float", "description": "Score de engagement del usuario (0-1)",     "range_min": 0.1, "range_max": 0.95, "nullable": True,  "trend": None, "dependency": None},
         ])
 
     return {
@@ -2454,23 +2471,24 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
     Responsabilidad ÚNICA: diseñar. NO genera filas.
     """
     profile = state.get("studentProfile", "business")
-    # ml_ds: 600 filas (Issue #244 cascade: 600 ≤ 2000 → full GridSearchCV).
-    # business: 100 (midpoint de 80-120, usado para calcular rangos de revenue en
-    # el prompt; el LLM elige n_rows en 80-120).
-    max_rows = 600 if profile == "ml_ds" else 100
 
-    # Extraer familias ML requeridas para el Módulo 3 a partir del input del usuario.
-    # _detect_algorithm_families resuelve por catálogo (Issue #233) con fallback legacy.
+    # Resolve primary family BEFORE max_rows — both max_rows and the fallback schema
+    # branch by family. _detect_algorithm_families is kept for the prompt vocabulary
+    # string; _resolve_primary_family is the authoritative single-family resolver.
     algoritmos_raw = state.get("algoritmos", [])
     familias_detectadas = _detect_algorithm_families(algoritmos_raw) if algoritmos_raw else []
     ml_required_families = (
         ", ".join(familias_detectadas) if familias_detectadas else "clasificacion"
     )
-
-    # Resolve primary family for per-family prompt dispatch (M2 dataset, Issue #233).
-    # _detect_algorithm_families is kept above for the vocabulary string; this separate
-    # call resolves the single primary family used to select the schema design prompt.
     primary_family, _legacy_warn_schema = _resolve_primary_family(algoritmos_raw)
+
+    # ml_ds+clasificacion: 600 filas (Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV).
+    # ml_ds+otras familias: 200 filas — el GridSearchCV size cascade es exclusivo del
+    # notebook de clasificacion; regresion/clustering no necesitan 600 filas.
+    # business: 100 (midpoint de 80-120; el LLM elige n_rows estrictamente entre 80-120).
+    _is_clasificacion_ml = profile == "ml_ds" and (primary_family or "") == "clasificacion"
+    max_rows = 600 if _is_clasificacion_ml else (200 if profile == "ml_ds" else 100)
+
     _schema_prompt = SCHEMA_DESIGNER_PROMPT_BY_FAMILY.get(
         primary_family or "", SCHEMA_DESIGNER_PROMPT
     )
@@ -2588,7 +2606,9 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
             logger.error("[schema_designer] %s ERROR: %s", model_label, e, exc_info=True)
 
     print("[schema_designer] todos los intentos fallaron — usando fallback schema")
-    fallback_schema = _build_fallback_schema(state, max_rows, profile)
+    fallback_schema = _build_fallback_schema(
+        state, max_rows, profile, primary_family=primary_family or ""
+    )
     # Issue #225 — incluso en fallback respetamos el contrato del architect.
     contract = state.get("dataset_schema_required")
     fallback_schema = _augment_schema_with_contract(fallback_schema, contract)

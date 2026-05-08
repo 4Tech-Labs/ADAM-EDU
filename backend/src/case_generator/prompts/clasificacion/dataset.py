@@ -85,8 +85,8 @@ NUNCA uses type="str" para "categoria" — el notebook M3 requiere int para el t
 | 8 | retention_m3            | float   | 0.50      | 0.80      | false    | retention_m1     | linear       | 0.05         |
 | 9 | retention_m6            | float   | 0.35      | 0.65      | false    | retention_m3     | linear       | 0.05         |
 |10 | retention_m12           | float   | 0.20      | 0.50      | false    | retention_m6     | linear       | 0.05         |
-|11 | customer_ltv            | float   | 500       | 5000      | TRUE     | —                | —            | —            |
-|12 | engagement_score        | float   | 0.1       | 0.95      | TRUE     | —                | —            | —            |
+|11 | customer_ltv            | float   | 500       | 5000      | true     | —                | —            | —            |
+|12 | engagement_score        | float   | 0.1       | 0.95      | true     | —                | —            | —            |
 |13 | days_since_last_login   | int     | 1         | 180       | false    | engagement_score | inverse      | 0.2          |
 |14 | support_tickets_count   | int     | 0         | 10        | false    | nps              | inverse      | 0.2          |
 |15 | plan_tier               | int     | 1         | 3         | false    | —                | —            | —            |
