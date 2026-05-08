@@ -69,9 +69,17 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
 
 ## CONTRATO DE COLUMNAS PARA CLASIFICACION (ml_ds) — 18 columnas exactas
 
-Para {student_profile}="ml_ds" DEBES generar EXACTAMENTE estas 18 columnas en este orden.
-NUNCA generes columnas fuera de esta lista exacta.
-NUNCA uses type="str" para "categoria" — el notebook M3 requiere int para el target binario.
+Dos casos según el valor de `dataset_contract_block` arriba:
+
+**Caso A — contrato null o {{}} (sin dataset_schema_required):**
+DEBES generar EXACTAMENTE estas 18 columnas en este orden. No añadas columnas fuera de esta lista.
+
+**Caso B — contrato activo (dataset_schema_required no vacío):**
+Aplica las REGLAS DE COBERTURA DEL CONTRATO de arriba primero (cubre target + feature_columns).
+Usa las 18 columnas de abajo como base; completa con las columnas del contrato que no estén ya cubiertas.
+Puedes superar 18 columnas si el contrato lo requiere — la cobertura del contrato tiene prioridad.
+
+En AMBOS casos: NUNCA uses type="str" para "categoria" — el notebook M3 requiere int para el target binario.
 
 | # | name                    | type    | range_min | range_max | nullable | depends_on       | relationship | noise_factor |
 |---|-------------------------|---------|-----------|-----------|----------|------------------|--------------|--------------|

@@ -2482,15 +2482,24 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
     )
     primary_family, _legacy_warn_schema = _resolve_primary_family(algoritmos_raw)
 
+    # Effective family: when _resolve_primary_family returns None (unrecognized or absent
+    # algorithms), ml_ds jobs must mirror _prepare_m3_notebook_generation_context(), which
+    # explicitly falls back to "clasificacion" (line ~4323). Without this alignment,
+    # schema_designer would emit a non-classification schema (no 'categoria', 200 rows,
+    # generic prompt) while M3 still generates a classification notebook — silent AUC
+    # collapse. Business jobs keep "" so the generic schema prompt fires (business profile
+    # does not go through algorithm selection and should not receive the 18-col schema).
+    _effective_family = primary_family or ("clasificacion" if profile == "ml_ds" else "")
+
     # ml_ds+clasificacion: 600 filas (Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV).
     # ml_ds+otras familias: 200 filas — el GridSearchCV size cascade es exclusivo del
     # notebook de clasificacion; regresion/clustering no necesitan 600 filas.
     # business: 100 (midpoint de 80-120; el LLM elige n_rows estrictamente entre 80-120).
-    _is_clasificacion_ml = profile == "ml_ds" and (primary_family or "") == "clasificacion"
+    _is_clasificacion_ml = profile == "ml_ds" and _effective_family == "clasificacion"
     max_rows = 600 if _is_clasificacion_ml else (200 if profile == "ml_ds" else 100)
 
     _schema_prompt = SCHEMA_DESIGNER_PROMPT_BY_FAMILY.get(
-        primary_family or "", SCHEMA_DESIGNER_PROMPT
+        _effective_family, SCHEMA_DESIGNER_PROMPT
     )
 
     context = _build_base_context(state)
@@ -2607,7 +2616,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
 
     print("[schema_designer] todos los intentos fallaron — usando fallback schema")
     fallback_schema = _build_fallback_schema(
-        state, max_rows, profile, primary_family=primary_family or ""
+        state, max_rows, profile, primary_family=_effective_family
     )
     # Issue #225 — incluso en fallback respetamos el contrato del architect.
     contract = state.get("dataset_schema_required")
