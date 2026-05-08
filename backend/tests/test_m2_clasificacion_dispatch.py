@@ -95,3 +95,27 @@ def test_eda_questions_dispatch_fallback_non_clasificacion():
     """Non-clasificacion families fall back to the generic EDA questions prompt."""
     fallback = EDA_QUESTIONS_PROMPT_BY_FAMILY.get("regresion", EDA_QUESTIONS_GENERATOR_PROMPT)
     assert fallback is EDA_QUESTIONS_GENERATOR_PROMPT
+
+
+def test_schema_designer_placeholder_contract():
+    """SCHEMA_DESIGNER_PROMPT_CLASSIFICATION contains exactly the 7 required placeholders
+    and the REGLAS DE COBERTURA DEL CONTRATO section — as claimed in the module docstring."""
+    import re
+
+    placeholders = set(re.findall(r"\{(\w+)\}", SCHEMA_DESIGNER_PROMPT_CLASSIFICATION))
+    expected = {
+        "dataset_contract_block",
+        "financial_data",
+        "industria",
+        "max_rows",
+        "ml_required_families",
+        "operational_data",
+        "student_profile",
+    }
+    assert placeholders == expected, (
+        f"Placeholder contract violated. "
+        f"Missing: {expected - placeholders}, Extra: {placeholders - expected}"
+    )
+    assert "REGLAS DE COBERTURA DEL CONTRATO" in SCHEMA_DESIGNER_PROMPT_CLASSIFICATION, (
+        "REGLAS DE COBERTURA DEL CONTRATO section missing from SCHEMA_DESIGNER_PROMPT_CLASSIFICATION"
+    )

@@ -4,9 +4,10 @@ This file is intentionally kept as a re-export to avoid breaking any direct
 callers that import ``SCHEMA_DESIGNER_PROMPT_CLASSIFICATION`` from
 ``case_generator.prompts.clasificacion.dataset``.
 
-TODO-M2-C: Delete this shim once an exhaustive grep across the entire
-``backend/`` tree (tests/, datagen/, orchestration/, alembic/, scripts/)
-confirms zero direct imports from ``case_generator.prompts.clasificacion.dataset``.
+TODO-M2-CLSF-DATASET-SHIM: Delete this shim once an exhaustive grep across
+the entire ``backend/`` tree (tests/, datagen/, orchestration/, alembic/,
+scripts/) confirms zero direct imports from
+``case_generator.prompts.clasificacion.dataset``.
 Until that audit is complete, removing this file risks a ModuleNotFoundError
 at production deploy time.
 """
