@@ -88,6 +88,20 @@ function renderItemRow(item: AlgorithmCatalogItem) {
                 >
                     {TIER_LABELS[item.tier]}
                 </span>
+                <span
+                    className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${
+                        item.learning_type === "unsupervised"
+                            ? "bg-violet-50 text-violet-700 border border-violet-200"
+                            : "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                    }`}
+                    aria-label={
+                        item.learning_type === "unsupervised"
+                            ? "Aprendizaje no supervisado"
+                            : "Aprendizaje supervisado"
+                    }
+                >
+                    {item.learning_type === "unsupervised" ? "No Supervisado" : "Supervisado"}
+                </span>
                 <span>{item.name}</span>
             </span>
         </SelectItem>
