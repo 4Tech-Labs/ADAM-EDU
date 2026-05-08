@@ -263,17 +263,30 @@ def _metrics_block_declares_modeling_skipped(metrics_block: str) -> bool:
 
 
 def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float, bool]]:
+    """Yield (raw_number, float_value, allows_skipped_zero) for numbers that must
+    be anchored to the computed metrics block.
+
+    **Magnitude guard**: values > 200 are unconditionally skipped.  Model
+    performance metrics (AUC, F1, recall, precision, accuracy) are bounded
+    [0, 1] or [0, 100%]; they can never exceed 200.  Large business volumes
+    written as thousands (e.g. ``580,000 envíos``, ``1,200,000 registros``)
+    are legitimate narrative context that the validator must never flag,
+    regardless of whether a metric keyword appears in the same clause.
+    """
     matches: list[tuple[int, str, float, bool]] = []
     consumed_spans: list[tuple[int, int]] = []
 
     for match in _ADJACENT_MODEL_METRIC_NUMBER_RE.finditer(prose):
         raw_number = match.group("value").replace(",", ".")
+        float_value = float(raw_number)
+        if float_value > 200:
+            continue  # business volume — not a model metric
         value_span = match.span("value")
         segment = match.group(0)
         matches.append((
             value_span[0],
             raw_number,
-            float(raw_number),
+            float_value,
             _allows_skipped_zero_placeholder(segment),
         ))
         consumed_spans.append(value_span)
@@ -282,14 +295,17 @@ def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float, bool]]:
         value_span = match.span(1)
         if any(_spans_overlap(value_span, consumed) for consumed in consumed_spans):
             continue
+        raw_number = match.group(1).replace(",", ".")
+        float_value = float(raw_number)
+        if float_value > 200:
+            continue  # business volume — not a model metric
         if not _is_model_metric_number(prose, match):
             continue
-        raw_number = match.group(1).replace(",", ".")
         segment = _model_metric_clause(prose, value_span[0], value_span[1])
         matches.append((
             value_span[0],
             raw_number,
-            float(raw_number),
+            float_value,
             _allows_skipped_zero_placeholder(segment),
         ))
 

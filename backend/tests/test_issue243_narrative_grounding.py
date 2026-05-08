@@ -458,6 +458,49 @@ def test_validator_still_flags_zero_metric_when_modeling_was_not_skipped() -> No
     )
 
 
+def test_validator_allows_large_business_volumes_near_metric_keywords() -> None:
+    """Regression: 580,000 envíos (business projection) must never be flagged UNANCHORED.
+
+    Root cause (Issue #243 follow-up): ``_model_metric_clause`` extends forward
+    from the number to the next clause boundary.  If a model-metric keyword
+    (e.g. ``baseline``, ``feature``, ``variable``, ``coeficiente``) appears
+    AFTER a large volume figure in the same clause, ``_is_model_metric_number``
+    returned True, causing the validator to flag the volume as an unanchored
+    model metric.  Since model performance values can never exceed 200, the
+    magnitude guard ``> 200`` short-circuits the check before clause analysis.
+    """
+    block = build_computed_metrics_block({"auc_lr": 0.7234, "f1_macro": 0.65})
+
+    # Exact sentence from the failing production job (LR deep-dive, CyberWeek).
+    assert validate_narrative_grounding(
+        "Para calcular el impacto financiero real, proyectamos el desempeño del modelo "
+        "sobre el volumen esperado del CyberWeek (580,000 envíos).",
+        block,
+    ) == []
+
+    # Forward-extension variant: metric keyword AFTER the volume in the same clause.
+    assert validate_narrative_grounding(
+        "Aplicamos el modelo sobre los 580,000 envíos esperados como baseline de comparación.",
+        block,
+    ) == []
+
+    # Thousands-separator variants (dot notation and bare integer).
+    assert validate_narrative_grounding(
+        "Con 1.200.000 registros de clientes, el feature principal define la segmentación.",
+        block,
+    ) == []
+    assert validate_narrative_grounding(
+        "El coeficiente de riesgo se estima sobre 4500 contratos activos.",
+        block,
+    ) == []
+
+    # Sanity: a real unanchored model metric (87%) must still be caught.
+    assert "UNANCHORED: 87" in validate_narrative_grounding(
+        "El modelo logró AUC 87% en producción.",
+        block,
+    )
+
+
 def test_prompts_inject_computed_metrics_block_only_for_classification() -> None:
     rendered = M4_PROMPT_CLASSIFICATION.format(
         contexto_m1="M1",
