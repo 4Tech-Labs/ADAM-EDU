@@ -48,8 +48,7 @@ error de decisión en lenguaje de negocio:
   - Costo de omisión: "Si omite Y unidades/clientes que sí presentarían el evento,
     el impacto financiero sería de [cifra]."
   Las cifras deben provenir de los Exhibits del caso, no ser inventadas.
-  Incluir en el enunciado: "Tu respuesta es una hipótesis inicial que revisarás
-  con evidencia posterior del caso."
+  (La instrucción de hipótesis inicial ya está en el bloque base — no duplicar.)
 
 Referencia para contextualizar las preguntas — pregunta eje del caso:
 {pregunta_eje}

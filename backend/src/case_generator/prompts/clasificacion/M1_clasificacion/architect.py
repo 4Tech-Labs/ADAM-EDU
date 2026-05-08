@@ -34,8 +34,11 @@ _M1_CLASSIFICATION_ANCHOR_ARCHITECT = """
    `approval_flag`, `fraud_flag`, `late_delivery_flag`.
    NUNCA uses un target continuo (`revenue`, `margin_pct`) ni un índice compuesto.
 
-2. **`pregunta_eje` es OBLIGATORIA — NUNCA `null` en esta familia.**
-   Debe plantear una decisión ejecutiva que requiere clasificar entidades (clientes,
+2. **`pregunta_eje` es OBLIGATORIA cuando `student_profile = "ml_ds"` — NUNCA `null` para ese perfil en esta familia.**
+   La regla del contrato base (encima de este bloque) sigue vigente:
+   - Si `student_profile = "ml_ds"` → emitir `pregunta_eje` como pregunta directiva gerencial.
+   - Si `student_profile = "business"` → emitir `null` (el sanitizador de graph.py lo forzará igualmente).
+   La pregunta debe plantear una decisión ejecutiva que requiere clasificar entidades (clientes,
    transacciones, solicitudes) en categorías mutuamente excluyentes.
    Formulación correcta:
      "¿A qué segmentos debe la empresa priorizar intervención para reducir la pérdida
