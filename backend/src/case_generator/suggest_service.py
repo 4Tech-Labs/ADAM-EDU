@@ -386,10 +386,10 @@ def classify_tier(technique: str) -> AlgorithmTier:
 def get_algorithm_catalog(profile: str, case_type: str) -> dict[str, object]:
     """Return the canonical algorithm catalog for a (profile, case_type) pair.
 
-    Shape: ``{"items": [{"name", "family", "family_label", "tier"}, ...]}``.
+    Shape: ``{"items": [{"name", "family", "family_label", "tier", "learning_type"}, ...]}``.
 
     - ``profile=business``: only baseline-tier items (4 algorithms).
-    - ``profile=ml_ds``: full catalog (8 algorithms = 4 families × 2 tiers).
+    - ``profile=ml_ds``: full catalog (8 algorithms = 4 families x 2 tiers).
     - ``case_type=harvard_only``: empty list (no algorithms picked when no EDA).
     """
     if profile not in {"business", "ml_ds"}:
@@ -575,6 +575,27 @@ _FAMILY_LEARNING_TYPE: dict[str, str] = {
     "clustering": "unsupervised",
     "serie_temporal": "supervised",
 }
+
+# Fail-fast invariant: every ALGORITHM_CATALOG entry's learning_type must
+# match the family-level registry.  Without this, a future catalog edit that
+# adds or renames an entry can silently diverge from _FAMILY_LEARNING_TYPE,
+# causing the LLM suggester to receive an incorrect paradigm header.
+_learning_type_conflicts = [
+    e
+    for e in ALGORITHM_CATALOG
+    if cast(str, e["family"]) in _FAMILY_LEARNING_TYPE
+    and cast(str, e["learning_type"]) != _FAMILY_LEARNING_TYPE[cast(str, e["family"])]
+]
+if _learning_type_conflicts:
+    _conflict_details = ", ".join(
+        f"{cast(str, e['name'])!r}: catalog={cast(str, e['learning_type'])!r} "
+        f"vs registry={_FAMILY_LEARNING_TYPE[cast(str, e['family'])]!r}"
+        for e in _learning_type_conflicts
+    )
+    raise RuntimeError(
+        f"learning_type mismatch between ALGORITHM_CATALOG and _FAMILY_LEARNING_TYPE: "
+        f"{_conflict_details}. Keep both in sync or derive one from the other."
+    )
 
 _FAMILY_TARGET_HINT: dict[str, str] = {
     "clasificacion": (
