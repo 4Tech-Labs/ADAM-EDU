@@ -4,6 +4,18 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
+## TODO-244-A: Test unitario React para badge `learning_type` en `AlgorithmSelector`
+
+**What:** Agregar un test Vitest + React Testing Library que renderice `AlgorithmSelector` con un catálogo mockeado y verifique que el badge "Supervisado" / "No Supervisado" se renderiza correctamente según el campo `learning_type` de cada ítem.
+
+**Why:** El componente `AlgorithmSelector` no tiene tests unitarios de componente. La badge se valida actualmente sólo de forma end-to-end implícita (frontend build + lint).
+
+**Scope:** Crear `frontend/src/features/teacher-authoring/AlgorithmSelector.test.tsx` con al menos 2 assertions: badge "Supervisado" para `Logistic Regression`, badge "No Supervisado" para `K-Means`.
+
+**Blocked by:** Setup de Vitest + RTL para el componente (actualmente no existe test file). No bloquea el rollout del feature.
+
+---
+
 ## TODO-M5-A: Evaluar contrato dedicado `m5Memo` para memorándum final
 
 **What:** Evaluar si M5 debe evolucionar desde el contrato compatible actual `m5Questions[0]` / `m5QuestionsSolutions[0]` hacia un artefacto explícito `m5Memo` con UI y grading propios.
