@@ -12,7 +12,7 @@ Specialised for binary classification (churn prediction):
 - n_rows = {max_rows} (600 for ml_ds) → Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV.
 
 Do NOT diverge the 7 required placeholders or the REGLAS DE COBERTURA DEL CONTRATO
-section — both are validated by test_m2_dataset_family_dispatch.py.
+section — both are validated by test_m2_clasificacion_dispatch.py.
 """
 
 __all__ = ["SCHEMA_DESIGNER_PROMPT_CLASSIFICATION"]

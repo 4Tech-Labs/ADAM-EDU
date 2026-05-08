@@ -89,3 +89,9 @@ def test_eda_text_dispatch_fallback_non_clasificacion():
     """Non-clasificacion families fall back to the generic EDA text prompt."""
     fallback = EDA_TEXT_ANALYST_PROMPT_BY_FAMILY.get("regresion", EDA_TEXT_ANALYST_PROMPT)
     assert fallback is EDA_TEXT_ANALYST_PROMPT
+
+
+def test_eda_questions_dispatch_fallback_non_clasificacion():
+    """Non-clasificacion families fall back to the generic EDA questions prompt."""
+    fallback = EDA_QUESTIONS_PROMPT_BY_FAMILY.get("regresion", EDA_QUESTIONS_GENERATOR_PROMPT)
+    assert fallback is EDA_QUESTIONS_GENERATOR_PROMPT

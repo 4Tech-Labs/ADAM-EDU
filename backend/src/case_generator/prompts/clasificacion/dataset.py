@@ -1,4 +1,4 @@
-﻿"""Backward-compatibility shim — content moved to M2_clasificacion/dataset.py.
+"""Backward-compatibility shim — content moved to M2_clasificacion/dataset.py.
 
 This file is intentionally kept as a re-export to avoid breaking any direct
 callers that import ``SCHEMA_DESIGNER_PROMPT_CLASSIFICATION`` from
