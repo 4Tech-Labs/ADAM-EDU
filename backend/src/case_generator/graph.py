@@ -1893,11 +1893,20 @@ def _build_fallback_schema(state: ADAMState, max_rows: int, profile: str) -> dic
     ]
 
     if profile == "ml_ds":
+        # Columns 11–18 for clasificacion: binary churn target with signal.
+        # customer_ltv / engagement_score keep nullable=True (5% null ratio);
+        # cols 13–18 are fixed classification features; categoria is the binary
+        # target (int 0/1) correlated with churn_rate via linear dependency so
+        # LR/RF achieve AUC-ROC ≥ 0.70 instead of learning noise from a str target.
         base_columns.extend([
-            {"name": "customer_ltv",         "type": "float", "description": "Customer lifetime value",  "range_min": 500,  "range_max": 5000, "nullable": True,  "trend": "up",   "dependency": None},
-            {"name": "engagement_score",     "type": "float", "description": "Score de engagement 0-1", "range_min": 0.1,  "range_max": 0.95, "nullable": True,  "trend": None,   "dependency": None},
-            {"name": "ticket_text", "type": "str",   "description": "Texto libre de tickets o quejas del cliente",  "range_min": None, "range_max": None, "nullable": False, "trend": None, "dependency": None},
-            {"name": "categoria",   "type": "str",   "description": "Categoría o clasificación del registro",        "range_min": None, "range_max": None, "nullable": False, "trend": None, "dependency": None},
+            {"name": "customer_ltv",            "type": "float", "description": "Customer lifetime value estimado",                  "range_min": 500,  "range_max": 5000, "nullable": True,  "trend": "up", "dependency": None},
+            {"name": "engagement_score",        "type": "float", "description": "Score de engagement del usuario (0-1)",             "range_min": 0.1,  "range_max": 0.95, "nullable": True,  "trend": None, "dependency": None},
+            {"name": "days_since_last_login",   "type": "int",   "description": "Días desde el último login del usuario",            "range_min": 1,    "range_max": 180,  "nullable": False, "trend": None, "dependency": {"depends_on": "engagement_score", "relationship": "inverse", "noise_factor": 0.2}},
+            {"name": "support_tickets_count",   "type": "int",   "description": "Número de tickets de soporte abiertos",            "range_min": 0,    "range_max": 10,   "nullable": False, "trend": None, "dependency": {"depends_on": "nps",              "relationship": "inverse", "noise_factor": 0.2}},
+            {"name": "plan_tier",               "type": "int",   "description": "Nivel del plan contratado (1=básico, 2=estándar, 3=premium)", "range_min": 1, "range_max": 3, "nullable": False, "trend": None, "dependency": None},
+            {"name": "payment_failures",        "type": "int",   "description": "Número de fallos de pago en los últimos 3 meses",   "range_min": 0,    "range_max": 5,    "nullable": False, "trend": None, "dependency": {"depends_on": "churn_rate",       "relationship": "linear",  "noise_factor": 0.3}},
+            {"name": "monthly_usage_pct",       "type": "float", "description": "Porcentaje de uso mensual del producto (0-1)",      "range_min": 0.0,  "range_max": 1.0,  "nullable": False, "trend": None, "dependency": {"depends_on": "engagement_score", "relationship": "linear",  "noise_factor": 0.1}},
+            {"name": "categoria",               "type": "int",   "description": "Etiqueta binaria de clasificación: 0=activo, 1=en riesgo de churn", "range_min": 0, "range_max": 1, "nullable": False, "trend": None, "dependency": {"depends_on": "churn_rate", "relationship": "linear", "noise_factor": 0.30}},
         ])
 
     return {
@@ -2445,9 +2454,10 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
     Responsabilidad ÚNICA: diseñar. NO genera filas.
     """
     profile = state.get("studentProfile", "business")
-    # ml_ds: 200 filas (sin cambio). business: 100 (midpoint de 80-120, usado para
-    # calcular rangos de revenue en el prompt; el LLM elige n_rows en 80-120).
-    max_rows = 200 if profile == "ml_ds" else 100
+    # ml_ds: 600 filas (Issue #244 cascade: 600 ≤ 2000 → full GridSearchCV).
+    # business: 100 (midpoint de 80-120, usado para calcular rangos de revenue en
+    # el prompt; el LLM elige n_rows en 80-120).
+    max_rows = 600 if profile == "ml_ds" else 100
 
     # Extraer familias ML requeridas para el Módulo 3 a partir del input del usuario.
     # _detect_algorithm_families resuelve por catálogo (Issue #233) con fallback legacy.

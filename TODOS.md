@@ -4,36 +4,34 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
-## TODO-M2-A: Especializar SCHEMA_DESIGNER_PROMPT_CLASSIFICATION para la familia clasificación
+## TODO-NORM-A: Actualizar RENAME_MAP en _normalize_ml_ds_columns para el schema de 18 columnas
 
-**What:** Reemplazar el contenido de `SCHEMA_DESIGNER_PROMPT_CLASSIFICATION` en
-`backend/src/case_generator/prompts/clasificacion/dataset.py` con un prompt diseñado
-específicamente para casos de clasificación (target binario/multiclase, columnas de
-class-imbalance, vocabulario de features para LR/RF, restricciones de distribución
-de clases).
+**What:** En `_normalize_ml_ds_columns()` en `backend/src/case_generator/graph.py` (~línea 1930),
+la entrada `"feature_adoption_pct" → ("categoria", "str")` del `RENAME_MAP` quedó obsoleta
+tras la especialización del prompt de clasificación. Si el LLM ignora parcialmente el nuevo
+prompt y emite `feature_adoption_pct`, la función lo renombra a `categoria` con `type="str"`
+y borra la `dependency` — deshaciendo silenciosamente la corrección del target binario.
 
-**Why:** Actualmente el prompt es una copia idéntica del genérico `SCHEMA_DESIGNER_PROMPT`.
-La separación estructural ya existe (branch `feat/m2-dataset-family-dispatch`); lo que
-falta es la especialización del contenido. Un prompt específico de clasificación genera
-datasets de mayor calidad para M3 (notebook LR/RF) porque puede reforzar: columna `label`
-o `categoria` con distribución de clases realista, features correladas con el target,
-y ausencia de leakage por construcción.
+**Why:** Cierra el último camino de corrupción silenciosa del tipo de `categoria`. Después de
+este TODO, una respuesta LLM no conforme con el nuevo prompt ya no puede producir un target
+de texto sin señal a través de la vía de legado.
 
-**Pros:** Mejor calidad del dataset para todos los casos `ml_ds + clasificacion`;
-permite controlar directamente el `class_imbalance_ratio` y el vocabulario de features
-sin depender de la heurística genérica del LLM.
+**Pros:** Elimina la posibilidad de que una respuesta LLM parcialmente incumplidora resulte
+en AUC ~0.50 en el notebook M3, incluso tras el rename de seguridad.
 
-**Cons:** Requiere ingeniería de prompt, fixtures de evaluación para validar que no
-rompe el schema contract de Issue #225, y al menos un run live para confirmar calidad.
+**Cons:** Requiere decidir si `feature_adoption_pct` se mapea a `("categoria", "int")` con
+una dependencia stub en `churn_rate`, o si simplemente se descarta. La opción más segura es:
+si aparece `feature_adoption_pct`, renombrar a `categoria` Y forzar `type="int"`,
+`range_min=0`, `range_max=1`, `dependency={"depends_on": "churn_rate", "relationship": "linear", "noise_factor": 0.30}`.
 
-**Context:** El fichero destino es `prompts/clasificacion/dataset.py`, variable
-`SCHEMA_DESIGNER_PROMPT_CLASSIFICATION`. El dispatch ya está cableado: `schema_designer()`
-en `graph.py` selecciona este prompt cuando `primary_family == "clasificacion"`. El
-cambio sólo toca la cadena de texto — no la lógica de dispatch ni el pipeline de datos.
-Empezar por identificar qué columnas ML son específicas de clasificación en el
-VOCABULARIO OBLIGATORIO y añadir reglas de distribución de clases para `label`/`categoria`.
+**Context:** Ver `_normalize_ml_ds_columns()` en `graph.py`. La función corre después de
+validación Pydantic como red de seguridad post-LLM. La entrada `feature_adoption_pct` del
+RENAME_MAP fue añadida cuando el prompt genérico permitía ese nombre de columna. Tras este
+PR, el prompt de clasificación emite `categoria: int` directamente, por lo que este camino
+no debería activarse en operación normal. Sin embargo, permanece como trampa para replays
+de `task_payload` legacy y para LLMs con respuestas parcialmente no conformes.
 
-**Depends on / blocked by:** Branch `feat/m2-dataset-family-dispatch` mergeado a main.
+**Depends on / blocked by:** PR de especialización del dataset de clasificación (M2) ya mergeado.
 
 ---
 
@@ -58,8 +56,7 @@ como fallback, por lo que la ausencia de la clave `"regresion"` no rompe nada ho
 Cuando se cree el prompt, sólo hay que añadir la clave al dict en `prompts/__init__.py`.
 Ver `prompts/clasificacion/dataset.py` como template exacto.
 
-**Depends on / blocked by:** TODO-M2-A (opcional — puede hacerse en paralelo si el
-prompt de regresión se define antes de especializar el de clasificación).
+**Depends on / blocked by:** Independiente — puede hacerse sin bloqueantes.
 
 ---
 

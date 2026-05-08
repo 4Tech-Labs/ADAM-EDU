@@ -132,3 +132,93 @@ def test_generic_prompt_still_contains_required_placeholders(placeholder: str) -
 
 def test_classification_prompt_is_non_empty_string() -> None:
     assert len(SCHEMA_DESIGNER_PROMPT_CLASSIFICATION.strip()) > 100
+
+
+# ---------------------------------------------------------------------------
+# Classification-specific semantic contracts
+# ---------------------------------------------------------------------------
+
+
+def test_classification_prompt_specifies_categoria_as_int() -> None:
+    """``categoria`` column in SCHEMA_DESIGNER_PROMPT_CLASSIFICATION must declare
+    type="int", not type="str".
+
+    A str target column causes the data_generator to emit random categorical
+    strings with zero signal, so LR/RF learn noise and AUC collapses to ~0.50.
+
+    The bounded-window regex (.{0,400}) avoids cross-column false positives that
+    would occur with ``.*?`` (re.DOTALL) spanning into the next column's "type" field.
+    Using ``[^}]*`` is unsafe here because the prompt uses doubled braces ``{{ }}``
+    for .format() escaping, which places literal ``}`` characters inside each column
+    block (inside the dependency sub-object).  The 400-char window is large enough
+    to cover any single column block including its dependency object.
+    """
+    import re  # noqa: PLC0415
+
+    positive = re.search(
+        r'"name"\s*:\s*"categoria".{0,400}"type"\s*:\s*"int"',
+        SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
+        re.DOTALL,
+    )
+    assert positive is not None, (
+        'SCHEMA_DESIGNER_PROMPT_CLASSIFICATION must declare "categoria" with '
+        '"type": "int" — a str target produces a random signal-free column'
+    )
+
+    negative = re.search(
+        r'"name"\s*:\s*"categoria".{0,400}"type"\s*:\s*"str"',
+        SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
+        re.DOTALL,
+    )
+    assert negative is None, (
+        'SCHEMA_DESIGNER_PROMPT_CLASSIFICATION must NOT declare "categoria" with '
+        '"type": "str" — that would make the binary target useless for classification'
+    )
+
+
+def test_classification_fallback_schema_categoria_is_int_with_dependency() -> None:
+    """_build_fallback_schema for ml_ds must produce ``categoria`` as int 0/1
+    with a dependency on ``churn_rate``.
+
+    The fallback runs when the primary LLM call fails (503, timeout, JSON parse
+    error).  Without this fix, the fallback emits ``categoria: str`` with no
+    dependency, causing the same AUC collapse as a bad LLM output — silently,
+    with no exception raised.
+
+    Also asserts that ``ticket_text`` is absent: it is not part of the 18-column
+    classification contract and would confuse the M3 notebook.
+    """
+    from case_generator.graph import _build_fallback_schema  # noqa: PLC0415
+
+    result = _build_fallback_schema(state={}, max_rows=600, profile="ml_ds")  # type: ignore[arg-type]
+
+    columns_by_name = {col["name"]: col for col in result["columns"]}
+
+    # --- categoria presence and type ---
+    assert "categoria" in columns_by_name, (
+        "_build_fallback_schema must include a 'categoria' column for ml_ds"
+    )
+    cat = columns_by_name["categoria"]
+    assert cat["type"] == "int", (
+        f"'categoria' must have type='int', got {cat['type']!r}"
+    )
+    assert cat["range_min"] == 0, f"categoria range_min must be 0, got {cat['range_min']}"
+    assert cat["range_max"] == 1, f"categoria range_max must be 1, got {cat['range_max']}"
+    assert cat["nullable"] is False, "categoria must be nullable=False"
+
+    # --- dependency on churn_rate ---
+    dep = cat.get("dependency")
+    assert dep is not None, (
+        "'categoria' must have a dependency on churn_rate so LR/RF receive a signal-bearing target"
+    )
+    assert dep["depends_on"] == "churn_rate", (
+        f"categoria dependency must point to 'churn_rate', got {dep['depends_on']!r}"
+    )
+    assert dep["relationship"] == "linear"
+    assert dep["noise_factor"] == pytest.approx(0.30)
+
+    # --- ticket_text must NOT be present in the 18-col classification schema ---
+    assert "ticket_text" not in columns_by_name, (
+        "'ticket_text' is not part of the 18-column classification contract "
+        "and must not appear in the ml_ds fallback schema"
+    )
