@@ -2482,14 +2482,20 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
     )
     primary_family, _legacy_warn_schema = _resolve_primary_family(algoritmos_raw)
 
-    # Effective family: when _resolve_primary_family returns None (unrecognized or absent
-    # algorithms), ml_ds jobs must mirror _prepare_m3_notebook_generation_context(), which
-    # explicitly falls back to "clasificacion" (line ~4323). Without this alignment,
-    # schema_designer would emit a non-classification schema (no 'categoria', 200 rows,
-    # generic prompt) while M3 still generates a classification notebook — silent AUC
-    # collapse. Business jobs keep "" so the generic schema prompt fires (business profile
-    # does not go through algorithm selection and should not receive the 18-col schema).
-    _effective_family = primary_family or ("clasificacion" if profile == "ml_ds" else "")
+    # Effective family drives max_rows, prompt dispatch, and fallback schema branch.
+    #
+    # ml_ds: use the resolved family when available; fall back to "clasificacion" to
+    # mirror _prepare_m3_notebook_generation_context() (line ~4323), which makes the
+    # same explicit fallback so M3 and schema_designer always agree on the family.
+    # Without this alignment a None-family ml_ds job emits a non-classification schema
+    # (no 'categoria', 200 rows, generic prompt) while M3 generates a classification
+    # notebook — silent AUC collapse.
+    #
+    # business: always "" → generic schema prompt, regardless of primary_family.
+    # The classification and future family-specific prompts contain ml_ds-only sections
+    # (18-col contract, GridSearchCV row counts) that should never reach business cases.
+    # The generic prompt handles both profiles via its existing 10-col / 14-col rules.
+    _effective_family = (primary_family or "clasificacion") if profile == "ml_ds" else ""
 
     # ml_ds+clasificacion: 600 filas (Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV).
     # ml_ds+otras familias: 200 filas — el GridSearchCV size cascade es exclusivo del
