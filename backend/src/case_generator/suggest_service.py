@@ -284,15 +284,36 @@ def resolve_legacy_family(legacy_name: str) -> Optional[tuple[str, str]]:
     return None
 
 
+# Static dispatch metadata for families retired from the active catalog.
+# Required so historical jobs that stored ARIMA or Prophet in task_payload
+# still dispatch correctly to the M3 notebook prompt via get_dispatch_meta()
+# in graph.py::m3_notebook_generator without raising a KeyError.
+_LEGACY_DISPATCH_META: dict[str, dict[str, object]] = {
+    "serie_temporal": {
+        "familia": "serie_temporal",
+        "family_label": FAMILY_LABELS["serie_temporal"],
+        "prompt_key": "timeseries",
+        "visualizacion": "Forecast vs actual con eje fecha + Residuals vs tiempo",
+        "prerequisito": "Columna fecha parseable + columna numérica objetivo + ≥30 puntos.",
+        "fragments_hint": ["fecha", "date", "timestamp", "periodo", "mes", "dia", "year_month"],
+    },
+}
+
+
 def get_dispatch_meta(family: str) -> dict[str, object]:
     """Aggregated per-family dispatch metadata for the M3 notebook prompt.
 
     Returns a single dict ``{familia, family_label, prompt_key, visualizacion,
     prerequisito, fragments_hint}``. Both algorithms in a family share the same
     ``prompt_key`` and use the same prerequisite, so we collapse them.
+
+    Falls back to ``_LEGACY_DISPATCH_META`` for families retired from the active
+    catalog (e.g. ``serie_temporal``) so historical job replay keeps working.
     """
     entries = [e for e in ALGORITHM_CATALOG if e["family"] == family]
     if not entries:
+        if family in _LEGACY_DISPATCH_META:
+            return _LEGACY_DISPATCH_META[family]
         raise KeyError(f"Unknown family: {family!r}")
     fragments: list[str] = []
     for e in entries:

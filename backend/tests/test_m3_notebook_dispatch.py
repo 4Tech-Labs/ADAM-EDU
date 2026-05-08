@@ -18,6 +18,7 @@ from case_generator.graph import (
     _strip_jupytext_for_validation,
     _validate_notebook_family_consistency,
 )
+from case_generator.suggest_service import get_dispatch_meta
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -289,3 +290,51 @@ def test_validator_still_catches_real_violations_after_filter() -> None:
     )
     violations = _validate_notebook_family_consistency("regresion", nb)
     assert "roc_auc_score" in violations
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# get_dispatch_meta — legacy family fallback (Issue #261)
+# Retiring ARIMA and Prophet from the active catalog must not break M3 dispatch
+# for historical jobs that already stored "serie_temporal" in task_payload.
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_get_dispatch_meta_serie_temporal_does_not_raise() -> None:
+    """get_dispatch_meta must not raise KeyError for the retired serie_temporal family."""
+    meta = get_dispatch_meta("serie_temporal")
+    assert isinstance(meta, dict)
+
+
+def test_get_dispatch_meta_serie_temporal_returns_correct_prompt_key() -> None:
+    meta = get_dispatch_meta("serie_temporal")
+    assert meta["prompt_key"] == "timeseries"
+
+
+def test_get_dispatch_meta_serie_temporal_returns_required_keys() -> None:
+    meta = get_dispatch_meta("serie_temporal")
+    required = {"familia", "family_label", "prompt_key", "visualizacion", "prerequisito", "fragments_hint"}
+    assert required.issubset(meta.keys())
+
+
+def test_get_dispatch_meta_serie_temporal_family_label_is_string() -> None:
+    meta = get_dispatch_meta("serie_temporal")
+    assert isinstance(meta["family_label"], str) and meta["family_label"]
+
+
+def test_get_dispatch_meta_serie_temporal_fragments_hint_is_nonempty_list() -> None:
+    meta = get_dispatch_meta("serie_temporal")
+    hints = meta["fragments_hint"]
+    assert isinstance(hints, list) and len(hints) > 0
+
+
+def test_get_dispatch_meta_active_family_still_works() -> None:
+    """Active families must still resolve from the catalog (regression guard)."""
+    for family in ("clasificacion", "regresion", "clustering"):
+        meta = get_dispatch_meta(family)
+        assert meta["familia"] == family
+
+
+def test_get_dispatch_meta_unknown_family_raises_key_error() -> None:
+    """Truly unknown families must still raise KeyError (contract unchanged)."""
+    with pytest.raises(KeyError):
+        get_dispatch_meta("nlp_text_mining")
