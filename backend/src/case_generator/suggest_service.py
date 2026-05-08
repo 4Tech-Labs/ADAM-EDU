@@ -147,40 +147,25 @@ ALGORITHM_CATALOG: list[dict[str, object]] = [
         "prerequisite": "≥2 columnas numéricas escalables (sin target). StandardScaler obligatorio.",
         "fragments_hint": ["valor", "monto", "cantidad", "score", "edad", "ingreso", "frecuencia"],
     },
-    # ── Series Temporales ───────────────────────────────────────────────────
-    {
-        "name": "ARIMA",
-        "family": "serie_temporal",
-        "family_label": FAMILY_LABELS["serie_temporal"],
-        "tier": "baseline",
-        "profile_visibility": ["business", "ml_ds"],
-        "prompt_key": "timeseries",
-        "visualization": "Forecast vs actual con eje fecha + Residuals vs tiempo",
-        "prerequisite": "Columna fecha parseable + columna numérica objetivo + ≥30 puntos.",
-        "fragments_hint": ["fecha", "date", "timestamp", "periodo", "mes", "dia", "year_month"],
-    },
-    {
-        "name": "Prophet",
-        "family": "serie_temporal",
-        "family_label": FAMILY_LABELS["serie_temporal"],
-        "tier": "challenger",
-        "profile_visibility": ["ml_ds"],
-        "prompt_key": "timeseries",
-        "visualization": "Forecast vs actual con eje fecha + Residuals vs tiempo (fallback ARIMA si Prophet no instalado)",
-        "prerequisite": "Columna fecha parseable + columna numérica objetivo + ≥30 puntos.",
-        "fragments_hint": ["fecha", "date", "timestamp", "periodo", "mes", "dia", "year_month"],
-    },
 ]
 
 
 def _validate_catalog_invariants() -> None:
-    """Fail-fast at import time so the catalog never ships violating its contract."""
+    """Fail-fast at import time so the catalog never ships violating its contract.
+
+    ``FAMILY_LABELS`` is the superset of all recognised families (including
+    legacy ones kept for historical job replay).  The active catalog may expose
+    a strict subset of those families — every catalog family must be a known
+    label, but not every label needs an active catalog entry.
+    """
     by_family: dict[str, list[dict[str, object]]] = {}
     for entry in ALGORITHM_CATALOG:
         by_family.setdefault(cast(str, entry["family"]), []).append(entry)
-    if set(by_family) != set(FAMILY_LABELS):
+    unknown_families = set(by_family) - set(FAMILY_LABELS)
+    if unknown_families:
         raise RuntimeError(
-            f"Catalog families {sorted(by_family)} != FAMILY_LABELS {sorted(FAMILY_LABELS)}"
+            f"Catalog uses unknown families {sorted(unknown_families)}; "
+            f"add them to FAMILY_LABELS first."
         )
     for family, entries in by_family.items():
         if len(entries) > 2:
@@ -230,7 +215,9 @@ _LEGACY_FAMILY_MAP: dict[str, str] = {
     "lasso": "regresion",
     "elastic net": "regresion",
     "svr": "regresion",
-    # time series surrogates
+    # time series surrogates (includes catalog algorithms now retired to legacy)
+    "arima": "serie_temporal",
+    "prophet": "serie_temporal",
     "stl": "serie_temporal",
     "lstm": "serie_temporal",
     "auto_arima": "serie_temporal",
@@ -297,15 +284,36 @@ def resolve_legacy_family(legacy_name: str) -> Optional[tuple[str, str]]:
     return None
 
 
+# Static dispatch metadata for families retired from the active catalog.
+# Required so historical jobs that stored ARIMA or Prophet in task_payload
+# still dispatch correctly to the M3 notebook prompt via get_dispatch_meta()
+# in graph.py::m3_notebook_generator without raising a KeyError.
+_LEGACY_DISPATCH_META: dict[str, dict[str, object]] = {
+    "serie_temporal": {
+        "familia": "serie_temporal",
+        "family_label": FAMILY_LABELS["serie_temporal"],
+        "prompt_key": "timeseries",
+        "visualizacion": "Forecast vs actual con eje fecha + Residuals vs tiempo",
+        "prerequisito": "Columna fecha parseable + columna numérica objetivo + ≥30 puntos.",
+        "fragments_hint": ["fecha", "date", "timestamp", "periodo", "mes", "dia", "year_month"],
+    },
+}
+
+
 def get_dispatch_meta(family: str) -> dict[str, object]:
     """Aggregated per-family dispatch metadata for the M3 notebook prompt.
 
     Returns a single dict ``{familia, family_label, prompt_key, visualizacion,
     prerequisito, fragments_hint}``. Both algorithms in a family share the same
     ``prompt_key`` and use the same prerequisite, so we collapse them.
+
+    Falls back to ``_LEGACY_DISPATCH_META`` for families retired from the active
+    catalog (e.g. ``serie_temporal``) so historical job replay keeps working.
     """
     entries = [e for e in ALGORITHM_CATALOG if e["family"] == family]
     if not entries:
+        if family in _LEGACY_DISPATCH_META:
+            return _LEGACY_DISPATCH_META[family]
         raise KeyError(f"Unknown family: {family!r}")
     fragments: list[str] = []
     for e in entries:
@@ -585,16 +593,24 @@ def _build_algorithm_anchor_block(req: SuggestRequest) -> Optional[str]:
         return None
     family = family_of(req.algorithmPrimary)
     if not family:
-        # Off-catalog algorithm — refuse to anchor on a guess. Better to fall
-        # back to the global-taxonomy prompt than mislead the LLM.
+        # Algorithm not in the active catalog — try the legacy resolver so that
+        # historical picks (e.g. ARIMA, Prophet) still produce a valid anchor.
+        legacy = resolve_legacy_family(req.algorithmPrimary)
+        family = legacy[0] if legacy else None
+    if not family:
+        # Truly unknown algorithm — refuse to anchor on a guess.
         return None
     family_label = FAMILY_LABELS.get(family, family)
     target_hint = _FAMILY_TARGET_HINT.get(family, "")
+    challenger_family = family_of(req.algorithmChallenger) if req.algorithmChallenger else None
+    if not challenger_family and req.algorithmChallenger:
+        legacy_c = resolve_legacy_family(req.algorithmChallenger)
+        challenger_family = legacy_c[0] if legacy_c else None
     valid_challenger = (
         req.algorithmChallenger
         if req.mode == "contrast"
         and req.algorithmChallenger
-        and family_of(req.algorithmChallenger) == family
+        and challenger_family == family
         else None
     )
     effective_mode = "contrast" if valid_challenger else "single"
@@ -1048,6 +1064,10 @@ def _check_scenario_family_coherence(
     if not req.algorithmPrimary:
         return None
     expected_family = family_of(req.algorithmPrimary)
+    if not expected_family:
+        # Algorithm not in the active catalog — try the legacy resolver.
+        legacy = resolve_legacy_family(req.algorithmPrimary)
+        expected_family = legacy[0] if legacy else None
     if not expected_family:
         return None
     # Only meaningful when the LLM actually produced a scenario in this call.
