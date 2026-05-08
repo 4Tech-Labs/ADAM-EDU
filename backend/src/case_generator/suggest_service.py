@@ -388,9 +388,12 @@ def get_algorithm_catalog(profile: str, case_type: str) -> dict[str, object]:
 
     Shape: ``{"items": [{"name", "family", "family_label", "tier", "learning_type"}, ...]}``.
 
-    - ``profile=business``: only baseline-tier items (4 algorithms).
-    - ``profile=ml_ds``: full catalog (8 algorithms = 4 families x 2 tiers).
+    - ``profile=business``: only baseline-tier items (3 algorithms — one per active family).
+    - ``profile=ml_ds``: full catalog (6 algorithms = 3 active families x 2 tiers).
     - ``case_type=harvard_only``: empty list (no algorithms picked when no EDA).
+
+    ``serie_temporal`` is retired from the active catalog; it resolves only via the
+    legacy family resolver for historical job replay and is never returned here.
     """
     if profile not in {"business", "ml_ds"}:
         raise ValueError(f"Invalid profile: {profile!r}")
