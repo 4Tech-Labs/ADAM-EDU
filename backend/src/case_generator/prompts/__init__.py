@@ -30,6 +30,9 @@ from case_generator.prompts.clasificacion import (
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
     ClassificationNotebookVariant,
+    EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
+    EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION,
+    EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION,
     M3_CONTENT_PROMPT_CLASSIFICATION,
     M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
     M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY,
@@ -699,50 +702,22 @@ Hipótesis implícitas del dilema (extraídas del M1): {dilema_hypotheses}
 case_id: {case_id} | output_depth: {output_depth}
 """
 
+# ── EDA_TEXT_ANALYST_PROMPT_BY_FAMILY — dispatch table for eda_text_analyst node.
+# Keys match family_of()/resolve_legacy_family() in suggest_service.py.
+# Currently aliases to the generic for all families; update the "clasificacion"
+# entry when M2_clasificacion/eda_text.py is customized.
+EDA_TEXT_ANALYST_PROMPT_BY_FAMILY: dict[str, str] = {
+    "clasificacion": EDA_TEXT_ANALYST_PROMPT,
+    # regresion, clustering, serie_temporal — deferred
+}
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Issue #237 — EDA ANNOTATE-ONLY PROMPT (path Python-determinista)
-# ═══════════════════════════════════════════════════════════════════════════
-# Cuando el caso es ml_ds + clasificación, los 6 charts EDA se construyen en
-# Python puro (datagen/eda_charts_classification.py). El LLM SOLO escribe
-# `description` (≤500 chars) y `notes` (≤300 chars) por chart. NO modifica
-# traces, layout, source ni ningún número.
-EDA_ANNOTATE_ONLY_PROMPT = """\
-# Your Identity
-Eres el EDA Annotator de ADAM, especialista en redactar lectura pedagógica
-sobre charts ya construidos.
 
-# Your Mission
-Para CADA chart en `{charts_context_json}` escribe `description` y `notes`
-que ayuden al estudiante a leer la visualización en términos de negocio.
-
-# Hard Boundaries
-- NO modifiques `traces`, `layout`, `source`, `id`, `title`, `subtitle`,
-  `chart_type` ni ningún número del chart. Esos campos son determinísticos
-  y vienen del builder Python — NO son negociables.
-- NO inventes valores numéricos en tus textos. Solo puedes hablar de las
-  formas/tendencias visibles en el chart (p. ej. "una clase domina",
-  "hay missingness concentrada en X columnas").
-- NO devuelvas charts nuevos ni reordenes los existentes.
-- Idioma: {output_language}.
-- `description`: ≤500 caracteres. Lectura objetiva del chart.
-- `notes`: ≤300 caracteres. Lectura pedagógica para el perfil
-  `{student_profile}` (qué pregunta debería hacerse el estudiante,
-  qué riesgo de modelado anticipa).
-
-# Output Schema (estricto)
-Devuelve un objeto con la clave `annotations`:
-{{
-  "annotations": [
-    {{"id": "<chart_id>", "description": "...", "notes": "..."}}
-  ]
-}}
-Una entrada por chart en `{charts_context_json}` (mismo `id`, mismo orden
-recomendado). Cualquier campo extra será descartado.
-
-# Metadatos del sistema
-case_id: {case_id}
-"""
+# ── EDA_ANNOTATE_ONLY_PROMPT — backward-compat alias.
+# Prompt moved to prompts/clasificacion/M2_clasificacion/eda_annotate.py
+# (Issue M2-clasificacion refactor). graph.py now references
+# EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION directly; this alias keeps any
+# existing callers working without modification.
+EDA_ANNOTATE_ONLY_PROMPT = EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION
 
 
 EDA_CHART_GENERATOR_PROMPT = """\
@@ -944,6 +919,13 @@ Pregunta eje directiva: {pregunta_eje}
 case_id: {case_id} | student_profile: {student_profile} | primary_family: {primary_family}
 """
 
+# ── EDA_QUESTIONS_PROMPT_BY_FAMILY — dispatch table for eda_questions_generator node.
+# Currently aliases to the generic for all families; update the "clasificacion"
+# entry when M2_clasificacion/eda_questions.py is customized.
+EDA_QUESTIONS_PROMPT_BY_FAMILY: dict[str, str] = {
+    "clasificacion": EDA_QUESTIONS_GENERATOR_PROMPT,
+    # regresion, clustering, serie_temporal — deferred
+}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2536,9 +2518,12 @@ __all__ = [
   "CASE_WRITER_PROMPT_BY_FAMILY",
   "CASE_WRITER_PROMPT_CLASSIFICATION",
   "EDA_ANNOTATE_ONLY_PROMPT",
+  "EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION",
   "EDA_CHART_GENERATOR_PROMPT",
   "EDA_QUESTIONS_GENERATOR_PROMPT",
+  "EDA_QUESTIONS_PROMPT_BY_FAMILY",
   "EDA_TEXT_ANALYST_PROMPT",
+  "EDA_TEXT_ANALYST_PROMPT_BY_FAMILY",
   "M3_AUDIT_PROMPT",
   "M3_AUDIT_QUESTIONS_PROMPT",
   "M3_CONTENT_GENERATOR_PROMPT",

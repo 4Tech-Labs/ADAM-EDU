@@ -83,10 +83,12 @@ from case_generator.prompts import (
     CASE_QUESTIONS_PROMPT_BY_FAMILY,
     CASE_WRITER_PROMPT,
     CASE_WRITER_PROMPT_BY_FAMILY,
-    EDA_ANNOTATE_ONLY_PROMPT,
+    EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
     EDA_CHART_GENERATOR_PROMPT,
     EDA_QUESTIONS_GENERATOR_PROMPT,
+    EDA_QUESTIONS_PROMPT_BY_FAMILY,
     EDA_TEXT_ANALYST_PROMPT,
+    EDA_TEXT_ANALYST_PROMPT_BY_FAMILY,
     CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT,
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
@@ -1119,7 +1121,9 @@ def eda_text_analyst(state: ADAMState, config: RunnableConfig) -> dict:
             ),
         })
 
-        prompt = EDA_TEXT_ANALYST_PROMPT.format(**context)
+        prompt = EDA_TEXT_ANALYST_PROMPT_BY_FAMILY.get(
+            context.get("primary_family", ""), EDA_TEXT_ANALYST_PROMPT
+        ).format(**context)
 
         # 🚀 LA SOLUCIÓN: Invocación directa sin JSON schema
         response = llm.invoke(prompt)
@@ -1424,7 +1428,7 @@ def _eda_classification_python_path(
                 }
                 for c in charts
             ]
-            prompt = EDA_ANNOTATE_ONLY_PROMPT.format(
+            prompt = EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION.format(
                 charts_context_json=json.dumps(charts_context, ensure_ascii=False),
                 case_id=state.get("case_id", "") or state.get("titulo", ""),
                 student_profile=state.get("studentProfile", "ml_ds"),
@@ -1620,7 +1624,9 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "chart_manifest": chart_manifest,
         })
 
-        prompt = EDA_QUESTIONS_GENERATOR_PROMPT.format(**context)
+        prompt = EDA_QUESTIONS_PROMPT_BY_FAMILY.get(
+            context.get("primary_family", ""), EDA_QUESTIONS_GENERATOR_PROMPT
+        ).format(**context)
 
         # v9 M2-Redesign: EDAQuestionsOutput con EDASocraticQuestion (solucion_esperada = objeto)
         resultado: EDAQuestionsOutput = llm.with_structured_output(

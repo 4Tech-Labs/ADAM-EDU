@@ -880,3 +880,33 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 **Why:** Observabilidad del switch del path determinista.
 
 **Context:** Hoy logueamos via `logger.info` en `_eda_classification_python_path`. Falta consolidarlo a un campo del job en `authoring_jobs.task_payload` o en un campo dedicado del snapshot final.
+
+---
+
+## TODO-M2-CLSF-EDA-TEXT: Customizar EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION
+
+**What:** Rellenar EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION en M2_clasificacion/eda_text.py con framing de target binario, enfasis en desbalance de clases y vocabulario de churn. Actualizar EDA_TEXT_ANALYST_PROMPT_BY_FAMILY[clasificacion] en prompts/__init__.py.
+
+**Depends on / blocked by:** PR feature/m2-clasificacion-prompt-subfolder mergeado.
+
+---
+
+## TODO-M2-CLSF-EDA-QUESTIONS: Customizar EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION
+
+**What:** Rellenar EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION en M2_clasificacion/eda_questions.py con preguntas socraticas sobre trade-offs recall/precision y desbalance de clases. Actualizar EDA_QUESTIONS_PROMPT_BY_FAMILY[clasificacion].
+
+**Depends on / blocked by:** PR feature/m2-clasificacion-prompt-subfolder mergeado.
+
+---
+## TODO-M2-OTHER-FAMILIES: Aplicar patron M2_<familia>/ a regresion, clustering, serie_temporal
+
+**What:** Crear prompts/regresion/M2_regresion/, prompts/clustering/M2_clustering/, prompts/serie_temporal/M2_serie_temporal/ siguiendo el patron de 4 archivos (dataset.py, eda_text.py, eda_questions.py, __init__.py) de clasificacion. Un PR independiente por familia.
+
+**Depends on / blocked by:** PR feature/m2-clasificacion-prompt-subfolder mergeado. Cada familia es independiente.
+
+---
+
+## TODO-M2-CLSF-DATASET-SHIM: Eliminar shim prompts/clasificacion/dataset.py
+
+**What:** Borrar backend/src/case_generator/prompts/clasificacion/dataset.py (shim) una vez confirmado que ningun importador directo lo referencia. Ejecutar grep exhaustivo en todo backend/ antes de borrar.
+**Depends on / blocked by:** PR feature/m2-clasificacion-prompt-subfolder mergeado. Requiere auditoria de importadores directos.
