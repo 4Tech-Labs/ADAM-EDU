@@ -37,6 +37,7 @@ from case_generator.prompts.clasificacion import (
     M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY,
     M4_PROMPT_CLASSIFICATION,
     M5_PROMPT_CLASSIFICATION,
+    SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
 )
 
 
@@ -1366,6 +1367,16 @@ M5_PROMPT_BY_FAMILY: dict[str, str] = {
     "serie_temporal": M5_CONTENT_GENERATOR_PROMPT,
 }
 
+# ── SCHEMA_DESIGNER_PROMPT_BY_FAMILY — dispatch table consumed by
+# graph.py::schema_designer.  Keys MUST match values returned by
+# ``family_of(name)`` / ``resolve_legacy_family(name)`` in suggest_service.py.
+# Non-clasificacion families fall back to the generic SCHEMA_DESIGNER_PROMPT
+# until their specialised prompts are authored in future iterations.
+SCHEMA_DESIGNER_PROMPT_BY_FAMILY: dict[str, str] = {
+    "clasificacion": SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
+    # regresion, clustering, serie_temporal — deferred (future iterations)
+}
+
 
 M5_QUESTIONS_GENERATOR_PROMPT = """\
 # Your Identity
@@ -2542,6 +2553,8 @@ __all__ = [
   "ClassificationNotebookVariant",
   "PROMPT_BY_FAMILY",
   "SCHEMA_DESIGNER_PROMPT",
+  "SCHEMA_DESIGNER_PROMPT_BY_FAMILY",
+  "SCHEMA_DESIGNER_PROMPT_CLASSIFICATION",
   "TEACHING_NOTE_PART1_PROMPT",
   "TEACHING_NOTE_PART2_PROMPT",
 ]

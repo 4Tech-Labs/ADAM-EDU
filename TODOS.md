@@ -4,6 +4,89 @@ Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
 ---
 
+## TODO-M2-A: Especializar SCHEMA_DESIGNER_PROMPT_CLASSIFICATION para la familia clasificación
+
+**What:** Reemplazar el contenido de `SCHEMA_DESIGNER_PROMPT_CLASSIFICATION` en
+`backend/src/case_generator/prompts/clasificacion/dataset.py` con un prompt diseñado
+específicamente para casos de clasificación (target binario/multiclase, columnas de
+class-imbalance, vocabulario de features para LR/RF, restricciones de distribución
+de clases).
+
+**Why:** Actualmente el prompt es una copia idéntica del genérico `SCHEMA_DESIGNER_PROMPT`.
+La separación estructural ya existe (branch `feat/m2-dataset-family-dispatch`); lo que
+falta es la especialización del contenido. Un prompt específico de clasificación genera
+datasets de mayor calidad para M3 (notebook LR/RF) porque puede reforzar: columna `label`
+o `categoria` con distribución de clases realista, features correladas con el target,
+y ausencia de leakage por construcción.
+
+**Pros:** Mejor calidad del dataset para todos los casos `ml_ds + clasificacion`;
+permite controlar directamente el `class_imbalance_ratio` y el vocabulario de features
+sin depender de la heurística genérica del LLM.
+
+**Cons:** Requiere ingeniería de prompt, fixtures de evaluación para validar que no
+rompe el schema contract de Issue #225, y al menos un run live para confirmar calidad.
+
+**Context:** El fichero destino es `prompts/clasificacion/dataset.py`, variable
+`SCHEMA_DESIGNER_PROMPT_CLASSIFICATION`. El dispatch ya está cableado: `schema_designer()`
+en `graph.py` selecciona este prompt cuando `primary_family == "clasificacion"`. El
+cambio sólo toca la cadena de texto — no la lógica de dispatch ni el pipeline de datos.
+Empezar por identificar qué columnas ML son específicas de clasificación en el
+VOCABULARIO OBLIGATORIO y añadir reglas de distribución de clases para `label`/`categoria`.
+
+**Depends on / blocked by:** Branch `feat/m2-dataset-family-dispatch` mergeado a main.
+
+---
+
+## TODO-M2-B: Añadir dispatch de dataset para la familia regresión
+
+**What:** Crear `backend/src/case_generator/prompts/regresion/dataset.py` con
+`SCHEMA_DESIGNER_PROMPT_REGRESSION` y extender `SCHEMA_DESIGNER_PROMPT_BY_FAMILY`
+con la clave `"regresion"`.
+
+**Why:** Completa el patrón de separación por familia para regresión (target continuo,
+features numéricas correladas, sin columna de clase). Sigue el mismo patrón de 5 pasos
+establecido en `feat/m2-dataset-family-dispatch` para clasificación.
+
+**Pros:** Habilita especialización futura del schema de regresión sin afectar otras
+familias; la carpeta `prompts/regresion/` no existe aún — este TODO la crea.
+
+**Cons:** Requiere crear la carpeta, el módulo y el `__init__.py` de regresión antes
+de poder especializar el prompt. La estructura es idéntica a la de clasificación.
+
+**Context:** El dispatch en `schema_designer()` ya usa `.get(primary_family, SCHEMA_DESIGNER_PROMPT)`
+como fallback, por lo que la ausencia de la clave `"regresion"` no rompe nada hoy.
+Cuando se cree el prompt, sólo hay que añadir la clave al dict en `prompts/__init__.py`.
+Ver `prompts/clasificacion/dataset.py` como template exacto.
+
+**Depends on / blocked by:** TODO-M2-A (opcional — puede hacerse en paralelo si el
+prompt de regresión se define antes de especializar el de clasificación).
+
+---
+
+## TODO-M2-C: Añadir dispatch de dataset para la familia clustering
+
+**What:** Crear `backend/src/case_generator/prompts/clustering/dataset.py` con
+`SCHEMA_DESIGNER_PROMPT_CLUSTERING` y extender `SCHEMA_DESIGNER_PROMPT_BY_FAMILY`
+con la clave `"clustering"`.
+
+**Why:** Completa la cobertura de las 3 familias activas del catálogo (clasificacion,
+regresion, clustering). Clustering no tiene target column — el prompt debe reforzar
+eso explícitamente para evitar que el LLM genere una columna `label` o `categoria`.
+
+**Pros:** Cierra la brecha de calidad de dataset para jobs de clustering (K-Means);
+elimina el riesgo de que el prompt genérico genere un target innecesario.
+
+**Cons:** Mismos que TODO-M2-B. Tercera iteración del mismo patrón — bajo riesgo.
+
+**Context:** `serie_temporal` está retirada del catálogo activo y no necesita un
+prompt especializado en este ciclo. Cuando clustering esté hecho, las 3 familias
+activas tendrán su propio prompt de dataset, completando la arquitectura de dispatch.
+
+**Depends on / blocked by:** TODO-M2-B (regresion) y branch `feat/m2-dataset-family-dispatch`
+mergeado.
+
+---
+
 ## TODO-244-A: Test unitario React para badge `learning_type` en `AlgorithmSelector`
 
 **What:** Agregar un test Vitest + React Testing Library que renderice `AlgorithmSelector` con un catálogo mockeado y verifique que el badge "Supervisado" / "No Supervisado" se renderiza correctamente según el campo `learning_type` de cada ítem.
