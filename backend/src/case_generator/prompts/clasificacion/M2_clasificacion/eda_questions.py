@@ -31,7 +31,7 @@ correlación/causalidad, sino los específicos de clasificación binaria:
   P2 — Precision/Recall Trade-off           (bloom_level: "synthesis")
 
 # JSON Schema Obligatorio (claves EXACTAS — no añadir ni modificar)
-# El wrapper externo {"preguntas": [...]} lo impone EDAQuestionsOutput; aquí se detalla
+# El wrapper externo {{"preguntas": [...]}} lo impone EDAQuestionsOutput; aquí se detalla
 # el contenido de cada elemento de la lista.
 {{
   "preguntas": [

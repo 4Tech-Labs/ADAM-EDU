@@ -16,6 +16,8 @@ Covers:
 10. SCHEMA_DESIGNER_PROMPT_CLASSIFICATION contains exactly the 7 required placeholders
 11. EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION contains exactly the 7 required
     placeholders (guards against KeyError in eda_questions_generator node at runtime)
+12. format() smoke: EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION.format(**context) succeeds
+    without ValueError/KeyError — catches unescaped literal braces in comments or prose
 """
 
 import inspect
@@ -160,13 +162,18 @@ def test_eda_questions_classification_placeholder_contract():
     {"eda_context": ..., "chart_manifest": ...}.
     An extra placeholder → KeyError at runtime; a missing one → silent gap.
     This test guards both failure modes at CI time.
-    """
-    import re
 
-    raw = EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION
-    # Extract all single-word placeholders (e.g. {foo}) while ignoring
-    # double-brace literals ({{foo}}) used in the embedded JSON schema examples.
-    placeholders = set(re.findall(r"(?<!\{)\{(\w+)\}(?!\})", raw))
+    Uses string.Formatter().parse() (same as test_eda_text_analyst_placeholder_contract)
+    so that format-spec placeholders, complex field names, and stray literal-brace
+    fragments (e.g. {"foo": ...} in prose) are all caught — unlike a naive regex.
+    """
+    placeholders = {
+        fname.split(".")[0].split("[")[0]
+        for _, fname, _, _ in string.Formatter().parse(
+            EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION
+        )
+        if fname is not None
+    }
     expected = {
         "chart_manifest",
         "eda_context",
@@ -180,6 +187,27 @@ def test_eda_questions_classification_placeholder_contract():
         f"Placeholder contract violated for EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION. "
         f"Missing: {expected - placeholders}, Extra: {placeholders - expected}"
     )
+
+
+def test_eda_questions_classification_format_smoke():
+    """prompt.format(**context) with the full 7-key context must not raise.
+
+    Catches unescaped literal braces in prose or comment lines (e.g. a line like
+    '# see {"key": value}') that would raise KeyError in eda_questions_generator
+    at runtime but are invisible to placeholder-extraction tests.
+    This test is the CI-level equivalent of the production call in graph.py.
+    """
+    dummy = {
+        "chart_manifest": "[]",
+        "eda_context": "eda",
+        "pregunta_eje": "pregunta",
+        "case_id": "c1",
+        "student_profile": "ml_ds",
+        "primary_family": "clasificacion",
+        "output_language": "Spanish",
+    }
+    result = EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION.format(**dummy)
+    assert result  # non-empty after substitution
 
 
 def test_eda_text_analyst_placeholder_contract():
