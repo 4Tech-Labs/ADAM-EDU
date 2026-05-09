@@ -1,17 +1,23 @@
 """Tests for M2 clasificacion prompt dispatch — Issue M2-clasificacion refactor.
 
 Covers:
-1. Direct import from M2_clasificacion.dataset resolves correctly
-2. SCHEMA_DESIGNER_PROMPT_BY_FAMILY["clasificacion"] dispatch is wired
-3. EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION import + non-empty
-4. Behavioral: EDA_ANNOTATE_ONLY_PROMPT is alias of _CLASSIFICATION (object identity)
-   AND the sentinel string appears inside the prompt (confirms graph.py uses renamed symbol)
-5. graph.py._eda_classification_python_path references EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION
-6. EDA_TEXT_ANALYST_PROMPT_BY_FAMILY["clasificacion"] resolves to EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION
-   (not the generic) and is non-empty
-7. EDA_QUESTIONS_PROMPT_BY_FAMILY["clasificacion"] resolves non-empty
-8. Fallback: non-clasificacion family falls back to generic prompt
-9. EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION contains exactly the 14 required placeholders
+1.  Direct import from M2_clasificacion.dataset resolves correctly
+2.  SCHEMA_DESIGNER_PROMPT_BY_FAMILY["clasificacion"] dispatch is wired
+3.  EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION import + non-empty
+4.  Behavioral: EDA_ANNOTATE_ONLY_PROMPT is alias of _CLASSIFICATION (object identity)
+    AND the sentinel string appears inside the prompt (confirms graph.py uses renamed symbol)
+5.  graph.py._eda_classification_python_path references EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION
+6.  EDA_TEXT_ANALYST_PROMPT_BY_FAMILY["clasificacion"] resolves to
+    EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION (not the generic) and is non-empty
+7.  EDA_QUESTIONS_PROMPT_BY_FAMILY["clasificacion"] resolves to
+    EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION (not the generic) and is non-empty
+8.  Fallback: non-clasificacion family falls back to generic prompt
+9.  EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION contains exactly the 14 required placeholders
+10. SCHEMA_DESIGNER_PROMPT_CLASSIFICATION contains exactly the 7 required placeholders
+11. EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION contains exactly the 7 required
+    placeholders (guards against KeyError in eda_questions_generator node at runtime)
+12. format() smoke: EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION.format(**context) succeeds
+    without ValueError/KeyError — catches unescaped literal braces in comments or prose
 """
 
 import inspect
@@ -22,6 +28,9 @@ from case_generator.prompts.clasificacion.M2_clasificacion.dataset import (
 )
 from case_generator.prompts.clasificacion.M2_clasificacion.eda_annotate import (
     EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
+)
+from case_generator.prompts.clasificacion.M2_clasificacion.eda_questions import (
+    EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION,
 )
 from case_generator.prompts.clasificacion.M2_clasificacion.eda_text import (
     EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION,
@@ -88,11 +97,23 @@ def test_eda_text_analyst_dispatch_clasificacion():
 
 
 def test_eda_questions_dispatch_clasificacion():
-    """EDA_QUESTIONS_PROMPT_BY_FAMILY['clasificacion'] resolves to a non-empty prompt."""
+    """EDA_QUESTIONS_PROMPT_BY_FAMILY['clasificacion'] resolves to the specialized prompt.
+
+    Guards two failure modes:
+    - len > 100: the slot is no longer an empty string.
+    - identity: the dispatch points to the classification-specific symbol, not the generic.
+      A regression (e.g., re-pointing to EDA_QUESTIONS_GENERATOR_PROMPT) would silently
+      pass a len-only check but is caught here.
+    """
     prompt = EDA_QUESTIONS_PROMPT_BY_FAMILY.get("clasificacion")
     assert prompt is not None
     assert isinstance(prompt, str)
     assert len(prompt) > 100
+    assert prompt is EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION, (
+        "EDA_QUESTIONS_PROMPT_BY_FAMILY['clasificacion'] must resolve to "
+        "EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION — check dispatch table in "
+        "prompts/__init__.py (line ~925)"
+    )
 
 
 def test_eda_text_dispatch_fallback_non_clasificacion():
@@ -129,6 +150,64 @@ def test_schema_designer_placeholder_contract():
     assert "REGLAS DE COBERTURA DEL CONTRATO" in SCHEMA_DESIGNER_PROMPT_CLASSIFICATION, (
         "REGLAS DE COBERTURA DEL CONTRATO section missing from SCHEMA_DESIGNER_PROMPT_CLASSIFICATION"
     )
+
+
+def test_eda_questions_classification_placeholder_contract():
+    """EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION contains exactly the 7 required
+    placeholders — no more, no less.
+
+    The eda_questions_generator node calls:
+        prompt.format(**context)
+    where context is _build_base_context(state) updated with
+    {"eda_context": ..., "chart_manifest": ...}.
+    An extra placeholder → KeyError at runtime; a missing one → silent gap.
+    This test guards both failure modes at CI time.
+
+    Uses string.Formatter().parse() (same as test_eda_text_analyst_placeholder_contract)
+    so that format-spec placeholders, complex field names, and stray literal-brace
+    fragments (e.g. {"foo": ...} in prose) are all caught — unlike a naive regex.
+    """
+    placeholders = {
+        fname.split(".")[0].split("[")[0]
+        for _, fname, _, _ in string.Formatter().parse(
+            EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION
+        )
+        if fname is not None
+    }
+    expected = {
+        "chart_manifest",
+        "eda_context",
+        "pregunta_eje",
+        "case_id",
+        "student_profile",
+        "primary_family",
+        "output_language",
+    }
+    assert placeholders == expected, (
+        f"Placeholder contract violated for EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION. "
+        f"Missing: {expected - placeholders}, Extra: {placeholders - expected}"
+    )
+
+
+def test_eda_questions_classification_format_smoke():
+    """prompt.format(**context) with the full 7-key context must not raise.
+
+    Catches unescaped literal braces in prose or comment lines (e.g. a line like
+    '# see {"key": value}') that would raise KeyError in eda_questions_generator
+    at runtime but are invisible to placeholder-extraction tests.
+    This test is the CI-level equivalent of the production call in graph.py.
+    """
+    dummy = {
+        "chart_manifest": "[]",
+        "eda_context": "eda",
+        "pregunta_eje": "pregunta",
+        "case_id": "c1",
+        "student_profile": "ml_ds",
+        "primary_family": "clasificacion",
+        "output_language": "Spanish",
+    }
+    result = EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION.format(**dummy)
+    assert result  # non-empty after substitution
 
 
 def test_eda_text_analyst_placeholder_contract():
