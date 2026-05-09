@@ -15,7 +15,7 @@ Covers:
 """
 
 import inspect
-import re
+import string
 
 from case_generator.prompts.clasificacion.M2_clasificacion.dataset import (
     SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
@@ -81,9 +81,9 @@ def test_eda_text_analyst_dispatch_clasificacion():
     assert prompt is not None
     assert isinstance(prompt, str)
     assert len(prompt) > 100
-    assert prompt is not EDA_TEXT_ANALYST_PROMPT, (
-        "EDA_TEXT_ANALYST_PROMPT_BY_FAMILY['clasificacion'] must use "
-        "EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION, not the generic prompt"
+    assert prompt is EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION, (
+        "EDA_TEXT_ANALYST_PROMPT_BY_FAMILY['clasificacion'] must resolve to "
+        "EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION — check dispatch table in prompts/__init__.py"
     )
 
 
@@ -138,7 +138,15 @@ def test_eda_text_analyst_placeholder_contract():
     KeyError in graph.py eda_text_analyst() at runtime when prompt.format(**context)
     is called with the fixed 14-key context dict.
     """
-    placeholders = set(re.findall(r"\{(\w+)\}", EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION))
+    # Use string.Formatter().parse() instead of a regex so that format-spec
+    # placeholders ({foo:,.0f}) and conversion placeholders ({bar!r}) are also
+    # enumerated.  re.findall(r"\{(\w+)\}") would silently miss them, letting a
+    # runtime KeyError slip past this contract test.
+    placeholders = {
+        fname.split(".")[0].split("[")[0]
+        for _, fname, _, _ in string.Formatter().parse(EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION)
+        if fname is not None
+    }
     expected = {
         "dilema_hypotheses",
         "dataset_instruction",

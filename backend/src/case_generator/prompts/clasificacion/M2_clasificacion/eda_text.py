@@ -127,9 +127,12 @@ Incluye el Diccionario de Datos como tabla Markdown, mín 8 variables:
 ### Distribución del Target y Balance de Clases
 Calcula desde {dataset_str}:
 - Conteo de clase 0 y clase 1 en `categoria`.
-- Imbalance ratio: count_mayoritaria / count_minoritaria.
-- Emite la fórmula explícita: imbalance_ratio = count(cat==1) / count(cat==0)
-  (o la inversa si clase 0 es la minoritaria) para que EDA_CHART_GENERATOR la verifique.
+- Imbalance ratio: count_mayoritaria / count_minoritaria (resultado siempre ≥ 1).
+- Emite la fórmula explícita:
+  imbalance_ratio = max(count_cat0, count_cat1) / min(count_cat0, count_cat1)
+  donde count_cat0 = count(categoria==0) y count_cat1 = count(categoria==1).
+  El resultado es siempre ≥ 1 (numerador = clase mayoritaria, denominador = minoritaria),
+  sin asumir a priori qué clase es mayoritaria en el dataset concreto.
 - Si imbalance ratio > 4:1: "Desbalance severo (ratio X:1). La accuracy como métrica
   única es engañosa. El estudiante debe analizar Matriz de Confusión, Precision, Recall
   y F1-Score — especialmente para la clase 1 (churners). Considerar ajuste de threshold
