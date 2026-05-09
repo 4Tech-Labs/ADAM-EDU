@@ -18,15 +18,12 @@ eda_annotate.py EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION
                   A backward-compat alias ``EDA_ANNOTATE_ONLY_PROMPT`` is kept
                   in ``prompts/__init__.py``.
 
-eda_text.py     EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION  (empty slot)
-                  Override slot for a future classification-specific EDA
-                  narrative.  The dispatch table currently aliases to the
-                  generic ``EDA_TEXT_ANALYST_PROMPT``.
+eda_text.py     EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION
+                  Override for a classification-specific EDA narrative (Issue #268).
 
-eda_questions.py  EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION  (empty slot)
-                  Override slot for future classification-specific socratic
-                  questions.  The dispatch table currently aliases to the
-                  generic ``EDA_QUESTIONS_GENERATOR_PROMPT``.
+eda_questions.py  EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION
+                  Socratic questions specialized for binary classification:
+                  P1 accuracy paradox, P2 precision/recall trade-off (Issue #269).
 
 Charts
 ------

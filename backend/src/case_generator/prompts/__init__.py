@@ -31,6 +31,7 @@ from case_generator.prompts.clasificacion import (
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
     ClassificationNotebookVariant,
     EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
+    EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION,
     EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION,
     M3_CONTENT_PROMPT_CLASSIFICATION,
     M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
@@ -919,10 +920,10 @@ case_id: {case_id} | student_profile: {student_profile} | primary_family: {prima
 """
 
 # ── EDA_QUESTIONS_PROMPT_BY_FAMILY — dispatch table for eda_questions_generator node.
-# Currently aliases to the generic for all families; update the "clasificacion"
-# entry when M2_clasificacion/eda_questions.py is customized.
+# "clasificacion" dispatches to EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION (Issue #269).
+# regresion, clustering, serie_temporal remain deferred — aliased to the generic.
 EDA_QUESTIONS_PROMPT_BY_FAMILY: dict[str, str] = {
-    "clasificacion": EDA_QUESTIONS_GENERATOR_PROMPT,
+    "clasificacion": EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION,
     # regresion, clustering, serie_temporal — deferred
 }
 
