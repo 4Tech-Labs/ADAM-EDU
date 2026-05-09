@@ -31,38 +31,42 @@ correlación/causalidad, sino los específicos de clasificación binaria:
   P2 — Precision/Recall Trade-off           (bloom_level: "synthesis")
 
 # JSON Schema Obligatorio (claves EXACTAS — no añadir ni modificar)
-[
-  {{
-    "numero": 1,
-    "titulo": "string corto (≤8 palabras)",
-    "enunciado": "string (pregunta completa que cita métricas y datos reales del M2)",
-    "solucion_esperada": {{
-      "teoria": "string (concepto estadístico/analítico que el estudiante debe conocer, máx 40 palabras)",
-      "ejemplo": "string (ejemplo concreto del caso que ilustra el concepto, máx 40 palabras)",
-      "implicacion": "string (consecuencia si el estudiante ignora este sesgo en su decisión, máx 40 palabras)",
-      "literatura": "string (referencia académica sin DOIs/URLs inventados, máx 30 palabras)"
+# El wrapper externo {"preguntas": [...]} lo impone EDAQuestionsOutput; aquí se detalla
+# el contenido de cada elemento de la lista.
+{{
+  "preguntas": [
+    {{
+      "numero": 1,
+      "titulo": "string corto (≤8 palabras)",
+      "enunciado": "string (pregunta completa que cita métricas y datos reales del M2)",
+      "solucion_esperada": {{
+        "teoria": "string (concepto estadístico/analítico que el estudiante debe conocer, máx 40 palabras)",
+        "ejemplo": "string (ejemplo concreto del caso que ilustra el concepto, máx 40 palabras)",
+        "implicacion": "string (consecuencia si el estudiante ignora este sesgo en su decisión, máx 40 palabras)",
+        "literatura": "string (referencia académica sin DOIs/URLs inventados, máx 30 palabras)"
+      }},
+      "bloom_level": "analysis",
+      "chart_ref": "id del chart de distribución de clases del manifest, o null si no existe",
+      "exhibit_ref": "Dataset",
+      "task_type": "text_response"
     }},
-    "bloom_level": "analysis",
-    "chart_ref": "id del chart de distribución de clases del manifest, o null si no existe",
-    "exhibit_ref": "Dataset",
-    "task_type": "text_response"
-  }},
-  {{
-    "numero": 2,
-    "titulo": "string corto (≤8 palabras)",
-    "enunciado": "string (pregunta completa que cita threshold, churn rate y costo asimétrico reales del M2)",
-    "solucion_esperada": {{
-      "teoria": "string (máx 40 palabras)",
-      "ejemplo": "string (máx 40 palabras)",
-      "implicacion": "string (máx 40 palabras)",
-      "literatura": "string (sin DOIs/URLs inventados, máx 30 palabras)"
-    }},
-    "bloom_level": "synthesis",
-    "chart_ref": "id del chart de correlación o scatter del manifest, o null si no hay uno relevante",
-    "exhibit_ref": "Dataset",
-    "task_type": "text_response"
-  }}
-]
+    {{
+      "numero": 2,
+      "titulo": "string corto (≤8 palabras)",
+      "enunciado": "string (pregunta completa que cita threshold, churn rate y costo asimétrico reales del M2)",
+      "solucion_esperada": {{
+        "teoria": "string (máx 40 palabras)",
+        "ejemplo": "string (máx 40 palabras)",
+        "implicacion": "string (máx 40 palabras)",
+        "literatura": "string (sin DOIs/URLs inventados, máx 30 palabras)"
+      }},
+      "bloom_level": "synthesis",
+      "chart_ref": "id del chart de correlación o scatter del manifest, o null si no hay uno relevante",
+      "exhibit_ref": "Dataset",
+      "task_type": "text_response"
+    }}
+  ]
+}}
 
 # How You Work (Workflow)
 1. **Lee {eda_context}** — extrae: churn rate exacto, balance de clases (% clase 0 / % clase 1),
