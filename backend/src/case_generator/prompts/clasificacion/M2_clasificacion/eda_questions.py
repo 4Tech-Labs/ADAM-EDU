@@ -1,33 +1,17 @@
-"""EDA socratic-questions prompt slot for the clasificacion algorithm family — M2 module.
+"""EDA Socratic-questions prompt for the clasificacion algorithm family — M2 module.
 
-``EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION`` is the override slot for a
-classification-specific EDA questions prompt.
+``EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION`` is the live, production prompt
+for binary-classification Socratic questions (Issue #269).
 
-Current state: EMPTY SLOT — the dispatch table in ``prompts/__init__.py``
-currently maps ``EDA_QUESTIONS_PROMPT_BY_FAMILY["clasificacion"]`` to the
-generic ``EDA_QUESTIONS_GENERATOR_PROMPT`` until this slot is filled in.
+``EDA_QUESTIONS_PROMPT_BY_FAMILY["clasificacion"]`` in ``prompts/__init__.py``
+points to this symbol. The dispatch is active — no further wiring needed.
 
-How to activate classification-specific questions:
-  1. Fill in ``EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION`` below with the
-     classification-tailored prompt (recall/precision trade-offs, feature
-     engineering for binary targets, class imbalance intuition, etc.).
-  2. In ``prompts/__init__.py``:
-     a. Add to the ``from case_generator.prompts.clasificacion import (...)``
-        block::
+Design:
+  P1 — Accuracy Paradox / Class Imbalance   (bloom_level: "analysis")
+  P2 — Precision/Recall Trade-off           (bloom_level: "synthesis")
 
-          EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION,
-
-     b. Update the dispatch entry::
-
-          EDA_QUESTIONS_PROMPT_BY_FAMILY["clasificacion"] = (
-              EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION
-          )
-
-     (The symbol is not imported into ``prompts/__init__.py`` until this
-     slot is filled — importing an empty-string constant would create an
-     unused import that breaks ruff/F401.)
-  3. Run ``pytest tests/test_m2_clasificacion_dispatch.py -q`` to verify
-     the dispatch table resolves to the new prompt.
+Both questions are anchored in real EDA data from ``{eda_context}`` and
+``{chart_manifest}``. Output schema: ``EDAQuestionsOutput`` (2 × ``EDASocraticQuestion``).
 
 IMPORTANT — circular import constraint:
   This file MUST NOT import from ``case_generator.prompts`` (the parent
@@ -82,7 +66,7 @@ correlación/causalidad, sino los específicos de clasificación binaria:
 
 # How You Work (Workflow)
 1. **Lee {eda_context}** — extrae: churn rate exacto, balance de clases (% clase 0 / % clase 1),
-   accuracy reportada si existe, y cualquier métrica de desbalanceo (Gini, entropia, etc.).
+   accuracy reportada si existe, y cualquier métrica de desbalanceo (Gini, entropía, etc.).
 2. **Lee {chart_manifest}** — identifica:
    - El chart con distribución de clases (barras o pie de target) → chart_ref de P1.
    - El chart de correlación o scatter más informativo → chart_ref de P2 (null si no existe).
@@ -91,7 +75,8 @@ correlación/causalidad, sino los específicos de clasificación binaria:
      modelo trivial "siempre predice clase 0" logra ese accuracy sin poder predictivo.
    - Pregunta: "Si el modelo reporta X% de accuracy y el churn rate es Y%, ¿qué modelo trivial
      logra ese accuracy sin ningún poder predictivo sobre churners?"
-   - Referencia el id del chart de distribución de clases en chart_ref (título exacto del manifest).
+   Referencia el id del chart de distribución de clases en chart_ref (usa el title del manifest
+   solo para seleccionar el chart correcto; chart_ref = solo el id, sin incluir el title).
 4. **Diseña P2 — Precision/Recall Trade-off** anclada en el costo asimétrico del negocio:
    - Usa el churn rate de {eda_context} para cuantificar el trade-off.
    - Pregunta al estudiante qué threshold debería usar LR/RF en {primary_family} para maximizar
@@ -104,7 +89,9 @@ correlación/causalidad, sino los específicos de clasificación binaria:
 # Your Boundaries
 - Solo JSON schema. PROHIBIDO Markdown libre fuera del JSON.
 - Toda pregunta referencia métricas, variables o gráficas reales y exactas del M2.
-- Las referencias a gráficos usan el `id` y `title` exactos del {chart_manifest}.
+- Las referencias a gráficos: `chart_ref` contiene SOLO el `id` del chart (string exacto del
+  manifest). Usa el `title` únicamente para identificar cuál chart seleccionar — nunca lo
+  incluyas en el valor de `chart_ref`.
 - El campo `literatura` sin DOIs ni URLs inventados — solo referencia académica conocida.
 - PROHIBIDO usar "sesgo de confirmación" o "correlación vs causalidad" como tema principal
   de P1 o P2 — esos pertenecen al prompt genérico para otras familias.
