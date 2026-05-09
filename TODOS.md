@@ -906,7 +906,8 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 
 ---
 
-## TODO-M2-CLSF-DATASET-SHIM: Eliminar shim prompts/clasificacion/dataset.py
+## ~~TODO-M2-CLSF-DATASET-SHIM~~: ✅ DONE — Eliminar shim prompts/clasificacion/dataset.py
 
 **What:** Borrar backend/src/case_generator/prompts/clasificacion/dataset.py (shim) una vez confirmado que ningun importador directo lo referencia. Ejecutar grep exhaustivo en todo backend/ antes de borrar.
 **Depends on / blocked by:** PR feature/m2-clasificacion-prompt-subfolder mergeado. Requiere auditoria de importadores directos.
+**Status: DONE** — Cerrado por `chore/m2-clsf-dataset-shim-cleanup` (Issue #270). Los 2 importadores directos (tests) migrados a `M2_clasificacion.dataset`. Shim eliminado. Guard negativo `test_shim_deleted_raises_module_not_found` agregado.
