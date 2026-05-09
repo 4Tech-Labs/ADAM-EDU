@@ -85,11 +85,15 @@ def test_clasificacion_narrative_has_no_issue_refs() -> None:
 
 
 def test_clasificacion_dataset_has_no_issue_refs() -> None:
-    """``case_generator.prompts.clasificacion.dataset`` is clean."""
-    import case_generator.prompts.clasificacion.dataset as mod
+    """``case_generator.prompts.clasificacion.M2_clasificacion.dataset`` is clean."""
+    import case_generator.prompts.clasificacion.M2_clasificacion.dataset as mod
 
     for name, value in _public_str_constants(mod):
-        _assert_no_issue_refs("case_generator.prompts.clasificacion.dataset", name, value)
+        _assert_no_issue_refs(
+            "case_generator.prompts.clasificacion.M2_clasificacion.dataset",
+            name,
+            value,
+        )
 
 
 def test_clasificacion_notebooks_shared_has_no_issue_refs() -> None:

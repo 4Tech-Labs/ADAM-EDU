@@ -43,8 +43,8 @@ def test_schema_designer_prompt_classification_importable_from_subpackage() -> N
 
 def test_schema_designer_prompt_classification_importable_from_dataset_module() -> None:
     """SCHEMA_DESIGNER_PROMPT_CLASSIFICATION is importable directly from the
-    leaf module clasificacion/dataset.py."""
-    from case_generator.prompts.clasificacion.dataset import (  # noqa: PLC0415
+    canonical leaf module M2_clasificacion/dataset.py."""
+    from case_generator.prompts.clasificacion.M2_clasificacion.dataset import (  # noqa: PLC0415
         SCHEMA_DESIGNER_PROMPT_CLASSIFICATION as from_leaf,
     )
     assert from_leaf is SCHEMA_DESIGNER_PROMPT_CLASSIFICATION
@@ -261,3 +261,19 @@ def test_non_clasificacion_fallback_schema_has_no_classification_columns(family:
         f"family={family!r}: fallback schema must still include 'engagement_score'"
     )
     assert result["n_rows"] == 200
+
+
+# ---------------------------------------------------------------------------
+# Shim-deletion regression guard (Issue #270)
+# ---------------------------------------------------------------------------
+
+
+def test_shim_deleted_raises_module_not_found() -> None:
+    """clasificacion/dataset.py backward-compat shim was permanently removed
+    in Issue #270.  Importing that path MUST raise ModuleNotFoundError.
+    This test is the automated guard against accidental re-introduction of
+    the shim — if the file comes back, this test will fail loudly."""
+    import importlib  # noqa: PLC0415
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("case_generator.prompts.clasificacion.dataset")
