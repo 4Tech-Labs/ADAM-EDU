@@ -31,6 +31,7 @@ from case_generator.prompts.clasificacion import (
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
     ClassificationNotebookVariant,
     EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
+    EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION,
     M3_CONTENT_PROMPT_CLASSIFICATION,
     M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
     M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY,
@@ -702,10 +703,10 @@ case_id: {case_id} | output_depth: {output_depth}
 
 # ── EDA_TEXT_ANALYST_PROMPT_BY_FAMILY — dispatch table for eda_text_analyst node.
 # Keys match family_of()/resolve_legacy_family() in suggest_service.py.
-# Currently aliases to the generic for all families; update the "clasificacion"
-# entry when M2_clasificacion/eda_text.py is customized.
+# "clasificacion" uses the binary-churn-specialized prompt (Issue #268).
+# Other families — regresion, clustering, serie_temporal — deferred.
 EDA_TEXT_ANALYST_PROMPT_BY_FAMILY: dict[str, str] = {
-    "clasificacion": EDA_TEXT_ANALYST_PROMPT,
+    "clasificacion": EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION,
     # regresion, clustering, serie_temporal — deferred
 }
 
