@@ -7,18 +7,24 @@ Covers:
 4. Behavioral: EDA_ANNOTATE_ONLY_PROMPT is alias of _CLASSIFICATION (object identity)
    AND the sentinel string appears inside the prompt (confirms graph.py uses renamed symbol)
 5. graph.py._eda_classification_python_path references EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION
-6. EDA_TEXT_ANALYST_PROMPT_BY_FAMILY["clasificacion"] resolves non-empty
+6. EDA_TEXT_ANALYST_PROMPT_BY_FAMILY["clasificacion"] resolves to EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION
+   (not the generic) and is non-empty
 7. EDA_QUESTIONS_PROMPT_BY_FAMILY["clasificacion"] resolves non-empty
 8. Fallback: non-clasificacion family falls back to generic prompt
+9. EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION contains exactly the 14 required placeholders
 """
 
 import inspect
+import re
 
 from case_generator.prompts.clasificacion.M2_clasificacion.dataset import (
     SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
 )
 from case_generator.prompts.clasificacion.M2_clasificacion.eda_annotate import (
     EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
+)
+from case_generator.prompts.clasificacion.M2_clasificacion.eda_text import (
+    EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION,
 )
 from case_generator.prompts import (
     EDA_ANNOTATE_ONLY_PROMPT,
@@ -70,11 +76,15 @@ def test_graph_uses_classification_annotate_symbol():
 
 
 def test_eda_text_analyst_dispatch_clasificacion():
-    """EDA_TEXT_ANALYST_PROMPT_BY_FAMILY['clasificacion'] resolves to a non-empty prompt."""
+    """EDA_TEXT_ANALYST_PROMPT_BY_FAMILY['clasificacion'] resolves to EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION."""
     prompt = EDA_TEXT_ANALYST_PROMPT_BY_FAMILY.get("clasificacion")
     assert prompt is not None
     assert isinstance(prompt, str)
     assert len(prompt) > 100
+    assert prompt is not EDA_TEXT_ANALYST_PROMPT, (
+        "EDA_TEXT_ANALYST_PROMPT_BY_FAMILY['clasificacion'] must use "
+        "EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION, not the generic prompt"
+    )
 
 
 def test_eda_questions_dispatch_clasificacion():
@@ -118,4 +128,34 @@ def test_schema_designer_placeholder_contract():
     )
     assert "REGLAS DE COBERTURA DEL CONTRATO" in SCHEMA_DESIGNER_PROMPT_CLASSIFICATION, (
         "REGLAS DE COBERTURA DEL CONTRATO section missing from SCHEMA_DESIGNER_PROMPT_CLASSIFICATION"
+    )
+
+
+def test_eda_text_analyst_placeholder_contract():
+    """EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION contains exactly the 14 required placeholders.
+
+    Guards against accidental extra {placeholder} expressions that would cause a
+    KeyError in graph.py eda_text_analyst() at runtime when prompt.format(**context)
+    is called with the fixed 14-key context dict.
+    """
+    placeholders = set(re.findall(r"\{(\w+)\}", EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION))
+    expected = {
+        "dilema_hypotheses",
+        "dataset_instruction",
+        "data_gap_warnings_block",
+        "output_language",
+        "student_profile",
+        "algoritmos",
+        "case_context",
+        "dataset_str",
+        "dataset_summary",
+        "dataset_total_rows",
+        "financial_exhibit",
+        "operational_exhibit",
+        "case_id",
+        "output_depth",
+    }
+    assert placeholders == expected, (
+        f"Placeholder contract violated for EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION. "
+        f"Missing: {expected - placeholders}, Extra: {placeholders - expected}"
     )
