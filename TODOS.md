@@ -502,6 +502,40 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 
 **Context:** Reconfirmado en la corrección async de Issue #112. La decisión explícita es mantener Fase 2 enfocada en `AsyncPostgresSaver` + resume funcional y diferir la política de retención hasta que el flujo durable esté estable.
 
+---
+
+## TODO-M5-clasificacion-A: Mover `M5_PROMPT_CLASSIFICATION` a subcarpeta `M5_clasificacion/`
+
+**What:** Crear `backend/src/case_generator/prompts/clasificacion/M5_clasificacion/__init__.py`, `narrative.py`, `questions.py` y `charts.py` siguiendo el patrón de `M4_clasificacion/`. Mover `M5_PROMPT_CLASSIFICATION` desde `clasificacion/narrative.py` hacia `M5_clasificacion/narrative.py`. Mantener alias backward-compat `M5_PROMPT_CLASSIFICATION` en `clasificacion/narrative.py`.
+
+**Why:** El PR `feat/m4-clasificacion-prompt-subfolder` establece el patrón de subcarpetas por módulo para la familia clasificación. `M5_PROMPT_CLASSIFICATION` es actualmente el único prompt de clasificación M5 que vive en `clasificacion/narrative.py` sin su propia subcarpeta. Moverlo completa el patrón y prepara el terreno para prompts M5 de questions/charts separados por familia.
+
+**Pros:** Consistencia de arquitectura con M1/M2/M3/M4; facilita añadir `M5_QUESTIONS_PROMPT_CLASSIFICATION` y `M5_CHART_PROMPT_CLASSIFICATION` en el futuro sin tocar archivos de nivel superior; mantiene `clasificacion/narrative.py` como coordinador liviano.
+
+**Cons:** Requiere tocar `clasificacion/narrative.py`, `clasificacion/__init__.py`, `prompts/__init__.py` y actualizar imports. Bajo riesgo si se sigue el mismo patrón quirúrgico de este PR.
+
+**Context:** El stub `# TODO(M5_clasificacion): M5_PROMPT_CLASSIFICATION moves to M5_clasificacion/ in next PR.` ya existe en `clasificacion/narrative.py` como recordatorio explícito. Este TODO no bloquea ningún feature activo — `M5_PROMPT_CLASSIFICATION` ya funciona en su ubicación actual.
+
+**Depends on / blocked by:** PR `feat/m4-clasificacion-prompt-subfolder` mergeado en main.
+
+---
+
+## TODO-M4-clasificacion-B: Evaluar variantes lr_only/rf_only/contrast para prompts M4 questions/charts
+
+**What:** Después de despliegue en staging, evaluar si el único `M4_QUESTIONS_PROMPT_CLASSIFICATION` y `M4_CHART_PROMPT_CLASSIFICATION` es suficiente para todos los valores de `algorithm_mode` (`single`/`contrast`), o si se necesitan variantes dedicadas similares al patrón `M3_CLASSIFICATION_QUESTIONS_BY_VARIANT` (`lr_only`, `rf_only`, `lr_rf_contrast`).
+
+**Why:** M4 questions/charts reciben `algorithm_mode` como placeholder pero el prompt actual no tiene branching explícito por variante — el LLM debe inferir el comportamiento correcto. Si la calidad pedagógica difiere materialmente entre modes (especialmente en el gráfico de escenarios del Tornado), puede valer la pena introducir variantes.
+
+**Scope:** Revisar outputs generados en staging para al menos 3 casos: `clasificacion + lr_only`, `clasificacion + rf_only`, `clasificacion + lr_rf_contrast`. Si la calidad es aceptable en los 3, este TODO se cierra como no necesario. Si hay regresión en uno o más, crear `M4_clasificacion/questions_by_variant.py` y `M4_clasificacion/charts_by_variant.py` siguiendo el patrón de `M3_clasificacion/`.
+
+**Pros:** Evita over-engineering si el prompt actual es suficiente; si no lo es, el patrón de dispatch por variante ya está establecido en M3 y es directo de replicar.
+
+**Cons:** Añade 2 dicts de variantes y más superficie de test si se decide implementar. Requiere eval con LLM real (no solo tests determinísticos).
+
+**Context:** El `m4_chart_generator` ya usa `_extract_state_algorithm_mode(state)` y pasa `algorithm_mode` al prompt. El Tornado chart en `M4_CHART_PROMPT_CLASSIFICATION` tiene una nota `(adapta el eje si es single-mode vs contrast)` para guiar al LLM, pero sin branching duro.
+
+**Depends on / blocked by:** PR `feat/m4-clasificacion-prompt-subfolder` mergeado en main y al menos 1 semana de telemetría de jobs M4-clasificacion en staging.
+
 **Depends on / blocked by:** Estabilizar primero el flujo de resume con el wiring async lazy/fail-closed y acordar política de compliance para retención de trazas de ejecución.
 
 ---
