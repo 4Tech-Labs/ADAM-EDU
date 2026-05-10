@@ -126,3 +126,57 @@ def test_clasificacion_notebooks_shared_has_no_issue_refs() -> None:
                         f"  Match: {match.group()!r}\n"
                         f"  Context: ...{excerpt!r}..."
                     )
+
+
+def test_m3_clasificacion_content_has_no_issue_refs() -> None:
+    """``case_generator.prompts.clasificacion.M3_clasificacion.content`` is clean."""
+    import case_generator.prompts.clasificacion.M3_clasificacion.content as mod
+
+    for name, value in _public_str_constants(mod):
+        _assert_no_issue_refs(
+            "case_generator.prompts.clasificacion.M3_clasificacion.content", name, value
+        )
+
+    # Also inspect dict-valued constants whose values are strings (e.g. BY_VARIANT).
+    for name, obj in vars(mod).items():
+        if name.startswith("_") or not isinstance(obj, dict):
+            continue
+        for key, value in obj.items():
+            if isinstance(value, str):
+                match = _ISSUE_REF_PATTERN.search(value)
+                if match:
+                    start = max(0, match.start() - 60)
+                    excerpt = value[start : match.end() + 60].replace("\n", "\\n")
+                    pytest.fail(
+                        f"case_generator.prompts.clasificacion.M3_clasificacion.content"
+                        f".{name}[{key!r}] contains an internal issue-tracker label.\n"
+                        f"  Match: {match.group()!r}\n"
+                        f"  Context: ...{excerpt!r}..."
+                    )
+
+
+def test_m3_clasificacion_questions_has_no_issue_refs() -> None:
+    """``case_generator.prompts.clasificacion.M3_clasificacion.questions`` is clean."""
+    import case_generator.prompts.clasificacion.M3_clasificacion.questions as mod
+
+    for name, value in _public_str_constants(mod):
+        _assert_no_issue_refs(
+            "case_generator.prompts.clasificacion.M3_clasificacion.questions", name, value
+        )
+
+    # Also inspect dict-valued constants whose values are strings.
+    for name, obj in vars(mod).items():
+        if name.startswith("_") or not isinstance(obj, dict):
+            continue
+        for key, value in obj.items():
+            if isinstance(value, str):
+                match = _ISSUE_REF_PATTERN.search(value)
+                if match:
+                    start = max(0, match.start() - 60)
+                    excerpt = value[start : match.end() + 60].replace("\n", "\\n")
+                    pytest.fail(
+                        f"case_generator.prompts.clasificacion.M3_clasificacion.questions"
+                        f".{name}[{key!r}] contains an internal issue-tracker label.\n"
+                        f"  Match: {match.group()!r}\n"
+                        f"  Context: ...{excerpt!r}..."
+                    )
