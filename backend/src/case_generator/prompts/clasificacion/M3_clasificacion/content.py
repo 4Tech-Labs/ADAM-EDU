@@ -1,16 +1,21 @@
-"""Classification-family narrative prompt variants."""
+"""M3 classification narrative prompt variants.
+
+Defines the per-algorithm-variant content prompts for M3 (Módulo 3 — Experimento)
+in the classification family. These prompts are assembled by concatenating the shared
+M3 base prompt with algorithm-specific coherence and grounding blocks.
+
+Public symbols
+--------------
+M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY
+M3_CONTENT_PROMPT_CLASSIFICATION_RF_ONLY
+M3_CONTENT_PROMPT_CLASSIFICATION          (also the contrast variant)
+M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT
+"""
 
 from case_generator.prompts._shared import (
     M3_EXPERIMENT_PROMPT,
-    M4_CONTENT_GENERATOR_PROMPT,
-    M5_CONTENT_GENERATOR_PROMPT,
     _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK,
 )
-
-# ══════════════════════════════════════════════════════════════════════════════
-# NOTE: _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK is now defined in _shared.py
-# and imported above. It is kept importable from here for any legacy references.
-# ══════════════════════════════════════════════════════════════════════════════
 
 # ── LR-only deep dive ────────────────────────────────────────────────────────
 _M3_CLASSIFICATION_COHERENCE_BLOCK_LR_ONLY = """\
@@ -86,23 +91,7 @@ Explica cómo fp_cost y fn_cost cambian el threshold y la decisión directiva. C
 con la pregunta eje y con el costo de elegir una opción A/B/C bajo incertidumbre.
 """
 
-_M5_CLASSIFICATION_DECISION_MATRIX_BLOCK = """\
-
-# Matriz de decisión ejecutiva (solo clasificación)
-Este documento M5 debe incluir una tabla Markdown con 4 a 6 filas y columnas EXACTAS:
-
-| acción | KPI esperado | riesgo | modelo soporte |
-|---|---|---|---|
-
-Reglas:
-- La columna `acción` debe ser una decisión ejecutiva concreta vinculada a la pregunta eje: {pregunta_eje}
-- `KPI esperado` debe ser un indicador de negocio observable, no una métrica técnica aislada.
-- `riesgo` debe nombrar el trade-off operativo, financiero o de gobernanza.
-- `modelo soporte` debe indicar LR baseline, RF challenger, matriz de costos o evidencia M2/M4.
-- No revelar una opción ganadora única; la matriz prepara la deliberación de Junta Directiva.
-"""
-
-# ── M3 narrative prompt constants — one per classification variant ────────────
+# ── M3 narrative prompt constants — one per classification variant ─────────────
 M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY = (
     M3_EXPERIMENT_PROMPT
     + _M3_CLASSIFICATION_COHERENCE_BLOCK_LR_ONLY
@@ -121,31 +110,19 @@ M3_CONTENT_PROMPT_CLASSIFICATION = (
     + _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK
 )
 
-# ── Dispatch table — mirrors CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT ────────
-# Keyed by the string constants in ClassificationNotebookVariant.
+# ── Dispatch table — mirrors CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT ──────────
+# Keyed by the ClassificationNotebookVariant string literals.
 # m3_content_generator resolves the variant with _resolve_classification_notebook_variant()
 # and looks up this dict to select the correct narrative prompt before invoking the LLM.
-# To add a new single-algorithm deep dive, add a coherence block above and a key here.
 M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT: dict[str, str] = {
     "lr_only":        M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY,
     "rf_only":        M3_CONTENT_PROMPT_CLASSIFICATION_RF_ONLY,
     "lr_rf_contrast": M3_CONTENT_PROMPT_CLASSIFICATION,
 }
 
-M4_PROMPT_CLASSIFICATION = (
-    M4_CONTENT_GENERATOR_PROMPT + _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK
-)
-M5_PROMPT_CLASSIFICATION = (
-  M5_CONTENT_GENERATOR_PROMPT
-  + _M5_CLASSIFICATION_DECISION_MATRIX_BLOCK
-  + _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK
-)
-
 __all__ = [
     "M3_CONTENT_PROMPT_CLASSIFICATION",
     "M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY",
     "M3_CONTENT_PROMPT_CLASSIFICATION_RF_ONLY",
     "M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT",
-    "M4_PROMPT_CLASSIFICATION",
-    "M5_PROMPT_CLASSIFICATION",
 ]
