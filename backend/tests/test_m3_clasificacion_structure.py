@@ -14,8 +14,6 @@ Zero LLM calls. Zero network access. Zero database access.
 
 from __future__ import annotations
 
-import pytest
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Package importability
@@ -218,40 +216,58 @@ def _make_state(profile: str, family_name: str, variant_algoritmos: list[str] | 
 
 
 def test_graph_dispatch_uses_classification_questions_lr_only() -> None:
-    """m3_questions_generator selects lr_only classification prompt for lr_only variant."""
-    from unittest.mock import MagicMock, patch
+    """m3_questions_generator invokes the LLM with the lr_only variant prompt.
 
-    from case_generator.prompts.clasificacion.M3_clasificacion.questions import (
-        M3_CLASSIFICATION_QUESTIONS_PROMPT_LR_ONLY,
-    )
+    Patches _get_writer_llm (the actual LLM factory used by the node) and
+    _build_base_context so the node runs without a live DB / LLM connection.
+    Asserts unconditionally that the formatted prompt contains the LR-only
+    specialization sentinel text and excludes the RF-only sentinel.
+    """
+    from unittest.mock import MagicMock, patch
 
     state = _make_state("ml_ds", "clasificacion", ["Logistic Regression"])
 
-    captured: dict = {}  # type: ignore[type-arg]
+    # Minimal context satisfying all format placeholders in M3_EXPERIMENT_QUESTIONS_PROMPT.
+    # The node's context.update() will overlay eda_report / m3_content from state.
+    _ctx: dict[str, str] = {
+        "case_id": "test-case",
+        "student_profile": "ml_ds",
+        "primary_family": "clasificacion",
+        "pregunta_eje": "\u00bfQu\u00e9 decisi\u00f3n?",
+        "output_language": "es",
+    }
 
-    def fake_llm_call(prompt: str, tag: str, **_: object) -> str:
-        captured["prompt"] = prompt
-        captured["tag"] = tag
-        return '{"questions": []}'
+    mock_output = MagicMock()
+    mock_output.preguntas = []
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value.invoke.return_value = mock_output
 
-    with patch("case_generator.graph._call_llm_with_tag", side_effect=fake_llm_call, create=True):
-        with patch("case_generator.graph._parse_questions_response", return_value=[], create=True):
-            try:
-                from case_generator.graph import m3_questions_generator
-                from langchain_core.runnables import RunnableConfig
+    with (
+        patch("case_generator.graph._get_writer_llm", return_value=mock_llm),
+        patch("case_generator.graph._build_base_context", return_value=_ctx.copy()),
+    ):
+        from case_generator.graph import m3_questions_generator
+        from langchain_core.runnables import RunnableConfig
 
-                m3_questions_generator(state, RunnableConfig())  # type: ignore[arg-type]
-            except Exception:
-                pass  # state might be incomplete; we only care about prompt selection
+        m3_questions_generator(state, RunnableConfig())  # type: ignore[arg-type]
 
-    if captured.get("prompt"):
-        assert captured["prompt"] == M3_CLASSIFICATION_QUESTIONS_PROMPT_LR_ONLY
-        assert captured.get("tag") == "m3_classification_questions_lr_only"
+    invoke_call = mock_llm.with_structured_output.return_value.invoke.call_args
+    assert invoke_call is not None, (
+        "LLM was not invoked — m3_questions_generator may have raised before the LLM call"
+    )
+    formatted_prompt: str = invoke_call.args[0]
+    # Sentinel text present verbatim only in the LR-only specialization block.
+    assert "deep dive Logistic Regression" in formatted_prompt, (
+        "Expected LR-only variant sentinel in formatted prompt, got:\n"
+        f"{formatted_prompt[:300]!r}"
+    )
+    assert "deep dive Random Forest" not in formatted_prompt, (
+        "RF-only sentinel must not appear in an LR-only dispatch"
+    )
 
 
 def test_graph_dispatch_non_classification_uses_generic_prompt() -> None:
     """m3_questions_generator uses M3_EXPERIMENT_QUESTIONS_PROMPT for regresion/clustering."""
-    from case_generator.graph import _resolve_generation_focus
     from case_generator.prompts import M3_EXPERIMENT_QUESTIONS_PROMPT
 
     # Verify the import path from graph picks up the same object
