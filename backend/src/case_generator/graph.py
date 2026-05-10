@@ -104,6 +104,7 @@ from case_generator.prompts import (
     M3_NOTEBOOK_BASE_TEMPLATE,
     M3_CONTENT_PROMPT_BY_FAMILY,
     M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
+    M3_CLASSIFICATION_QUESTIONS_BY_VARIANT,
     PROMPT_BY_FAMILY,
     M4_PROMPT_BY_FAMILY,
     M4_CONTENT_GENERATOR_PROMPT,
@@ -3931,10 +3932,31 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "m3_content": state.get("m3_content", ""),
         })
 
-        profile, _family = _resolve_generation_focus(state)
+        profile, family = _resolve_generation_focus(state)
         if profile == "ml_ds":
-            prompt = M3_EXPERIMENT_QUESTIONS_PROMPT
-            tag = "m3_experiment_questions"
+            if family == "clasificacion":
+                _algoritmos_raw = _extract_state_algoritmos(state)
+                _algorithm_mode = _extract_state_algorithm_mode(state)
+                _variant, _q_variant_warning = _resolve_classification_notebook_variant(
+                    algorithm_mode=_algorithm_mode,
+                    algoritmos=_algoritmos_raw,
+                )
+                if _q_variant_warning:
+                    logger.warning(
+                        "[m3_questions_generator] question variant fallback — "
+                        "variant=%s algoritmos=%r reason: %s",
+                        _variant,
+                        _algoritmos_raw,
+                        _q_variant_warning,
+                    )
+                prompt = M3_CLASSIFICATION_QUESTIONS_BY_VARIANT.get(
+                    _variant,
+                    M3_CLASSIFICATION_QUESTIONS_BY_VARIANT["lr_rf_contrast"],
+                )
+                tag = f"m3_classification_questions_{_variant}"
+            else:
+                prompt = M3_EXPERIMENT_QUESTIONS_PROMPT
+                tag = "m3_experiment_questions"
         else:
             prompt = M3_AUDIT_QUESTIONS_PROMPT
             tag = "m3_audit_questions"
