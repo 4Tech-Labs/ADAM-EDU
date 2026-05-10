@@ -1,26 +1,20 @@
 """Classification-family narrative prompt variants."""
 
 from case_generator.prompts._shared import (
+    _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK,
     M4_CONTENT_GENERATOR_PROMPT,
     M5_CONTENT_GENERATOR_PROMPT,
-    _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK,
 )
-
-# M3 content prompt constants — canonical definitions live in M3_clasificacion/content.py.
-# Re-imported here so that any legacy ``from .narrative import M3_CONTENT_PROMPT_*``
-# call continues to work without creating a second source of truth.
-from case_generator.prompts.clasificacion.M3_clasificacion.content import (  # noqa: E402
+from case_generator.prompts.clasificacion.M3_clasificacion.content import (
     M3_CONTENT_PROMPT_CLASSIFICATION,
     M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
     M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY,
     M3_CONTENT_PROMPT_CLASSIFICATION_RF_ONLY,
 )
 
-# ══════════════════════════════════════════════════════════════════════════════
 # NOTE: _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK is defined in _shared.py.
-# NOTE: M3_CONTENT_PROMPT_CLASSIFICATION* are now defined in M3_clasificacion/content.py
-#       and re-exported from this module for backward-compat only — do not duplicate.
-# ══════════════════════════════════════════════════════════════════════════════
+# NOTE: M3_CONTENT_PROMPT_CLASSIFICATION* canonical definitions live in M3_clasificacion/content.py.
+#       Re-exported here for backward-compat only — do not redefine.
 
 _M5_CLASSIFICATION_DECISION_MATRIX_BLOCK = """\
 
@@ -48,6 +42,10 @@ M5_PROMPT_CLASSIFICATION = (
 )
 
 __all__ = [
+    "M3_CONTENT_PROMPT_CLASSIFICATION",
+    "M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT",
+    "M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY",
+    "M3_CONTENT_PROMPT_CLASSIFICATION_RF_ONLY",
     "M4_PROMPT_CLASSIFICATION",
     "M5_PROMPT_CLASSIFICATION",
 ]

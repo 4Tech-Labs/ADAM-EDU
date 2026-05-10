@@ -14,7 +14,6 @@ Zero LLM calls. Zero network access. Zero database access.
 
 from __future__ import annotations
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Package importability
 # ──────────────────────────────────────────────────────────────────────────────
@@ -246,8 +245,9 @@ def test_graph_dispatch_uses_classification_questions_lr_only() -> None:
         patch("case_generator.graph._get_writer_llm", return_value=mock_llm),
         patch("case_generator.graph._build_base_context", return_value=_ctx.copy()),
     ):
-        from case_generator.graph import m3_questions_generator
         from langchain_core.runnables import RunnableConfig
+
+        from case_generator.graph import m3_questions_generator
 
         m3_questions_generator(state, RunnableConfig())  # type: ignore[arg-type]
 
@@ -268,10 +268,9 @@ def test_graph_dispatch_uses_classification_questions_lr_only() -> None:
 
 def test_graph_dispatch_non_classification_uses_generic_prompt() -> None:
     """m3_questions_generator uses M3_EXPERIMENT_QUESTIONS_PROMPT for regresion/clustering."""
-    from case_generator.prompts import M3_EXPERIMENT_QUESTIONS_PROMPT
-
     # Verify the import path from graph picks up the same object
     import case_generator.graph as graph_mod
+    from case_generator.prompts import M3_EXPERIMENT_QUESTIONS_PROMPT
 
     assert hasattr(graph_mod, "M3_EXPERIMENT_QUESTIONS_PROMPT"), (
         "graph.py must import M3_EXPERIMENT_QUESTIONS_PROMPT"
@@ -292,3 +291,104 @@ def test_graph_imports_m3_classification_questions_by_variant() -> None:
         "rf_only",
         "lr_rf_contrast",
     }
+
+
+def test_graph_dispatch_uses_classification_questions_rf_only() -> None:
+    """m3_questions_generator invokes the LLM with the rf_only variant prompt.
+
+    Patches _get_writer_llm and _build_base_context so the node runs without a
+    live DB / LLM connection. Asserts the formatted prompt contains the RF-only
+    specialization sentinel and excludes the LR-only sentinel.
+    """
+    from unittest.mock import MagicMock, patch
+
+    state = _make_state("ml_ds", "clasificacion", ["Random Forest"])
+
+    _ctx: dict[str, str] = {
+        "case_id": "test-case",
+        "student_profile": "ml_ds",
+        "primary_family": "clasificacion",
+        "pregunta_eje": "¿Qué decisión?",
+        "output_language": "es",
+    }
+
+    mock_output = MagicMock()
+    mock_output.preguntas = []
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value.invoke.return_value = mock_output
+
+    with (
+        patch("case_generator.graph._get_writer_llm", return_value=mock_llm),
+        patch("case_generator.graph._build_base_context", return_value=_ctx.copy()),
+    ):
+        from langchain_core.runnables import RunnableConfig
+
+        from case_generator.graph import m3_questions_generator
+
+        m3_questions_generator(state, RunnableConfig())  # type: ignore[arg-type]
+
+    invoke_call = mock_llm.with_structured_output.return_value.invoke.call_args
+    assert invoke_call is not None, (
+        "LLM was not invoked — m3_questions_generator may have raised before the LLM call"
+    )
+    formatted_prompt: str = invoke_call.args[0]
+    # Sentinel text present verbatim only in the RF-only specialization block.
+    assert "deep dive Random Forest" in formatted_prompt, (
+        "Expected RF-only variant sentinel in formatted prompt, got:\n"
+        f"{formatted_prompt[:300]!r}"
+    )
+    assert "deep dive Logistic Regression" not in formatted_prompt, (
+        "LR-only sentinel must not appear in an RF-only dispatch"
+    )
+
+
+def test_graph_dispatch_uses_classification_questions_lr_rf_contrast() -> None:
+    """m3_questions_generator invokes the LLM with the lr_rf_contrast variant prompt.
+
+    Patches _get_writer_llm and _build_base_context so the node runs without a
+    live DB / LLM connection. Asserts the formatted prompt contains the contrast
+    specialization sentinel and excludes both single-model sentinels.
+    """
+    from unittest.mock import MagicMock, patch
+
+    state = _make_state("ml_ds", "clasificacion", ["Logistic Regression", "Random Forest"])
+
+    _ctx: dict[str, str] = {
+        "case_id": "test-case",
+        "student_profile": "ml_ds",
+        "primary_family": "clasificacion",
+        "pregunta_eje": "¿Qué decisión?",
+        "output_language": "es",
+    }
+
+    mock_output = MagicMock()
+    mock_output.preguntas = []
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value.invoke.return_value = mock_output
+
+    with (
+        patch("case_generator.graph._get_writer_llm", return_value=mock_llm),
+        patch("case_generator.graph._build_base_context", return_value=_ctx.copy()),
+    ):
+        from langchain_core.runnables import RunnableConfig
+
+        from case_generator.graph import m3_questions_generator
+
+        m3_questions_generator(state, RunnableConfig())  # type: ignore[arg-type]
+
+    invoke_call = mock_llm.with_structured_output.return_value.invoke.call_args
+    assert invoke_call is not None, (
+        "LLM was not invoked — m3_questions_generator may have raised before the LLM call"
+    )
+    formatted_prompt: str = invoke_call.args[0]
+    # Sentinel text present verbatim only in the contrast specialization block.
+    assert "contraste LR baseline vs RF challenger" in formatted_prompt, (
+        "Expected contrast variant sentinel in formatted prompt, got:\n"
+        f"{formatted_prompt[:300]!r}"
+    )
+    assert "deep dive Logistic Regression" not in formatted_prompt, (
+        "LR-only sentinel must not appear in a contrast dispatch"
+    )
+    assert "deep dive Random Forest" not in formatted_prompt, (
+        "RF-only sentinel must not appear in a contrast dispatch"
+    )
