@@ -911,3 +911,49 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 **What:** Borrar backend/src/case_generator/prompts/clasificacion/dataset.py (shim) una vez confirmado que ningun importador directo lo referencia. Ejecutar grep exhaustivo en todo backend/ antes de borrar.
 **Depends on / blocked by:** PR feature/m2-clasificacion-prompt-subfolder mergeado. Requiere auditoria de importadores directos.
 **Status: DONE** — Cerrado por `chore/m2-clsf-dataset-shim-cleanup` (Issue #270). Los 2 importadores directos (tests) migrados a `M2_clasificacion.dataset`. Shim eliminado. Guard negativo `test_shim_deleted_raises_module_not_found` agregado.
+
+---
+
+## TODO-M3-CLSF-A: Crear M4_clasificacion/ subfolder (narrativa M4)
+
+**What:** Crear `backend/src/case_generator/prompts/clasificacion/M4_clasificacion/` como paquete propio, mirroring el patrón `M3_clasificacion/`. Mover el prompt `M4_PROMPT_CLASSIFICATION` (actualmente en `narrative.py`) a `M4_clasificacion/content.py`. Exportar como antes a través de `clasificacion/__init__.py`.
+
+**Why:** Completa la consolidación por módulo dentro de `clasificacion/`. Permite que M4 tenga variantes de algoritmo propias sin saturar `narrative.py`.
+
+**Pros:** Simetría estructural con M1/M2/M3_clasificacion; facilita añadir variantes LR/RF en M4 si se necesitan.
+
+**Cons:** Cambio puro de estructura; no hay lógica nueva. Requiere actualizar imports y `__all__` en `clasificacion/__init__.py` y `narrative.py`.
+
+**Context:** PR `feat/m3-clasificacion-prompt-subfolder` dejó `M4_PROMPT_CLASSIFICATION` y `M5_PROMPT_CLASSIFICATION` en `narrative.py` para no ampliar scope. Este TODO es el siguiente paso natural.
+
+**Depends on / blocked by:** PR `feat/m3-clasificacion-prompt-subfolder` mergeado.
+
+---
+
+## TODO-M3-CLSF-B: Crear M5_clasificacion/ subfolder (narrativa M5)
+
+**What:** Crear `backend/src/case_generator/prompts/clasificacion/M5_clasificacion/` como paquete propio, mirroring `M3_clasificacion/`. Mover `M5_PROMPT_CLASSIFICATION` de `narrative.py` a `M5_clasificacion/content.py`.
+
+**Why:** Mismo razonamiento que TODO-M3-CLSF-A para M5. Permite añadir variantes de memo ejecutivo por perfil de algoritmo sin tocar `narrative.py`.
+
+**Pros:** Simetría con M1–M4; `narrative.py` queda vacía y puede eliminarse en limpieza posterior.
+
+**Cons:** Cambio estructural sin lógica nueva; requiere actualizar imports.
+
+**Depends on / blocked by:** TODO-M3-CLSF-A completado primero (o ambos en el mismo PR).
+
+---
+
+## TODO-M3-CLSF-C: Eliminar M3 content de narrative.py (cleanup de residuos)
+
+**What:** Una vez confirmado que ningún importador externo consume `M3_CONTENT_PROMPT_CLASSIFICATION_*` directamente desde `narrative.py` (ya que son canónicos en `M3_clasificacion/content.py`), eliminar esas definiciones de `narrative.py` para evitar duplicación silenciosa.
+
+**Why:** `narrative.py` aún define `M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY`, `_RF_ONLY` y `M3_CONTENT_PROMPT_CLASSIFICATION` por compatibilidad hacia atrás. Una vez el sistema esté estabilizado en producción, esta duplicación es deuda técnica.
+
+**Pros:** Elimina la fuente de verdad duplicada; `narrative.py` queda solo con M4/M5 hasta TODO-M3-CLSF-A/B.
+
+**Cons:** Requiere audit de importadores directos. Si algún código importa desde `narrative.py` directamente (no a través de `clasificacion/__init__.py`), fallará — el audit debe ejecutarse antes.
+
+**Context:** El `__all__` de `narrative.py` ya fue acotado a `["M4_PROMPT_CLASSIFICATION", "M5_PROMPT_CLASSIFICATION"]` en PR `feat/m3-clasificacion-prompt-subfolder`. Las definiciones de M3 aún existen como variables privadas-de-facto (sin `__all__`). Un `grep -r "from.*narrative import" backend/` confirmará si hay importadores directos.
+
+**Depends on / blocked by:** PR `feat/m3-clasificacion-prompt-subfolder` mergeado. Audit de importadores directos.
