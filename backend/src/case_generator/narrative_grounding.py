@@ -15,7 +15,6 @@ from collections.abc import Mapping, Sequence
 from numbers import Real
 from typing import Any
 
-
 NARRATIVE_GROUNDING_WARNING = (
     "m3_metrics_summary ausente — grounding deshabilitado para este job"
 )
@@ -46,14 +45,18 @@ _ADJACENT_MODEL_METRIC_NUMBER_RE = re.compile(
     r"(?:auc|roc|f1|accuracy|exactitud|precision|precisión|recall|sensibilidad|"
     r"especificidad|prevalencia|prevalence|baseline|dummy|coeficiente|coefficient|"
     r"importancia|importance|shap|permutation)"
-    r"\s*(?:=|:)?\s*(?P<value>[+-]?\d+(?:[.,]\d+)?)\s*%?"
+    r"\s*(?:=|:|\()?\s*(?P<value>[+-]?\d+(?:[.,]\d+)?)\s*%?"
 )
-# Clause-level boundaries: sentence punctuation plus list connectors. Used to
-# scope model-metric keyword detection to the immediate clause around a number
-# so business figures ("ROI 35% y AUC 72%") in the same sentence as a model
-# metric are not transitively flagged as unanchored.
+# Clause-level boundaries: sentence punctuation, list connectors, and
+# parentheses/brackets. Parentheses bound a parenthetical scope so that a
+# business number inside «(estimando una mejora del 15%)» is not misclassified
+# as a model metric due to a keyword like «precisión» that appears OUTSIDE the
+# opening paren in the surrounding sentence.
+# The adjacent regex above (which includes «\(» as an optional separator)
+# ensures that «AUC (72%)» and «recall(68%)» are still caught even though the
+# «(» now acts as a clause boundary.
 _CLAUSE_BOUNDARY_RE = re.compile(
-    r"[.,;:\n|\u2014\u2013]|\s+(?:y|o|and|or)\s+",
+    r"[.,;:\n|\u2014\u2013()]|\s+(?:y|o|and|or)\s+",
     flags=re.IGNORECASE,
 )
 _DATE_RANGE_RE = re.compile(r"\b(?:19|20)\d{2}\s*[-–]\s*(?:19|20)\d{2}\b")
@@ -282,8 +285,7 @@ def _is_thousands_formatted(raw: str) -> bool:
 
 
 def _iter_model_metric_numbers(prose: str) -> list[tuple[str, float, bool]]:
-    """Yield (raw_number, float_value, allows_skipped_zero) for numbers that must
-    be anchored to the computed metrics block.
+    """Yield (raw_number, float_value, allows_skipped_zero) for numbers that must be anchored.
 
     Two guards protect business figures from being mis-classified as model
     metrics:

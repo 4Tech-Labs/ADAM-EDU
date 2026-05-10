@@ -32,7 +32,6 @@ from case_generator.prompts import (
     M5_QUESTIONS_GENERATOR_PROMPT,
 )
 
-
 SUMMARY = {
     "auc_lr": 0.7234,
     "auc_rf": 0.8123,
@@ -587,6 +586,61 @@ def test_prompts_inject_computed_metrics_block_only_for_classification() -> None
         assert "computed_metrics_block" not in M3_CONTENT_PROMPT_BY_FAMILY[family]
         assert "computed_metrics_block" not in M4_PROMPT_BY_FAMILY[family]
         assert "computed_metrics_block" not in M5_PROMPT_BY_FAMILY[family]
+
+
+def test_validator_does_not_flag_business_estimate_inside_parenthetical_near_precision_keyword() -> None:
+    """Regression: business % inside a parenthetical must not inherit metric keywords from outside.
+
+    Production failure (May 2026): M4 for a Random Forest case generated
+    ``"manufactura de alta precisión (estimando una mejora máxima del 15%
+    para no exceder proyecciones de eficiencia irreales)"``.
+    ``_model_metric_clause`` extended backward past the ``(`` and found
+    ``"precisión"`` in the surrounding sentence, mis-classifying the business
+    estimate 15% as a model metric.  Because the metrics block for that job
+    had no anchor near 15%, the validator raised UNANCHORED and the job failed.
+
+    Fix: parentheses ``()`` are now clause boundaries in ``_CLAUSE_BOUNDARY_RE``
+    so parenthetical content is evaluated in isolation.  ``_ADJACENT_MODEL_METRIC_NUMBER_RE``
+    was simultaneously extended with ``\\(`` as an optional separator so
+    ``"AUC (72%)"`` style citations are still caught directly.
+    """
+    # Metrics block with no anchor near 15% (e.g. prevalence = 7%)
+    block = build_computed_metrics_block(
+        {"auc_lr": 0.7234, "auc_rf": 0.8123, "f1_macro": 0.6543, "prevalence": 0.07}
+    )
+
+    # The exact pattern from the production failure: business estimate inside a
+    # parenthetical, preceded in the same sentence by the industry term "precisión".
+    prose_with_parens = (
+        "En el contexto de la industria de manufactura de alta precisión "
+        "(estimando una mejora máxima del 15% para no exceder proyecciones "
+        "de eficiencia irreales), calculamos el beneficio directo de implementar el modelo."
+    )
+    assert validate_narrative_grounding(prose_with_parens, block) == [], (
+        "15% inside a parenthetical must not be flagged — it is a business estimate, "
+        "not a model metric, even though 'precisión' appears outside the paren."
+    )
+
+    # Sanity: an unanchored AUC value cited directly must still be flagged.
+    bad_prose = "El AUC del modelo fue 87% en producción."
+    assert "UNANCHORED: 87" in validate_narrative_grounding(bad_prose, block)
+
+    # Sanity: AUC cited in parenthetical style must also be caught.
+    bad_paren_prose = "El modelo Random Forest (AUC 87%) supera el baseline."
+    assert "UNANCHORED: 87" in validate_narrative_grounding(bad_paren_prose, block)
+
+
+def test_validator_catches_model_metric_inside_parenthetical_with_keyword_also_inside() -> None:
+    """Model metric inside parens is still caught when the keyword is ALSO inside the parens.
+
+    Ensures the paren-as-boundary fix does not suppress true positives where
+    both the keyword and the unanchored number share a parenthetical scope.
+    """
+    block = build_computed_metrics_block({"auc_lr": 0.7234})
+
+    # keyword and number both inside the parenthetical — must still be caught
+    bad_prose = "El modelo (con AUC del 87%) supera al baseline."
+    assert "UNANCHORED: 87" in validate_narrative_grounding(bad_prose, block)
 
 
 def test_m4_accepts_qualitative_minimum_success_condition(
