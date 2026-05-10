@@ -502,6 +502,8 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 
 **Context:** Reconfirmado en la corrección async de Issue #112. La decisión explícita es mantener Fase 2 enfocada en `AsyncPostgresSaver` + resume funcional y diferir la política de retención hasta que el flujo durable esté estable.
 
+**Depends on / blocked by:** Estabilizar primero el flujo de resume con el wiring async lazy/fail-closed y acordar política de compliance para retención de trazas de ejecución.
+
 ---
 
 ## TODO-M5-clasificacion-A: Mover `M5_PROMPT_CLASSIFICATION` a subcarpeta `M5_clasificacion/`
@@ -535,8 +537,6 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 **Context:** El `m4_chart_generator` ya usa `_extract_state_algorithm_mode(state)` y pasa `algorithm_mode` al prompt. El Tornado chart en `M4_CHART_PROMPT_CLASSIFICATION` tiene una nota `(adapta el eje si es single-mode vs contrast)` para guiar al LLM, pero sin branching duro.
 
 **Depends on / blocked by:** PR `feat/m4-clasificacion-prompt-subfolder` mergeado en main y al menos 1 semana de telemetría de jobs M4-clasificacion en staging.
-
-**Depends on / blocked by:** Estabilizar primero el flujo de resume con el wiring async lazy/fail-closed y acordar política de compliance para retención de trazas de ejecución.
 
 ---
 

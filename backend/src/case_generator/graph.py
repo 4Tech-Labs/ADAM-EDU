@@ -3220,7 +3220,7 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "m4_content": state.get("m4_content", ""),
             "anexo_financiero": state.get("doc1_anexo_financiero", ""),
             "algorithm_mode": _extract_state_algorithm_mode(state) or "single",
-            "computed_metrics_block": state.get("m3_metrics_summary", "") or "",
+            "computed_metrics_block": build_computed_metrics_block(state.get("m3_metrics_summary")),
         })
 
         prompt = _resolve_family_prompt(state, M4_QUESTIONS_PROMPT_BY_FAMILY, M4_QUESTIONS_GENERATOR_PROMPT)
@@ -4775,7 +4775,7 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "m4_content": state.get("m4_content", ""),
             "anexo_financiero": state.get("doc1_anexo_financiero", ""),
             "algorithm_mode": _extract_state_algorithm_mode(state) or "single",
-            "computed_metrics_block": state.get("m3_metrics_summary", "") or "",
+            "computed_metrics_block": build_computed_metrics_block(state.get("m3_metrics_summary")),
         })
 
         prompt = _resolve_family_prompt(state, M4_CHARTS_PROMPT_BY_FAMILY, M4_CHART_GENERATOR_PROMPT)

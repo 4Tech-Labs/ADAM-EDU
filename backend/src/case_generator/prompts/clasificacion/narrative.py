@@ -2,7 +2,6 @@
 
 from case_generator.prompts._shared import (
     _NARRATIVE_GROUNDING_CLASSIFICATION_BLOCK,
-    M4_CONTENT_GENERATOR_PROMPT,
     M5_CONTENT_GENERATOR_PROMPT,
 )
 from case_generator.prompts.clasificacion.M3_clasificacion.content import (
