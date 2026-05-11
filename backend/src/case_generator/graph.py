@@ -97,6 +97,7 @@ from case_generator.prompts import (
     M4_QUESTIONS_GENERATOR_PROMPT,
     M4_QUESTIONS_PROMPT_BY_FAMILY,
     M5_QUESTIONS_GENERATOR_PROMPT,
+    M5_QUESTIONS_PROMPT_BY_FAMILY,
     # v8 M3 — prompts por perfil (aliases backward-compat también disponibles)
     M3_AUDIT_PROMPT,
     M3_EXPERIMENT_PROMPT,
@@ -3273,15 +3274,26 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             complex_q = all_q[-3:]
 
         context = _build_base_context(state)
+        _, family = _resolve_generation_focus(
+            state, default_unresolved_ml_ds_to_classification=True
+        )
+        prompt_text = _resolve_family_prompt(
+            state, M5_QUESTIONS_PROMPT_BY_FAMILY, M5_QUESTIONS_GENERATOR_PROMPT
+        )
         context.update({
             "m5_content": state.get("m5_content", ""),
             "doc1_preguntas_complejas": json.dumps(complex_q[:3], ensure_ascii=False),
             # main_risk_from_m3_m4 e implementation_timeframe vienen de _build_base_context
+            "computed_metrics_block": (
+                build_computed_metrics_block(state.get("m3_metrics_summary"))
+                if family == "clasificacion"
+                else ""
+            ),
         })
 
         resultado: GeneradorPreguntasM5Output = llm.with_structured_output(
             GeneradorPreguntasM5Output
-        ).invoke(M5_QUESTIONS_GENERATOR_PROMPT.format(**context))
+        ).invoke(prompt_text.format(**context))
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
         print(f"[m5_questions_generator] {len(preguntas)} memorándum final")
