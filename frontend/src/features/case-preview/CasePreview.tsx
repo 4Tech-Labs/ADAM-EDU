@@ -21,6 +21,10 @@ interface Props {
     isAlreadyPublished?: boolean;
 }
 
+function sanitizeExportTitle(title: string): string {
+    return title.replace(/[^a-zA-ZáéíóúñÁÉÍÓÚÑ0-9 ]/g, "").replace(/\s+/g, "_");
+}
+
 export function CasePreview({
     caseData,
     onEditParams,
@@ -121,7 +125,7 @@ export function CasePreview({
         const anchor = document.createElement("a");
 
         anchor.href = url;
-        anchor.download = `${result.title.replace(/[^a-zA-ZáéíóúñÁÉÍÓÚÑ0-9 ]/g, "").replace(/\s+/g, "_")}_${activeModule}.html`;
+        anchor.download = `${sanitizeExportTitle(result.title)}_${activeModule}.html`;
 
         document.body.appendChild(anchor);
         anchor.click();
@@ -130,11 +134,8 @@ export function CasePreview({
     }, [activeModule, result.title, visibleModules]);
 
     const handleDownloadPDF = useCallback(() => {
-        const safeTitle = result.title
-            .replace(/[^a-zA-ZáéíóúñÁÉÍÓÚÑ0-9 ]/g, "")
-            .replace(/\s+/g, "_");
         const prevTitle = document.title;
-        document.title = `${safeTitle}_${activeModule}`;
+        document.title = `${sanitizeExportTitle(result.title)}_${activeModule}`;
         const restoreTitle = () => {
             document.title = prevTitle;
             window.removeEventListener("afterprint", restoreTitle);
@@ -181,18 +182,18 @@ export function CasePreview({
     }
 
     /* Remove paper card shadow + clipping */
-    .paper-shadow {
+    .case-preview .paper-shadow {
         overflow: visible !important;
         box-shadow: none !important;
         border-radius: 0 !important;
     }
 
     /* NotebookViewer SyntaxHighlighter has inline maxHeight: 600px on <pre> */
-    pre { max-height: none !important; overflow: visible !important; }
+    .case-preview pre { max-height: none !important; overflow: visible !important; }
 
-    /* Avoid splitting charts and tables across pages */
-    .js-plotly-plot { page-break-inside: avoid; }
-    .case-preview table { page-break-inside: avoid; }
+    /* Avoid splitting charts and tables across pages (legacy + modern CSS Fragmentation) */
+    .js-plotly-plot { page-break-inside: avoid; break-inside: avoid; }
+    .case-preview table { page-break-inside: avoid; break-inside: avoid; }
 }
 `}</style>
             <div className={`case-preview flex ${PORTAL_SHELL_HEIGHT_VH_CLASSNAME} overflow-hidden font-sans`}>
