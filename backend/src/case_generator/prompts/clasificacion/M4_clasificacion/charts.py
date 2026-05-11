@@ -46,12 +46,13 @@ El contexto incluye el análisis de impacto M4 de un modelo de clasificación
 # Estructura OBLIGATORIA de los 3 gráficos
 
 ## Gráfico 1: Flujo de Caja y Punto de Equilibrio (Payback) — Pipeline ML
-- **chart_type:** `"bar"` (flujo neto por período) + `"line"` (acumulado)
+- **chart_type:** `"bar"` — un único valor en este campo (el schema no admite compuestos).
+  El trace de acumulado se añade como trace `"line"` dentro del array `traces`.
 - **Concepto:** Mostrar inversión inicial (infraestructura ML, licencias, datos) →
   flujos netos por período → punto donde el acumulado cruza cero ("Valle de la Muerte").
 - **Traces:**
-  - bar: flujo neto por período (incluir costos de reentrenamiento periódico)
-  - line: acumulado
+  - `{"type": "bar", ...}`: flujo neto por período (incluir costos de reentrenamiento periódico)
+  - `{"type": "line", ...}`: flujo acumulado (cruza cero en el payback period)
 - **Datos:** Extraer inversión de Exhibit 1, proyectar flujos netos según la opción
   recomendada en M4 content. Usar el horizonte temporal del caso.
 - **Títulos técnico-financieros:** ej. "ROI del Pipeline ML vs Inversión en Infra".
@@ -104,7 +105,7 @@ El contexto incluye el análisis de impacto M4 de un modelo de clasificación
   "subtitle": "string",
   "library": "plotly",
   "chart_type": "waterfall|bar|line",
-  "traces": [{{ "type": "...", "x": [...], "y": [...], "name": "..." }}],
+  "traces": [{{ "type": "bar|line|scatter", "x": [...], "y": [...], "name": "..." }}],
   "layout": {{ "xaxis": {{"title": "..."}}, "yaxis": {{"title": "..."}}, "showlegend": true, "template": "plotly_white" }},
   "source": "Análisis Financiero — {case_id}",
   "notes": "string (insight + método de cálculo + referencia a métricas M3 si aplica)",
