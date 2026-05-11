@@ -51,8 +51,8 @@ El contexto incluye el análisis de impacto M4 de un modelo de clasificación
 - **Concepto:** Mostrar inversión inicial (infraestructura ML, licencias, datos) →
   flujos netos por período → punto donde el acumulado cruza cero ("Valle de la Muerte").
 - **Traces:**
-  - `{"type": "bar", ...}`: flujo neto por período (incluir costos de reentrenamiento periódico)
-  - `{"type": "line", ...}`: flujo acumulado (cruza cero en el payback period)
+  - `{{"type": "bar", ...}}`: flujo neto por período (incluir costos de reentrenamiento periódico)
+  - `{{"type": "line", ...}}`: flujo acumulado (cruza cero en el payback period)
 - **Datos:** Extraer inversión de Exhibit 1, proyectar flujos netos según la opción
   recomendada en M4 content. Usar el horizonte temporal del caso.
 - **Títulos técnico-financieros:** ej. "ROI del Pipeline ML vs Inversión en Infra".
