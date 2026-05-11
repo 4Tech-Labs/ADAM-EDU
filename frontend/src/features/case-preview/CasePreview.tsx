@@ -129,6 +129,20 @@ export function CasePreview({
         URL.revokeObjectURL(url);
     }, [activeModule, result.title, visibleModules]);
 
+    const handleDownloadPDF = useCallback(() => {
+        const safeTitle = result.title
+            .replace(/[^a-zA-ZáéíóúñÁÉÍÓÚÑ0-9 ]/g, "")
+            .replace(/\s+/g, "_");
+        const prevTitle = document.title;
+        document.title = `${safeTitle}_${activeModule}`;
+        const restoreTitle = () => {
+            document.title = prevTitle;
+            window.removeEventListener("afterprint", restoreTitle);
+        };
+        window.addEventListener("afterprint", restoreTitle);
+        window.print();
+    }, [activeModule, result.title]);
+
     const handleResumeClick = useCallback(() => {
         setIsResuming(true);
         onResumeEDA?.();
@@ -144,6 +158,43 @@ export function CasePreview({
     return (
         <>
             <style>{CASE_VIEWER_STYLES}</style>
+            <style>{`
+@media print {
+    /* Hide navigation chrome */
+    .case-preview aside { display: none !important; }
+    .case-preview main > header { display: none !important; }
+
+    /* Release overflow from layout shell and body useEffect */
+    html, body { overflow: visible !important; height: auto !important; }
+    .case-preview { overflow: visible !important; height: auto !important; }
+    .case-preview main {
+        overflow: visible !important;
+        height: auto !important;
+        display: block !important;
+    }
+
+    /* Release Tailwind overflow-hidden / overflow-y-auto containers */
+    .case-preview .overflow-hidden,
+    .case-preview .overflow-y-auto {
+        overflow: visible !important;
+        height: auto !important;
+    }
+
+    /* Remove paper card shadow + clipping */
+    .paper-shadow {
+        overflow: visible !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+    }
+
+    /* NotebookViewer SyntaxHighlighter has inline maxHeight: 600px on <pre> */
+    pre { max-height: none !important; overflow: visible !important; }
+
+    /* Avoid splitting charts and tables across pages */
+    .js-plotly-plot { page-break-inside: avoid; }
+    .case-preview table { page-break-inside: avoid; }
+}
+`}</style>
             <div className={`case-preview flex ${PORTAL_SHELL_HEIGHT_VH_CLASSNAME} overflow-hidden font-sans`}>
                 <aside className="flex flex-col flex-shrink-0 bg-[#0f172a] text-slate-400" style={{ width: 280 }}>
                     <div className="h-16 flex items-center px-5 border-b border-slate-800 flex-shrink-0">
@@ -247,9 +298,8 @@ export function CasePreview({
 
                             <button
                                 type="button"
-                                disabled
-                                title="Exportación PDF próximamente"
-                                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 border border-slate-200 text-slate-400 text-xs font-semibold rounded-lg cursor-not-allowed opacity-50"
+                                onClick={handleDownloadPDF}
+                                className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
                             >
                                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
