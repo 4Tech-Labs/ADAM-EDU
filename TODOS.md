@@ -995,7 +995,7 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 
 ---
 
-## TODO-M5-A: Mover M5_QUESTIONS_GENERATOR_PROMPT de prompts/__init__.py a prompts/_shared.py
+## ~~TODO-M5-A~~: Mover M5_QUESTIONS_GENERATOR_PROMPT de prompts/__init__.py a prompts/_shared.py ✅ DONE (PR #277 — refactor/m5-questions-generator-prompt-to-shared)
 
 **What:** M5_QUESTIONS_GENERATOR_PROMPT (el prompt base de M5 para familias regresion/clustering/serie_temporal)
 actua hoy como fallback generico en M5_QUESTIONS_PROMPT_BY_FAMILY y esta definido directamente en
