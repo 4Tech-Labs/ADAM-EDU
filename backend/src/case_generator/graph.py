@@ -95,6 +95,7 @@ from case_generator.prompts import (
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
     ClassificationNotebookVariant,
     M4_QUESTIONS_GENERATOR_PROMPT,
+    M4_QUESTIONS_PROMPT_BY_FAMILY,
     M5_QUESTIONS_GENERATOR_PROMPT,
     # v8 M3 — prompts por perfil (aliases backward-compat también disponibles)
     M3_AUDIT_PROMPT,
@@ -109,6 +110,7 @@ from case_generator.prompts import (
     M4_PROMPT_BY_FAMILY,
     M4_CONTENT_GENERATOR_PROMPT,
     M4_CHART_GENERATOR_PROMPT,
+    M4_CHARTS_PROMPT_BY_FAMILY,
     M5_PROMPT_BY_FAMILY,
     M5_CONTENT_GENERATOR_PROMPT,
     TEACHING_NOTE_PART1_PROMPT,
@@ -3217,11 +3219,14 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         context.update({
             "m4_content": state.get("m4_content", ""),
             "anexo_financiero": state.get("doc1_anexo_financiero", ""),
+            "algorithm_mode": _extract_state_algorithm_mode(state) or "single",
+            "computed_metrics_block": build_computed_metrics_block(state.get("m3_metrics_summary")),
         })
 
+        prompt = _resolve_family_prompt(state, M4_QUESTIONS_PROMPT_BY_FAMILY, M4_QUESTIONS_GENERATOR_PROMPT)
         resultado: GeneradorPreguntasOutput = llm.with_structured_output(
             GeneradorPreguntasOutput
-        ).invoke(M4_QUESTIONS_GENERATOR_PROMPT.format(**context))
+        ).invoke(prompt.format(**context))
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
         print(f"[m4_questions_generator] {len(preguntas)} preguntas")
@@ -3562,6 +3567,35 @@ def _prepare_classification_narrative_grounding(
             "narrative_grounding_warning": NARRATIVE_GROUNDING_WARNING
         }
     return metrics_block, True, {}
+
+
+def _resolve_family_prompt(
+    state: ADAMState,
+    prompt_by_family: dict[str, str],
+    default_prompt: str,
+) -> str:
+    """Return the family-specific prompt for non-narrative M4 nodes (questions, charts).
+
+    Mirrors the family-resolution logic used by ``_select_narrative_prompt`` but
+    without narrative grounding: no metrics block, no reprompt loop.  The caller
+    is responsible for injecting ``algorithm_mode`` and ``computed_metrics_block``
+    into the context dict separately.
+
+    Family dispatch is ONLY applied for ``ml_ds`` profiles — non-ml_ds profiles
+    (e.g. ``business``) always receive ``default_prompt``.  This mirrors
+    ``_select_narrative_prompt``'s gating logic exactly.
+    """
+    effective_family: str | None = None  # stays None for non-ml_ds → returns default
+    profile, resolved_family = _resolve_generation_focus(state)
+    if profile == "ml_ds":
+        effective_family = resolved_family
+        if effective_family is None:
+            effective_family = "clasificacion"
+            logger.warning(
+                "[m4_dispatch] family unresolved for ml_ds; defaulting to clasificacion",
+                extra={"case_id": state.get("case_id"), "algoritmos": _extract_state_algoritmos(state)},
+            )
+    return prompt_by_family.get(effective_family or "", default_prompt)
 
 
 def _select_narrative_prompt(
@@ -4740,11 +4774,14 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
         context.update({
             "m4_content": state.get("m4_content", ""),
             "anexo_financiero": state.get("doc1_anexo_financiero", ""),
+            "algorithm_mode": _extract_state_algorithm_mode(state) or "single",
+            "computed_metrics_block": build_computed_metrics_block(state.get("m3_metrics_summary")),
         })
 
+        prompt = _resolve_family_prompt(state, M4_CHARTS_PROMPT_BY_FAMILY, M4_CHART_GENERATOR_PROMPT)
         result: EDAChartGeneratorOutput = llm.with_structured_output(
             EDAChartGeneratorOutput
-        ).invoke(M4_CHART_GENERATOR_PROMPT.format(**context))
+        ).invoke(prompt.format(**context))
         charts = [c.model_dump() for c in result.charts]
         print(f"[m4_chart_generator] {len(charts)} charts generados")
         return {"m4_charts": charts, "current_agent": "m4_chart_generator"}
