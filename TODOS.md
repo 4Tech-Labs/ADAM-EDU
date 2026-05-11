@@ -991,3 +991,30 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 **Context:** El `__all__` de `narrative.py` ya fue acotado a `["M4_PROMPT_CLASSIFICATION", "M5_PROMPT_CLASSIFICATION"]` en PR `feat/m3-clasificacion-prompt-subfolder`. Las definiciones de M3 aún existen como variables privadas-de-facto (sin `__all__`). Un `grep -r "from.*narrative import" backend/` confirmará si hay importadores directos.
 
 **Depends on / blocked by:** PR `feat/m3-clasificacion-prompt-subfolder` mergeado. Audit de importadores directos.
+
+
+---
+
+## TODO-M5-A: Mover M5_QUESTIONS_GENERATOR_PROMPT de prompts/__init__.py a prompts/_shared.py
+
+**What:** M5_QUESTIONS_GENERATOR_PROMPT (el prompt base de M5 para familias regresion/clustering/serie_temporal)
+actua hoy como fallback generico en M5_QUESTIONS_PROMPT_BY_FAMILY y esta definido directamente en
+ackend/src/case_generator/prompts/__init__.py. Moverlo a prompts/_shared.py junto con otros
+prompts base (M1_QUESTIONS_GENERATOR_PROMPT, M2_SCHEMA_DESIGNER_PROMPT, etc.) mejora la consistencia
+arquitectonica del modulo.
+
+**Why:** Siguiendo el patron de M1-M4 donde los prompts base viven en _shared.py y el dispatch
+table en __init__.py. _shared.py ya importa desde familias especializadas; este cambio lo
+simetria con el resto de la columna de prompts base.
+
+**Pros:** Reduce la longitud de __init__.py (que ya tiene muchas definiciones inline); la fuente
+de verdad del prompt base queda en _shared.py junto al resto; facilita tests directos del prompt base.
+
+**Cons:** Requiere actualizar la importacion en __init__.py (de definicion inline a import desde _shared).
+Bajo riesgo de rotura si solo __init__.py es el importador canonico.
+
+**Context:** Diferido de Phase 2 de PR feat/m5-clasificacion-subfolder (Decision 4A). El dispatch
+M5_QUESTIONS_PROMPT_BY_FAMILY permanece en __init__.py y continua funcionando con el fallback
+sin cambios visibles desde el exterior.
+
+**Depends on / blocked by:** PR feat/m5-clasificacion-subfolder mergeado. Independiente despues.
