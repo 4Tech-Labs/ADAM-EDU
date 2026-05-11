@@ -22,13 +22,23 @@ Covers:
 These are pure-Python unit tests — no LLM calls, no DB, no fixtures.
 """
 
-# ── 1. Import smoke ──────────────────────────────────────────────────────────
+import inspect as _inspect
 
+from case_generator.graph import _resolve_family_prompt
+from case_generator.prompts import (
+    M4_CHART_GENERATOR_PROMPT,
+    M4_CHARTS_PROMPT_BY_FAMILY,
+    M4_QUESTIONS_GENERATOR_PROMPT,
+    M4_QUESTIONS_PROMPT_BY_FAMILY,
+)
 from case_generator.prompts.clasificacion.M4_clasificacion import (
     M4_CHART_PROMPT_CLASSIFICATION,
     M4_NARRATIVE_PROMPT_CLASSIFICATION,
     M4_QUESTIONS_PROMPT_CLASSIFICATION,
 )
+from case_generator.prompts.clasificacion.narrative import M4_PROMPT_CLASSIFICATION
+
+# ── 1. Import smoke ──────────────────────────────────────────────────────────
 
 
 def test_m4_clasificacion_import_smoke_narrative() -> None:
@@ -51,8 +61,6 @@ def test_m4_clasificacion_import_smoke_charts() -> None:
 
 # ── 2. Backward-compat alias ─────────────────────────────────────────────────
 
-from case_generator.prompts.clasificacion.narrative import M4_PROMPT_CLASSIFICATION  # noqa: E402, I001
-
 
 def test_backward_compat_alias_is_same_object() -> None:
     """M4_PROMPT_CLASSIFICATION (narrative.py) must resolve to M4_NARRATIVE_PROMPT_CLASSIFICATION."""
@@ -63,13 +71,6 @@ def test_backward_compat_alias_is_same_object() -> None:
 
 
 # ── 3. Questions dispatch table ───────────────────────────────────────────────
-
-from case_generator.prompts import (  # noqa: E402
-    M4_CHART_GENERATOR_PROMPT,
-    M4_CHARTS_PROMPT_BY_FAMILY,
-    M4_QUESTIONS_GENERATOR_PROMPT,
-    M4_QUESTIONS_PROMPT_BY_FAMILY,
-)
 
 
 def test_m4_questions_dispatch_clasificacion_returns_classification_prompt() -> None:
@@ -106,8 +107,6 @@ def test_m4_charts_dispatch_non_clasificacion_returns_global_prompt() -> None:
 
 
 # ── 5-7. _resolve_family_prompt helper ───────────────────────────────────────
-
-from case_generator.graph import _resolve_family_prompt  # noqa: E402
 
 
 def _make_state(*, student_profile: str = "ml_ds", algoritmos: list[str] | None = None) -> dict:
@@ -151,8 +150,6 @@ def test_resolve_family_prompt_business_returns_default() -> None:
 
 
 # ── 8. Context injection keys (questions) ────────────────────────────────────
-
-import inspect as _inspect  # noqa: E402
 
 
 def test_m4_questions_generator_node_injects_algorithm_mode() -> None:
