@@ -1,4 +1,4 @@
-# TODOS
+﻿# TODOS
 
 Deuda técnica y mejoras diferidas identificadas durante el desarrollo.
 
@@ -999,7 +999,7 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 
 **What:** M5_QUESTIONS_GENERATOR_PROMPT (el prompt base de M5 para familias regresion/clustering/serie_temporal)
 actua hoy como fallback generico en M5_QUESTIONS_PROMPT_BY_FAMILY y esta definido directamente en
-ackend/src/case_generator/prompts/__init__.py. Moverlo a prompts/_shared.py junto con otros
+ackend/src/case_generator/prompts/__init__.py. Moverlo a prompts/_shared.py junto con otros
 prompts base (M1_QUESTIONS_GENERATOR_PROMPT, M2_SCHEMA_DESIGNER_PROMPT, etc.) mejora la consistencia
 arquitectonica del modulo.
 

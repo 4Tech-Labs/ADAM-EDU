@@ -24,12 +24,17 @@ Differences from the global prompt
 
 Placeholders expected in context
 ---------------------------------
-From ``_build_base_context()``:  algoritmos, algorithm_mode, case_id,
-    student_profile, output_language, nombre_empresa, industria,
-    output_depth, titulo, pregunta_eje, main_risk_from_m3_m4,
-    implementation_timeframe, primary_family.
+From ``_build_base_context()``:  algoritmos, case_id, student_profile,
+    output_language, nombre_empresa, industria, output_depth, titulo,
+    pregunta_eje, main_risk_from_m3_m4, implementation_timeframe,
+    primary_family.
 Added by the calling node:       m5_content, doc1_preguntas_complejas,
-                                 computed_metrics_block.
+                                 algorithm_mode, computed_metrics_block.
+
+Note: ``algorithm_mode`` is NOT provided by ``_build_base_context()``.
+It is injected explicitly by ``graph.py::m5_questions_generator`` via
+``_extract_state_algorithm_mode(state) or "single"``.  Any new node that
+reuses this prompt must inject ``algorithm_mode`` the same way.
 """
 
 M5_QUESTIONS_PROMPT_CLASSIFICATION: str = """\
