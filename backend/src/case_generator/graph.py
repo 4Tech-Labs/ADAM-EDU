@@ -3284,6 +3284,7 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "m5_content": state.get("m5_content", ""),
             "doc1_preguntas_complejas": json.dumps(complex_q[:3], ensure_ascii=False),
             # main_risk_from_m3_m4 e implementation_timeframe vienen de _build_base_context
+            "algorithm_mode": _extract_state_algorithm_mode(state) or "single",
             "computed_metrics_block": (
                 build_computed_metrics_block(state.get("m3_metrics_summary"))
                 if family == "clasificacion"
