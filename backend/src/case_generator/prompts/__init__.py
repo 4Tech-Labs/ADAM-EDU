@@ -50,7 +50,9 @@ from case_generator.prompts.clasificacion import (
     M4_NARRATIVE_PROMPT_CLASSIFICATION,
     M4_PROMPT_CLASSIFICATION,
     M4_QUESTIONS_PROMPT_CLASSIFICATION,
+    M5_NARRATIVE_PROMPT_CLASSIFICATION,
     M5_PROMPT_CLASSIFICATION,
+    M5_QUESTIONS_PROMPT_CLASSIFICATION,
     SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
 )
 
@@ -1415,6 +1417,18 @@ Marco temporal de implementación: {implementation_timeframe}
 case_id: {case_id} | student_profile: {student_profile} | primary_family: {primary_family} | output_language: {output_language}
 """
 
+# ── M5_QUESTIONS_PROMPT_BY_FAMILY — dispatch table consumed by
+# graph.py::m5_questions_generator.  The clasificacion entry carries
+# {computed_metrics_block}, {algoritmos}, and {algorithm_mode} placeholders
+# so the teacher solucion_esperada is grounded in verified M3 metrics.
+# Non-clasificacion families fall back to the generic M5_QUESTIONS_GENERATOR_PROMPT.
+M5_QUESTIONS_PROMPT_BY_FAMILY: dict[str, str] = {
+    "clasificacion": M5_QUESTIONS_PROMPT_CLASSIFICATION,
+    "regresion": M5_QUESTIONS_GENERATOR_PROMPT,
+    "clustering": M5_QUESTIONS_GENERATOR_PROMPT,
+    "serie_temporal": M5_QUESTIONS_GENERATOR_PROMPT,
+}
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TÉCNICO CONDICIONAL — NOTEBOOK (Arquitectura Híbrida v9)
@@ -2522,9 +2536,12 @@ __all__ = [
   "M4_QUESTIONS_PROMPT_CLASSIFICATION",
   "M4_QUESTIONS_PROMPT_BY_FAMILY",
   "M5_CONTENT_GENERATOR_PROMPT",
+  "M5_NARRATIVE_PROMPT_CLASSIFICATION",
   "M5_PROMPT_BY_FAMILY",
   "M5_PROMPT_CLASSIFICATION",
   "M5_QUESTIONS_GENERATOR_PROMPT",
+  "M5_QUESTIONS_PROMPT_BY_FAMILY",
+  "M5_QUESTIONS_PROMPT_CLASSIFICATION",
   "NOTEBOOK_BASE_TEMPLATE",
   "NOTEBOOK_SOCRATIC_PROMPT",
   "CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT",
