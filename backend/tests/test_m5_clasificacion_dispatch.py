@@ -172,3 +172,13 @@ def test_m5_questions_generator_node_uses_family_dispatch() -> None:
         "m5_questions_generator must dispatch via M5_QUESTIONS_PROMPT_BY_FAMILY "
         "instead of the hardcoded M5_QUESTIONS_GENERATOR_PROMPT."
     )
+
+
+def test_m5_questions_generator_prompt_content_integrity() -> None:
+    """Prompt moved to _shared.py — verify content was copied intact (TODO-M5-A)."""
+    assert len(M5_QUESTIONS_GENERATOR_PROMPT) > 500, (
+        "M5_QUESTIONS_GENERATOR_PROMPT appears truncated after move to _shared.py"
+    )
+    assert "{case_id}" in M5_QUESTIONS_GENERATOR_PROMPT, (
+        "M5_QUESTIONS_GENERATOR_PROMPT is missing the {case_id} placeholder"
+    )
