@@ -81,10 +81,14 @@ Párrafo 1 — Decisión ejecutiva: nombra la opción (A/B/C) o curso de acción
   para producción y por qué supera al otro en el contexto del caso.
 
 Párrafo 2 — Evidencia del caso: usa datos concretos de M2/Exhibits/M4 Y métricas del modelo.
-  OBLIGATORIO: citar al menos 1 valor numérico anclado en {computed_metrics_block}
-  (AUC, F1, precision, recall, prevalencia, coeficiente o importancia).
-  OBLIGATORIO: citar al menos 1 valor de negocio de M2/Exhibits/M4.
-  PROHIBIDO: inventar métricas que no figuren en {computed_metrics_block} ni en el caso.
+  OBLIGATORIO siempre: citar al menos 1 valor de negocio de M2/Exhibits/M4.
+  Si {computed_metrics_block} contiene valores numéricos verificados:
+    OBLIGATORIO: citar al menos 1 valor anclado en {computed_metrics_block}
+    (AUC, F1, precision, recall, prevalencia, coeficiente o importancia).
+  Si {computed_metrics_block} empieza con "M3_METRICS_SUMMARY_AUSENTE":
+    Las métricas del notebook no están disponibles. NO cites AUC, F1 ni porcentajes
+    como resultados ejecutados. Referencia hallazgos cualitativos de M3/M4 en su lugar.
+  PROHIBIDO en ambos casos: inventar métricas que no figuren en {computed_metrics_block} ni en el caso.
 
 Párrafo 3 — Riesgo y mitigación: responde explícitamente a `{main_risk_from_m3_m4}` con una
   mitigación específica, responsable y observable para modelos de clasificación.
@@ -118,7 +122,10 @@ Párrafo 5 — Criterio académico: relaciona la postura con un framework recono
 - El enunciado DEBE exigir: decisión explícita sobre el despliegue de {algoritmos}, evidencia
   del caso (técnica + negocio), riesgo/mitigación de producción, y plan de implementación.
 - La solucion_esperada DEBE citar {main_risk_from_m3_m4} y {implementation_timeframe}.
-- La solucion_esperada DEBE anclar al menos 1 métrica del modelo en {computed_metrics_block}.
+- La solucion_esperada DEBE anclar al menos 1 métrica del modelo en {computed_metrics_block}
+  SOLO si contiene valores numéricos verificados. Si el bloque indica
+  "M3_METRICS_SUMMARY_AUSENTE", NO cites métricas ejecutadas — usa hallazgos
+  cualitativos del M3/M4 en su lugar.
 - solucion_esperada: NUNCA menciones fuentes externas inventadas. Solo frameworks reconocidos.
 - **Idioma de salida: {output_language}**
 
