@@ -15,7 +15,7 @@ export function TeacherLayout({
 }: TeacherLayoutProps) {
     return (
         <div className="min-h-screen bg-[#F0F4F8]" data-testid={testId}>
-            <div className="sticky top-0 z-40 shadow-[0_6px_20px_-14px_rgba(1,68,160,0.6)]">
+            <div className="sticky top-0 z-40 shadow-[0_6px_20px_-14px_rgba(1,68,160,0.6)] print:hidden">
                 <TeacherUserHeader />
             </div>
             <main className={contentClassName}>{children}</main>
