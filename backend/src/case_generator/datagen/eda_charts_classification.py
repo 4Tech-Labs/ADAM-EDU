@@ -1,4 +1,4 @@
-"""Issue #237 — Python-deterministic 6-chart EDA panel for classification.
+"""Issue #237 — Python-deterministic 5-chart EDA panel for classification.
 
 Pipeline (no LLM calls; numpy/pandas/sklearn only):
 
@@ -14,8 +14,7 @@ Pipeline (no LLM calls; numpy/pandas/sklearn only):
    │  2. missingness_heatmap        (heatmap, sample 500 rows)        │
    │  3. mutual_info_top8           (bar, MI(X, y) top 8)             │
    │  4. boxplots_top3_numeric      (box, by class, top-3 numeric)    │
-   │  5. stacked_top2_categorical   (bar stacked, normalized 100%)    │
-   │  6. pca_2d_scatter             (scatter, 2 PCs colored by class) │
+   │  5. pca_2d_scatter             (scatter, 2 PCs colored by class) │
    └──────────────────────────────────────────────────────────────────┘
                       ▼
             list[EDAChartSpec]  (data_source="python_builder",
@@ -30,8 +29,8 @@ Determinism guarantees:
 
 Failure policy:
   * Any unrecoverable error in a single chart builder → that chart is
-    skipped (not faked). The function returns ``len(charts) ≤ 6`` and the
-    caller (``eda_chart_generator``) caps to 6 and logs the gap.
+    skipped (not faked). The function returns ``len(charts) ≤ 5`` and the
+    caller (``eda_chart_generator``) caps to 5 and logs the gap.
   * Empty/None ``df`` → returns ``[]`` so the caller can fall back to the
     LLM-JSON path with a warning.
 """
@@ -50,8 +49,6 @@ logger = logging.getLogger("adam.graph")
 _MISSINGNESS_SAMPLE_ROWS = 500
 _MI_TOP_K = 8
 _BOX_TOP_K = 3
-_STACKED_TOP_K = 2
-_STACKED_MAX_CATEGORIES = 8  # per categorical column, by frequency
 _SOURCE_TEMPLATE = "Dataset ADAM — {case_id}"
 
 
@@ -330,94 +327,6 @@ def _build_boxplots_top3_numeric(
     }
 
 
-def _build_stacked_top2_categorical(
-    df: pd.DataFrame, target_col: str, source: str, categorical_cols: list[str]
-) -> dict[str, Any]:
-    if not categorical_cols:
-        return _empty_chart(
-            "stacked_top2_categorical",
-            "Composición de clases por features categóricas",
-            "Sin columnas categóricas disponibles",
-            "bar",
-            source,
-        )
-    # Pick top-2 by cardinality bounded ([2, _STACKED_MAX_CATEGORIES]).
-    nunique = df[categorical_cols].nunique(dropna=True)
-    candidates = [
-        c
-        for c in categorical_cols
-        if 2 <= int(nunique.get(c, 0)) <= _STACKED_MAX_CATEGORIES
-    ]
-    candidates = sorted(candidates, key=lambda c: int(nunique[c]), reverse=True)[
-        :_STACKED_TOP_K
-    ]
-    if not candidates:
-        return _empty_chart(
-            "stacked_top2_categorical",
-            "Composición de clases por features categóricas",
-            "Sin features categóricas con cardinalidad útil",
-            "bar",
-            source,
-        )
-
-    classes = sorted(df[target_col].dropna().astype(str).unique().tolist())
-    # Use subplots layout in plotly via xaxis/xaxis2 — simpler: one stacked
-    # bar chart per col concatenated with an "Origen" label.
-    traces: list[dict[str, Any]] = []
-    x_labels: list[str] = []
-    # Build (col, category) pairs as composite x labels.
-    composite_x: list[str] = []
-    pct_by_class: dict[str, list[float]] = {c: [] for c in classes}
-    for col in candidates:
-        # fillna BEFORE astype(str): otherwise NaN -> 'nan' string and the
-        # explicit __nan__ bucket is never created.
-        col_str = df[col].fillna("__nan__").astype(str)
-        cats = (
-            col_str
-            .value_counts()
-            .head(_STACKED_MAX_CATEGORIES)
-            .index.tolist()
-        )
-        cats = sorted(cats)
-        for cat in cats:
-            mask = col_str == cat
-            sub = df.loc[mask, target_col].astype(str)
-            total = max(int(sub.shape[0]), 1)
-            label = f"{col}={cat}"
-            composite_x.append(label)
-            for cls in classes:
-                pct = float((sub == cls).sum()) * 100.0 / total
-                pct_by_class[cls].append(round(pct, 6))
-    x_labels = composite_x
-    for cls in classes:
-        traces.append(
-            {
-                "type": "bar",
-                "x": x_labels,
-                "y": pct_by_class[cls],
-                "name": str(cls),
-            }
-        )
-    return {
-        "id": "stacked_top2_categorical",
-        "title": "Composición de clases por features categóricas",
-        "subtitle": f"Top {len(candidates)} categóricas, normalizado a 100%",
-        "library": "plotly",
-        "chart_type": "bar",
-        "traces": traces,
-        "layout": {
-            "template": "plotly_white",
-            "barmode": "stack",
-            "xaxis": {"title": "Feature = categoría"},
-            "yaxis": {"title": "% de clase", "range": [0, 100]},
-        },
-        "source": source,
-        "description": "",
-        "notes": "",
-        "data_source": "python_builder",
-    }
-
-
 def _build_pca_2d_scatter(
     df: pd.DataFrame, target_col: str, source: str, numeric_cols: list[str]
 ) -> dict[str, Any] | None:
@@ -425,7 +334,7 @@ def _build_pca_2d_scatter(
 
     Returns an empty-skeleton chart (via ``_empty_chart``) when there are
     fewer than 2 numeric features available, so the dispatcher always sees
-    a valid ``EDAChartSpec`` shape and the panel keeps a stable 6-chart
+    a valid ``EDAChartSpec`` shape and the panel keeps a stable 5-chart
     contract. Never returns ``None`` in the current implementation.
     """
     if len(numeric_cols) < 2:
@@ -489,7 +398,7 @@ def _build_pca_2d_scatter(
 def generate_classification_eda_charts(
     df: pd.DataFrame, target_col: str, contract: dict | None
 ) -> list[dict[str, Any]]:
-    """Build the 6-chart EDA panel deterministically.
+    """Build the 5-chart EDA panel deterministically.
 
     Returns a list of dicts shaped like ``EDAChartSpec`` (with
     ``data_source="python_builder"`` and empty ``description``/``notes``).
@@ -509,7 +418,7 @@ def generate_classification_eda_charts(
         return []
 
     source = _source_label(contract)
-    numeric_cols, categorical_cols = _split_columns(df, target_col)
+    numeric_cols, _ = _split_columns(df, target_col)
     charts: list[dict[str, Any]] = []
 
     builders: list[tuple[str, Any]] = [
@@ -519,12 +428,6 @@ def generate_classification_eda_charts(
         (
             "boxplots_top3_numeric",
             lambda: _build_boxplots_top3_numeric(df, target_col, source, numeric_cols),
-        ),
-        (
-            "stacked_top2_categorical",
-            lambda: _build_stacked_top2_categorical(
-                df, target_col, source, categorical_cols
-            ),
         ),
         (
             "pca_2d_scatter",
