@@ -90,7 +90,7 @@ correlación/causalidad, sino los específicos de clasificación binaria:
 - Las referencias a gráficos: `chart_ref` contiene SOLO el `id` del chart (string exacto del
   manifest). Usa el `title` únicamente para identificar cuál chart seleccionar — nunca lo
   incluyas en el valor de `chart_ref`.
-- El campo `literatura` sin DOIs ni URLs inventados — solo referencia académica conocida.
+- La referencia académica va integrada al final del párrafo `solucion_esperada` — sin inventar DOIs ni URLs.
 - PROHIBIDO usar "sesgo de confirmación" o "correlación vs causalidad" como tema principal
   de P1 o P2 — esos pertenecen al prompt genérico para otras familias.
 - P1 es SIEMPRE accuracy_paradox (bloom: "analysis"), P2 es SIEMPRE precision_recall

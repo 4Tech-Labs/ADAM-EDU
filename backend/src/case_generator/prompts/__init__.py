@@ -892,7 +892,7 @@ sesgo de confirmación y confusión entre correlación y causalidad.
 - Solo JSON schema. PROHIBIDO Markdown libre.
 - Toda pregunta referencia métricas, variables o gráficas reales y exactas del M2.
 - Las referencias a gráficos deben usar el `id` y `title` del `{chart_manifest}`.
-- El campo `literatura` debe basarse en tendencias conocidas del sector, sin inventar DOIs/URLs.
+- La referencia académica va integrada al final del párrafo `solucion_esperada` — sin inventar DOIs ni URLs.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}

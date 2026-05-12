@@ -8,7 +8,8 @@ import { SolucionEsperadaRenderer } from "./SolucionEsperadaRenderer";
 export type QuestionRenderable = PreguntaMinimalista | EDASocraticQuestion;
 
 function isEDASocraticQuestion(question: QuestionRenderable): question is EDASocraticQuestion {
-    return "task_type" in question;
+    const t = (question as unknown as Record<string, unknown>).task_type;
+    return t === "text_response" || t === "notebook_task";
 }
 
 export function PreguntaCard({
