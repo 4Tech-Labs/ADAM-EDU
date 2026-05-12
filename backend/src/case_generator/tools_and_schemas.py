@@ -490,29 +490,18 @@ class GeneradorPreguntasM5Output(BaseModel):
 # MÓDULO 2 EDA — Preguntas Socráticas (aislado de PreguntaMinimalista)
 # ═══════════════════════════════════════════════════════
 
-class SolucionEsperadaEDA(BaseModel):
-    """Solución esperada estructurada para preguntas socráticas del EDA.
-    A diferencia de PreguntaMinimalista (string), este modelo descompone
-    la solución en campos semánticos para renderizado visual en el frontend.
-    """
-    teoria: str = Field(description="Concepto estadístico/analítico que el estudiante debe conocer (máx 40 palabras)")
-    ejemplo: str = Field(description="Ejemplo concreto del caso que ilustra el concepto (máx 40 palabras)")
-    implicacion: str = Field(description="Consecuencia si el estudiante ignora este sesgo en su decisión (máx 40 palabras)")
-    literatura: str = Field(description="Referencia académica o tendencia conocida del sector (sin DOIs/URLs inventados, máx 30 palabras)")
-
-
 class EDASocraticQuestion(BaseModel):
     """Pregunta socrática exclusiva del Módulo 2 EDA.
 
     Modelo AISLADO de PreguntaMinimalista para no romper M1, M3, M4, M5.
     Diferencias vs PreguntaMinimalista:
-      - solucion_esperada es SolucionEsperadaEDA (objeto) en vez de str
+      - solucion_esperada es str (párrafo único docente-only, máx 120 palabras)
       - task_type clasifica si la respuesta es texto o requiere notebook
     """
     numero: int = Field(description="Número secuencial de la pregunta (1 o 2)")
     titulo: str = Field(description="Título corto y descriptivo de la pregunta (≤8 palabras)")
     enunciado: str = Field(description="El cuerpo principal de la pregunta dirigido al estudiante")
-    solucion_esperada: SolucionEsperadaEDA = Field(description="Solución estructurada visible solo para el docente")
+    solucion_esperada: str = Field(description="Respuesta modelo en un párrafo fluido (máx 120 palabras, visible solo para el docente)")
     bloom_level: str = Field(description="Nivel Bloom: analysis|evaluation|synthesis")
     chart_ref: Optional[str] = Field(default=None, description="ID del gráfico referenciado (chart_01, etc.)")
     exhibit_ref: Optional[str] = Field(default=None, description="Exhibit 1|Exhibit 2|Dataset|Ninguno")

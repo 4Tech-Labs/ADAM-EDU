@@ -37,19 +37,11 @@ export interface M5QuestionSolution {
     solucion_esperada: string;  // memorándum modelo docente-only para la decisión final
 }
 
-// Module 2 EDA questions use a richer structured answer schema.
-export interface EDASolucionEsperada {
-    teoria: string;
-    ejemplo: string;
-    implicacion: string;
-    literatura: string;
-}
-
 export interface EDASocraticQuestion {
     numero: number;
     titulo: string;
     enunciado: string;
-    solucion_esperada: EDASolucionEsperada;
+    solucion_esperada: string;
     bloom_level?: string;
     chart_ref?: string;
     exhibit_ref?: string;

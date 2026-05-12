@@ -148,12 +148,7 @@ def _build_canonical_output(title: str = "CrediAgil") -> dict[str, object]:
                     "numero": 2,
                     "titulo": "EDA 2",
                     "enunciado": "Interpreta el grafico.",
-                    "solucion_esperada": {
-                        "teoria": "Teoria",
-                        "ejemplo": "Ejemplo",
-                        "implicacion": "Implicacion",
-                        "literatura": "Literatura",
-                    },
+                    "solucion_esperada": "Teoria. Ejemplo. Implicacion. Literatura.",
                     "task_type": "text_response",
                 }
             ],
