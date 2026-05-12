@@ -25,7 +25,7 @@ vi.mock("./modules/M4Finance", () => ({ M4Finance: () => <div>M4</div> }));
 vi.mock("./modules/M5ExecutiveReport", () => ({ M5ExecutiveReport: () => <div>M5</div> }));
 vi.mock("./modules/M6MasterSolution", () => ({ M6MasterSolution: () => <div>Teaching note docente</div> }));
 
-import { CaseContentRenderer } from "./CaseContentRenderer";
+import { CaseContentRenderer, injectNotebookRefs } from "./CaseContentRenderer";
 
 const result: CanonicalCaseOutput = {
     title: "Caso de prueba",
@@ -105,5 +105,48 @@ describe("CaseContentRenderer", () => {
 
         expect(screen.getByTestId("custom-right-panel")).toBeTruthy();
         expect(screen.queryByText(/En esta sección/i)).toBeNull();
+    });
+});
+
+describe("injectNotebookRefs", () => {
+    it("injects §3.0.6 badge next to the cost matrix heading", () => {
+        const html =
+            '<h2 id="seccion-como-leer-la-matriz-de-costos" class="scroll-mt-24">Cómo leer la matriz de costos</h2>';
+        const result = injectNotebookRefs(html) as string;
+
+        expect(result).toContain("&sect;&thinsp;3.0.6");
+        expect(result).toContain('data-nb-ref="3.0.6"');
+        expect(result).toContain('aria-label="Sección del notebook"');
+    });
+
+    it("returns HTML unchanged for unrecognized headings", () => {
+        const html = '<h2 id="seccion-por-que-lr" class="scroll-mt-24">Por qué LR baseline</h2>';
+
+        expect(injectNotebookRefs(html)).toBe(html);
+    });
+
+    it("passes through null, undefined, and empty string unchanged", () => {
+        expect(injectNotebookRefs(null)).toBeNull();
+        expect(injectNotebookRefs(undefined)).toBeUndefined();
+        expect(injectNotebookRefs("")).toBe("");
+    });
+
+    it("is idempotent — calling twice produces exactly one badge", () => {
+        const html =
+            '<h2 id="seccion-como-leer-la-matriz-de-costos" class="scroll-mt-24">Cómo leer la matriz de costos</h2>';
+        const once = injectNotebookRefs(html) as string;
+        const twice = injectNotebookRefs(once) as string;
+        const matches = twice.match(/&sect;&thinsp;3\.0\.6/g);
+
+        expect(matches).toHaveLength(1);
+    });
+
+    it("does not inject a badge when the cost matrix heading is absent (e.g. business profile)", () => {
+        const html =
+            '<h2 id="seccion-hallazgos-clave" class="scroll-mt-24">Hallazgos clave</h2><p>Sin matriz de costos.</p>';
+        const result = injectNotebookRefs(html) as string;
+
+        expect(result).not.toContain("&sect;");
+        expect(result).not.toContain("data-nb-ref");
     });
 });

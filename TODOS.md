@@ -1048,3 +1048,58 @@ M5_QUESTIONS_PROMPT_BY_FAMILY permanece en __init__.py y continua funcionando co
 sin cambios visibles desde el exterior.
 
 **Depends on / blocked by:** PR feat/m5-clasificacion-subfolder mergeado. Independiente despues.
+
+---
+
+## TODO-M3-REF-A: Extender `NOTEBOOK_HEADING_REFS` a otros encabezados M3 de análisis clave
+
+**What:** Añadir entradas adicionales en la constante `NOTEBOOK_HEADING_REFS` de
+`frontend/src/shared/case-viewer/CaseContentRenderer.tsx` para anotar otros encabezados
+del narrativo M3 que correspondan a celdas numeradas del notebook (por ejemplo, ROC/PR
+curves en `§3.0.4`, matriz de confusión en `§3.0.7`, sección de tuning en `§3.0.8`).
+
+**Why:** Si `§3.0.6` es útil para que el estudiante localice la matriz de costos, la misma
+mecánica beneficia otras secciones analíticas clave del módulo M3.
+
+**Pros:** Añadir una entrada es exactamente una línea en el lookup table — el mecanismo ya
+existe. Zero nuevas abstracciones.
+
+**Cons:** Requiere auditar qué encabezados del narrativo LLM corresponden a qué celdas
+numeradas en cada variante (lr_only / rf_only / lr_rf_contrast), ya que algunos análisis
+(tuning, interpretabilidad) tienen celdas distintas por variante. Un solo número de sección
+no aplica a todos los casos.
+
+**Context:** El mecanismo `injectNotebookRefs()` fue introducido en
+`feat/m3-cost-matrix-notebook-ref`. Los números de sección de todas las celdas de
+clasificación están hardcodeados en `notebooks/_shared.py` y `notebook.py`.
+`§3.0.6 — Matriz de costos` es idéntico en las tres variantes, por lo que era seguro como
+primer caso. Otras secciones requieren verificar si el número es estable entre variantes.
+
+**Depends on / blocked by:** `feat/m3-cost-matrix-notebook-ref` mergeado. Independiente después.
+
+---
+
+## TODO-M3-REF-B: Assertion de CI sobre el texto exacto del encabezado en `content.py`
+
+**What:** Añadir un test de string literal en `backend/tests/` que verifique que los tres
+bloques de coherencia en `backend/src/case_generator/prompts/clasificacion/M3_clasificacion/content.py`
+contienen exactamente `## Cómo leer la matriz de costos` (con tilde, capitalización y
+espaciado correctos).
+
+**Why:** El único modo de fallo silencioso de `injectNotebookRefs()` es que el LLM reciba
+una instrucción con un encabezado distinto (por drift del prompt) y genere un ID diferente
+al que el frontend espera (`seccion-como-leer-la-matriz-de-costos`). Un assert de string
+en CI lo detectaría en el momento del cambio del prompt.
+
+**Pros:** Cierra el único modo de fallo silencioso del sistema. Costo casi nulo — es un
+`assert "## Cómo leer la matriz de costos" in BLOCK` en un archivo de test existente.
+
+**Cons:** La assertion es un test de string literal sobre un prompt — si el encabezado se
+renombra intencionalmente, el desarrollador debe actualizar dos archivos (prompt + assertion).
+Riesgo de falso positivo si se renombra el encabezado con buena razón.
+
+**Context:** Ver `_M3_CLASSIFICATION_COHERENCE_BLOCK_LR_ONLY`, `_RF_ONLY`, y
+`_LR_RF_CONTRAST` en `content.py`. El ID generado por `renderMarkdownWithIds()` depende de
+la normalización NFD + eliminación de diacríticos de ese texto exacto.
+
+**Depends on / blocked by:** `feat/m3-cost-matrix-notebook-ref` mergeado. Independiente después.
