@@ -4042,6 +4042,7 @@ _FAMILY_PROHIBITED_PATTERNS: dict[str, tuple[str, ...]] = {
         "train_test_split(",
         "roc_auc_score",
         "confusion_matrix",
+        "ConfusionMatrixDisplay",
         "classification_report",
         "f1_score(",
         "mean_squared_error(",
@@ -4052,6 +4053,7 @@ _FAMILY_PROHIBITED_PATTERNS: dict[str, tuple[str, ...]] = {
         "train_test_split(",
         "roc_auc_score",
         "confusion_matrix",
+        "ConfusionMatrixDisplay",
         "classification_report",
         "silhouette_score(",
         "davies_bouldin_score(",
@@ -4061,6 +4063,7 @@ _FAMILY_PROHIBITED_PATTERNS: dict[str, tuple[str, ...]] = {
     "regresion": (
         "roc_auc_score",
         "confusion_matrix",
+        "ConfusionMatrixDisplay",
         "classification_report",
         "silhouette_score(",
         "davies_bouldin_score(",
@@ -4124,6 +4127,8 @@ _FAMILY_REQUIRED_SENTINELS: dict[str, tuple[str, ...]] = {
         "# === SECTION:roc_curves ===",
         "# === SECTION:pr_curves ===",
         "# === SECTION:comparison_table ===",
+        # Issue #246 — ConfusionMatrixDisplay normalizada por fila (umbral 0.5).
+        "# === SECTION:confusion_matrix ===",
         # Issue #238 — celda de threshold tuning con matriz de costos del negocio.
         "# === SECTION:cost_matrix ===",
         # Issue #240 — tuning + interpretabilidad avanzada (clasificacion ml_ds).
@@ -4151,6 +4156,10 @@ _FAMILY_REQUIRED_APIS: dict[str, tuple[str, ...]] = {
         # tienen que aparecer en código ejecutable, no solo en markdown.
         "confusion_matrix(",
         "predict_proba(",
+        # Issue #246 — celda confusion_matrix usa ConfusionMatrixDisplay para
+        # render visual normalizado por fila. Debe aparecer como import/call en
+        # código ejecutable, no solo en markdown.
+        "ConfusionMatrixDisplay",
         # Issue #240 — tuning + interpretabilidad avanzada para Harvard ml_ds.
         # tuning_lr usa GridSearchCV; tuning_rf usa RandomizedSearchCV;
         # interp_rf usa permutation_importance + PartialDependenceDisplay.
@@ -4170,6 +4179,7 @@ _CLASSIFICATION_REQUIRED_SENTINELS_BY_VARIANT: dict[str, tuple[str, ...]] = {
         "# === SECTION:roc_curves ===",
         "# === SECTION:pr_curves ===",
         "# === SECTION:comparison_table ===",
+        "# === SECTION:confusion_matrix ===",
         "# === SECTION:cost_matrix ===",
         "# === SECTION:tuning_lr ===",
         "# === SECTION:interp_lr ===",
@@ -4182,6 +4192,7 @@ _CLASSIFICATION_REQUIRED_SENTINELS_BY_VARIANT: dict[str, tuple[str, ...]] = {
         "# === SECTION:roc_curves ===",
         "# === SECTION:pr_curves ===",
         "# === SECTION:comparison_table ===",
+        "# === SECTION:confusion_matrix ===",
         "# === SECTION:cost_matrix ===",
         "# === SECTION:tuning_rf ===",
         "# === SECTION:interp_rf ===",
@@ -4201,6 +4212,7 @@ _CLASSIFICATION_REQUIRED_APIS_BY_VARIANT: dict[str, tuple[str, ...]] = {
         "train_test_split(",
         "confusion_matrix(",
         "predict_proba(",
+        "ConfusionMatrixDisplay",
         "GridSearchCV(",
     ),
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: (
@@ -4213,6 +4225,7 @@ _CLASSIFICATION_REQUIRED_APIS_BY_VARIANT: dict[str, tuple[str, ...]] = {
         "train_test_split(",
         "confusion_matrix(",
         "predict_proba(",
+        "ConfusionMatrixDisplay",
         "RandomizedSearchCV(",
         "permutation_importance(",
         "PartialDependenceDisplay",

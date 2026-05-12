@@ -133,11 +133,12 @@ def _replace_rule_m(prompt: str, variant: ClassificationNotebookVariant) -> str:
      - `SECTION:roc_curves`         → única figura ROC de la variante
      - `SECTION:pr_curves`          → cálculo AUC-PR sin plot adicional
      - `SECTION:comparison_table`   → tabla final con Dummy + modelo(s) seleccionado(s)
-     - `SECTION:cost_matrix`        → segunda y última figura: costo-vs-threshold
+     - `SECTION:confusion_matrix`   → ConfusionMatrixDisplay (normalize="true"); plt.show() #2 del bloque
+     - `SECTION:cost_matrix`        → tercera y última figura: costo-vs-threshold
      - `SECTION:metrics_summary_json` → marker JSON estable para grounding
    Reglas:
    * Nomenclatura heredada Rule L: Celda 2a (métricas), Celda 2b (visualización primaria), Celda 2c (importancia), Celda 2d (SHAP opcional).
-  * Máximo DOS celdas con llamada explícita de render en todo este bloque: ROC y matriz de costos.
+  * Máximo TRES celdas con llamada explícita de render en todo este bloque: ROC, matriz de confusión y matriz de costos.
    * Las sentinelas se emiten LITERALMENTE como primera línea de su celda `# %%`.
    * `dummy_baseline` fija `is_binary` y `can_model_binary`; cada celda posterior
      debe iniciar con `if not is_binary or not can_model_binary: ...`.
@@ -155,16 +156,16 @@ def _replace_rule_m(prompt: str, variant: ClassificationNotebookVariant) -> str:
 INTRO_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """## Sección 3.0.5 — Deep dive Logistic Regression
 ## Emite SOLO celdas LR. No generes código ni texto de modelos no seleccionados.
-## Las únicas celdas con gráficos son `roc_curves` y `cost_matrix`.
+## Las celdas con gráficos son: `roc_curves`, `confusion_matrix` y `cost_matrix`.
 
 """,
     "rf_only": """## Sección 3.0.5 — Deep dive Random Forest
 ## Emite SOLO celdas RF. No generes código ni texto de modelos no seleccionados.
-## Las únicas celdas con gráficos son `roc_curves` y `cost_matrix`.
+## Las celdas con gráficos son: `roc_curves`, `confusion_matrix` y `cost_matrix`.
 
 """,
     "lr_rf_contrast": """## Sección 3.0.5 — Contraste Logistic Regression vs Random Forest
-## Emite celdas LR y RF, manteniendo máximo dos gráficos totales: ROC y matriz de costos.
+## Emite celdas LR y RF, manteniendo tres gráficos totales: ROC, matriz de confusión y matriz de costos.
 
 """,
 }
@@ -598,10 +599,104 @@ except Exception as e:
 }
 
 
+CONFUSION_MATRIX_SECTIONS: dict[ClassificationNotebookVariant, str] = {
+    "lr_only": """
+# %% [markdown]
+# #### 3.0.5.8 Matriz de confusión — Logistic Regression (normalizada por fila)
+# Muestra la tasa de acierto por clase real a umbral fijo 0.5.
+# Normalizado por fila para que sea informativo en datasets desbalanceados.
+
+# %%
+# === SECTION:confusion_matrix ===
+try:
+  if not is_binary or not can_model_binary:
+    print(f"Bloque LR omitido: {{modeling_skip_reason}}")
+  else:
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import ConfusionMatrixDisplay
+    _Xtr_cfm, _Xte_cfm, _ytr_cfm, _yte_cfm = train_test_split(
+        X_raw, y, test_size=0.2, random_state=42,
+        stratify=y if y.value_counts().min() >= 2 else None)
+    pipe_lr.fit(_Xtr_cfm, _ytr_cfm)
+    _ypred_lr_cfm = pipe_lr.predict(_Xte_cfm)
+    fig_cfm, ax_cfm = plt.subplots(figsize=(5, 4))
+    ConfusionMatrixDisplay.from_predictions(
+        _yte_cfm, _ypred_lr_cfm, ax=ax_cfm,
+        colorbar=False, normalize="true", values_format=".2f")
+    ax_cfm.set_title("Matriz de confusión — LR (normalizada por fila)")
+    plt.tight_layout(); plt.show()
+except Exception as e:
+  print(f"⚠️ Matriz de confusión LR falló: {{e}}")
+""",
+    "rf_only": """
+# %% [markdown]
+# #### 3.0.5.8 Matriz de confusión — Random Forest (normalizada por fila)
+# Muestra la tasa de acierto por clase real a umbral fijo 0.5.
+# Normalizado por fila para que sea informativo en datasets desbalanceados.
+
+# %%
+# === SECTION:confusion_matrix ===
+try:
+  if not is_binary or not can_model_binary:
+    print(f"Bloque RF omitido: {{modeling_skip_reason}}")
+  else:
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import ConfusionMatrixDisplay
+    _Xtr_cfm, _Xte_cfm, _ytr_cfm, _yte_cfm = train_test_split(
+        X_raw, y, test_size=0.2, random_state=42,
+        stratify=y if y.value_counts().min() >= 2 else None)
+    pipe_rf.fit(_Xtr_cfm, _ytr_cfm)
+    _ypred_rf_cfm = pipe_rf.predict(_Xte_cfm)
+    fig_cfm, ax_cfm = plt.subplots(figsize=(5, 4))
+    ConfusionMatrixDisplay.from_predictions(
+        _yte_cfm, _ypred_rf_cfm, ax=ax_cfm,
+        colorbar=False, normalize="true", values_format=".2f")
+    ax_cfm.set_title("Matriz de confusión — RF (normalizada por fila)")
+    plt.tight_layout(); plt.show()
+except Exception as e:
+  print(f"⚠️ Matriz de confusión RF falló: {{e}}")
+""",
+    "lr_rf_contrast": """
+# %% [markdown]
+# #### 3.0.5.8 Matrices de confusión — LR y RF (normalizadas por fila)
+# Ambos modelos en una sola figura para comparación directa (Regla L atomic charting).
+# Normalizado por fila para que sea informativo en datasets desbalanceados.
+
+# %%
+# === SECTION:confusion_matrix ===
+try:
+  if not is_binary or not can_model_binary:
+    print(f"Bloque contraste omitido: {{modeling_skip_reason}}")
+  else:
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import ConfusionMatrixDisplay
+    _Xtr_cfm, _Xte_cfm, _ytr_cfm, _yte_cfm = train_test_split(
+        X_raw, y, test_size=0.2, random_state=42,
+        stratify=y if y.value_counts().min() >= 2 else None)
+    pipe_lr.fit(_Xtr_cfm, _ytr_cfm)
+    pipe_rf.fit(_Xtr_cfm, _ytr_cfm)
+    _ypred_lr_cfm = pipe_lr.predict(_Xte_cfm)
+    _ypred_rf_cfm = pipe_rf.predict(_Xte_cfm)
+    fig_cfm, axes_cfm = plt.subplots(1, 2, figsize=(10, 4))
+    ConfusionMatrixDisplay.from_predictions(
+        _yte_cfm, _ypred_lr_cfm, ax=axes_cfm[0],
+        colorbar=False, normalize="true", values_format=".2f")
+    axes_cfm[0].set_title("Matriz de confusión — LR (normalizada por fila)")
+    ConfusionMatrixDisplay.from_predictions(
+        _yte_cfm, _ypred_rf_cfm, ax=axes_cfm[1],
+        colorbar=False, normalize="true", values_format=".2f")
+    axes_cfm[1].set_title("Matriz de confusión — RF (normalizada por fila)")
+    plt.tight_layout(); plt.show()
+except Exception as e:
+  print(f"⚠️ Matrices de confusión fallaron: {{e}}")
+""",
+}
+
+
 RF_INTERP_TABLE_ONLY_SECTION = """
 # %% [markdown]
 # ### 3.0.10 — Interpretabilidad RF: permutation importance tabular
-# Se evita un gráfico adicional para respetar el límite de dos figuras del notebook.
+# Se evita un gráfico adicional para respetar el presupuesto de tres figuras del notebook.
 
 # %%
 # === SECTION:interp_rf ===
@@ -641,7 +736,7 @@ try:
     perm_df = pd.DataFrame({{"feature": feature_names_rf, "importance_mean": perm.importances_mean, "importance_std": perm.importances_std}}).sort_values("importance_mean", ascending=False)
     print("Top 10 permutation importance (RF):")
     print(perm_df.head(10).to_string(index=False))
-    print("PartialDependenceDisplay disponible para análisis manual posterior; omitido aquí para respetar el límite de dos gráficos.")
+    print("PartialDependenceDisplay disponible para análisis manual posterior; omitido aquí para respetar el presupuesto de tres figuras.")
 except Exception as e:
   print(f"⚠️ Interpretabilidad RF falló: {{e}}")
 """
@@ -860,6 +955,7 @@ def build_classification_notebook_prompt(
     prompt = _replace_section(prompt, "# === SECTION:roc_curves ===", ROC_SECTIONS[variant])
     prompt = _replace_section(prompt, "# === SECTION:pr_curves ===", PR_SECTIONS[variant])
     prompt = _replace_section(prompt, "# === SECTION:comparison_table ===", COMPARISON_SECTIONS[variant])
+    prompt = _replace_section(prompt, "# === SECTION:confusion_matrix ===", CONFUSION_MATRIX_SECTIONS[variant])
     prompt = _replace_section(prompt, "# === SECTION:cost_matrix ===", COST_SECTIONS[variant])
     if variant in {"rf_only", "lr_rf_contrast"}:
         prompt = _replace_section(prompt, "# === SECTION:interp_rf ===", RF_INTERP_TABLE_ONLY_SECTION)

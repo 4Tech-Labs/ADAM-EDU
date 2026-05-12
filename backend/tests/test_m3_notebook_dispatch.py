@@ -78,6 +78,7 @@ CLEAN_CLASSIFICATION_CODE = """
 # === SECTION:roc_curves ===
 # === SECTION:pr_curves ===
 # === SECTION:comparison_table ===
+# === SECTION:confusion_matrix ===
 # === SECTION:cost_matrix ===
 # === SECTION:tuning_lr ===
 # === SECTION:tuning_rf ===
@@ -88,6 +89,7 @@ from sklearn.dummy import DummyClassifier
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score, confusion_matrix, roc_curve, precision_recall_curve
+from sklearn.metrics import ConfusionMatrixDisplay
 from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.inspection import permutation_importance, PartialDependenceDisplay
@@ -103,6 +105,7 @@ search_lr = GridSearchCV(model, {}, cv=3).fit(X_train, y_train)
 search_rf = RandomizedSearchCV(model, {}, n_iter=2).fit(X_train, y_train)
 perm = permutation_importance(model, X_test, y_test)
 PartialDependenceDisplay.from_estimator(model, X_test, [0])
+ConfusionMatrixDisplay.from_predictions(y_test, y_test)
 """
 
 CLEAN_CLUSTERING_CODE = """

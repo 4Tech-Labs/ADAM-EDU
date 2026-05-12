@@ -148,8 +148,8 @@ def test_single_model_prompts_do_not_seed_unselected_model_text(
         ),
     ],
 )
-def test_variant_prompts_keep_two_chart_budget(prompt: str) -> None:
-    assert _executable_region(prompt).count("plt.show()") == 2
+def test_variant_prompts_keep_three_chart_budget(prompt: str) -> None:
+    assert _executable_region(prompt).count("plt.show()") == 3
 
 
 @pytest.mark.parametrize(
@@ -216,6 +216,7 @@ LR_ONLY_NOTEBOOK = """
 # === SECTION:roc_curves ===
 # === SECTION:pr_curves ===
 # === SECTION:comparison_table ===
+# === SECTION:confusion_matrix ===
 # === SECTION:cost_matrix ===
 # === SECTION:tuning_lr ===
 # === SECTION:interp_lr ===
@@ -223,7 +224,7 @@ LR_ONLY_NOTEBOOK = """
 from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve
+from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix, precision_recall_curve, roc_curve
 from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_val_score, train_test_split
 
 dummy = DummyClassifier()
@@ -236,6 +237,7 @@ precision, recall, _ = precision_recall_curve(y_test, scores)
 matrix = confusion_matrix(y_test, y_test)
 probabilities = pipe_lr.predict_proba(X_test)
 search = GridSearchCV(pipe_lr, {}, cv=3)
+ConfusionMatrixDisplay.from_predictions(y_test, y_test)
 """
 
 RF_ONLY_NOTEBOOK = """
@@ -245,6 +247,7 @@ RF_ONLY_NOTEBOOK = """
 # === SECTION:roc_curves ===
 # === SECTION:pr_curves ===
 # === SECTION:comparison_table ===
+# === SECTION:confusion_matrix ===
 # === SECTION:cost_matrix ===
 # === SECTION:tuning_rf ===
 # === SECTION:interp_rf ===
@@ -253,7 +256,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import PartialDependenceDisplay, permutation_importance
-from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve
+from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix, precision_recall_curve, roc_curve
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, cross_val_score, train_test_split
 
 dummy = DummyClassifier()
@@ -268,6 +271,7 @@ probabilities = pipe_rf.predict_proba(X_test)
 search = RandomizedSearchCV(pipe_rf, {}, n_iter=2)
 perm = permutation_importance(pipe_rf, X_test, y_test)
 PartialDependenceDisplay.from_estimator(pipe_rf, X_test, [0])
+ConfusionMatrixDisplay.from_predictions(y_test, y_test)
 """
 
 
@@ -297,6 +301,52 @@ def test_variant_validator_rejects_unselected_rf_in_lr_only() -> None:
 
     assert "RandomForestClassifier" in violations
     assert "pipe_rf" in violations
+
+
+@pytest.mark.parametrize(
+    ("variant", "prompt"),
+    [
+        pytest.param(
+            CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
+            M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY,
+            id="lr_only",
+        ),
+        pytest.param(
+            CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
+            M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY,
+            id="rf_only",
+        ),
+        pytest.param(
+            CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
+            M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST,
+            id="lr_rf_contrast",
+        ),
+    ],
+)
+def test_variant_prompts_contain_confusion_matrix_section(variant: str, prompt: str) -> None:
+    exec_region = _executable_region(prompt)
+    assert "# === SECTION:confusion_matrix ===" in exec_region
+    assert "ConfusionMatrixDisplay" in exec_region
+    assert 'normalize="true"' in exec_region
+
+
+def test_contrast_variant_confusion_matrix_uses_side_by_side_subplots() -> None:
+    exec_region = _executable_region(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST)
+    assert "plt.subplots(1, 2" in exec_region
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY, id="lr_only"),
+        pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY, id="rf_only"),
+    ],
+)
+def test_single_variant_confusion_matrix_does_not_use_side_by_side_subplots(
+    prompt: str,
+) -> None:
+    exec_region = _executable_region(prompt)
+    assert "plt.subplots(1, 2" not in exec_region
 
 
 def test_variant_validator_rejects_unselected_lr_in_rf_only() -> None:

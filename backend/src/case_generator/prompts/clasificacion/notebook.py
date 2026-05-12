@@ -264,7 +264,7 @@ L. **Atomic Cell Charting**: cada celda de
 
 M. **PEDAGOGÍA HARVARD ml_ds — bloque comparativo OBLIGATORIO.**
    Antes del bloque per-algoritmo, emite la **Sección 3.0.5** descrita más
-   abajo en "Estructura OBLIGATORIA". Esa sección contiene OCHO celdas con
+   abajo en "Estructura OBLIGATORIA". Esa sección contiene NUEVE celdas con
    sentinelas contractuales que el validador post-LLM verifica:
      - `# === SECTION:dummy_baseline ===`     → bootstrap (target_col, y, feature_cols, X_raw, is_binary) + DummyClassifier (most_frequent + stratified)
      - `# === SECTION:pipeline_lr ===`        → Pipeline(ColumnTransformer + LogisticRegression)
@@ -273,6 +273,7 @@ M. **PEDAGOGÍA HARVARD ml_ds — bloque comparativo OBLIGATORIO.**
      - `# === SECTION:roc_curves ===`         → hold-out propio + curva ROC (LR vs RF) en una sola figura
      - `# === SECTION:pr_curves ===`          → curva Precision-Recall (LR vs RF) en una sola figura, reusando el hold-out
      - `# === SECTION:comparison_table ===`   → tabla pd.DataFrame final con las 7 columnas, hold-out reconstruido localmente
+     - `# === SECTION:confusion_matrix ===`   → ConfusionMatrixDisplay LR y RF en figura 1×2 (normalize="true"); umbral fijo 0.5; plt.show() #3 del bloque comparativo
      - `# === SECTION:cost_matrix ===`        → curva costo-vs-threshold con confusion_matrix + predict_proba; eje Y en `currency` del contrato; línea vertical roja en threshold óptimo y línea gris en 0.5
    Reglas:
    * Las sentinelas se emiten LITERALMENTE como primera línea de su celda
@@ -700,6 +701,47 @@ try:
             print(comparison.to_string(index=False))
 except Exception as e:
     print(f"⚠️ Tabla comparativa falló: {{e}}")
+
+# %% [markdown]
+# #### 3.0.5.8 Matriz de confusión (normalizada por fila)
+# Complemento visual de la tabla comparativa anterior. Muestra la tasa de
+# acierto por clase real (recall por clase) a umbral fijo 0.5.
+# Normalizar por fila es más informativo que conteos crudos en datasets
+# desbalanceados: un 95 % de TN junto a un 3 % de TP se leería como buen
+# rendimiento con conteos absolutos, pero la normalización lo expone.
+
+# %%
+# === SECTION:confusion_matrix ===
+try:
+  if not is_binary or not can_model_binary:
+    print(f"Bloque comparativo omitido: {{modeling_skip_reason}}")
+  else:
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import ConfusionMatrixDisplay
+
+        _Xtr_cfm, _Xte_cfm, _ytr_cfm, _yte_cfm = train_test_split(
+            X_raw, y, test_size=0.2, random_state=42,
+            stratify=y if y.value_counts().min() >= 2 else None,
+        )
+        pipe_lr.fit(_Xtr_cfm, _ytr_cfm)
+        pipe_rf.fit(_Xtr_cfm, _ytr_cfm)
+        _ypred_lr_cfm = pipe_lr.predict(_Xte_cfm)
+        _ypred_rf_cfm = pipe_rf.predict(_Xte_cfm)
+
+        fig_cfm, axes_cfm = plt.subplots(1, 2, figsize=(10, 4))
+        ConfusionMatrixDisplay.from_predictions(
+            _yte_cfm, _ypred_lr_cfm, ax=axes_cfm[0],
+            colorbar=False, normalize="true", values_format=".2f",
+        )
+        axes_cfm[0].set_title("Matriz de confusión — LR (normalizada por fila)")
+        ConfusionMatrixDisplay.from_predictions(
+            _yte_cfm, _ypred_rf_cfm, ax=axes_cfm[1],
+            colorbar=False, normalize="true", values_format=".2f",
+        )
+        axes_cfm[1].set_title("Matriz de confusión — RF (normalizada por fila)")
+        plt.tight_layout(); plt.show()
+except Exception as e:
+    print(f"⚠️ Matriz de confusión falló: {{e}}")
 
 # %% [markdown]
 # ### 3.0.6 — Matriz de costos del negocio + threshold tuning
