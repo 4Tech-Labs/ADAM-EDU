@@ -1387,7 +1387,7 @@ def _clamp(text: str, max_chars: int) -> str:
 def _eda_classification_python_path(
     state: ADAMState, config: RunnableConfig, contract: dict | None
 ) -> dict | None:
-    """Issue #237 — construye 6 charts EDA en Python y pide al LLM solo
+    """Issue #237 — construye 5 charts EDA en Python y pide al LLM solo
     `description` + `notes`. Devuelve el dict de update del nodo o ``None``
     si el path Python no aplica (deja que el caller use el LLM-JSON).
     """
@@ -1415,9 +1415,9 @@ def _eda_classification_python_path(
             )
             return None
 
-        # Cap defensivo: el contrato Issue #237 son 6 charts.
-        if len(charts) > 6:
-            charts = charts[:6]
+        # Cap defensivo: el contrato Issue #237 son 5 charts.
+        if len(charts) > 5:
+            charts = charts[:5]
 
         # Annotate-only: pedimos al LLM solo description/notes por id.
         try:
