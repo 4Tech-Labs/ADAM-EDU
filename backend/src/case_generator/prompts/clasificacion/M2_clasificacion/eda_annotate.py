@@ -1,7 +1,7 @@
 """EDA annotation-only prompt for the clasificacion algorithm family — M2 module.
 
 This prompt is used by ``graph.py::_eda_classification_python_path`` when the
-case is ``ml_ds + clasificacion``.  In that path the 6 EDA charts are built
+case is ``ml_ds + clasificacion``.  In that path, up to 4 EDA charts are built
 deterministically by ``datagen/eda_charts_classification.py``; the LLM's role
 is ONLY to write ``description`` and ``notes`` per chart — it never touches
 traces, layout, or any numeric value.

@@ -1,6 +1,6 @@
-"""Issue #237 — Python-deterministic 5-chart EDA panel for classification.
+"""Issue #237 — Python-deterministic 4-chart EDA panel for classification.
 
-Pipeline (no LLM calls; numpy/pandas/sklearn only):
+Pipeline (no LLM calls; pandas/sklearn only):
 
     df: pd.DataFrame                 contract: dict (dataset_schema_required)
          │                                          │
@@ -14,7 +14,6 @@ Pipeline (no LLM calls; numpy/pandas/sklearn only):
    │  2. missingness_heatmap        (heatmap, sample 500 rows)        │
    │  3. mutual_info_top8           (bar, MI(X, y) top 8)             │
    │  4. boxplots_top3_numeric      (box, by class, top-3 numeric)    │
-   │  5. pca_2d_scatter             (scatter, 2 PCs colored by class) │
    └──────────────────────────────────────────────────────────────────┘
                       ▼
             list[EDAChartSpec]  (data_source="python_builder",
@@ -29,8 +28,8 @@ Determinism guarantees:
 
 Failure policy:
   * Any unrecoverable error in a single chart builder → that chart is
-    skipped (not faked). The function returns ``len(charts) ≤ 5`` and the
-    caller (``eda_chart_generator``) caps to 5 and logs the gap.
+    skipped (not faked). The function returns ``len(charts) ≤ 4``; callers
+    may log or otherwise handle the emitted/expected chart count.
   * Empty/None ``df`` → returns ``[]`` so the caller can fall back to the
     LLM-JSON path with a warning.
 """
@@ -40,7 +39,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger("adam.graph")
@@ -327,69 +325,6 @@ def _build_boxplots_top3_numeric(
     }
 
 
-def _build_pca_2d_scatter(
-    df: pd.DataFrame, target_col: str, source: str, numeric_cols: list[str]
-) -> dict[str, Any] | None:
-    """Build the PCA 2D scatter chart.
-
-    Returns an empty-skeleton chart (via ``_empty_chart``) when there are
-    fewer than 2 numeric features available, so the dispatcher always sees
-    a valid ``EDAChartSpec`` shape and the panel keeps a stable 5-chart
-    contract. Never returns ``None`` in the current implementation.
-    """
-    if len(numeric_cols) < 2:
-        return _empty_chart(
-            "pca_2d_scatter",
-            "PCA 2D — proyección coloreada por clase",
-            "Se requieren ≥2 features numéricas",
-            "scatter",
-            source,
-            notes="No fue posible calcular PCA (features numéricas insuficientes).",
-        )
-    from sklearn.decomposition import PCA
-    from sklearn.preprocessing import StandardScaler
-
-    X = df[numeric_cols].copy()
-    # Fill numeric NaN with column mean (stable, deterministic).
-    X = X.apply(lambda s: s.fillna(s.mean() if pd.notna(s.mean()) else 0.0), axis=0)
-    Xs = StandardScaler().fit_transform(X.to_numpy())
-    pcs = PCA(n_components=2, random_state=42).fit_transform(Xs)
-    classes = sorted(df[target_col].dropna().astype(str).unique().tolist())
-    traces: list[dict[str, Any]] = []
-    target_str = df[target_col].astype(str).to_numpy()
-    for cls in classes:
-        idx = np.where(target_str == cls)[0]
-        if idx.size == 0:
-            continue
-        traces.append(
-            {
-                "type": "scatter",
-                "mode": "markers",
-                "x": [round(float(v), 6) for v in pcs[idx, 0].tolist()],
-                "y": [round(float(v), 6) for v in pcs[idx, 1].tolist()],
-                "name": str(cls),
-                "marker": {"size": 6, "opacity": 0.7},
-            }
-        )
-    return {
-        "id": "pca_2d_scatter",
-        "title": "PCA 2D — proyección coloreada por clase",
-        "subtitle": "PC1 vs PC2 sobre features numéricas estandarizadas",
-        "library": "plotly",
-        "chart_type": "scatter",
-        "traces": traces,
-        "layout": {
-            "template": "plotly_white",
-            "xaxis": {"title": "PC1"},
-            "yaxis": {"title": "PC2"},
-        },
-        "source": source,
-        "description": "",
-        "notes": "",
-        "data_source": "python_builder",
-    }
-
-
 # ───────────────────────────────────────────────────────────────────────
 # Public entrypoint
 # ───────────────────────────────────────────────────────────────────────
@@ -398,7 +333,7 @@ def _build_pca_2d_scatter(
 def generate_classification_eda_charts(
     df: pd.DataFrame, target_col: str, contract: dict | None
 ) -> list[dict[str, Any]]:
-    """Build the 5-chart EDA panel deterministically.
+    """Build the 4-chart EDA panel deterministically.
 
     Returns a list of dicts shaped like ``EDAChartSpec`` (with
     ``data_source="python_builder"`` and empty ``description``/``notes``).
@@ -428,10 +363,6 @@ def generate_classification_eda_charts(
         (
             "boxplots_top3_numeric",
             lambda: _build_boxplots_top3_numeric(df, target_col, source, numeric_cols),
-        ),
-        (
-            "pca_2d_scatter",
-            lambda: _build_pca_2d_scatter(df, target_col, source, numeric_cols),
         ),
     ]
     for cid, fn in builders:

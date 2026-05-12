@@ -63,17 +63,16 @@ CONTRACT = {"case_id": "test_case_237"}
 
 
 def test_happy_path_invariants(df_binary: pd.DataFrame) -> None:
-    """El happy path emite EXACTAMENTE 5 charts en el orden esperado, todos
+    """El happy path emite EXACTAMENTE 4 charts en el orden esperado, todos
     con `data_source=python_builder` y descriptions/notes vacías (anti-LLM).
     """
     charts = generate_classification_eda_charts(df_binary, "churn", CONTRACT)
-    assert len(charts) == 5
+    assert len(charts) == 4
     expected_ids = [
         "class_distribution",
         "missingness_heatmap",
         "mutual_info_top8",
         "boxplots_top3_numeric",
-        "pca_2d_scatter",
     ]
     assert [c["id"] for c in charts] == expected_ids
     for c in charts:
@@ -87,13 +86,10 @@ def test_happy_path_invariants(df_binary: pd.DataFrame) -> None:
 
 def test_target_multiclass(df_multiclass: pd.DataFrame) -> None:
     charts = generate_classification_eda_charts(df_multiclass, "label", CONTRACT)
-    assert len(charts) == 5
+    assert len(charts) == 4
     cd = next(c for c in charts if c["id"] == "class_distribution")
     classes_in_chart = cd["traces"][0]["x"]
     assert set(classes_in_chart) == {"bronze", "silver", "gold"}
-    pca = next(c for c in charts if c["id"] == "pca_2d_scatter")
-    # Una traza por clase observada (todas presentes en el df determinista).
-    assert {t["name"] for t in pca["traces"]} == {"bronze", "silver", "gold"}
 
 
 def test_target_continuous_returns_charts_anyway(df_binary: pd.DataFrame) -> None:
@@ -104,18 +100,10 @@ def test_target_continuous_returns_charts_anyway(df_binary: pd.DataFrame) -> Non
     df = df_binary.copy()
     df["score"] = np.linspace(0.0, 1.0, len(df))
     charts = generate_classification_eda_charts(df, "score", CONTRACT)
-    # Devuelve charts sin crashear; mínimo 4 (algunos pueden caer en empty path).
-    assert len(charts) >= 4
+    # Devuelve charts sin crashear; mínimo 3 (mutual_info puede caer con
+    # targets continuos de cardinalidad alta; los otros builders son robustos).
+    assert len(charts) >= 3
     assert all(c["library"] == "plotly" for c in charts)
-
-
-def test_pca_lt2_numeric_returns_empty_skeleton(df_binary: pd.DataFrame) -> None:
-    df = df_binary[["age", "region", "churn"]].copy()
-    charts = generate_classification_eda_charts(df, "churn", CONTRACT)
-    pca = next(c for c in charts if c["id"] == "pca_2d_scatter")
-    # Empty skeleton: 0 traces y nota explicativa.
-    assert pca["traces"] == []
-    assert "PCA" in pca["notes"] or "numéricas" in pca["notes"]
 
 
 def test_empty_df_returns_empty_list() -> None:
@@ -198,7 +186,7 @@ def test_boundary_llm_cannot_alter_traces(df_binary: pd.DataFrame) -> None:
 
     assert update is not None
     charts = update["doc2_eda_charts"]
-    assert len(charts) == 5
+    assert len(charts) == 4
     cd = next(c for c in charts if c["id"] == "class_distribution")
     # description vino del LLM stub, traces sin tocar (vienen del builder).
     assert cd["description"] == "desc fake"
@@ -211,14 +199,10 @@ def test_boundary_llm_cannot_alter_traces(df_binary: pd.DataFrame) -> None:
         .tolist()
     ]
     assert cd["data_source"] == "python_builder"
-    # Charts sin annotation explícita quedan con strings vacíos (no None).
-    pca = next(c for c in charts if c["id"] == "pca_2d_scatter")
-    assert pca["description"] == ""
-    assert pca["notes"] == ""
 
 
 def test_llm_ghost_chart_id_is_silently_dropped(df_binary: pd.DataFrame) -> None:
-    """Si el LLM annotate-only devuelve un id que NO existe entre los 5
+    """Si el LLM annotate-only devuelve un id que NO existe entre los 4
     charts del builder, el id fantasma se descarta y NO se añade chart.
     """
     from case_generator.graph import _eda_classification_python_path
@@ -249,8 +233,8 @@ def test_llm_ghost_chart_id_is_silently_dropped(df_binary: pd.DataFrame) -> None
 
     assert update is not None
     charts = update["doc2_eda_charts"]
-    # Sigue siendo exactamente 5 — el ghost no se añade.
-    assert len(charts) == 5
+    # Sigue siendo exactamente 4 — el ghost no se añade.
+    assert len(charts) == 4
     chart_ids = {c["id"] for c in charts}
     assert "ghost_chart_does_not_exist" not in chart_ids
     # La annotation real sí se aplicó.
