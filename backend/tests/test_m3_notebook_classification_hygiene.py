@@ -142,6 +142,7 @@ def test_prompt_still_renders_with_existing_substitution_vars() -> None:
 # Issue #240: 4 more sentinels (tuning_lr/tuning_rf/interp_lr/interp_rf) for
 # Harvard ml_ds tuning + advanced interpretability.
 # Issue #239: metrics_summary_json sentinel added atomically with the executor.
+# Issue #246: confusion_matrix sentinel added for ConfusionMatrixDisplay visual.
 _REQUIRED_SENTINELS = (
     "# === SECTION:dummy_baseline ===",
     "# === SECTION:pipeline_lr ===",
@@ -150,6 +151,7 @@ _REQUIRED_SENTINELS = (
     "# === SECTION:roc_curves ===",
     "# === SECTION:pr_curves ===",
     "# === SECTION:comparison_table ===",
+    "# === SECTION:confusion_matrix ===",
     "# === SECTION:cost_matrix ===",
     "# === SECTION:tuning_lr ===",
     "# === SECTION:tuning_rf ===",
@@ -176,6 +178,8 @@ _REQUIRED_API_TOKENS = (
     "RandomizedSearchCV(",
     "permutation_importance(",
     "PartialDependenceDisplay",
+    # Issue #246 — ConfusionMatrixDisplay visual normalizada por fila.
+    "ConfusionMatrixDisplay",
 )
 
 
@@ -255,6 +259,7 @@ def test_validator_passes_when_all_required_present() -> None:
         "from sklearn.model_selection import GridSearchCV, RandomizedSearchCV\n"
         "from sklearn.inspection import permutation_importance, PartialDependenceDisplay\n"
         "from sklearn.metrics import roc_curve, precision_recall_curve, confusion_matrix\n"
+        "from sklearn.metrics import ConfusionMatrixDisplay\n"
         "model = DummyClassifier(strategy='most_frequent')\n"
         "X_tr, X_te, y_tr, y_te = train_test_split(X, y, random_state=42)\n"
         "fpr, tpr, _ = roc_curve(y, scores)\n"
@@ -265,6 +270,7 @@ def test_validator_passes_when_all_required_present() -> None:
         "search_rf = RandomizedSearchCV(model, {}, n_iter=2).fit(X, y)\n"
         "perm = permutation_importance(model, X_te, y_te)\n"
         "PartialDependenceDisplay.from_estimator(model, X_te, [0])\n"
+        "ConfusionMatrixDisplay.from_predictions(y_te, y_te)\n"
     )
     assert _validate_notebook_family_consistency("clasificacion", code) == []
 

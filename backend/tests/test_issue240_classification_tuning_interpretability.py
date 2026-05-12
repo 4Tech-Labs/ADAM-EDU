@@ -207,8 +207,8 @@ def test_required_sentinels_extended_for_classification_only() -> None:
     cls = set(_FAMILY_REQUIRED_SENTINELS["clasificacion"])
     for sentinel in _NEW_SENTINELS:
         assert sentinel in cls
-    assert len(_FAMILY_REQUIRED_SENTINELS["clasificacion"]) == 13, (
-        f"expected 13 sentinels (8 prev + 4 issue240 + metrics summary), got "
+    assert len(_FAMILY_REQUIRED_SENTINELS["clasificacion"]) == 14, (
+        f"expected 14 sentinels (8 prev + 4 issue240 + metrics_summary_json + confusion_matrix), got "
         f"{len(_FAMILY_REQUIRED_SENTINELS['clasificacion'])}"
     )
     assert set(_FAMILY_REQUIRED_SENTINELS) == {"clasificacion"}
@@ -219,8 +219,8 @@ def test_required_apis_extended_for_classification_only() -> None:
     cls = set(_FAMILY_REQUIRED_APIS["clasificacion"])
     for token in _NEW_APIS:
         assert token in cls
-    assert len(_FAMILY_REQUIRED_APIS["clasificacion"]) == 13, (
-        f"expected 13 APIs (9 prev + 4 new), got "
+    assert len(_FAMILY_REQUIRED_APIS["clasificacion"]) == 14, (
+        f"expected 14 APIs (9 prev + 4 new + ConfusionMatrixDisplay), got "
         f"{len(_FAMILY_REQUIRED_APIS['clasificacion'])}"
     )
     assert set(_FAMILY_REQUIRED_APIS) == {"clasificacion"}
@@ -277,6 +277,7 @@ def test_validator_happy_path_with_full_2024_pedagogy() -> None:
         ")\n"
         "from sklearn.inspection import permutation_importance, PartialDependenceDisplay\n"
         "from sklearn.metrics import roc_curve, precision_recall_curve, confusion_matrix\n"
+        "from sklearn.metrics import ConfusionMatrixDisplay\n"
         "model = DummyClassifier(strategy='most_frequent')\n"
         "X_tr, X_te, y_tr, y_te = train_test_split(X, y, random_state=42)\n"
         "fpr, tpr, _ = roc_curve(y, scores)\n"
@@ -287,6 +288,7 @@ def test_validator_happy_path_with_full_2024_pedagogy() -> None:
         "search_rf = RandomizedSearchCV(model, {}, n_iter=2).fit(X_tr, y_tr)\n"
         "perm = permutation_importance(model, X_te, y_te)\n"
         "PartialDependenceDisplay.from_estimator(model, X_te, [0])\n"
+        "ConfusionMatrixDisplay.from_predictions(y_te, y_te)\n"
     )
     assert _validate_notebook_family_consistency("clasificacion", code) == []
 

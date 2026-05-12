@@ -35,6 +35,36 @@ de `task_payload` legacy y para LLMs con respuestas parcialmente no conformes.
 
 ---
 
+## TODO-CONFUSION-MULTICLASS: Extender confusion_matrix a casos multiclase
+
+**What:** La sección `# === SECTION:confusion_matrix ===` que se agrega en Issue #246 está
+protegida detrás de `if not is_binary or not can_model_binary: ...` — es decir, solo se
+ejecuta para clasificación binaria. Los casos multiclase (3+ clases) omiten la sección por
+completo con un `print(f"Bloque omitido: {modeling_skip_reason}")`.
+
+**Why:** La `ConfusionMatrixDisplay` es especialmente informativa en multiclase (matriz N×N
+con tasas de confusión entre clases). La restricción binaria actual cubre ~90% del catálogo
+Harvard ml_ds pero deja un gap pedagógico real para datasets como clasificación de tipos de
+crédito o segmentación de productos con 3+ categorías de respuesta.
+
+**Pros:** Elimina el mensaje de `Bloque omitido` para alumnos que trabajen con targets
+multiclase; los gráficos N×N normalizados por fila son didácticamente valiosos.
+
+**Cons:** Requiere redeseñar `comparison_table` y `cost_matrix` para multiclase (actualmente
+también binarias). La `cost_matrix` usa un sweep de thresholds que solo tiene sentido con
+probabilidades de clase positiva — en multiclase no hay un threshold único.
+
+**Context:** Esto NO se puede resolver solo en `confusion_matrix`: `cost_matrix` necesita ser
+rediseñada primero para multiclase, porque el notebook quedaría incoherente si se muestra
+una matriz multiclase pero la cost_matrix sigue asumiendo binario. La restricción actual es
+la posición correcta hasta que `cost_matrix` tenga un modo multiclase explícito.
+
+**Depends on / blocked by:** Rediseño de `cost_matrix` para multiclase (no existe aún).
+Una vez desbloqueado, quitar el guard `if not is_binary` en `confusion_matrix` y añadir
+`normalize="true"` para matrices N×N.
+
+---
+
 ## TODO-M2-B: Añadir dispatch de dataset para la familia regresión
 
 **What:** Crear `backend/src/case_generator/prompts/regresion/dataset.py` con

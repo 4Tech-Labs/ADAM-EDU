@@ -304,13 +304,16 @@ def test_required_sentinels_include_cost_matrix() -> None:
     sentinels = _FAMILY_REQUIRED_SENTINELS["clasificacion"]
     assert "# === SECTION:cost_matrix ===" in sentinels
     # Issue #239 amplía a 13 con metrics_summary_json, en el mismo diff que el executor.
-    assert len(sentinels) == 13
+    # Issue #246 amplía a 14 con confusion_matrix (ConfusionMatrixDisplay normalizada).
+    assert len(sentinels) == 14
 
 
 def test_required_apis_include_confusion_matrix_and_predict_proba() -> None:
     apis = _FAMILY_REQUIRED_APIS["clasificacion"]
     assert "confusion_matrix(" in apis
     assert "predict_proba(" in apis
+    # Issue #246 — ConfusionMatrixDisplay debe estar en el contrato de APIs.
+    assert "ConfusionMatrixDisplay" in apis
 
 
 def test_classification_prompt_emits_cost_matrix_sentinel_and_apis() -> None:
