@@ -149,4 +149,22 @@ describe("injectNotebookRefs", () => {
         expect(result).not.toContain("&sect;");
         expect(result).not.toContain("data-nb-ref");
     });
+
+    it("badge carries data-nb-ref-badge so SectionRail textContent is not polluted", () => {
+        const html =
+            '<h2 id="seccion-como-leer-la-matriz-de-costos" class="scroll-mt-24">Cómo leer la matriz de costos</h2>';
+        const injected = injectNotebookRefs(html) as string;
+
+        const container = document.createElement("div");
+        container.innerHTML = injected;
+        const heading = container.querySelector("h2")!;
+
+        // Simulate what the navSections builder does: clone, remove badges, read textContent.
+        const clone = heading.cloneNode(true) as Element;
+        clone.querySelectorAll("[data-nb-ref-badge]").forEach((el) => el.remove());
+
+        expect(clone.textContent?.trim()).toBe("Cómo leer la matriz de costos");
+        // Sanity: the raw heading textContent WOULD be polluted without the fix.
+        expect(heading.textContent).toContain("§");
+    });
 });
