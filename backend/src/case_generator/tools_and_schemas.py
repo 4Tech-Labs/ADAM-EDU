@@ -362,15 +362,15 @@ class EDAChartSpec(BaseModel):
 
 
 class EDAChartGeneratorOutput(BaseModel):
-    """Salida del EDA Chart Generator — 3 a 6 charts según path de generación.
+    """Salida del EDA Chart Generator — 3 a 5 charts según path de generación.
 
     Path LLM-JSON original (business y otras familias ml_ds): 3 charts.
-    Path Python-determinista (Issue #237, ml_ds + clasificación): 6 charts.
+    Path Python-determinista (Issue #237, ml_ds + clasificación): 5 charts.
     El cap final lo aplica el nodo `eda_chart_generator` en `graph.py`.
     """
 
     charts: list[EDAChartSpec] = Field(
-        description="Entre 3 y 6 charts estructurados para visualización (depende del path)."
+        description="Entre 3 y 5 charts estructurados para visualización (depende del path)."
     )
 
 
