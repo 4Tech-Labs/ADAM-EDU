@@ -390,7 +390,7 @@ class EDAAnnotateOnlyOutput(BaseModel):
     """
 
     annotations: list[EDAAnnotateOnlyAnnotation] = Field(
-        description="Una entrada por chart Python-construido (≤6)"
+        description="Una entrada por chart Python-construido (≤5)"
     )
 
 
