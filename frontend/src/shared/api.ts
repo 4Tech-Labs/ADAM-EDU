@@ -109,7 +109,12 @@ interface AuthoringJobRealtimeRow {
 
 const AUTHORING_PROGRESS_STEP_SET = new Set<string>(AUTHORING_PROGRESS_STEP_IDS);
 const AUTHORING_PROGRESS_POLL_INTERVAL_MS = 3000;
-const AUTHORING_REALTIME_SUBSCRIBE_TIMEOUT_MS = 1800;
+// Increased from 1800ms: cold WebSocket setup on production Supabase (DNS + TLS +
+// Phoenix channel join + JWT validation) can reach ~2s on P99 of 4G connections.
+// After the JWT race fix below, the primary cause of premature watchdog triggers
+// (pre-INITIAL_SESSION CHANNEL_ERROR → self-heal → second attempt hits 1800ms) is
+// eliminated. 4000ms covers P99 without adding unnecessary polling-fallback latency.
+const AUTHORING_REALTIME_SUBSCRIBE_TIMEOUT_MS = 4000;
 const AUTHORING_REALTIME_SILENCE_TIMEOUT_MS = AUTHORING_PROGRESS_POLL_INTERVAL_MS;
 
 export class ProgressTransportDegradedError extends Error {
@@ -706,6 +711,19 @@ async function streamRealtimeProgress(
     }
     const realtimeClient = client;
 
+    // Fix: force-sync the current session JWT into the Realtime client before
+    // calling channel.subscribe(). Without this, the Supabase JS v2 Realtime
+    // component may not yet have received its token (which arrives asynchronously
+    // via INITIAL_SESSION → onAuthStateChange → realtime.setAuth()). On cold start
+    // this window is ~50ms and causes the channel join to use the anon key, which
+    // fails the authoring_jobs RLS policy (auth.uid() = NULL) → CHANNEL_ERROR.
+    // getBearerToken() reads from localStorage (sub-ms); if null the channel
+    // proceeds unauthenticated and falls back to polling via the existing path.
+    const currentToken = await getBearerToken();
+    if (currentToken) {
+        realtimeClient.setAuth(currentToken);
+    }
+
     await new Promise<void>((resolve, reject) => {
         let settled = false;
         let subscribed = false;
@@ -784,7 +802,11 @@ async function streamRealtimeProgress(
                 }
 
                 if (subscriptionStatus === "CHANNEL_ERROR" || subscriptionStatus === "TIMED_OUT" || subscriptionStatus === "CLOSED") {
-                    console.error("[authoring-progress] realtime subscription failed", {
+                    // Downgraded from console.error: post-fix this is a handled degradation
+                    // (expired token or transient network issue) that the polling fallback
+                    // recovers from transparently. error-level noise in production dashboards
+                    // would create false alerts for a recoverable condition.
+                    console.warn("[authoring-progress] realtime subscription failed", {
                         jobId,
                         subscriptionStatus,
                     });
