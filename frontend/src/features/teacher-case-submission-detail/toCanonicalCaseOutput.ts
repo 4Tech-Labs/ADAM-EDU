@@ -5,7 +5,6 @@ import type {
     EDAChartSpec,
     EDADepth,
     EDASocraticQuestion,
-    EDASolucionEsperada,
     M5QuestionSolution,
     PreguntaMinimalista,
     StudentProfile,
@@ -136,26 +135,22 @@ function sanitizeChartArray(value: unknown): EDAChartSpec[] | undefined {
     return charts.length > 0 ? charts : undefined;
 }
 
-function sanitizeEdaExpectedSolution(value: unknown): EDASolucionEsperada | null {
-    if (!isRecord(value)) {
-        return null;
+function sanitizeEdaExpectedSolution(value: unknown): string | null {
+    if (typeof value === "string" && value.trim()) {
+        return value;
     }
 
-    const teoria = readString(value.teoria);
-    const ejemplo = readString(value.ejemplo);
-    const implicacion = readString(value.implicacion);
-    const literatura = readString(value.literatura);
-
-    if (!teoria || !ejemplo || !implicacion || !literatura) {
-        return null;
+    if (isRecord(value)) {
+        // Backward compat: old DB records may store a 4-field {teoria, ejemplo, implicacion, literatura} object.
+        const parts = [value.teoria, value.ejemplo, value.implicacion, value.literatura]
+            .filter((v): v is string => typeof v === "string" && v.trim() !== "")
+            .map((v) => v.trim());
+        if (parts.length > 0) {
+            return parts.join(" ");
+        }
     }
 
-    return {
-        teoria,
-        ejemplo,
-        implicacion,
-        literatura,
-    };
+    return null;
 }
 
 function sanitizeMinimalQuestion(value: unknown): PreguntaMinimalista | null {

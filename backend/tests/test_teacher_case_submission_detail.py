@@ -131,10 +131,7 @@ def _build_canonical_output(*, include_m2: bool = True, include_m4: bool = True)
                 "numero": 2,
                 "titulo": "EDA 2",
                 "enunciado": "Interpreta el grafico.",
-                "solucion_esperada": {
-                    "teoria": "Teoria",
-                    "ejemplo": "Ejemplo",
-                },
+                "solucion_esperada": "Teoria. Ejemplo.",
                 "task_type": "text_response",
             }
         ]

@@ -163,12 +163,7 @@ describe("toCanonicalCaseOutput", () => {
                             titulo: "Hallazgo principal",
                             enunciado: "Interpreta el gráfico principal.",
                             task_type: "text_response",
-                            solucion_esperada: {
-                                teoria: "La variabilidad sugiere un proceso inestable.",
-                                ejemplo: "El percentil 95 revela dispersión entre cohortes.",
-                                implicacion: "Se requiere estandarizar el onboarding.",
-                                literatura: "Montgomery, control estadístico de procesos.",
-                            },
+                            solucion_esperada: "La variabilidad sugiere un proceso inestable con dispersión alta entre cohortes.",
                         },
                     ],
                 },
@@ -201,5 +196,54 @@ describe("toCanonicalCaseOutput", () => {
             titulo: "Hallazgo principal",
             task_type: "text_response",
         });
+    });
+
+    it("accepts legacy 4-field solucion_esperada from old DB records", () => {
+        const detail = createSubmissionDetailResponse({
+            case_view: {
+                studentProfile: null as never,
+                caseType: undefined,
+                content: {
+                    edaQuestions: [
+                        {
+                            numero: 1,
+                            titulo: "Sesgo de confirmación",
+                            enunciado: "¿Qué evidencia omitirías?",
+                            task_type: "text_response",
+                            solucion_esperada: {
+                                teoria: "El sesgo de confirmación filtra evidencia contraria.",
+                                ejemplo: "Solo se mira la tasa de aprobados.",
+                                implicacion: "Se toman decisiones sobre datos parciales.",
+                                literatura: "Kahneman, Thinking Fast and Slow.",
+                            } as unknown as string,
+                        },
+                    ],
+                },
+            },
+            modules: [
+                {
+                    id: "M2",
+                    title: "Módulo 2 · EDA",
+                    questions: [
+                        {
+                            id: "M2-Q1",
+                            order: 1,
+                            statement: "¿Qué evidencia omitirías?",
+                            context: "",
+                            expected_solution: "El sesgo de confirmación filtra evidencia contraria.",
+                            student_answer: "",
+                            student_answer_chars: 0,
+                            is_answer_from_draft: false,
+                        },
+                    ],
+                },
+            ],
+        });
+
+        const result = toCanonicalCaseOutput(detail);
+        const edaQ = result.content.edaQuestions?.[0];
+
+        expect(typeof edaQ?.solucion_esperada).toBe("string");
+        expect((edaQ?.solucion_esperada as string).length).toBeGreaterThan(0);
     });
 });

@@ -81,4 +81,32 @@ describe("PreguntaCard", () => {
         expect(screen.queryByText(/Solución Esperada/i)).not.toBeInTheDocument();
         expect(screen.queryByText("Conexión con la pregunta eje")).not.toBeInTheDocument();
     });
+
+    it("renders EDA question with legacy 4-field solucion_esperada without crashing", () => {
+        render(
+            <PreguntaCard
+                p={{
+                    numero: 2,
+                    titulo: "Sesgo EDA",
+                    enunciado: "¿Qué evidencia omitirías?",
+                    task_type: "text_response",
+                    solucion_esperada: {
+                        teoria: "El sesgo de confirmación filtra evidencia contraria.",
+                        ejemplo: "Solo se mira la tasa de aprobados.",
+                        implicacion: "Se toman decisiones sobre datos parciales.",
+                        literatura: "Kahneman, Thinking Fast and Slow.",
+                    },
+                } as unknown as PreguntaCardQuestion}
+                questionId="M2-Q1"
+                answer=""
+                onAnswerChange={vi.fn()}
+                readOnly={false}
+                showExpectedSolutions
+            />,
+        );
+
+        expect(screen.getByText("Solución Esperada — Solo Docentes")).toBeInTheDocument();
+        // Legacy fields are concatenated and rendered — at least one fragment is visible.
+        expect(screen.getByText(/sesgo de confirmaci/i)).toBeInTheDocument();
+    });
 });

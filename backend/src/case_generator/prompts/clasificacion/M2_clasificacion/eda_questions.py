@@ -39,12 +39,7 @@ correlación/causalidad, sino los específicos de clasificación binaria:
       "numero": 1,
       "titulo": "string corto (≤8 palabras)",
       "enunciado": "string (pregunta completa que cita métricas y datos reales del M2)",
-      "solucion_esperada": {{
-        "teoria": "string (concepto estadístico/analítico que el estudiante debe conocer, máx 40 palabras)",
-        "ejemplo": "string (ejemplo concreto del caso que ilustra el concepto, máx 40 palabras)",
-        "implicacion": "string (consecuencia si el estudiante ignora este sesgo en su decisión, máx 40 palabras)",
-        "literatura": "string (referencia académica sin DOIs/URLs inventados, máx 30 palabras)"
-      }},
+      "solucion_esperada": "string (respuesta modelo en un párrafo fluido que integra concepto, ejemplo del caso e implicación ejecutiva; incluye referencia académica al final; máx 120 palabras; docente-only)",
       "bloom_level": "analysis",
       "chart_ref": "id del chart de distribución de clases del manifest, o null si no existe",
       "exhibit_ref": "Dataset",
@@ -54,12 +49,7 @@ correlación/causalidad, sino los específicos de clasificación binaria:
       "numero": 2,
       "titulo": "string corto (≤8 palabras)",
       "enunciado": "string (pregunta completa que cita threshold, churn rate y costo asimétrico reales del M2)",
-      "solucion_esperada": {{
-        "teoria": "string (máx 40 palabras)",
-        "ejemplo": "string (máx 40 palabras)",
-        "implicacion": "string (máx 40 palabras)",
-        "literatura": "string (sin DOIs/URLs inventados, máx 30 palabras)"
-      }},
+      "solucion_esperada": "string (respuesta modelo en un párrafo fluido; máx 120 palabras; docente-only)",
       "bloom_level": "synthesis",
       "chart_ref": "id del chart de correlación o scatter del manifest, o null si no hay uno relevante",
       "exhibit_ref": "Dataset",
@@ -88,7 +78,11 @@ correlación/causalidad, sino los específicos de clasificación binaria:
    - Exige que proponga un umbral concreto (ej: 0.3) con justificación cuantitativa.
 5. **Verifica** que cada pregunta obligue al estudiante a ir más allá de la métrica superficial
    (accuracy) hacia métricas de negocio (recall, F-beta, AUC-ROC, costo de retención).
-6. **task_type siempre "text_response"** — M2 no genera notebook; ambas preguntas son argumentativas.
+6. **Redacta solucion_esperada como un párrafo fluido** que integre el concepto estadístico,
+   el ejemplo concreto del caso y la implicación ejecutiva en una sola prosa coherente.
+   Incluye la referencia académica al final del párrafo. Máx 120 palabras. No uses
+   sub-campos ni estructuras anidadas — solo texto plano.
+7. **task_type siempre "text_response"** — M2 no genera notebook; ambas preguntas son argumentativas.
 
 # Your Boundaries
 - Solo JSON schema. PROHIBIDO Markdown libre fuera del JSON.
@@ -128,16 +122,13 @@ de estructura (sustituir X e Y con los valores reales del caso):
    poder predictivo sobre los clientes que se van? ¿Por qué el accuracy es una métrica engañosa
    en este contexto y qué alternativas debería usar el equipo para evaluar el modelo?"
 
-solucion_esperada:
-  teoria: "Accuracy paradox: un clasificador que predice siempre la clase mayoritaria obtiene
-    accuracy = proporción clase 0, sin ningún poder predictivo sobre la clase minoritaria."
-  ejemplo: (construir con el churn rate real de {eda_context}, ej: "Con churn 8%, un modelo
-    que siempre predice 'no churn' logra 92% accuracy capturando 0% de churners reales.")
-  implicacion: "Seleccionar LR o RF con threshold=0.5 en dataset 92/8 → el modelo 'funciona'
-    en accuracy pero pierde 40-60% de churners reales; el presupuesto de retención se dirige
-    al segmento equivocado."
-  literatura: "Chawla et al. (2002) 'SMOTE: Synthetic Minority Over-sampling Technique';
-    James et al. 'An Introduction to Statistical Learning' cap. sobre imbalanced data."
+solucion_esperada: (párrafo único, ej:)
+  "Con un churn rate del 8%, un modelo que siempre predice 'no churn' logra 92% de accuracy
+  sin capturar ni un solo churner real — eso es el accuracy paradox. Usar threshold=0.5 en
+  un dataset 92/8 implica que LR o RF 'funcionan' en accuracy pero el equipo pierde 40-60%
+  de churners reales y el presupuesto de retención se dirige al segmento equivocado. La
+  alternativa es evaluar con recall, F-beta (beta>1) o AUC-ROC. Ref: Chawla et al. (2002)
+  'SMOTE'; James et al. 'An Introduction to Statistical Learning' cap. sobre imbalanced data."
 
 chart_ref: id del chart de distribución de clases/target de {chart_manifest}
 exhibit_ref: "Dataset"
@@ -152,18 +143,14 @@ de estructura:
    Proponga un umbral concreto (distinto de 0.5) y justifique su elección usando F-beta con
    beta>1 o AUC-ROC. ¿Cómo afecta esta decisión la elección entre los modelos disponibles?"
 
-solucion_esperada:
-  teoria: "Precision-recall trade-off: bajar threshold de 0.5 a 0.3 aumenta recall (captura
-    más churners) a costa de reducir precision (más falsos positivos). F-beta con beta>1
-    penaliza más los falsos negativos que los positivos."
-  ejemplo: (construir con churn rate real de {eda_context}, ej: "Si churn rate = 8%,
-    threshold=0.5 → recall ~40%; threshold=0.3 → recall ~70% con +15pp de FP — la decisión
-    depende del ratio costo_retención / ingreso_perdido por churner.")
-  implicacion: "Elegir threshold=0.5 por default en datos imbalanceados → accuracy alta pero
-    KPI de negocio fallido: el equipo reporta 'modelo funciona' mientras pierde churners
-    reales y el churn rate no baja en producción."
-  literatura: "Provost & Fawcett 'Data Science for Business' (2013) cap. sobre costos
-    asimétricos; Fawcett (2006) 'An Introduction to ROC Analysis' Pattern Recognition Letters."
+solucion_esperada: (párrafo único, ej:)
+  "Bajar el threshold de 0.5 a 0.3 aumenta el recall capturando más churners a costa de más
+  falsos positivos — ese es el precision-recall trade-off. Con churn rate del 8%, threshold=0.5
+  puede dar recall ~40%; bajarlo a 0.3 sube el recall a ~70% con +15pp de falsos positivos.
+  La decisión depende del ratio costo_retención / ingreso_perdido por churner: si perder un
+  churner cuesta más que retener a un cliente leal, F-beta con beta>1 es la métrica correcta
+  sobre AUC-ROC. Ref: Provost & Fawcett 'Data Science for Business' (2013); Fawcett (2006)
+  'An Introduction to ROC Analysis' Pattern Recognition Letters."
 
 chart_ref: id del chart de correlación o scatter de {chart_manifest}, o null si no hay relevante
 exhibit_ref: "Dataset"

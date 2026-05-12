@@ -44,10 +44,7 @@ def _build_canonical_output() -> dict[str, object]:
                     "numero": 2,
                     "titulo": "EDA 2",
                     "enunciado": "Interpreta el grafico.",
-                    "solucion_esperada": {
-                        "teoria": "Teoria",
-                        "ejemplo": "Ejemplo",
-                    },
+                    "solucion_esperada": "Teoria. Ejemplo.",
                     "task_type": "text_response",
                     "debug_logs": ["internal"],
                 }
@@ -75,10 +72,7 @@ def test_build_teacher_case_review_payload_keeps_solucion_esperada() -> None:
     assert payload["content"]["preguntaEje"] == "¿Debe la Junta priorizar retención selectiva?"
     assert payload["content"]["caseQuestions"][0]["solucion_esperada"] == "Solucion docente M1"
     assert "rubric" not in payload["content"]["caseQuestions"][0]
-    assert payload["content"]["edaQuestions"][0]["solucion_esperada"] == {
-        "teoria": "Teoria",
-        "ejemplo": "Ejemplo",
-    }
+    assert payload["content"]["edaQuestions"][0]["solucion_esperada"] == "Teoria. Ejemplo."
     assert payload["content"]["m5QuestionsSolutions"] == [
         {"numero": 5, "solucion_esperada": "Solucion separada M5"}
     ]

@@ -869,12 +869,7 @@ sesgo de confirmación y confusión entre correlación y causalidad.
     "numero": 1,
     "titulo": "string corto (≤8 palabras)",
     "enunciado": "string (pregunta completa referenciando datos reales del M2)",
-    "solucion_esperada": {{
-      "teoria": "string (concepto estadístico/analítico que el estudiante debe conocer, máx 40 palabras)",
-      "ejemplo": "string (ejemplo concreto del caso que ilustra el concepto, máx 40 palabras)",
-      "implicacion": "string (qué pasaría si el estudiante ignora este sesgo en su decisión, máx 40 palabras)",
-      "literatura": "string (referencia académica o tendencia conocida del sector, sin DOIs/URLs inventados, máx 30 palabras)"
-    }},
+    "solucion_esperada": "string (respuesta modelo en un párrafo fluido que integra concepto, ejemplo del caso e implicación ejecutiva; incluye referencia académica al final; máx 120 palabras; docente-only)",
     "bloom_level": "analysis|evaluation|synthesis",
     "chart_ref": "chart_01|chart_02|...|Ninguno",
     "exhibit_ref": "Exhibit 1|Exhibit 2|Dataset|Ninguno",
@@ -888,7 +883,9 @@ sesgo de confirmación y confusión entre correlación y causalidad.
 2. **Conecta:** Identifica el hallazgo más propenso a sesgo y la correlación más engañosa.
 3. **Diseña:** Preguntas que obliguen al estudiante a cuestionar lo que los datos PARECEN decir.
    Usa los IDs y títulos del `{chart_manifest}` para que las referencias sean precisas.
-4. **Redacta:** Cada campo de `solucion_esperada` por separado — son guías para el docente.
+4. **Redacta:** `solucion_esperada` como un párrafo fluido que integre el concepto, el ejemplo
+   concreto del caso y la implicación ejecutiva. Incluye la referencia académica al final.
+   Máx 120 palabras. No uses sub-campos ni estructuras anidadas — solo texto plano.
 5. **task_type siempre "text_response":** M2 no genera notebook — todas las preguntas son argumentativas.
 
 # Your Boundaries

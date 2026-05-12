@@ -8,7 +8,7 @@ import { SolucionEsperadaRenderer } from "./SolucionEsperadaRenderer";
 export type QuestionRenderable = PreguntaMinimalista | EDASocraticQuestion;
 
 function isEDASocraticQuestion(question: QuestionRenderable): question is EDASocraticQuestion {
-    return typeof question.solucion_esperada === "object" && question.solucion_esperada !== null && "teoria" in question.solucion_esperada;
+    return "task_type" in question;
 }
 
 export function PreguntaCard({
