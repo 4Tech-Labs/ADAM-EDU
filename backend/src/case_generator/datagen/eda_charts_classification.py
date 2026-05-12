@@ -1,6 +1,6 @@
 """Issue #237 — Python-deterministic 4-chart EDA panel for classification.
 
-Pipeline (no LLM calls; numpy/pandas/sklearn only):
+Pipeline (no LLM calls; pandas/sklearn only):
 
     df: pd.DataFrame                 contract: dict (dataset_schema_required)
          │                                          │
@@ -28,8 +28,8 @@ Determinism guarantees:
 
 Failure policy:
   * Any unrecoverable error in a single chart builder → that chart is
-    skipped (not faked). The function returns ``len(charts) ≤ 4`` and the
-    caller (``eda_chart_generator``) caps to 5 and logs the gap.
+    skipped (not faked). The function returns ``len(charts) ≤ 4``; callers
+    may log or otherwise handle the emitted/expected chart count.
   * Empty/None ``df`` → returns ``[]`` so the caller can fall back to the
     LLM-JSON path with a warning.
 """
@@ -39,7 +39,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger("adam.graph")
