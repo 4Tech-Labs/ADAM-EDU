@@ -63,17 +63,16 @@ CONTRACT = {"case_id": "test_case_237"}
 
 
 def test_happy_path_invariants(df_binary: pd.DataFrame) -> None:
-    """El happy path emite EXACTAMENTE 6 charts en el orden esperado, todos
+    """El happy path emite EXACTAMENTE 5 charts en el orden esperado, todos
     con `data_source=python_builder` y descriptions/notes vacías (anti-LLM).
     """
     charts = generate_classification_eda_charts(df_binary, "churn", CONTRACT)
-    assert len(charts) == 6
+    assert len(charts) == 5
     expected_ids = [
         "class_distribution",
         "missingness_heatmap",
         "mutual_info_top8",
         "boxplots_top3_numeric",
-        "stacked_top2_categorical",
         "pca_2d_scatter",
     ]
     assert [c["id"] for c in charts] == expected_ids
@@ -88,7 +87,7 @@ def test_happy_path_invariants(df_binary: pd.DataFrame) -> None:
 
 def test_target_multiclass(df_multiclass: pd.DataFrame) -> None:
     charts = generate_classification_eda_charts(df_multiclass, "label", CONTRACT)
-    assert len(charts) == 6
+    assert len(charts) == 5
     cd = next(c for c in charts if c["id"] == "class_distribution")
     classes_in_chart = cd["traces"][0]["x"]
     assert set(classes_in_chart) == {"bronze", "silver", "gold"}
@@ -199,7 +198,7 @@ def test_boundary_llm_cannot_alter_traces(df_binary: pd.DataFrame) -> None:
 
     assert update is not None
     charts = update["doc2_eda_charts"]
-    assert len(charts) == 6
+    assert len(charts) == 5
     cd = next(c for c in charts if c["id"] == "class_distribution")
     # description vino del LLM stub, traces sin tocar (vienen del builder).
     assert cd["description"] == "desc fake"
@@ -219,7 +218,7 @@ def test_boundary_llm_cannot_alter_traces(df_binary: pd.DataFrame) -> None:
 
 
 def test_llm_ghost_chart_id_is_silently_dropped(df_binary: pd.DataFrame) -> None:
-    """Si el LLM annotate-only devuelve un id que NO existe entre los 6
+    """Si el LLM annotate-only devuelve un id que NO existe entre los 5
     charts del builder, el id fantasma se descarta y NO se añade chart.
     """
     from case_generator.graph import _eda_classification_python_path
@@ -250,8 +249,8 @@ def test_llm_ghost_chart_id_is_silently_dropped(df_binary: pd.DataFrame) -> None
 
     assert update is not None
     charts = update["doc2_eda_charts"]
-    # Sigue siendo exactamente 6 — el ghost no se añade.
-    assert len(charts) == 6
+    # Sigue siendo exactamente 5 — el ghost no se añade.
+    assert len(charts) == 5
     chart_ids = {c["id"] for c in charts}
     assert "ghost_chart_does_not_exist" not in chart_ids
     # La annotation real sí se aplicó.
