@@ -1,4 +1,4 @@
-"""Issue #237 — Python-deterministic 4-chart EDA panel for classification.
+"""Issue #237 — Python-deterministic 3-chart EDA panel for classification.
 
 Pipeline (no LLM calls; pandas/sklearn only):
 
@@ -13,7 +13,6 @@ Pipeline (no LLM calls; pandas/sklearn only):
    │  1. class_distribution         (bar)                             │
    │  2. missingness_heatmap        (heatmap, sample 500 rows)        │
    │  3. mutual_info_top8           (bar, MI(X, y) top 8)             │
-   │  4. boxplots_top3_numeric      (box, by class, top-3 numeric)    │
    └──────────────────────────────────────────────────────────────────┘
                       ▼
             list[EDAChartSpec]  (data_source="python_builder",
@@ -28,7 +27,7 @@ Determinism guarantees:
 
 Failure policy:
   * Any unrecoverable error in a single chart builder → that chart is
-    skipped (not faked). The function returns ``len(charts) ≤ 4``; callers
+    skipped (not faked). The function returns ``len(charts) ≤ 3``; callers
     may log or otherwise handle the emitted/expected chart count.
   * Empty/None ``df`` → returns ``[]`` so the caller can fall back to the
     LLM-JSON path with a warning.
@@ -46,7 +45,6 @@ logger = logging.getLogger("adam.graph")
 # ── Defensive caps (keep payloads small for FE/Plotly) ────────────────
 _MISSINGNESS_SAMPLE_ROWS = 500
 _MI_TOP_K = 8
-_BOX_TOP_K = 3
 _SOURCE_TEMPLATE = "Dataset ADAM — {case_id}"
 
 
@@ -60,23 +58,6 @@ def _source_label(contract: dict | None) -> str:
     if isinstance(contract, dict):
         case_id = str(contract.get("case_id") or contract.get("caso_id") or "")
     return _SOURCE_TEMPLATE.format(case_id=case_id) if case_id else "Dataset ADAM"
-
-
-def _split_columns(
-    df: pd.DataFrame, target_col: str
-) -> tuple[list[str], list[str]]:
-    """Return (numeric_cols, categorical_cols), excluding target. Sorted."""
-    numeric: list[str] = []
-    categorical: list[str] = []
-    for col in df.columns:
-        if col == target_col:
-            continue
-        s = df[col]
-        if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
-            numeric.append(col)
-        else:
-            categorical.append(col)
-    return sorted(numeric), sorted(categorical)
 
 
 def _empty_chart(
@@ -274,57 +255,6 @@ def _build_mutual_info_top8(
     }
 
 
-def _build_boxplots_top3_numeric(
-    df: pd.DataFrame, target_col: str, source: str, numeric_cols: list[str]
-) -> dict[str, Any]:
-    if not numeric_cols:
-        return _empty_chart(
-            "boxplots_top3_numeric",
-            "Boxplots top features numéricas por clase",
-            "Sin columnas numéricas disponibles",
-            "box",
-            source,
-        )
-    # Pick top-3 by variance (deterministic, same dataset → same picks).
-    variances = df[numeric_cols].var(numeric_only=True).fillna(0.0)
-    top = variances.sort_values(ascending=False).index.tolist()[:_BOX_TOP_K]
-    classes = sorted(df[target_col].dropna().astype(str).unique().tolist())
-    traces: list[dict[str, Any]] = []
-    for col in top:
-        for cls in classes:
-            mask = df[target_col].astype(str) == cls
-            ys = df.loc[mask, col].dropna().astype(float).tolist()
-            traces.append(
-                {
-                    "type": "box",
-                    "y": ys,
-                    "name": f"{cls}",
-                    "x": [col] * len(ys),
-                    "boxmean": True,
-                    "legendgroup": cls,
-                    "showlegend": col == top[0],
-                }
-            )
-    return {
-        "id": "boxplots_top3_numeric",
-        "title": "Boxplots top features numéricas por clase",
-        "subtitle": f"Top {len(top)} por varianza: {', '.join(top)}",
-        "library": "plotly",
-        "chart_type": "box",
-        "traces": traces,
-        "layout": {
-            "template": "plotly_white",
-            "boxmode": "group",
-            "xaxis": {"title": "Feature"},
-            "yaxis": {"title": "Valor"},
-        },
-        "source": source,
-        "description": "",
-        "notes": "",
-        "data_source": "python_builder",
-    }
-
-
 # ───────────────────────────────────────────────────────────────────────
 # Public entrypoint
 # ───────────────────────────────────────────────────────────────────────
@@ -333,7 +263,7 @@ def _build_boxplots_top3_numeric(
 def generate_classification_eda_charts(
     df: pd.DataFrame, target_col: str, contract: dict | None
 ) -> list[dict[str, Any]]:
-    """Build the 4-chart EDA panel deterministically.
+    """Build the 3-chart EDA panel deterministically.
 
     Returns a list of dicts shaped like ``EDAChartSpec`` (with
     ``data_source="python_builder"`` and empty ``description``/``notes``).
@@ -353,17 +283,12 @@ def generate_classification_eda_charts(
         return []
 
     source = _source_label(contract)
-    numeric_cols, _ = _split_columns(df, target_col)
     charts: list[dict[str, Any]] = []
 
     builders: list[tuple[str, Any]] = [
         ("class_distribution", lambda: _build_class_distribution(df, target_col, source)),
         ("missingness_heatmap", lambda: _build_missingness_heatmap(df, target_col, source)),
         ("mutual_info_top8", lambda: _build_mutual_info_top8(df, target_col, source)),
-        (
-            "boxplots_top3_numeric",
-            lambda: _build_boxplots_top3_numeric(df, target_col, source, numeric_cols),
-        ),
     ]
     for cid, fn in builders:
         try:
