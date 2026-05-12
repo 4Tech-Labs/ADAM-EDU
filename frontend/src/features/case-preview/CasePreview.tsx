@@ -160,10 +160,15 @@ export function CasePreview({
         <>
             <style>{CASE_VIEWER_STYLES}</style>
             <style>{`
+@page { margin: 1.5cm 2cm; }
+
 @media print {
     /* Hide navigation chrome */
     .case-preview aside { display: none !important; }
     .case-preview main > header { display: none !important; }
+
+    /* Hide SectionRail right panel (w-44 flex-shrink-0) — frees ~176px of print width */
+    .case-preview .w-44 { display: none !important; }
 
     /* Release overflow from layout shell and body useEffect */
     html, body { overflow: visible !important; height: auto !important; }
@@ -174,11 +179,14 @@ export function CasePreview({
         display: block !important;
     }
 
-    /* Release Tailwind overflow-hidden / overflow-y-auto containers */
+    /* Release Tailwind overflow-hidden / overflow-y-auto containers;
+       also strip the px-6 horizontal padding that wastes 48px of print width */
     .case-preview .overflow-hidden,
     .case-preview .overflow-y-auto {
         overflow: visible !important;
         height: auto !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
     }
 
     /* Remove paper card shadow + clipping */
@@ -188,12 +196,23 @@ export function CasePreview({
         border-radius: 0 !important;
     }
 
+    /* Reduce module content panel from px-14 (56px) to 1.5rem (24px) each side */
+    #module-content-panel {
+        padding-left: 1.5rem !important;
+        padding-right: 1.5rem !important;
+    }
+
+    /* Constrain Plotly chart containers to available print width */
+    .js-plotly-plot,
+    .js-plotly-plot .svg-container,
+    .js-plotly-plot .main-svg { max-width: 100% !important; width: 100% !important; }
+
     /* NotebookViewer SyntaxHighlighter has inline maxHeight: 600px on <pre> */
     .case-preview pre { max-height: none !important; overflow: visible !important; }
 
     /* Avoid splitting charts and tables across pages (legacy + modern CSS Fragmentation) */
     .js-plotly-plot { page-break-inside: avoid; break-inside: avoid; }
-    .case-preview table { page-break-inside: avoid; break-inside: avoid; }
+    .case-preview table { page-break-inside: avoid; break-inside: avoid; max-width: 100% !important; }
 }
 `}</style>
             <div className={`case-preview flex ${PORTAL_SHELL_HEIGHT_VH_CLASSNAME} overflow-hidden font-sans`}>
