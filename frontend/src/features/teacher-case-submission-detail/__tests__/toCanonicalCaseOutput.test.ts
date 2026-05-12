@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { EDASocraticQuestion } from "@/shared/adam-types";
+
 import { toCanonicalCaseOutput } from "../toCanonicalCaseOutput";
 
 import { createSubmissionDetailResponse } from "./testData";
@@ -215,8 +217,8 @@ describe("toCanonicalCaseOutput", () => {
                                 ejemplo: "Solo se mira la tasa de aprobados.",
                                 implicacion: "Se toman decisiones sobre datos parciales.",
                                 literatura: "Kahneman, Thinking Fast and Slow.",
-                            } as unknown as string,
-                        },
+                            },
+                        } as unknown as EDASocraticQuestion,
                     ],
                 },
             },
