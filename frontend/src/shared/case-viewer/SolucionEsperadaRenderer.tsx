@@ -1,22 +1,32 @@
 import { Marked } from "marked";
 
 // Local marked instance that strips unsafe HTML from LLM-generated content.
-// - renderer.html: strips raw HTML blocks (e.g. <script>, <iframe>).
-// - renderer.link: allows only http/https/relative/anchor links; strips javascript:/data:/vbscript:
-//   by rendering the link text as plain text. Adds rel="noopener noreferrer" on external links.
+// - renderer.html: strips raw HTML blocks and inline HTML (e.g. <script>, <iframe>).
+// - renderer.link: allows only http/https and site-relative (single slash or anchor) links.
+//   - Protocol-relative (//domain) and unsafe protocols (javascript:, data:, vbscript:) become plain text.
+//   - href and title are HTML-attribute-escaped to prevent attribute injection XSS.
+//   - External links get rel="noopener noreferrer" and open in a new tab.
 // Using a local instance avoids mutating the global marked config used by M1–M6 modules.
-const _SAFE_LINK_RE = /^https?:|^\/{1,2}|^#/;
+
+// Encode HTML special characters safe for use inside a double-quoted attribute value.
+const _esc = (s: string): string =>
+    s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// Allow http/https and site-relative paths. Deliberately excludes protocol-relative (//domain)
+// as LLM-generated academic prose has no legitimate use for them.
+const _SAFE_LINK_RE = /^https?:|^\/(?!\/)|^#/;
 const _md = new Marked({
     renderer: {
         html: () => "",
         link({ href, title, text }) {
             if (!_SAFE_LINK_RE.test(href ?? "")) {
-                // Unsafe protocol (javascript:, data:, vbscript:, etc.) — render as plain text.
+                // Unsafe protocol (javascript:, data:, vbscript:, //, etc.) — render as plain text.
                 return text;
             }
-            const titleAttr = title ? ` title="${title}"` : "";
+            const safeHref = _esc(href ?? "");
+            const titleAttr = title ? ` title="${_esc(title)}"` : "";
             const externalAttrs = /^https?:/.test(href ?? "") ? ' target="_blank" rel="noopener noreferrer"' : "";
-            return `<a href="${href}"${titleAttr}${externalAttrs}>${text}</a>`;
+            return `<a href="${safeHref}"${titleAttr}${externalAttrs}>${text}</a>`;
         },
     },
 });
