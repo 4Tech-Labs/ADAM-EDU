@@ -2879,9 +2879,9 @@ def _generate_dataset_from_schema(schema: dict) -> list:
     # ── Fix B-signal: Reescribir columnas binarias (target) con señal multi-feature ──
     # El algoritmo de dependencia simple produce labels ≈ aleatorios cuando el padre
     # tiene baja varianza (churn_rate ≈ 0.085 → parent_norm ≈ 0.5 → round(0.5 + N(0,0.30))
-    # no discrimina). Este bloque reescribe targets binarios usando scoring logístico
-    # sobre TODOS los features numéricos disponibles, garantizando correlaciones reales
-    # con ~12% de ruido para evitar separabilidad perfecta.
+    # no discrimina). Este bloque reescribe targets binarios usando score lineal normalizado
+    # (promedio ponderado entre todos los features numéricos + umbral de mediana), garantizando
+    # correlaciones reales con ~12% de ruido para evitar separabilidad perfecta.
     #
     # Sólo aplica a columnas que cumplen los tres criterios:
     #   1. type == "int" AND range_min == 0 AND range_max == 1   (binaria)
@@ -2908,9 +2908,11 @@ def _generate_dataset_from_schema(schema: dict) -> list:
     for btcol in binary_target_cols:
         btname = btcol["name"]
         feature_arrays: list[list[float]] = []
-        for fname, fvals in df_data.items():
-            if fname == btname or fname == "period":
+        for col_def in num_cols:
+            fname = col_def["name"]
+            if fname == btname:
                 continue
+            fvals = df_data.get(fname, [])
             raw = [float(v) if v is not None else 0.0 for v in fvals]
             fmin, fmax = min(raw), max(raw)
             if fmax <= fmin:
