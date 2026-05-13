@@ -721,7 +721,7 @@ async function streamRealtimeProgress(
     // proceeds unauthenticated and falls back to polling via the existing path.
     const currentToken = await getBearerToken();
     if (currentToken) {
-        realtimeClient.setAuth(currentToken);
+        realtimeClient.realtime.setAuth(currentToken);
     }
 
     await new Promise<void>((resolve, reject) => {

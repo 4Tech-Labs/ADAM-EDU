@@ -1152,7 +1152,7 @@ describe("api auth + stream glue", () => {
 
         createClientMock.mockImplementationOnce(() => ({
             auth: { getSession: getSessionMock },
-            setAuth: setAuthMock,
+            realtime: { setAuth: setAuthMock },
             channel: channelMock,
             removeChannel: removeChannelMock,
         }));
@@ -1217,7 +1217,7 @@ describe("api auth + stream glue", () => {
 
         createClientMock.mockImplementationOnce(() => ({
             auth: { getSession: getSessionMock },
-            setAuth: setAuthMock,
+            realtime: { setAuth: setAuthMock },
             channel: vi.fn(() => channelStub),
             removeChannel: removeChannelMock,
         }));
@@ -1271,7 +1271,7 @@ describe("api auth + stream glue", () => {
 
         createClientMock.mockImplementationOnce(() => ({
             auth: { getSession: getSessionMock },
-            setAuth: setAuthMock,
+            realtime: { setAuth: setAuthMock },
             channel: channelMock,
             removeChannel: vi.fn().mockResolvedValue(undefined),
         }));
