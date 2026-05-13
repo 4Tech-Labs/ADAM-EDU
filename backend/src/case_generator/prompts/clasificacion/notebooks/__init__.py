@@ -5,6 +5,7 @@ from case_generator.prompts.clasificacion.notebooks._shared import (
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
     ClassificationNotebookVariant,
+    TOC_MARKDOWN_CELL_BY_VARIANT,
 )
 from case_generator.prompts.clasificacion.notebooks.contrast import (
     M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST,
@@ -36,4 +37,5 @@ __all__ = [
     "M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY",
     "M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST",
     "M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY",
+    "TOC_MARKDOWN_CELL_BY_VARIANT",
 ]

@@ -55,6 +55,7 @@ from case_generator.prompts.clasificacion import (
     M5_PROMPT_CLASSIFICATION,
     M5_QUESTIONS_PROMPT_CLASSIFICATION,
     SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
+    TOC_MARKDOWN_CELL_BY_VARIANT,
 )
 
 
@@ -1570,7 +1571,7 @@ M3_NOTEBOOK_BASE_TEMPLATE = """\
 # 2. Revisa las columnas detectadas automáticamente.
 # 3. Si un bloque muestra `REQUISITO FALTANTE`, ajusta únicamente los aliases o valida el nombre real de la columna.
 # 4. No inventes columnas ni datos; todo análisis debe salir del dataset real.
-
+{toc_cell}
 # %%
 import io
 import platform
@@ -2457,6 +2458,7 @@ __all__ = [
   "CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST",
   "CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY",
   "ClassificationNotebookVariant",
+  "TOC_MARKDOWN_CELL_BY_VARIANT",
   "PROMPT_BY_FAMILY",
   "SCHEMA_DESIGNER_PROMPT",
   "SCHEMA_DESIGNER_PROMPT_BY_FAMILY",

@@ -23,6 +23,7 @@ from case_generator.prompts import (
     M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY,
     M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST,
     M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY,
+    TOC_MARKDOWN_CELL_BY_VARIANT,
 )
 
 
@@ -359,3 +360,79 @@ def test_variant_validator_rejects_unselected_lr_in_rf_only() -> None:
 
     assert "LogisticRegression" in violations
     assert "pipe_lr" in violations
+
+
+# ---------------------------------------------------------------------------
+# TOC (Tabla de Contenido) cell tests — Issue feat/classification-notebook-toc
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("variant", "must_contain", "must_not_contain"),
+    [
+        pytest.param(
+            CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
+            ("3.0.5.2", "3.0.7", "3.0.9", "Logistic Regression"),
+            ("3.0.5.3", "3.0.8", "3.0.10"),
+            id="lr_only",
+        ),
+        pytest.param(
+            CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
+            ("3.0.5.3", "3.0.8", "3.0.10", "Random Forest"),
+            ("3.0.5.2", "3.0.7", "3.0.9"),
+            id="rf_only",
+        ),
+        pytest.param(
+            CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
+            ("3.0.5.2", "3.0.5.3", "3.0.7", "3.0.8", "3.0.9", "3.0.10"),
+            (),
+            id="lr_rf_contrast",
+        ),
+    ],
+)
+def test_toc_cell_contains_correct_sections_per_variant(
+    variant: str,
+    must_contain: tuple[str, ...],
+    must_not_contain: tuple[str, ...],
+) -> None:
+    """Each variant's TOC lists exactly its own sections and none of the absent ones."""
+    toc = TOC_MARKDOWN_CELL_BY_VARIANT[variant]
+    assert "# %% [markdown]" in toc, "TOC must be a Jupytext markdown cell"
+    assert "📋 Tabla de Contenido" in toc, "TOC must have the standard heading"
+    for token in must_contain:
+        assert token in toc, f"Expected {token!r} in {variant} TOC"
+    for token in must_not_contain:
+        assert token not in toc, f"Unexpected {token!r} found in {variant} TOC"
+
+
+def test_toc_cell_all_three_variants_share_base_sections() -> None:
+    """Sections 1, 2, 2.1, 3, 3.0, and 3.0.11 must appear in every variant TOC."""
+    base_sections = ("| 1 |", "| 2 |", "| 2.1 |", "| 3 |", "| 3.0 |", "| 3.0.11 |")
+    for variant, toc in TOC_MARKDOWN_CELL_BY_VARIANT.items():
+        for section in base_sections:
+            assert section in toc, f"Section {section!r} missing from {variant} TOC"
+
+
+def test_toc_cell_starts_with_newline_for_clean_cell_boundary() -> None:
+    """Each TOC string must start with \\n so the injected cell is preceded by a
+    blank line in the Jupytext source (conventional Jupytext style)."""
+    for variant, toc in TOC_MARKDOWN_CELL_BY_VARIANT.items():
+        assert toc.startswith("\n"), (
+            f"{variant} TOC string must start with \\n to produce a blank "
+            "line before the # %% [markdown] cell marker"
+        )
+
+
+def test_base_template_toc_placeholder_is_replaced_for_non_classification_family() -> None:
+    """When notebook_variant is None (non-classification family), the {toc_cell}
+    placeholder must not appear literally in the assembled base template."""
+    from case_generator.prompts import M3_NOTEBOOK_BASE_TEMPLATE
+
+    assembled = M3_NOTEBOOK_BASE_TEMPLATE.replace("{case_title}", "Test").replace(
+        "{toc_cell}", ""
+    )
+    assert "{toc_cell}" not in assembled, (
+        "The {toc_cell} placeholder leaked into the assembled notebook. "
+        "All families must call .replace('{toc_cell}', ...) before use."
+    )
+    assert "import io" in assembled, "Base template imports must survive the replacement"

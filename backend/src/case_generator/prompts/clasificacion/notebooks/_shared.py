@@ -923,6 +923,89 @@ print("ADAM_M3_METRICS_SUMMARY_JSON=" + _json_m3_metrics.dumps(_metrics_summary,
 }
 
 
+# ---------------------------------------------------------------------------
+# TOC (Tabla de Contenido) — static Jupytext markdown cell injected as cell 2
+# in each classification notebook variant.  Zero LLM tokens — resolved at
+# assembly time via the {toc_cell} placeholder in M3_NOTEBOOK_BASE_TEMPLATE.
+# The section numbers MUST match the headers actually emitted by each variant.
+# ---------------------------------------------------------------------------
+
+TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY: (
+        "\n# %% [markdown]\n"
+        "# ## 📋 Tabla de Contenido — Deep dive: Logistic Regression\n"
+        "#\n"
+        "# | # | Sección |\n"
+        "# |---|---|\n"
+        "# | 1 | Carga del dataset |\n"
+        "# | 2 | Inspección y calidad de datos |\n"
+        "# | 2.1 | Detección asistida de columnas |\n"
+        "# | 3 | Módulos Experimentales |\n"
+        "# | 3.0 | EDA Express |\n"
+        "# | 3.0.5.1 | Baseline trivial — DummyClassifier + bootstrap de variables |\n"
+        "# | 3.0.5.2 | Pipeline reproducible — Logistic Regression |\n"
+        "# | 3.0.5.4 | Validación cruzada estratificada |\n"
+        "# | 3.0.5.5 | Curva ROC |\n"
+        "# | 3.0.5.6 | Curva Precision-Recall |\n"
+        "# | 3.0.5.7 | Tabla final de métricas |\n"
+        "# | 3.0.5.8 | Matriz de confusión normalizada |\n"
+        "# | 3.0.6 | Matriz de costos del negocio + threshold tuning |\n"
+        "# | 3.0.7 | Tuning de hiperparámetros — Logistic Regression |\n"
+        "# | 3.0.9 | Interpretabilidad LR: odds ratios + CI bootstrap + VIF |\n"
+        "# | 3.0.11 | Resumen ejecutable de métricas |"
+    ),
+    CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: (
+        "\n# %% [markdown]\n"
+        "# ## 📋 Tabla de Contenido — Deep dive: Random Forest\n"
+        "#\n"
+        "# | # | Sección |\n"
+        "# |---|---|\n"
+        "# | 1 | Carga del dataset |\n"
+        "# | 2 | Inspección y calidad de datos |\n"
+        "# | 2.1 | Detección asistida de columnas |\n"
+        "# | 3 | Módulos Experimentales |\n"
+        "# | 3.0 | EDA Express |\n"
+        "# | 3.0.5.1 | Baseline trivial — DummyClassifier + bootstrap de variables |\n"
+        "# | 3.0.5.3 | Pipeline reproducible — Random Forest |\n"
+        "# | 3.0.5.4 | Validación cruzada estratificada |\n"
+        "# | 3.0.5.5 | Curva ROC |\n"
+        "# | 3.0.5.6 | Curva Precision-Recall |\n"
+        "# | 3.0.5.7 | Tabla final de métricas |\n"
+        "# | 3.0.5.8 | Matriz de confusión normalizada |\n"
+        "# | 3.0.6 | Matriz de costos del negocio + threshold tuning |\n"
+        "# | 3.0.8 | Tuning de hiperparámetros — Random Forest |\n"
+        "# | 3.0.10 | Interpretabilidad RF: permutation importance + PDP top-2 |\n"
+        "# | 3.0.11 | Resumen ejecutable de métricas |"
+    ),
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST: (
+        "\n# %% [markdown]\n"
+        "# ## 📋 Tabla de Contenido — Contraste: Logistic Regression vs Random Forest\n"
+        "#\n"
+        "# | # | Sección |\n"
+        "# |---|---|\n"
+        "# | 1 | Carga del dataset |\n"
+        "# | 2 | Inspección y calidad de datos |\n"
+        "# | 2.1 | Detección asistida de columnas |\n"
+        "# | 3 | Módulos Experimentales |\n"
+        "# | 3.0 | EDA Express |\n"
+        "# | 3.0.5.1 | Baseline trivial — DummyClassifier + bootstrap de variables |\n"
+        "# | 3.0.5.2 | Pipeline reproducible — Logistic Regression |\n"
+        "# | 3.0.5.3 | Pipeline reproducible — Random Forest |\n"
+        "# | 3.0.5.4 | Validación cruzada estratificada — LR vs RF |\n"
+        "# | 3.0.5.5 | Curva ROC — LR vs RF |\n"
+        "# | 3.0.5.6 | Curva Precision-Recall — LR vs RF |\n"
+        "# | 3.0.5.7 | Tabla comparativa final — LR vs RF |\n"
+        "# | 3.0.5.8 | Matrices de confusión — LR y RF normalizadas |\n"
+        "# | 3.0.6 | Matriz de costos del negocio + threshold tuning |\n"
+        "# | 3.0.7 | Tuning de hiperparámetros — Logistic Regression |\n"
+        "# | 3.0.8 | Tuning de hiperparámetros — Random Forest |\n"
+        "# | 3.0.9 | Interpretabilidad LR: odds ratios + CI bootstrap + VIF |\n"
+        "# | 3.0.10 | Interpretabilidad RF: permutation importance + PDP top-2 |\n"
+        "# | 3.0.11 | Resumen ejecutable de métricas |"
+    ),
+}
+
+
 def build_classification_notebook_prompt(
     legacy_prompt: str,
     variant: ClassificationNotebookVariant,
@@ -972,5 +1055,6 @@ __all__ = [
     "CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY",
     "CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST",
     "ClassificationNotebookVariant",
+    "TOC_MARKDOWN_CELL_BY_VARIANT",
     "build_classification_notebook_prompt",
 ]
