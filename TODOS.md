@@ -1103,3 +1103,63 @@ Riesgo de falso positivo si se renombra el encabezado con buena razón.
 la normalización NFD + eliminación de diacríticos de ese texto exacto.
 
 **Depends on / blocked by:** `feat/m3-cost-matrix-notebook-ref` mergeado. Independiente después.
+
+---
+
+## TODO-REALTIME-TELEMETRY: Instrumentar la tasa de CHANNEL_ERROR en producción post-fix
+
+**What:** Agregar telemetría estructurada (Sentry, Datadog, o evento de analytics propio) en
+el sitio donde `console.warn('[authoring-progress] realtime subscription failed', ...)` se
+ejecuta en `frontend/src/shared/api.ts`. Capturar `jobId`, `subscriptionStatus`, y contexto
+de red/browser.
+
+**Why:** Tras el fix del JWT race condition (Issue #248), la expectativa es que `CHANNEL_ERROR`
+prácticamente desaparezca en cold start. Sin telemetría no hay evidencia directa de que el
+fix funcionó. Si aparece una nueva causa de CHANNEL_ERROR (token expirado en escenarios
+inesperados, cambio de infraestructura Supabase), solo se sabría por tickets de soporte.
+
+**Pros:** Verificación directa post-deploy. Permite detectar regresiones de transporte
+Realtime con datos duros, no con reportes anecdóticos. Habilita alertas si la tasa supera
+un umbral (p.ej. >2% de jobs en una ventana de 1h).
+
+**Cons:** Requiere elegir e instalar una herramienta de telemetría client-side que actualmente
+no está configurada en ADAM-EDU. Pequeño overhead de red por evento de error. No bloquea
+el despliegue.
+
+**Context:** El punto exacto de instrumentación es en `api.ts`, bloque
+`subscriptionStatus === "CHANNEL_ERROR" || subscriptionStatus === "TIMED_OUT" || subscriptionStatus === "CLOSED"`, después del
+`console.warn`. La llamada debe incluir `{ jobId, subscriptionStatus }` como propiedades
+del evento. No loguear tokens ni PII.
+
+**Depends on / blocked by:** Deploy de `fix/realtime-subscription-jwt-race` primero; luego
+este TODO como follow-up independiente en una rama separada.
+
+---
+
+## TODO-REALTIME-EXPIRED-TOKEN-TEST: Test de cobertura para path de token expirado
+
+**What:** Agregar Test D en `frontend/src/shared/api.test.ts`: `getBearerToken()` devuelve
+un token no-nulo pero expirado → `setAuth(expiredToken)` es llamado → subscribe resulta en
+`CHANNEL_ERROR` (simulado) → el fallback a polling toma el control → el job completa via
+polling.
+
+**Why:** La decision 1A en la revisión del plan aceptó el path de token expirado como un
+edge case manejado por el fallback existente. Sin un test explícito, un cambio futuro a
+`getBearerToken()` (p.ej. añadir `forceRefresh`) podría romper la cadena de degradación
+silenciosamente.
+
+**Pros:** Cierra el único gap de cobertura restante del fix. Previene regresiones en el
+camino de degradación `CHANNEL_ERROR → polling` cuando el token es no-nulo pero inválido.
+
+**Cons:** El setup del mock es ligeramente más complejo que los tres tests añadidos en el PR
+(requiere simular `CHANNEL_ERROR` en `.subscribe()` después de que `setAuth()` fue llamado
+con un token non-null). Aproximadamente 40 líneas de test.
+
+**Context:** `getBearerToken()` llama `auth.getSession()` que retorna la sesión cacheada en
+localStorage tal como está, sin verificar expiración activamente. El token puede ser
+non-null pero expirado si el usuario reabrió una pestaña inactiva y `autoRefreshToken` no
+había disparado todavía. La RLS `auth.uid() = NULL` con un token expirado produce
+`CHANNEL_ERROR` idéntico al bug original, pero es manejado por el fallback.
+
+**Depends on / blocked by:** `fix/realtime-subscription-jwt-race` mergeado. Independiente
+después.

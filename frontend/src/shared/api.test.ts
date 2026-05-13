@@ -323,7 +323,9 @@ describe("api auth + stream glue", () => {
         const streamPromise = api.authoring.streamProgress("job-fast", (event) => events.push(event));
 
         await flushAsyncWork();
-        await vi.advanceTimersByTimeAsync(2000);
+        // Advance past AUTHORING_REALTIME_SUBSCRIBE_TIMEOUT_MS (4000ms) so the
+        // subscribe watchdog fires and the reconcile path resolves the stream.
+        await vi.advanceTimersByTimeAsync(5000);
         await streamPromise;
 
         expect(events).toContainEqual({
@@ -1113,5 +1115,198 @@ describe("api auth + stream glue", () => {
                 deadline: "2026-06-01T00:00:00Z",
             }),
         ).rejects.toMatchObject({ status: 422 });
+    });
+
+    // ── setAuth() JWT race fix tests ───────────────────────────────────────────
+    //
+    // These tests verify the fix for the cold-start race condition where the
+    // Supabase Realtime client doesn't yet have the user JWT when channel.subscribe()
+    // is called (INITIAL_SESSION fires ~50ms after bootstrapComplete).
+    //
+    // Path A: valid token  → setAuth(token) called BEFORE channel()
+    // Path B: null token   → setAuth NOT called, existing flow preserved
+    // Path C: getBearerToken rejects → error propagates, no orphan channel created
+
+    it("calls setAuth with the current token before creating the realtime channel (Path A)", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+
+        // Provide a valid session so getBearerToken() returns a non-null token.
+        getSessionMock.mockResolvedValue({
+            data: { session: { access_token: "valid-jwt-token" } },
+            error: null,
+        });
+
+        const callOrder: string[] = [];
+        const setAuthMock = vi.fn(() => { callOrder.push("setAuth"); });
+        const channelMock = vi.fn(() => { callOrder.push("channel"); return channelStub; });
+        const removeChannelMock = vi.fn().mockResolvedValue(undefined);
+
+        const channelStub = {
+            on: vi.fn().mockReturnThis(),
+            subscribe: vi.fn((handler: (status: string) => void) => {
+                handler("SUBSCRIBED");
+                return channelStub;
+            }),
+        };
+
+        createClientMock.mockImplementationOnce(() => ({
+            auth: { getSession: getSessionMock },
+            realtime: { setAuth: setAuthMock },
+            channel: channelMock,
+            removeChannel: removeChannelMock,
+        }));
+
+        const fetchMock = vi.fn()
+            // Initial snapshot: processing
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-auth-a",
+                    status: "processing",
+                    current_step: "case_architect",
+                    progress_seq: 1,
+                }), { status: 200, headers: { "Content-Type": "application/json" } }),
+            )
+            // Post-subscribe reconcile: completed
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-auth-a",
+                    status: "completed",
+                    current_step: "completed",
+                    progress_seq: 2,
+                }), { status: 200, headers: { "Content-Type": "application/json" } }),
+            )
+            // Result fetch
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-auth-a",
+                    assignment_id: "assignment-1",
+                    blueprint: {},
+                    canonical_output: { title: "Auth race fix test" },
+                }), { status: 200, headers: { "Content-Type": "application/json" } }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.authoring.streamProgress("job-auth-a", () => undefined);
+
+        // setAuth must have been called with the session token
+        expect(setAuthMock).toHaveBeenCalledOnce();
+        expect(setAuthMock).toHaveBeenCalledWith("valid-jwt-token");
+
+        // channel() must have been called (explicit guard: without this, indexOf returns
+        // -1 and the ordering assertion below fails with a confusing numeric comparison)
+        expect(channelMock).toHaveBeenCalledOnce();
+
+        // setAuth must have been called BEFORE the channel was created
+        expect(callOrder.indexOf("setAuth")).toBeLessThan(callOrder.indexOf("channel"));
+    });
+
+    it("skips setAuth and preserves existing flow when session token is null (Path B)", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+
+        // No active session — getBearerToken() returns null.
+        getSessionMock.mockResolvedValue({ data: { session: null }, error: null });
+
+        const setAuthMock = vi.fn();
+        const removeChannelMock = vi.fn().mockResolvedValue(undefined);
+
+        const channelStub = {
+            on: vi.fn().mockReturnThis(),
+            subscribe: vi.fn((handler: (status: string) => void) => {
+                handler("SUBSCRIBED");
+                return channelStub;
+            }),
+        };
+
+        createClientMock.mockImplementationOnce(() => ({
+            auth: { getSession: getSessionMock },
+            realtime: { setAuth: setAuthMock },
+            channel: vi.fn(() => channelStub),
+            removeChannel: removeChannelMock,
+        }));
+
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-auth-b",
+                    status: "processing",
+                    current_step: "case_architect",
+                    progress_seq: 1,
+                }), { status: 200, headers: { "Content-Type": "application/json" } }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-auth-b",
+                    status: "completed",
+                    current_step: "completed",
+                    progress_seq: 2,
+                }), { status: 200, headers: { "Content-Type": "application/json" } }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({
+                    job_id: "job-auth-b",
+                    assignment_id: "assignment-1",
+                    blueprint: {},
+                    canonical_output: { title: "No auth test" },
+                }), { status: 200, headers: { "Content-Type": "application/json" } }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await api.authoring.streamProgress("job-auth-b", () => undefined);
+
+        // setAuth must NOT have been called — null token must be skipped
+        expect(setAuthMock).not.toHaveBeenCalled();
+        // Channel was still created and the stream completed normally
+        expect(removeChannelMock).toHaveBeenCalledOnce();
+    });
+
+    it("surfaces the error and creates no orphan channel when getBearerToken rejects (Path C)", async () => {
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+
+        // getBearerToken() is called twice in the Realtime path:
+        //   Call 1: inside createAuthorizedHeaders() for the initial /progress snapshot fetch.
+        //   Call 2: the explicit pre-channel JWT sync added by this fix.
+        //
+        // Call 1 must succeed (return null token) so the snapshot fetch completes
+        // and streamRealtimeProgress reaches the Realtime section. If call 1 also
+        // rejects, the stream dies in the snapshot fetch — before the Realtime code
+        // is ever reached — and channelMock is never called for the wrong reason.
+        //
+        // Call 2 must reject to simulate a corrupted localStorage or Supabase
+        // storage lock failure that strikes specifically at channel-setup time.
+        const sessionError = new Error("storage lock unavailable");
+        getSessionMock
+            .mockResolvedValueOnce({ data: { session: null }, error: null }) // call 1: auth header for snapshot → no token, fetch proceeds
+            .mockRejectedValueOnce(sessionError);                             // call 2: pre-channel JWT sync → throws, no orphan channel
+
+        const channelMock = vi.fn();
+        const setAuthMock = vi.fn();
+
+        createClientMock.mockImplementationOnce(() => ({
+            auth: { getSession: getSessionMock },
+            realtime: { setAuth: setAuthMock },
+            channel: channelMock,
+            removeChannel: vi.fn().mockResolvedValue(undefined),
+        }));
+
+        // Initial snapshot succeeds (status: processing) so the Realtime path is entered.
+        const fetchMock = vi.fn().mockResolvedValueOnce(
+            new Response(JSON.stringify({
+                job_id: "job-auth-c",
+                status: "processing",
+                current_step: "case_architect",
+                progress_seq: 1,
+            }), { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await expect(
+            api.authoring.streamProgress("job-auth-c", () => undefined),
+        ).rejects.toThrow("storage lock unavailable");
+
+        // No channel must have been created — the JWT sync error propagates before channel()
+        expect(channelMock).not.toHaveBeenCalled();
     });
 });
