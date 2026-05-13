@@ -1193,6 +1193,10 @@ describe("api auth + stream glue", () => {
         expect(setAuthMock).toHaveBeenCalledOnce();
         expect(setAuthMock).toHaveBeenCalledWith("valid-jwt-token");
 
+        // channel() must have been called (explicit guard: without this, indexOf returns
+        // -1 and the ordering assertion below fails with a confusing numeric comparison)
+        expect(channelMock).toHaveBeenCalledOnce();
+
         // setAuth must have been called BEFORE the channel was created
         expect(callOrder.indexOf("setAuth")).toBeLessThan(callOrder.indexOf("channel"));
     });

@@ -717,8 +717,14 @@ async function streamRealtimeProgress(
     // via INITIAL_SESSION → onAuthStateChange → realtime.setAuth()). On cold start
     // this window is ~50ms and causes the channel join to use the anon key, which
     // fails the authoring_jobs RLS policy (auth.uid() = NULL) → CHANNEL_ERROR.
-    // getBearerToken() reads from localStorage (sub-ms); if null the channel
-    // proceeds unauthenticated and falls back to polling via the existing path.
+    //
+    // getBearerToken() calls supabase.auth.getSession(), which returns the in-memory
+    // currentSession for an active session (fast) but can throw under storage lock
+    // contention (see Path C test). When it returns null — no active session or a
+    // transient getSession() error — we intentionally skip setAuth() rather than
+    // calling setAuth(null): supabase-js already clears Realtime auth on SIGNED_OUT
+    // via its own onAuthStateChange handler, and clearing here on a transient error
+    // would destroy a valid Realtime connection that autoRefreshToken just refreshed.
     const currentToken = await getBearerToken();
     if (currentToken) {
         realtimeClient.realtime.setAuth(currentToken);
