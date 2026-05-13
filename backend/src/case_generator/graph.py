@@ -94,6 +94,7 @@ from case_generator.prompts import (
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
     ClassificationNotebookVariant,
+    TOC_MARKDOWN_CELL_BY_VARIANT,
     M4_QUESTIONS_GENERATOR_PROMPT,
     M4_QUESTIONS_PROMPT_BY_FAMILY,
     M5_QUESTIONS_GENERATOR_PROMPT,
@@ -4487,6 +4488,12 @@ def _prepare_m3_notebook_generation_context(
         dataset_contract_block=contract_block,
         data_gap_warnings_block=gaps_block,
     )
+    # Inject static TOC cell for classification variants — zero LLM overhead.
+    # For non-classification families notebook_variant is None, so we use "".
+    toc_cell = (
+        "" if notebook_variant is None else TOC_MARKDOWN_CELL_BY_VARIANT.get(notebook_variant, "")
+    )
+    base_template = base_template.replace("{toc_cell}", toc_cell)
     return _M3NotebookGenerationContext(
         llm=llm,
         family=family,

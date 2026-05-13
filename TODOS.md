@@ -1163,3 +1163,51 @@ había disparado todavía. La RLS `auth.uid() = NULL` con un token expirado prod
 
 **Depends on / blocked by:** `fix/realtime-subscription-jwt-race` mergeado. Independiente
 después.
+
+---
+
+## TODO-TOC-A: Drift validator — sección TOC vs headers reales por variante
+
+**What:** Añadir un test pytest (sin LLM, sin DB) en `test_issue230_classification_notebook_variants.py` que parsee el texto assembled de cada variante de clasificación y cruce los números de sección del `TOC_MARKDOWN_CELL_BY_VARIANT` contra los headers `# %% [markdown]` reales presentes en el `_shared.py` de cada variante. Reutilizar `_section_bounds()` para extraer el rango ejecutable de cada sección.
+
+**Why:** Las TOC son strings estáticos — pueden desincronizarse de los headers reales si se añade o renombra una sección en `_shared.py` sin actualizar el dict. Un test de drift barato captura esto antes de merge.
+
+**Pros:** Sin dependencias externas; se ejecuta en el suite unitario normal; protege la consistencia TOC↔headers como un constraint continuo.
+
+**Cons:** Requiere que los headers de sección en los prompts sigan un patrón parseable (por ejemplo, `## X.Y.Z Título`) para poder extraer los números de sección programáticamente.
+
+**Context:** Actualmente los TOC se validan solo por contenido de string (qué sección "3.0.5.2" está o no está). El drift validator cierra el loop: compara los índices declarados en la TOC contra los índices realmente presentes en el prompt de la variante.
+
+**Depends on / blocked by:** Independiente — puede implementarse en cualquier PR posterior sin impacto en runtime.
+
+---
+
+## TODO-TOC-B: Convertir índices TOC en anchor links (Jupyter anchor scheme)
+
+**What:** Una vez estabilizado el entorno de despliegue (JupyterLab vs Google Colab), convertir los números de sección de la TOC en links de anchor markdown (`[3.0.5.2 Pipeline LR](#3052-pipeline-reproducible--logistic-regression)`) para navegación clickable dentro del notebook.
+
+**Why:** En JupyterLab/JupyterHub los anchor links funcionan en celdas markdown; en Colab el scheme es diferente. La feature es de alta UX pero requiere confirmar el target antes de usar un scheme incorrecto que quede roto.
+
+**Pros:** Navegación rápida por el notebook para el alumno — clic directo a cada sección desde la TOC.
+
+**Cons:** El scheme de anchor links no es estándar entre Jupyter, JupyterLab y Colab. Un anchor mal formado produce un link roto sin error visible.
+
+**Context:** La TOC estática actual es legible pero no clickable. La conversión a anchors es trivial una vez decidido el entorno canónico. Los headers de las secciones en `_shared.py` deben convertirse al mismo scheme para que los destinos existan.
+
+**Depends on / blocked by:** Confirmación del entorno de despliegue de notebooks (JupyterHub/Lab vs Colab). No bloquea el rollout de la TOC estática.
+
+---
+
+## TODO-TOC-C: Extender TOC a familias regresión, clustering y serie_temporal
+
+**What:** Una vez que el placeholder `{toc_cell}` existe en `M3_NOTEBOOK_BASE_TEMPLATE`, añadir entradas de `TOC_MARKDOWN_CELL_BY_VARIANT` (o un `TOC_CELL_BY_FAMILY` nuevo) para las familias `regresion`, `clustering` y `serie_temporal`.
+
+**Why:** La infraestructura de placeholder ya está. El único trabajo restante es escribir los strings estáticos de TOC para cada familia una vez que los prompts de esas familias estén estabilizados.
+
+**Pros:** Cero cambios a `graph.py` — la lógica de resolución `TOC_MARKDOWN_CELL_BY_VARIANT.get(notebook_variant, "")` ya devuelve `""` para familias no listadas, por lo que la ausencia no rompe nada. Añadir una familia es puramente aditivo.
+
+**Cons:** Requiere estabilización previa de los prompts por familia para que los números de sección de la TOC sean definitivos.
+
+**Context:** `feat/classification-notebook-toc` implementa el mecanismo completo y los TOC para `lr_only`, `rf_only` y `lr_rf_contrast`. Extender a otras familias es trivial una vez aprobadas las secciones definitivas de sus prompts.
+
+**Depends on / blocked by:** Estabilización de los prompts de regresión, clustering y serie_temporal.
