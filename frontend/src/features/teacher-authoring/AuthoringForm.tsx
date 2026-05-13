@@ -840,7 +840,7 @@ export function AuthoringForm({
                                                         </svg>
                                                     </div>
                                                     <div>
-                                                        <p className={`text-sm font-bold transition-colors ${caseType === "harvard_with_eda" ? "text-[#0144a0]" : "text-slate-600"}`}>Caso + Análisis de Datos (EDA)</p>
+                                                        <p className={`text-sm font-bold transition-colors ${caseType === "harvard_with_eda" ? "text-[#0144a0]" : "text-slate-600"}`}>Caso + Análisis de Datos</p>
                                                         <p className="text-xs text-slate-500 mt-1 leading-relaxed">Incluye análisis de datos, visualizaciones y, si aplica, notebook ejecutable en Google Colab.</p>
                                                     </div>
                                                 </div>
