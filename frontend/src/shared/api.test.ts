@@ -1261,10 +1261,21 @@ describe("api auth + stream glue", () => {
         vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
         vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
 
-        // getSession() rejects — simulates a corrupted localStorage or Supabase
-        // storage lock failure. getBearerToken() will reject with this error.
+        // getBearerToken() is called twice in the Realtime path:
+        //   Call 1: inside createAuthorizedHeaders() for the initial /progress snapshot fetch.
+        //   Call 2: the explicit pre-channel JWT sync added by this fix.
+        //
+        // Call 1 must succeed (return null token) so the snapshot fetch completes
+        // and streamRealtimeProgress reaches the Realtime section. If call 1 also
+        // rejects, the stream dies in the snapshot fetch — before the Realtime code
+        // is ever reached — and channelMock is never called for the wrong reason.
+        //
+        // Call 2 must reject to simulate a corrupted localStorage or Supabase
+        // storage lock failure that strikes specifically at channel-setup time.
         const sessionError = new Error("storage lock unavailable");
-        getSessionMock.mockRejectedValue(sessionError);
+        getSessionMock
+            .mockResolvedValueOnce({ data: { session: null }, error: null }) // call 1: auth header for snapshot → no token, fetch proceeds
+            .mockRejectedValueOnce(sessionError);                             // call 2: pre-channel JWT sync → throws, no orphan channel
 
         const channelMock = vi.fn();
         const setAuthMock = vi.fn();
@@ -1276,8 +1287,7 @@ describe("api auth + stream glue", () => {
             removeChannel: vi.fn().mockResolvedValue(undefined),
         }));
 
-        // The initial snapshot fetch must still succeed so we reach the
-        // Realtime path (otherwise the early-exit polling path would hide the error).
+        // Initial snapshot succeeds (status: processing) so the Realtime path is entered.
         const fetchMock = vi.fn().mockResolvedValueOnce(
             new Response(JSON.stringify({
                 job_id: "job-auth-c",
@@ -1292,7 +1302,7 @@ describe("api auth + stream glue", () => {
             api.authoring.streamProgress("job-auth-c", () => undefined),
         ).rejects.toThrow("storage lock unavailable");
 
-        // No channel must have been created — no orphan subscription
+        // No channel must have been created — the JWT sync error propagates before channel()
         expect(channelMock).not.toHaveBeenCalled();
     });
 });

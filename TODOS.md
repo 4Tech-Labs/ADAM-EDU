@@ -1127,7 +1127,7 @@ no está configurada en ADAM-EDU. Pequeño overhead de red por evento de error. 
 el despliegue.
 
 **Context:** El punto exacto de instrumentación es en `api.ts`, bloque
-`subscriptionStatus === "CHANNEL_ERROR" || "TIMED_OUT" || "CLOSED"`, después del
+`subscriptionStatus === "CHANNEL_ERROR" || subscriptionStatus === "TIMED_OUT" || subscriptionStatus === "CLOSED"`, después del
 `console.warn`. La llamada debe incluir `{ jobId, subscriptionStatus }` como propiedades
 del evento. No loguear tokens ni PII.
 
