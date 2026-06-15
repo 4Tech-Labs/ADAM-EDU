@@ -1211,3 +1211,19 @@ después.
 **Context:** `feat/classification-notebook-toc` implementa el mecanismo completo y los TOC para `lr_only`, `rf_only` y `lr_rf_contrast`. Extender a otras familias es trivial una vez aprobadas las secciones definitivas de sus prompts.
 
 **Depends on / blocked by:** Estabilización de los prompts de regresión, clustering y serie_temporal.
+
+---
+
+## TODO-DATAGEN-A: Excluir columnas identificadoras del scoring multi-feature en binary target rewrite
+
+**What:** En `_generate_dataset_from_schema`, el bloque "Fix B-signal" que reescribe targets binarios incluye actualmente todas las columnas numéricas en el `feature_arrays` scoring. Columnas que son identificadores de fila (p. ej. `customer_id`, `user_id`, `folio`) tienen rango 1..N y tras normalizar producen señal artificial ("cliente 4999 siempre churna más que cliente 1").
+
+**Why:** Los schemas generados por `schema_designer` con contratos LLM ad-hoc pueden incluir columnas ID. Sin el guard, el scoring multi-feature aprendería un patrón fantasma que el modelo de clasificación puede explotar como feature de leakage durante la demostración del notebook.
+
+**Pros:** Elimina la única fuente de leakage latente en el scoring determinista. El fix es una condición de 3 palabras en el filtro del bucle `for fname, fvals in df_data.items()`.
+
+**Cons:** Una guard basada en nombre (contiene `_id`, termina en `id`) puede omitir IDs con nombres creativos (`folio`, `registro`). Una guard heurística (int con rango > N/2 valores únicos) es más robusta pero añade ~5 líneas. El schema fijo de 18 columnas de churn no tiene columnas ID; el riesgo hoy es solo en contratos LLM custom.
+
+**Context:** Identificado durante el plan-eng-review del PR `fix/classification-binary-target-signal` (Issue #246 área). El schema fijo de clasificación (18 cols) no expone el problema en producción hoy. La fix más segura: en el bucle de features, añadir `if any(suffix in fname.lower() for suffix in ("_id", "id", "folio", "registro")) and float(fmax - fmin) > n_rows / 2: continue`. Ver `_generate_dataset_from_schema` en `backend/src/case_generator/graph.py`, bloque "Fix B-signal".
+
+**Depends on / blocked by:** PR `fix/classification-binary-target-signal` mergeado. Independiente de otros TODOs.

@@ -2883,6 +2883,76 @@ def _generate_dataset_from_schema(schema: dict) -> list:
             result = [None if null_mask[i] else int(round(float(values[i]))) for i in range(n_rows)]
         df_data[name] = result
 
+    # ── Fix B-signal: Reescribir columnas binarias (target) con señal multi-feature ──
+    # El algoritmo de dependencia simple produce labels ≈ aleatorios cuando el padre
+    # tiene baja varianza (churn_rate ≈ 0.085 → parent_norm ≈ 0.5 → round(0.5 + N(0,0.30))
+    # no discrimina). Este bloque reescribe targets binarios usando score lineal normalizado
+    # (promedio ponderado entre todos los features numéricos + umbral de mediana), garantizando
+    # correlaciones reales con ~12% de ruido para evitar separabilidad perfecta.
+    #
+    # Sólo aplica a columnas que cumplen los tres criterios:
+    #   1. type == "int" AND range_min == 0 AND range_max == 1   (binaria)
+    #   2. nombre contiene keyword de target ("categoria", "target", "flag", "label", "clase")
+    #   3. hay al menos un feature numérico adicional para construir el score
+    # Noop para: business profile, clustering, regresión, serie_temporal.
+    _BINARY_TARGET_NAME_KWS = ("categoria", "target", "flag", "label", "clase")
+    _NEGATIVE_KWS = (
+        "churn", "fail", "error", "delay", "complaint", "ticket",
+        "risk", "late", "cancel", "reject", "missing", "payment_fail",
+        "dispatch", "incident", "bug", "defect", "refund",
+    )
+    _POSITIVE_KWS = (
+        "nps", "satisfaction", "retention", "engagement", "usage",
+        "active", "login", "adoption", "score", "performance",
+    )
+    binary_target_cols = [
+        c for c in num_cols
+        if c.get("type") == "int"
+        and c.get("range_min") == 0
+        and c.get("range_max") == 1
+        and any(kw in c.get("name", "").lower() for kw in _BINARY_TARGET_NAME_KWS)
+    ]
+    for btcol in binary_target_cols:
+        btname = btcol["name"]
+        feature_arrays: list[list[float]] = []
+        for col_def in num_cols:
+            fname = col_def["name"]
+            if fname == btname:
+                continue
+            fvals = df_data.get(fname, [])
+            raw = [float(v) if v is not None else 0.0 for v in fvals]
+            fmin, fmax = min(raw), max(raw)
+            if fmax <= fmin:
+                continue  # columna constante — sin señal
+            norm = [(v - fmin) / (fmax - fmin) for v in raw]
+            fname_lower = fname.lower()
+            if any(kw in fname_lower for kw in _NEGATIVE_KWS):
+                feature_arrays.append(norm)                      # alto → más probable clase 1
+            elif any(kw in fname_lower for kw in _POSITIVE_KWS):
+                feature_arrays.append([1.0 - v for v in norm])  # alto → menos probable clase 1
+            else:
+                feature_arrays.append(norm)                      # dirección por defecto: positiva
+        if not feature_arrays:
+            continue  # sin features numéricas → mantener valor generado por dependencia
+        # Score promedio entre todos los features disponibles
+        scores = [
+            sum(fa[i] for fa in feature_arrays) / len(feature_arrays)
+            for i in range(n_rows)
+        ]
+        # Umbral en la mediana → ~50% clase positiva (balance pedagógico)
+        threshold = sorted(scores)[n_rows // 2]
+        rewritten = []
+        for i in range(n_rows):
+            label = 1 if scores[i] >= threshold else 0
+            if rng_std.random() < 0.12:   # 12% de ruido — evita separabilidad perfecta
+                label = 1 - label
+            rewritten.append(label)
+        df_data[btname] = rewritten
+        logger.info(
+            "[_generate_dataset_from_schema] binary target '%s' reescrito con %d features",
+            btname, len(feature_arrays),
+        )
+
     # ── Ensamblar filas ──
     col_order = [c["name"] for c in columns]
     rows = [{col: df_data.get(col, [None]*n_rows)[i] for col in col_order} for i in range(n_rows)]
@@ -2943,12 +3013,15 @@ def _generate_dataset_from_schema(schema: dict) -> list:
                     row[curr] = round(min(float(cv), max_allowed), 4)
 
     # ── Fix B-05: Inyectar outliers para ejercicios EDA (n_rows >= 50) ──
+    # Excluir columnas binarias int[0,1]: multiplicar por 3.5 corrompería las etiquetas
+    # del target (0→0, 1→3.5) y rompería métricas binarias en el notebook de clasificación.
     numeric_non_revenue = [
         c for c in columns
         if c["type"] in ("float", "int")
         and c["name"] != revenue_col
         and not c["name"].startswith("period")
         and not c["name"].startswith("retention_")
+        and not (c.get("type") == "int" and c.get("range_min") == 0 and c.get("range_max") == 1)
     ]
     if numeric_non_revenue and n_rows >= 50:
         target_col_def = numeric_non_revenue[0]
