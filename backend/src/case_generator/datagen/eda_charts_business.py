@@ -140,7 +140,11 @@ def _aggregate_by_grain(
         .mean(numeric_only=True)
     )
     agg_periods = means.index.astype(str).tolist()
-    series_map = {col: means[col] for col in value_cols}
+    # `numeric_only=True` descarta una columna presente pero no numérica
+    # (p. ej. object dtype con strings o todo None). El filtro `if col in
+    # means.columns` mantiene la paridad con el path crudo: esa traza se omite
+    # (luego `_indexed_base_100` la trata como ausente), sin tirar el chart entero.
+    series_map = {col: means[col] for col in value_cols if col in means.columns}
     return agg_periods, series_map
 
 
