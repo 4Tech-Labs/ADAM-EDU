@@ -29,6 +29,14 @@ Este repo mantiene su base principal local fuera de Supabase CLI.
 No lo apuntes al Postgres interno de Supabase CLI.
 El launcher `uv run --directory backend python -m shared.app` ahora valida esto en startup y rechaza hosts remotos de Supabase cuando corres en `development`.
 
+### Tu data local no se borra al correr tests
+
+`pytest` reconstruye el esquema con `DROP SCHEMA public CASCADE`. Para que eso nunca toque tu base de desarrollo, la suite corre contra una base dedicada `adam_test` en el mismo Postgres local (`5434`): `backend/tests/conftest.py` reescribe `DATABASE_URL` a `adam_test` antes de importar la app, y un guardia se niega a resetear si el destino local no es `adam_test`. Tus usuarios, perfiles y cursos en la base `postgres` persisten entre cambios y entre corridas de tests. Puedes forzar otro destino con `TEST_DATABASE_URL`.
+
+### Seed de desarrollo: recrear una base de trabajo
+
+Si necesitas una base de trabajo desde cero (clon nuevo o reset deliberado), siembra una universidad, cuentas y cursos idempotentes con `uv run --directory backend python scripts/seed_dev.py`. Crea `admin.dev@adam.local`, `teacher.dev@adam.local` y `student.dev@adam.local` (sin rotacion de contrasena, con un par de cursos del profesor). Define `SEED_DEV_PASSWORD` en `backend/.env` para una contrasena estable; si no, se genera y se imprime una sola vez. Requiere `supabase start` para crear los usuarios de login en el stack local.
+
 ## Plano 2: auth local y tooling de Supabase
 
 Supabase CLI se usa para auth/session local y para obtener claves del stack local.
