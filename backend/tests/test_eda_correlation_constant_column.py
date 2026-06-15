@@ -3,15 +3,15 @@
 Surface tested: `_calculate_eda_regressions` (a pure data-prep helper).
 
 A constant numeric column has an UNDEFINED Pearson correlation. Including it made
-`Series.corr` (pandas implements it as `np.corrcoef`, used at graph.py:1239 against the
-target) divide by std=0 and emit a `RuntimeWarning`, and made the heatmap show a
+`Series.corr` (pandas implements it as `np.corrcoef`, used in the regression loop against
+the target) divide by std=0 and emit a `RuntimeWarning`, and made the heatmap show a
 misleading "0 correlation". The fix excludes constant columns from BOTH the correlation
 matrix and the regression loop, and skips regressions when the resolved target is itself
 constant.
 
 Detection note: we assert via `warnings.catch_warnings(record=True)` + `simplefilter("always")`
-and inspect the recorded list — NOT `simplefilter("error")`. The function wraps its body in a
-broad `try/except Exception` (graph.py:1266), and `RuntimeWarning` subclasses `Exception`, so a
+and inspect the recorded list — NOT `simplefilter("error")`. `_calculate_eda_regressions` wraps
+its body in a broad `try/except Exception`, and `RuntimeWarning` subclasses `Exception`, so a
 promoted warning would be swallowed and returned as `{}`, making an "it raises" assertion a no-op.
 
 Cero LLMs, cero red, cero DB. Tests puros y rápidos.
@@ -109,3 +109,23 @@ def test_constant_target_emits_no_runtime_warning() -> None:
 
     assert runtime_warnings == [], f"unexpected RuntimeWarning(s): {[str(w.message) for w in runtime_warnings]}"
     assert not any(k.startswith("target_vs_") for k in result), "no regressions expected for a constant target"
+
+
+# ── All numeric columns constant (incl. an all-NaN float column) ──
+def test_all_constant_numeric_columns_no_warning_no_matrix() -> None:
+    """Every numeric column constant ⇒ no warning, no matrix; all-NaN column also excluded.
+
+    Recombines branch B (matrix omitted) with the constant-target guard, and locks in the
+    side effect that an all-NaN float column (nunique(dropna=True) == 0) is classified
+    constant and dropped. The result must stay strict-JSON serializable.
+    """
+    dataset = [
+        {"label": "A", "flat_int": 5, "flat_float": 2.0, "all_nan": float("nan")}
+        for _ in range(20)
+    ]
+
+    result, runtime_warnings = _run_capturing_runtime_warnings(dataset)
+
+    assert runtime_warnings == [], f"unexpected RuntimeWarning(s): {[str(w.message) for w in runtime_warnings]}"
+    assert "correlation_matrix" not in result
+    json.dumps(result, allow_nan=False)
