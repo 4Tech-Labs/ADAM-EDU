@@ -1264,3 +1264,56 @@ datos de Fase 0 antes de construir infra de cache explícito.
 
 **Depends on / blocked by:** Datos de Fase 0 (cuánto del costo es input estático) + confirmar
 soporte de context caching en `gemini-3.x-preview`.
+
+---
+
+## TODO-294-A: Investigar el origen aguas arriba de columnas numéricas constantes en el dataset sintético
+
+**What:** Rastrear por qué `_generate_dataset_from_schema` (`backend/src/case_generator/graph.py:2720`)
+emite una columna numérica de varianza cero en un dataset `business` de ~95 filas. Empezar por el
+loop de `independent_cols` (~línea 2778) y `_generate_independent_values`: la causa probable es una
+columna `int` con `range_min`/`range_max` muy próximos (o iguales, donde el guard `if low >= high:
+high = low + 1.0` deja un rango de 1) que tras el redondeo a entero produce todas las filas con el
+mismo valor. Prevenir la columna constante en el generador, o marcarla en `data_gap_warnings`.
+
+**Why:** El fix de Issue #294 (PR `fix/issue-294-eda-constant-column-corr`) trata el SÍNTOMA en el
+EDA (excluye las columnas constantes de la correlación para matar el `RuntimeWarning` de
+`np.corrcoef` y la "0 correlación" engañosa). Un dataset sintético de ~95 filas no debería tener
+una columna numérica de varianza cero en primer lugar — el origen del dato sigue abierto.
+
+**Pros:** Elimina el smell en la fuente; mejora el realismo del dataset para TODOS los casos, no solo
+el heatmap del EDA.
+
+**Cons:** Edita la lógica de generación del archivo más sensible del repo (`graph.py`, shape del
+schema), con mayor riesgo de regresión; requiere su propio repro y un schema de prueba que reproduzca
+el rango degenerado.
+
+**Context:** Detectado durante la implementación de Issue #294. El repro confirmó que el
+`RuntimeWarning` real venía de `Series.corr` (= `np.corrcoef`) en `graph.py:1239`, no de
+`DataFrame.corr` en 1183. El fix de EDA ya contiene el síntoma, así que este trabajo es
+independiente y de baja urgencia.
+
+**Depends on / blocked by:** PR de Issue #294 mergeado (síntoma ya contenido). Sin otros bloqueantes.
+
+---
+
+## TODO-294-B: Registrar columnas constantes excluidas en `data_gap_warnings`
+
+**What:** Cuando el fix de Issue #294 en `_calculate_eda_regressions` excluye una columna numérica
+constante, dejar una traza (p. ej. un append a `data_gap_warnings`) en vez de descartarla en
+silencio, para que docentes/devs vean el smell de datos.
+
+**Why:** La exclusión silenciosa oculta el mismo problema de calidad de datos que ataca
+[TODO-294-A]. Un breadcrumb hace visible la recurrencia sin reintroducir el `RuntimeWarning`.
+
+**Pros:** Señal barata de calidad de datos; conecta el síntoma (EDA) con su origen (generador).
+
+**Cons:** `_calculate_eda_regressions` hoy solo devuelve métricas precalculadas; cablear un warning
+implica confirmar la ruta de escritura de `data_gap_warnings` desde este nodo del grafo — un toque
+de contrato algo más amplio que el fix puramente local.
+
+**Context:** Diferido en la plan-eng-review de Issue #294 (TODO 2, decisión "A: add"). Conviene
+emparejarlo con [TODO-294-A] una vez confirmada la ruta de escritura de `data_gap_warnings`.
+
+**Depends on / blocked by:** Confirmar cómo se persiste `data_gap_warnings` desde el nodo de EDA.
+Idealmente junto con [TODO-294-A].
