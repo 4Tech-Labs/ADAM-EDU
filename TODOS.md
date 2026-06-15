@@ -741,6 +741,107 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 
 **Depends on / blocked by:** Nuevo alcance de producto y endpoint backend dedicado para exponer y/o regenerar access links de forma autorizada. No bloquea #138.
 
+---
+
+## TODO-LR-M4M5: Conectar probabilidad LR ↔ impacto financiero en M4/M5 (business)
+
+**What:** Hacer que M4 (impacto económico) y M5 (resolución) del perfil business referencien
+explícitamente la decisión apoyada en regresión logística (probabilidad de abandono × valor del
+cliente en riesgo), en lenguaje gerencial. Hoy M4/M5 business caen al prompt default sin esa conexión.
+
+**Why:** La pregunta guía del caso ya pide priorizar "basándose en la probabilidad de abandono
+estimada por el modelo y el impacto financiero". El bloque LR de M3 (Issue 3A) abrió el arco; M4/M5
+aún no lo cierran.
+
+**Pros:** Coherencia narrativa completa del caso business+LR (M2→M3→M4→M5 alrededor del mismo modelo).
+
+**Cons:** Cruza el umbral de complejidad del cambio original; toca M4/M5 (área sensible) y posiblemente
+un dispatch business por familia; sube el riesgo cerca de entregas.
+
+**Context:** `_resolve_family_prompt` solo despacha para ml_ds; business usa el prompt default. La
+inserción debe ser análoga al bloque LR de M3 (gate `profile==business AND family==clasificacion`),
+empezando por `M4_CONTENT_GENERATOR_PROMPT` / `M5_CONTENT_GENERATOR_PROMPT` en `prompts/__init__.py`.
+Mantener lenguaje gerendial plano, sin jerga DS (igual que `M3_AUDIT_LR_BUSINESS_BLOCK`).
+
+**Depends on / blocked by:** Patrón de gate business+clasificacion introducido en el PR de
+"business LR + gráficos M2" (rama feature/business-lr-m2-charts).
+
+---
+
+## TODO-EDA-FAMILIES: Builder Python-determinista para regresión/clustering business
+
+**What:** Extender el path Python de charts EDA (hoy solo `clasificacion`) a `business+regresion` y
+`business+clustering`, reusando `datagen/eda_charts_common.py`.
+
+**Why:** Tras el PR de business+LR, solo clasificación tiene charts honestos deterministas para
+business; las otras familias siguen usando el path LLM-JSON (mismo riesgo de overclaim/charts malos).
+
+**Pros:** Calidad de charts uniforme en todas las familias del perfil business.
+
+**Cons:** Más builders + tests; fuera del caso de uso actual (clasificación/LR).
+
+**Context:** El dispatch en `graph.py::eda_chart_generator` gatea `primary_family == "clasificacion"`
+para enrutar a `_eda_business_python_path`. Replicar para regresión y clustering con sus charts
+propios (p. ej. real-vs-predicho para regresión; PCA 2D / elbow para clustering), reusando los
+helpers de `eda_charts_common.py` y el patrón de `eda_charts_business.py`.
+
+**Depends on / blocked by:** `eda_charts_common.py` y `eda_charts_business.py` introducidos en el PR
+de business+LR.
+
+---
+
+## TODO-OUTLIER-SCHEMA-AWARE: Inyección de outliers schema-aware (global, cross-profile)
+
+**What:** Reemplazar la heurística "primera columna numérica no-revenue × 3.5" de
+`_generate_dataset_from_schema` (graph.py, bloque `Fix B-05`) por una inyección de outliers
+controlada/declarada en el schema (qué columna, magnitud, cuántas filas).
+
+**Why:** La heurística "primera columna" es ciega y puede caer en una columna donde el outlier
+engaña la lectura (p. ej. `costs` → margen roto). El PR de business+LR solo mitiga el síntoma en
+business (excluye columnas financieras del target del outlier); ml_ds sigue con la heurística ciega.
+
+**Pros:** Outliers intencionales y pedagógicamente coherentes; menos artefactos engañosos en cualquier
+perfil; elimina la inconsistencia cost/margin latente en ml_ds.
+
+**Cons:** Toca el generador de datos compartido (afecta ml_ds — área sensible); requiere tests de
+regresión sobre notebooks ml_ds (AUC) que dependen de la distribución del dataset.
+
+**Context:** Ver el bloque `Fix B-05` en `_generate_dataset_from_schema` (graph.py). El PR de
+business+LR añadió un parámetro `profile` y excluye columnas financieras (revenue/cost/margin/ebitda)
+solo para business. La solución global declararía la inyección en el contrato del schema
+(`SCHEMA_DESIGNER_PROMPT`) en vez de inferirla por posición de columna.
+
+**Depends on / blocked by:** Coordinar con la reconciliación introducida en el PR de business+LR
+(parámetro `profile` en `_generate_dataset_from_schema`).
+
+---
+
+## TODO-EDA-BUILDER-POLISH: Pulido cosmético de los builders EDA Python (DRY + tono business)
+
+**What:** Dos nits cosméticos surgidos en la review adversarial del PR business+LR, diferidos por
+tocar el path de clasificación (sensible) para beneficio estético: (1) extraer un factory
+`chart_spec(...)` en `eda_charts_common.py` que colapse las 5 claves boilerplate del camino de
+éxito (library/description/notes/data_source/template), hoy repetidas en 7 dicts (4 business + 3
+clasificación); (2) suavizar la frase "qué riesgo de modelado anticipa" en
+`prompts/clasificacion/M2_clasificacion/eda_annotate.py:41` a un encuadre neutral de perfil
+(p. ej. "qué riesgo de decisión o de los datos anticipa"), o crear un
+`EDA_ANNOTATE_ONLY_PROMPT_BUSINESS` con tono gerencial coherente con `M3_AUDIT_LR_BUSINESS_BLOCK`.
+
+**Why:** (1) elimina duplicación residual (preferencia DRY del equipo); (2) el path business
+reutiliza el alias del prompt de clasificación, cuyo único rastro DS ("riesgo de modelado") riñe
+levemente con la regla "sin jerga DS" del perfil business.
+
+**Pros:** Builders más DRY y tono de anotaciones business 100% coherente.
+
+**Cons:** El factory refactoriza el builder de clasificación (ml_ds), que está verde y es sensible;
+la frase del annotate es compartida con ml_ds. Ambos son nits sin impacto de runtime.
+
+**Context:** Review adversarial del PR business+LR (verdict ship, 0 blockers). El factory es la
+duplicación que `eda_charts_common.py` aún no cubrió (solo extrajo `empty_chart`/`source_label`).
+La opción más limpia para (2) es un prompt business dedicado, pero añade superficie.
+
+**Depends on / blocked by:** Ninguno. Independiente; hacerlo cuando se toque el área de charts EDA.
+
 **Context:** Aceptado durante la revision de rediseño de Issue #127. El objetivo es que la solucion de clean-room sea invisible para quien escriba nuevos tests, pero explicita para quien mantenga el runtime. La documentacion debe referenciar el contrato centralizado una vez exista como superficie canonica.
 
 **Depends on / blocked by:** Depende de cerrar primero la implementacion de Issue #127 y de fijar cuales helpers quedan como API operativa estable para clean-room y diagnostico.

@@ -97,6 +97,7 @@ from case_generator.prompts import (
     CASE_QUESTIONS_PROMPT_BY_FAMILY,
     CASE_WRITER_PROMPT,
     CASE_WRITER_PROMPT_BY_FAMILY,
+    EDA_ANNOTATE_ONLY_PROMPT,
     EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
     EDA_CHART_GENERATOR_PROMPT,
     EDA_QUESTIONS_GENERATOR_PROMPT,
@@ -114,6 +115,7 @@ from case_generator.prompts import (
     M5_QUESTIONS_GENERATOR_PROMPT,
     M5_QUESTIONS_PROMPT_BY_FAMILY,
     # v8 M3 — prompts por perfil (aliases backward-compat también disponibles)
+    M3_AUDIT_LR_BUSINESS_BLOCK,
     M3_AUDIT_PROMPT,
     M3_EXPERIMENT_PROMPT,
     M3_AUDIT_QUESTIONS_PROMPT,
@@ -161,6 +163,9 @@ from case_generator.tools_and_schemas import (
     GeneradorPreguntasM5Output,
     EDAQuestionsOutput,
     DatasetSchema,
+)
+from case_generator.datagen.eda_charts_business import (
+    generate_business_eda_charts,
 )
 from case_generator.datagen.eda_charts_classification import (
     generate_classification_eda_charts,
@@ -1384,11 +1389,107 @@ def _clamp(text: str, max_chars: int) -> str:
     return text if len(text) <= max_chars else text[: max_chars - 1] + "…"
 
 
+def _annotate_validate_emit(
+    charts: list[dict],
+    state: ADAMState,
+    config: RunnableConfig,
+    annotate_prompt: str,
+) -> dict | None:
+    """Cola compartida de los paths EDA Python-deterministas (clasif + business).
+
+    Pide al LLM SOLO `description`/`notes` (annotate-only), fusiona con los charts
+    ya construidos en Python (sin tocar números), valida contra
+    ``EDAChartGeneratorOutput`` y devuelve el update del nodo, o ``None`` si nada
+    validó. El boundary del LLM nunca tumba el panel: si la anotación falla, se
+    sirven los charts sin texto LLM (preservando los `notes` del builder, p. ej.
+    el aviso anti-overclaim del chart de drivers).
+    """
+    # Cap defensivo: el contrato son ≤5 charts.
+    if len(charts) > 5:
+        charts = charts[:5]
+
+    try:
+        cfg = Configuration.from_runnable_config(config)
+        llm = _get_chart_llm(cfg.writer_model, temperature=0.3, thinking_level="minimal")
+        charts_context = [
+            {
+                "id": c.get("id", ""),
+                "title": c.get("title", ""),
+                "subtitle": c.get("subtitle", ""),
+                "chart_type": c.get("chart_type", ""),
+            }
+            for c in charts
+        ]
+        prompt = annotate_prompt.format(
+            charts_context_json=json.dumps(charts_context, ensure_ascii=False),
+            case_id=state.get("case_id", "") or state.get("titulo", ""),
+            student_profile=state.get("studentProfile", "business"),
+            output_language=state.get("output_language", "es"),
+        )
+        ann_result: EDAAnnotateOnlyOutput = llm.with_structured_output(
+            EDAAnnotateOnlyOutput
+        ).invoke(prompt)
+        ann_by_id: dict[str, tuple[str, str]] = {}
+        for ann in (ann_result.annotations or []):
+            if not ann.id:
+                continue
+            ann_by_id[ann.id] = (
+                _clamp(ann.description or "", 500),
+                _clamp(ann.notes or "", 300),
+            )
+    except Exception as ann_err:  # noqa: BLE001
+        # Boundary: errores del LLM nunca tumban el panel.
+        logger.warning(
+            "[eda_chart_generator/py] annotate-only LLM falló (%s) — sirviendo charts sin anotaciones",
+            ann_err,
+        )
+        ann_by_id = {}
+
+    # Merge defensivo: solo description/notes; preservamos data_source y los
+    # `notes` factuales del builder (p. ej. el caveat anti-overclaim). El caveat va
+    # ÍNTEGRO y primero; la nota pedagógica del LLM se presupuesta al espacio restante
+    # y se clampa con elipsis (no se corta a media palabra). Total ≤ 300 chars.
+    for c in charts:
+        cid = c.get("id", "")
+        desc, llm_notes = ann_by_id.get(cid, ("", ""))
+        c["description"] = desc or c.get("description", "") or ""
+        builder_notes = (c.get("notes", "") or "").strip()
+        sep = " " if builder_notes and llm_notes else ""
+        budget = max(0, 300 - len(builder_notes) - len(sep))
+        llm_tail = _clamp(llm_notes, budget) if budget else ""
+        c["notes"] = (builder_notes + sep + llm_tail).strip()
+        c["data_source"] = "python_builder"
+
+    # Validamos contra el schema (descartamos charts que rompan el contrato).
+    validated: list[dict] = []
+    for c in charts:
+        try:
+            spec = EDAChartGeneratorOutput.model_validate({"charts": [c]})
+            validated.append(spec.charts[0].model_dump())
+        except Exception as ve:  # noqa: BLE001
+            logger.warning(
+                "[eda_chart_generator/py] chart %s falló validación: %s — se omite",
+                c.get("id"), ve,
+            )
+
+    if not validated:
+        return None
+
+    logger.info(
+        "[eda_chart_generator/py] panel Python-determinista emitido: %d/%d charts",
+        len(validated), len(charts),
+    )
+    return {
+        "doc2_eda_charts": validated,
+        "current_agent": "eda_chart_generator",
+    }
+
+
 def _eda_classification_python_path(
     state: ADAMState, config: RunnableConfig, contract: dict | None
 ) -> dict | None:
-    """Issue #237 — construye 5 charts EDA en Python y pide al LLM solo
-    `description` + `notes`. Devuelve el dict de update del nodo o ``None``
+    """Issue #237 — construye los charts EDA de clasificación (ml_ds) en Python y
+    pide al LLM solo `description`/`notes`. Devuelve el update del nodo o ``None``
     si el path Python no aplica (deja que el caller use el LLM-JSON).
     """
     try:
@@ -1415,82 +1516,9 @@ def _eda_classification_python_path(
             )
             return None
 
-        # Cap defensivo: el contrato Issue #237 son 5 charts.
-        if len(charts) > 5:
-            charts = charts[:5]
-
-        # Annotate-only: pedimos al LLM solo description/notes por id.
-        try:
-            cfg = Configuration.from_runnable_config(config)
-            llm = _get_chart_llm(cfg.writer_model, temperature=0.3, thinking_level="minimal")
-            charts_context = [
-                {
-                    "id": c.get("id", ""),
-                    "title": c.get("title", ""),
-                    "subtitle": c.get("subtitle", ""),
-                    "chart_type": c.get("chart_type", ""),
-                }
-                for c in charts
-            ]
-            prompt = EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION.format(
-                charts_context_json=json.dumps(charts_context, ensure_ascii=False),
-                case_id=state.get("case_id", "") or state.get("titulo", ""),
-                student_profile=state.get("studentProfile", "ml_ds"),
-                output_language=state.get("output_language", "es"),
-            )
-            ann_result: EDAAnnotateOnlyOutput = llm.with_structured_output(
-                EDAAnnotateOnlyOutput
-            ).invoke(prompt)
-            ann_by_id: dict[str, tuple[str, str]] = {}
-            for ann in (ann_result.annotations or []):
-                if not ann.id:
-                    continue
-                ann_by_id[ann.id] = (
-                    _clamp(ann.description or "", 500),
-                    _clamp(ann.notes or "", 300),
-                )
-        except Exception as ann_err:  # noqa: BLE001
-            # Boundary Issue #237: errores del LLM nunca tumban el panel.
-            logger.warning(
-                "[eda_chart_generator/py] annotate-only LLM falló (%s) — sirviendo charts sin anotaciones",
-                ann_err,
-            )
-            ann_by_id = {}
-
-        # Merge defensivo: solo description/notes; preservamos data_source.
-        for c in charts:
-            cid = c.get("id", "")
-            desc, notes = ann_by_id.get(cid, ("", ""))
-            c["description"] = desc
-            c["notes"] = notes
-            c["data_source"] = "python_builder"
-
-        # Validamos contra el schema antes de devolver (descartamos charts que rompan el contrato).
-        validated: list[dict] = []
-        for c in charts:
-            try:
-                spec = EDAChartGeneratorOutput.model_validate({"charts": [c]})
-                validated.append(spec.charts[0].model_dump())
-            except Exception as ve:  # noqa: BLE001
-                logger.warning(
-                    "[eda_chart_generator/py] chart %s falló validación: %s — se omite",
-                    c.get("id"), ve,
-                )
-
-        if not validated:
-            logger.warning(
-                "[eda_chart_generator/py] todos los charts fallaron validación — fallback a path LLM"
-            )
-            return None
-
-        logger.info(
-            "[eda_chart_generator/py] panel Python-determinista emitido: %d/%d charts",
-            len(validated), len(charts),
+        return _annotate_validate_emit(
+            charts, state, config, EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION
         )
-        return {
-            "doc2_eda_charts": validated,
-            "current_agent": "eda_chart_generator",
-        }
     except Exception as e:  # noqa: BLE001
         logger.error(
             "[eda_chart_generator/py] ERROR no recuperable: %s — fallback a path LLM",
@@ -1499,23 +1527,74 @@ def _eda_classification_python_path(
         return None
 
 
+def _eda_business_python_path(
+    state: ADAMState, config: RunnableConfig, contract: dict | None
+) -> dict | None:
+    """Path Python-determinista del perfil business (mirror del de clasificación).
+
+    Construye el panel honesto de 3 charts (`generate_business_eda_charts`) y pide
+    al LLM solo `description`/`notes`. Consume `precalculated_metrics`
+    (`_calculate_eda_regressions`) para la matriz de cohortes y las correlaciones.
+
+    Devuelve el update del nodo o ``None`` en fallo. A diferencia del path ml_ds,
+    el caller NO hace fallback al LLM-JSON (Issue 5A): ``None`` → panel vacío, para
+    no reintroducir nunca los charts LLM de baja calidad que este cambio retira.
+    """
+    try:
+        import pandas as pd  # noqa: PLC0415 — local para no penalizar imports globales
+
+        dataset = state.get("doc7_dataset") or []
+        if not dataset:
+            logger.warning(
+                "[eda_chart_generator/business] doc7_dataset vacío — panel vacío (sin fallback LLM)"
+            )
+            return None
+        df = pd.DataFrame(dataset)
+        # target_col puede quedar vacío: el chart financiero y el de cohortes no lo
+        # necesitan; el de drivers degrada a placeholder con aviso.
+        target_col = _identify_target_variable(state, df)
+        precalculated = _calculate_eda_regressions(state, dataset)
+
+        charts = generate_business_eda_charts(df, target_col, precalculated, contract)
+        if not charts:
+            logger.warning(
+                "[eda_chart_generator/business] builder devolvió 0 charts — panel vacío (sin fallback LLM)"
+            )
+            return None
+
+        return _annotate_validate_emit(charts, state, config, EDA_ANNOTATE_ONLY_PROMPT)
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "[eda_chart_generator/business] ERROR no recuperable: %s — panel vacío (sin fallback LLM)",
+            e, exc_info=True,
+        )
+        return None
+
+
 def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
-    """Extrae los charts JSON del reporte EDA (Documento 2 — parte charts).
+    """Extrae los charts del reporte EDA (Documento 2 — parte charts).
 
-    Contrato: el path LLM-JSON legacy emite exactamente 3 charts. El path
-    Python-determinista (Issue #237, ml_ds + clasificacion) emite 6 charts.
+    Dispatch de generación (charts deterministas Python vs. LLM-JSON legacy):
 
-    Issue #237 — para `studentProfile == "ml_ds"` y familia primaria
-    `clasificacion`, los 6 charts se generan deterministicamente en Python
-    y el LLM solo escribe `description`/`notes`. El path original
-    (LLM-JSON monolítico) queda intacto para business y otras familias.
+        familia clasificacion + perfil ml_ds   → _eda_classification_python_path
+                                                  (Issue #237; 3 charts; LLM solo anota)
+                                                  fallback → LLM-JSON si el path Python falla
+        familia clasificacion + perfil business → _eda_business_python_path
+                                                  (3 charts honestos; LLM solo anota)
+                                                  SIN fallback LLM (Issue 5A): falla → panel vacío
+        cualquier otra combinación              → path LLM-JSON (EDA_CHART_GENERATOR_PROMPT)
+
+    Los paths Python construyen TODOS los números en pandas y el LLM solo escribe
+    `description`/`notes` — eso elimina las correlaciones sobre-afirmadas y los
+    doble-ejes engañosos del path LLM-JSON. El path LLM-JSON queda solo para
+    business+otras-familias y ml_ds+otras-familias (y como fallback de ml_ds+clasif).
     """
     eda_report = state.get("doc2_eda", "")
     if not eda_report or "No disponible" in eda_report:
         print("[eda_chart_generator] Skipping: no hay reporte EDA válido")
         return {"doc2_eda_charts": [], "current_agent": "eda_chart_generator"}
 
-    # ── Issue #237 dispatch ──────────────────────────────────────────────
+    # ── Dispatch a paths Python-deterministas (clasificacion) ────────────
     profile = state.get("studentProfile", "business")
     task_payload_obj = state.get("task_payload") or {}
     algoritmos_disp: list[str] = []
@@ -1524,12 +1603,23 @@ def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
     if not algoritmos_disp:
         algoritmos_disp = list(state.get("algoritmos") or [])
     primary_family, _legacy_warn = _resolve_primary_family(algoritmos_disp)
-    if profile == "ml_ds" and primary_family == "clasificacion":
+    if primary_family == "clasificacion":
         contract = state.get("dataset_schema_required")
-        py_update = _eda_classification_python_path(state, config, contract)
-        if py_update is not None:
-            return py_update
-        # else: fall through to legacy LLM-JSON path with warning already logged.
+        if profile == "ml_ds":
+            py_update = _eda_classification_python_path(state, config, contract)
+            if py_update is not None:
+                return py_update
+            # else: fall through to legacy LLM-JSON path (warning already logged).
+        elif profile == "business":
+            # Issue 5A: el builder business NUNCA cae al LLM-JSON (el path que
+            # producía los charts malos). Falla → panel vacío degradado.
+            py_update = _eda_business_python_path(state, config, contract)
+            if py_update is not None:
+                return py_update
+            logger.warning(
+                "[eda_chart_generator] business builder no produjo charts — panel vacío (sin fallback LLM)"
+            )
+            return {"doc2_eda_charts": [], "current_agent": "eda_chart_generator"}
 
     try:
         cfg = Configuration.from_runnable_config(config)
@@ -2737,11 +2827,15 @@ def _generate_independent_values(
 # HELPER — _generate_dataset_from_schema (Python puro, 0 tokens LLM)
 # ─────────────────────────────────────────────────────────
 
-def _generate_dataset_from_schema(schema: dict) -> list:
+def _generate_dataset_from_schema(schema: dict, profile: str = "business") -> list:
     """
     Genera filas de datos a partir del schema producido por schema_designer.
     Vectorizado con numpy. Cero tokens LLM. Determinista con seed derivado del schema.
     Soporta trend (up/down/stable) y dependency (linear/inverse) por columna.
+
+    ``profile`` ("business" | "ml_ds") solo afecta el target de la inyección de
+    outliers (Fix B-05): en business se excluyen las columnas de coherencia
+    financiera para no romper el panel M2. ml_ds conserva su comportamiento.
     """
     import numpy as np
 
@@ -2936,12 +3030,22 @@ def _generate_dataset_from_schema(schema: dict) -> list:
                     row[curr] = round(min(float(cv), max_allowed), 4)
 
     # ── Fix B-05: Inyectar outliers para ejercicios EDA (n_rows >= 50) ──
+    # Business: EXCLUIMOS las columnas de coherencia financiera
+    # (revenue/cost/margin/ebitda) del target del outlier. El panel M2 business
+    # grafica margen e ingresos indexados; un ×3.5 sobre `costs` distorsionaría esa
+    # lectura. Así el outlier cae en una métrica de comportamiento (p. ej. churn),
+    # más relevante para un caso de deserción. ml_ds conserva su comportamiento.
+    _financial_tokens = ("revenue", "cost", "margin", "ebitda")
     numeric_non_revenue = [
         c for c in columns
         if c["type"] in ("float", "int")
         and c["name"] != revenue_col
         and not c["name"].startswith("period")
         and not c["name"].startswith("retention_")
+        and not (
+            profile == "business"
+            and any(tok in c["name"].lower() for tok in _financial_tokens)
+        )
     ]
     if numeric_non_revenue and n_rows >= 50:
         target_col_def = numeric_non_revenue[0]
@@ -2953,7 +3057,12 @@ def _generate_dataset_from_schema(schema: dict) -> list:
                 original = float(rows[idx][target_col])
                 outlier_val = original * 3.5
                 if col_range_max is not None and float(col_range_max) > 0:
-                    outlier_val = min(outlier_val, float(col_range_max) * 2)
+                    # business: el atípico respeta el range_max declarado en vez de
+                    # 2× (evita p. ej. churn 0.30 cuando el schema declaró [0.02,0.15],
+                    # que además debilitaba la correlación nps↔churn que el panel
+                    # presenta como driver real). ml_ds conserva el cap ×2 histórico.
+                    cap_mult = 1.0 if profile == "business" else 2.0
+                    outlier_val = min(outlier_val, float(col_range_max) * cap_mult)
                 rows[idx][target_col] = round(outlier_val, 2)
 
     print(f"[_generate_dataset_from_schema] {len(rows)} filas generadas, {len(columns)} columnas")
@@ -2981,7 +3090,7 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
         if profile == "business":
             schema["n_rows"] = max(80, min(120, schema.get("n_rows", 100)))
 
-        rows = _generate_dataset_from_schema(schema)
+        rows = _generate_dataset_from_schema(schema, profile=profile)
         constraints = schema.get("constraints", {})
         constraints_with_count = {**constraints, "n_rows_expected": schema.get("n_rows", 100)}
 
@@ -3867,6 +3976,10 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         context.update({
             "contexto_m1": state.get("doc1_narrativa", "")[:8000],
             "contexto_m2": state.get("doc2_eda", "") or "DATASET_UNAVAILABLE",
+            # Default vacío: solo business+clasificacion lo rellena (más abajo).
+            # M3_AUDIT_PROMPT referencia {lr_business_block}; los prompts ml_ds no,
+            # así que la clave extra es ignorada por .format() en ese branch.
+            "lr_business_block": "",
         })
 
         profile = state.get("studentProfile", "business")
@@ -3942,6 +4055,13 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             prompt = M3_AUDIT_PROMPT
             tag = "m3_audit"
             m3_mode = "audit"
+            # LR-business (light, Issue 3A): si el algoritmo es de la familia
+            # clasificacion (p. ej. Logistic Regression), inyectamos el bloque que
+            # hace al auditor razonar sobre la decisión apoyada en el modelo, en
+            # lenguaje gerencial y SIN jerga DS. Otras familias business → sin bloque.
+            _business_family, _ = _resolve_primary_family(_extract_state_algoritmos(state))
+            if _business_family == "clasificacion":
+                context["lr_business_block"] = M3_AUDIT_LR_BUSINESS_BLOCK
             # business: contenido narrativo de auditoría sin notebook downstream;
             # Flash-medium con fallback a 2.5-flash (ya en _get_writer_llm) basta.
             llm = _get_writer_llm(cfg.writer_model, temperature=0.6, thinking_level="medium")

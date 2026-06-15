@@ -40,48 +40,13 @@ from typing import Any
 
 import pandas as pd
 
+from case_generator.datagen.eda_charts_common import empty_chart, source_label
+
 logger = logging.getLogger("adam.graph")
 
 # ── Defensive caps (keep payloads small for FE/Plotly) ────────────────
 _MISSINGNESS_SAMPLE_ROWS = 500
 _MI_TOP_K = 8
-_SOURCE_TEMPLATE = "Dataset ADAM — {case_id}"
-
-
-# ───────────────────────────────────────────────────────────────────────
-# Helpers
-# ───────────────────────────────────────────────────────────────────────
-
-
-def _source_label(contract: dict | None) -> str:
-    case_id = ""
-    if isinstance(contract, dict):
-        case_id = str(contract.get("case_id") or contract.get("caso_id") or "")
-    return _SOURCE_TEMPLATE.format(case_id=case_id) if case_id else "Dataset ADAM"
-
-
-def _empty_chart(
-    chart_id: str,
-    title: str,
-    subtitle: str,
-    chart_type: str,
-    source: str,
-    notes: str = "",
-) -> dict[str, Any]:
-    """Skeleton with empty traces — used when a builder cannot run safely."""
-    return {
-        "id": chart_id,
-        "title": title,
-        "subtitle": subtitle,
-        "library": "plotly",
-        "chart_type": chart_type,
-        "traces": [],
-        "layout": {"template": "plotly_white"},
-        "source": source,
-        "description": "",
-        "notes": notes,
-        "data_source": "python_builder",
-    }
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -131,7 +96,7 @@ def _build_missingness_heatmap(
 ) -> dict[str, Any]:
     n_rows = len(df)
     if n_rows == 0:
-        return _empty_chart(
+        return empty_chart(
             "missingness_heatmap",
             "Mapa de valores faltantes",
             "Sin filas para muestrear",
@@ -143,7 +108,7 @@ def _build_missingness_heatmap(
     )
     cols = [c for c in sorted(sample.columns) if c != target_col]
     if not cols:
-        return _empty_chart(
+        return empty_chart(
             "missingness_heatmap",
             "Mapa de valores faltantes",
             "Sin features fuera del target",
@@ -190,7 +155,7 @@ def _build_mutual_info_top8(
 
     feature_cols = [c for c in sorted(df.columns) if c != target_col]
     if not feature_cols:
-        return _empty_chart(
+        return empty_chart(
             "mutual_info_top8",
             "Top features por Mutual Information",
             "Sin features disponibles",
@@ -282,7 +247,7 @@ def generate_classification_eda_charts(
         )
         return []
 
-    source = _source_label(contract)
+    source = source_label(contract)
     charts: list[dict[str, Any]] = []
 
     builders: list[tuple[str, Any]] = [
