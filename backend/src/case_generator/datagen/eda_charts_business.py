@@ -17,6 +17,8 @@ Pipeline (no LLM calls; pandas only):
    ┌────────────────────────────────────────────────────────────────────────────┐
    │  1. financial_mirage   (scatter, líneas)   ingresos vs margen INDEXADOS      │
    │                                            base 100 → una sola escala honesta │
+   │                                            (agrega a anual/trimestral solo    │
+   │                                             para el display; lo declara)      │
    │  2. churn_drivers      (bar horizontal)    |corr| reales con el objetivo,    │
    │                                            eje fijo [0,1] → sin exagerar      │
    │  3. cohort_collapse    (heatmap)           retención por cohorte             │
@@ -44,6 +46,7 @@ Failure policy (igual que el builder de clasificación):
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import pandas as pd
@@ -55,6 +58,16 @@ logger = logging.getLogger("adam.graph")
 # Cuántos drivers mostrar y el umbral bajo el cual avisamos "sin driver fuerte".
 _DRIVERS_TOP_K = 8
 _DRIVERS_MIN_ABS_CORR = 0.10
+
+# Período mensual válido "YYYY-MM" con mes 01–12. Validar el mes (no solo \d{2})
+# hace que un mes malformado (p. ej. "2023-13") caiga al fallback honesto sin
+# agregación, en vez de producir una etiqueta de trimestre absurda (Q5/Q0).
+_PERIOD_MONTHLY_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+# Umbrales del grano de display (solo para financial_mirage). Business genera
+# 80–120 períodos mensuales → siempre cae en "annual" (~7–10 puntos). El grano
+# trimestral existe por robustez (datasets de 25–48 meses) y queda cubierto por test.
+_GRAIN_ANNUAL_MIN_MONTHS = 48
+_GRAIN_QUARTERLY_MIN_MONTHS = 24
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -70,6 +83,65 @@ def _sorted_by_period(df: pd.DataFrame) -> pd.DataFrame:
         except Exception:  # pragma: no cover - defensive
             return df
     return df
+
+
+def _detect_period_grain(periods: list[str]) -> str | None:
+    """Grano de display para `financial_mirage`: ``"annual"``, ``"quarterly"`` o ``None``.
+
+    Agregación de display HONESTA (solo suaviza/reduce puntos; el dataset no cambia):
+    business genera 80–120 períodos mensuales → la línea de margen sale como sierra
+    ruidosa que tapa el "espejismo". Agregar a un grano más grueso reduce los puntos
+    y el ruido a la vez, y se DECLARA en el subtítulo.
+
+    Devuelve ``None`` (= graficar crudo, sin sufijo de subtítulo) cuando:
+      * la lista está vacía, o
+      * NO todos los períodos son mensuales "YYYY-MM" con mes 01–12 (``all(...)``,
+        nunca ``any(...)``: mezclar formatos agregaría datos inconsistentes), o
+      * hay ≤ 24 meses (mensual ya se lee bien).
+
+    Con todos mensuales: ``> 48 → "annual"``, ``> 24 → "quarterly"``.
+    """
+    if not periods or not all(_PERIOD_MONTHLY_RE.match(p) for p in periods):
+        return None
+    n = len(periods)
+    if n > _GRAIN_ANNUAL_MIN_MONTHS:
+        return "annual"
+    if n > _GRAIN_QUARTERLY_MIN_MONTHS:
+        return "quarterly"
+    return None
+
+
+def _grain_key(period: str, grain: str) -> str:
+    """Clave de agrupación temporal para un período mensual "YYYY-MM" validado.
+
+    ``annual`` → ``"YYYY"``; ``quarterly`` → ``"YYYY-Qn"`` con ``n=(mes-1)//3+1``.
+    El llamador garantiza que ``period`` ya pasó ``_PERIOD_MONTHLY_RE`` (mes 01–12).
+    """
+    if grain == "annual":
+        return period[:4]
+    year, month = period.split("-")
+    return f"{year}-Q{(int(month) - 1) // 3 + 1}"
+
+
+def _aggregate_by_grain(
+    d: pd.DataFrame, value_cols: list[str], grain: str
+) -> tuple[list[str], dict[str, pd.Series]]:
+    """Promedia (media) las columnas de ``value_cols`` por grano temporal.
+
+    Devuelve ``(periods_agregados, {col: Serie de medias})`` SOLO para las columnas
+    presentes en ``value_cols`` (no asume que ``margin_pct`` exista → no tira el chart
+    entero si falta). ``groupby(sort=False)`` sobre un df ya ordenado por período, con
+    claves de grano monótonas, preserva el orden cronológico de forma determinista.
+    """
+    keys = [_grain_key(str(p), grain) for p in d["period"].tolist()]
+    means = (
+        d.assign(_grain_key=keys)
+        .groupby("_grain_key", sort=False)[value_cols]
+        .mean(numeric_only=True)
+    )
+    agg_periods = means.index.astype(str).tolist()
+    series_map = {col: means[col] for col in value_cols}
+    return agg_periods, series_map
 
 
 def _indexed_base_100(series: pd.Series) -> list[float | None] | None:
@@ -151,6 +223,13 @@ def _build_financial_mirage(df: pd.DataFrame, source: str) -> dict[str, Any]:
 
     Reemplaza el `scatter mode:lines` de doble eje Y del prompt legacy, que
     distorsionaba la comparación al darle escalas independientes a cada serie.
+
+    Antes de indexar, agrega la serie a un grano más grueso SOLO para el display
+    cuando hay muchos meses (business: 80–120 → anual). El dataset no cambia; la
+    agregación se declara en el subtítulo. Pipeline::
+
+        _sorted_by_period → _detect_period_grain → [_aggregate_by_grain (media)]
+                          → _indexed_base_100 (guardas intactas) → trace eje único
     """
     if "period" not in df.columns or "revenue" not in df.columns:
         return empty_chart(
@@ -163,10 +242,26 @@ def _build_financial_mirage(df: pd.DataFrame, source: str) -> dict[str, Any]:
         )
 
     d = _sorted_by_period(df)
-    periods = [str(p) for p in d["period"].tolist()]
+    raw_periods = [str(p) for p in d["period"].tolist()]
+
+    # Agregación temporal HONESTA solo para el display (el dataset no cambia).
+    # Reduce puntos y suaviza la sierra del margen, y se declara en el subtítulo.
+    value_cols = [c for c in ("revenue", "margin_pct") if c in d.columns]
+    grain = _detect_period_grain(raw_periods)
+    subtitle_suffix = ""
+    if grain is not None and value_cols:
+        periods, series = _aggregate_by_grain(d, value_cols, grain)
+        rev_series = series.get("revenue")
+        marg_series = series.get("margin_pct")
+        subtitle_suffix = " (promedio anual)" if grain == "annual" else " (promedio trimestral)"
+    else:
+        periods = raw_periods
+        rev_series = d["revenue"]
+        marg_series = d["margin_pct"] if "margin_pct" in d.columns else None
+
     traces: list[dict[str, Any]] = []
 
-    rev_idx = _indexed_base_100(d["revenue"])
+    rev_idx = _indexed_base_100(rev_series) if rev_series is not None else None
     if rev_idx is not None:
         traces.append(
             {
@@ -179,8 +274,8 @@ def _build_financial_mirage(df: pd.DataFrame, source: str) -> dict[str, Any]:
         )
 
     margin_note = ""
-    if "margin_pct" in d.columns:
-        marg_idx = _indexed_base_100(d["margin_pct"])
+    if marg_series is not None:
+        marg_idx = _indexed_base_100(marg_series)
         if marg_idx is not None:
             traces.append(
                 {
@@ -212,7 +307,10 @@ def _build_financial_mirage(df: pd.DataFrame, source: str) -> dict[str, Any]:
     return {
         "id": "financial_mirage",
         "title": "El espejismo del crecimiento",
-        "subtitle": "Ingresos y margen indexados (base 100 = primer período) en una escala comparable",
+        "subtitle": (
+            "Ingresos y margen indexados (base 100 = primer período) en una escala comparable"
+            + subtitle_suffix
+        ),
         "library": "plotly",
         "chart_type": "scatter",
         "traces": traces,

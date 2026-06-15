@@ -790,6 +790,33 @@ de business+LR.
 
 ---
 
+## TODO-297-A: El de-sawtooth de `financial_mirage` es solo de presentación (causa raíz intacta)
+
+**What:** Dejar registrado que el fix de Issue #297 (agregación temporal anual/trimestral en
+`_build_financial_mirage`) suaviza la sierra del margen SOLO en ese chart, vía display-aggregation.
+La causa raíz de la varianza por fila del margen sigue intacta: `costs` `noise_factor: 0.12`
+(`SCHEMA_DESIGNER_PROMPT`) + el recálculo `(rev-cost)/rev` en `_generate_dataset_from_schema`.
+
+**Why:** Cualquier futuro chart business que muestre el `margin_pct` MENSUAL crudo (sin agregar)
+volverá a verse como sierra. El fix no es un cambio de datos a propósito (cohortes, correlaciones
+y ml_ds quedan byte-idénticos), así que la deuda es consciente, no un descuido.
+
+**Pros:** Si más adelante se decide que el margen mensual crudo importa, hay un punto único documentado
+para reconsiderar bajar el `noise_factor` o suavizar en el data-gen (con su propio plan-eng-review).
+
+**Cons:** Mantener una nota de deuda que quizá nunca se accione. Bajo costo.
+
+**Context:** El grano se elige en `_detect_period_grain` (eda_charts_business.py): business genera
+80–120 meses → SIEMPRE cae en "annual" (~7–10 puntos). La rama "quarterly" (25–48 meses) es
+actualmente **inalcanzable en producción** (el clamp `n_rows` business es 80–120 mensual); existe por
+robustez y queda cubierta por test `test_financial_mirage_aggregates_quarterly_for_mid_horizon`. Si en
+el futuro el schema designer pudiera emitir granularidad más gruesa o se cambia el clamp, revisitar.
+
+**Depends on / blocked by:** Independiente. No bloquea nada; cerrar solo si se decide atacar la causa
+raíz de la varianza del margen en el data-gen (área sensible, requiere regresión de notebooks ml_ds).
+
+---
+
 ## TODO-OUTLIER-SCHEMA-AWARE: Inyección de outliers schema-aware (global, cross-profile)
 
 **What:** Reemplazar la heurística "primera columna numérica no-revenue × 3.5" de
