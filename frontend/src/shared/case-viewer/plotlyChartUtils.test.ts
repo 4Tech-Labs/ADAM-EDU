@@ -26,11 +26,13 @@ describe("sanitizeTraces — dense heatmap per-cell text handling", () => {
         expect(out.textfont).toBeDefined();
     });
 
-    it("injects default text for a non-dense heatmap missing a texttemplate", () => {
+    it("injects default text WITHOUT a forced color so Plotly auto-contrasts per cell", () => {
         const [out] = sanitizeTraces([heatmap(12, 4)]);
 
         expect(out.texttemplate).toBe("%{z:.2f}");
-        expect(out.textfont).toEqual({ size: 11, color: "#ffffff" });
+        // No color: Plotly elige por celda un color legible (oscuro sobre celdas
+        // claras, blanco sobre oscuras). Forzar blanco ocultaba el texto en celdas pálidas.
+        expect(out.textfont).toEqual({ size: 11 });
     });
 
     it("drops per-cell text on a dense (17×17 correlation-like) heatmap", () => {
