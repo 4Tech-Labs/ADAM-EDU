@@ -1211,3 +1211,56 @@ después.
 **Context:** `feat/classification-notebook-toc` implementa el mecanismo completo y los TOC para `lr_only`, `rf_only` y `lr_rf_contrast`. Extender a otras familias es trivial una vez aprobadas las secciones definitivas de sus prompts.
 
 **Depends on / blocked by:** Estabilización de los prompts de regresión, clustering y serie_temporal.
+
+---
+
+## TODO-COST-A: Reducir la FRECUENCIA de reprompts de validación (prompt tuning de 1ª pasada)
+
+**What:** Afinar los prompts de primera pasada para que disparen menos los reprompts de
+validación: grounding narrativo (`validate_narrative_grounding` en M3/M4/M5), decision-matrix
+(`_validate_m5_decision_matrix`), family-consistency (`_validate_notebook_family_consistency`)
+y la corrección de ejecución de `m3_notebook_executor`. Cada reprompt es una llamada LLM extra
+sobre un nodo Pro.
+
+**Why:** Es el driver #2 de costo del diagnóstico de reducción de costos (los reprompts pueden
+añadir ~6-8 llamadas Pro extra en el peor caso). Reducir la tasa de reprompt baja costo sin
+debilitar las compuertas de corrección.
+
+**Pros:** Ataca el costo sin tocar el tier de modelo ni eliminar las validaciones; las compuertas
+siguen intactas como red de seguridad.
+
+**Cons:** Es prompt-engineering en los archivos más sensibles (`prompts/**`, `graph.py`); requiere
+su propio eval (golden-set) para confirmar que el ajuste no degrada calidad. Alto cuidado.
+
+**Context:** El `CostCallbackHandler` (Fase 0, `cost_metrics.py`) persiste `cost_breakdown` en
+`task_payload` con tokens/USD por nodo; usar esa telemetría para medir la tasa real de reprompt
+por nodo ANTES de tocar prompts. Sin datos de Fase 0 no se sabe qué reprompt domina.
+
+**Depends on / blocked by:** Datos de Fase 0 (reprompt-rate por nodo) en producción/staging.
+Debe ir en un PR dedicado con eval, no junto al PR de reducción de costos.
+
+---
+
+## TODO-COST-B: Gemini explicit context caching (`cached_content`) para prefijos estáticos
+
+**What:** Cachear explícitamente los prefijos de prompt estáticos grandes
+(`prompts/__init__.py` ~28K tokens, `prompts/clasificacion/notebooks/_shared.py` ~12K tokens)
+con la API de context caching de Gemini, para pagarlos a la tarifa reducida de cache en vez de
+reenviarlos completos en cada llamada.
+
+**Why:** Hoy cada `.invoke` reenvía el prompt estático completo como input. El caching corta
+input-tokens transversalmente en todos los nodos.
+
+**Pros:** Reducción de input-tokens sin tocar la lógica del grafo ni la calidad de salida.
+
+**Cons:** El reuso DENTRO de un job es limitado (cada nodo usa un template distinto, una sola vez),
+así que el beneficio real depende del caching IMPLÍCITO entre jobs y del soporte de caching en los
+modelos `-preview`. Agrega complejidad de gestión de TTL/handles de cache.
+
+**Context:** El `CostCallbackHandler` ya separa `cached_input_tokens` (lee `input_token_details.cache_read`)
+y los factura a `cached_input_per_1m` en `cost_metrics.PRICE_MAP`, así que el ahorro es medible una
+vez activado. Confiar primero en el caching implícito de Gemini (gratis, sin código) y reevaluar con
+datos de Fase 0 antes de construir infra de cache explícito.
+
+**Depends on / blocked by:** Datos de Fase 0 (cuánto del costo es input estático) + confirmar
+soporte de context caching en `gemini-3.x-preview`.

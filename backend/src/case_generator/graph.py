@@ -23,19 +23,23 @@ Total nodos LLM por path:
   harvard_only (business): ~10 llamadas
   harvard_with_eda (ml_ds + notebook): ~19 llamadas
 
-Modelos:
-  architect_model (Pro): case_architect, schema_designer
-  m3 (Pro chain) : m3_content_generator (ml_ds), m3_notebook_generator
-    m4/m5 (Pro chain): m4_content_generator, m5_content_generator, m5_questions_generator
-    writer_model (Flash): m3_content_generator (business), demás nodos LLM y fallback operativo M4/M5
+Modelos (tier por-nodo vía configuration.resolve_node_model + node_model_overrides;
+  cada .invoke lleva tag node:<name> y CostCallbackHandler agrega tokens/USD por nodo):
+  architect_model (Pro): case_architect (thinking medium — Fase 1), schema_designer
+  m3: m3_content_generator (ml_ds → Pro, eval-gate pendiente para Flash),
+      m3_notebook_generator (Flash — Fase 1 downgrade, protegido por gate de ejecución)
+    m4/m5 (Pro chain): m4_content_generator (thinking medium — Fase 1),
+                       m5_content_generator, m5_questions_generator
+    writer_model (Flash): m3_content_generator (business), m3_notebook_generator,
+                          demás nodos LLM y fallback operativo M4/M5
   chart_llm (Flash, 16K tokens): chart generators (M2, M3, M4)
   Cadenas de fallback (depende del nodo, no es global):
     - _get_writer_llm  / _get_chart_llm    : primary -> gemini-2.5-flash
-    - _get_architect_llm                   : Pro-high -> Pro-medium -> gemini-3-flash-preview
-        - _get_m4_llm / _get_m5_llm            : Pro -> Pro-low/medium -> writer_model -> gemini-2.5-flash
+    - _get_architect_llm                   : Pro -> Pro-medium -> gemini-3-flash-preview
+        - _get_m4_llm / _get_m5_llm            : Pro-medium -> Pro-low -> writer_model -> gemini-2.5-flash
     - schema_designer (M2 inline)          : Pro-medium -> Pro-low -> gemini-3-flash-preview
     - m3_content_generator (ml_ds inline)  : Pro-medium -> Pro-low -> gemini-3-flash-preview
-    - m3_notebook_generator/executor       : Pro-medium -> Pro-low -> gemini-3-flash-preview
+    - m3_notebook_generator                : Flash(writer) -> gemini-2.5-flash
   Python puro (0 tokens): data_generator, data_validator, barriers sync
 
 Resiliencia (v9):
@@ -75,7 +79,17 @@ from langgraph.types import RetryPolicy
 from psycopg.errors import UndefinedTable
 
 from case_generator.state import ADAMState
-from case_generator.configuration import Configuration
+from case_generator.configuration import (
+    Configuration,
+    resolve_node_model,
+    NODE_CASE_ARCHITECT,
+    NODE_SCHEMA_DESIGNER,
+    NODE_M3_CONTENT,
+    NODE_M3_NOTEBOOK,
+    NODE_M4_CONTENT,
+    NODE_M5_CONTENT,
+    NODE_M5_QUESTIONS,
+)
 from case_generator.prompts import (
     CASE_ARCHITECT_PROMPT,
     CASE_ARCHITECT_PROMPT_BY_FAMILY,
@@ -232,6 +246,43 @@ _M5_MAX_OUTPUT_TOKENS = 32768
 # ─── LLM Factory ────────────────────────────────────────
 
 
+def _build_gemini(
+    model: str,
+    *,
+    temperature: float,
+    max_output_tokens: int,
+    thinking_level: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    response_mime_type: str | None = None,
+) -> ChatGoogleGenerativeAI:
+    """Build one ChatGoogleGenerativeAI with the shared resilience boilerplate.
+
+    Single source of truth for ``api_key``, the shared ``_rate_limiter`` and
+    ``max_retries`` so the tier factories below stay thin and per-node model /
+    thinking changes live in one place. Callers compose ``.with_fallbacks()``
+    chains around the result — those chains are intentionally NOT built here, so
+    the resilience net per node is preserved exactly.
+
+    ``thinking_level``/``tools``/``response_mime_type`` are omitted when None so
+    the model gets the SDK default (matches the prior per-factory behavior).
+    """
+    kwargs: dict[str, Any] = dict(
+        model=model,
+        temperature=temperature,
+        max_retries=2,
+        max_output_tokens=max_output_tokens,
+        api_key=os.getenv("GEMINI_API_KEY"),
+        rate_limiter=_rate_limiter,
+    )
+    if thinking_level is not None:
+        kwargs["thinking_level"] = thinking_level
+    if tools is not None:
+        kwargs["model_kwargs"] = {"tools": tools}
+    if response_mime_type is not None:
+        kwargs["response_mime_type"] = response_mime_type
+    return ChatGoogleGenerativeAI(**kwargs)
+
+
 def _get_writer_llm(
     model: str,
     temperature: float = 0.7,
@@ -240,24 +291,11 @@ def _get_writer_llm(
     """LLM estándar (Flash) para redacción y structured output.
     Fallback automático a gemini-2.5-flash si el primary falla.
     """
-    primary = ChatGoogleGenerativeAI(
-        model=model,
-        temperature=temperature,
-        thinking_level=thinking_level,
-        max_retries=2,
-        max_output_tokens=8192,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
+    primary = _build_gemini(
+        model, temperature=temperature, thinking_level=thinking_level, max_output_tokens=8192
     )
     # Fallback: modelo anterior estable. Mismos prompts funcionan sin cambios.
-    fallback = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        temperature=temperature,
-        max_output_tokens=8192,
-        max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
+    fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=8192)
     return primary.with_fallbacks([fallback])
 
 
@@ -274,38 +312,22 @@ def _get_architect_llm(
     max_output_tokens=16384: thinking_level="medium" consume ~2-4K tokens de reasoning;
     CaseArchitectOutput (8 campos densos) requiere ~3500-5000 tokens de output JSON.
     """
-    primary = ChatGoogleGenerativeAI(
-        model=model,
-        temperature=temperature,
-        thinking_level=thinking_level,
-        max_retries=2,
-        max_output_tokens=16384,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-        model_kwargs={"tools": [{"code_execution": {}}]},
+    _code_exec: list[dict[str, Any]] = [{"code_execution": {}}]
+    primary = _build_gemini(
+        model, temperature=temperature, thinking_level=thinking_level,
+        max_output_tokens=16384, tools=_code_exec,
     )
     # Cadena de fallbacks ordenada:
     #   1) Pro con thinking_level="medium": misma calidad de modelo, menos
     #      reasoning tokens. Cubre fallos transitorios (rate limit, 5xx puntual,
     #      parser error en una respuesta).
     #   2) Flash: red de seguridad final por si Pro está caído globalmente.
-    pro_fallback_medium = ChatGoogleGenerativeAI(
-        model=model,
-        temperature=temperature,
-        thinking_level="medium",
-        max_retries=2,
-        max_output_tokens=16384,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-        model_kwargs={"tools": [{"code_execution": {}}]},
+    pro_fallback_medium = _build_gemini(
+        model, temperature=temperature, thinking_level="medium",
+        max_output_tokens=16384, tools=_code_exec,
     )
-    flash_fallback = ChatGoogleGenerativeAI(
-        model="gemini-3-flash-preview",
-        temperature=temperature,
-        max_output_tokens=16384,
-        max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
+    flash_fallback = _build_gemini(
+        "gemini-3-flash-preview", temperature=temperature, max_output_tokens=16384
     )
     return primary.with_fallbacks([pro_fallback_medium, flash_fallback])
 
@@ -322,36 +344,14 @@ def _get_m4_llm(
     fallback escape hatches for preview-model outages and rollouts. Do not reuse
     the architect helper because M4 should not receive Code Execution tools.
     """
-    common_kwargs = dict(
-        model=model,
-        temperature=temperature,
-        max_retries=2,
-        max_output_tokens=24576,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
-    primary = ChatGoogleGenerativeAI(thinking_level="high", **common_kwargs)
-    pro_fallback_medium = ChatGoogleGenerativeAI(
-        thinking_level="medium",
-        **common_kwargs,
-    )
-    writer_fallback = ChatGoogleGenerativeAI(
-        model=fallback_model,
-        temperature=temperature,
-        max_retries=2,
-        max_output_tokens=24576,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
-    stable_fallback = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        temperature=temperature,
-        max_retries=2,
-        max_output_tokens=24576,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
-    return primary.with_fallbacks([pro_fallback_medium, writer_fallback, stable_fallback])
+    # Fase 1 cost cut: primary thinking "high"→"medium". M4 prose stays on Pro
+    # (HIGH-risk terminal narrative), but the extra "high" reasoning tokens were
+    # billed at Pro output rates for marginal quality; "medium" keeps the model.
+    primary = _build_gemini(model, temperature=temperature, thinking_level="medium", max_output_tokens=24576)
+    pro_fallback_low = _build_gemini(model, temperature=temperature, thinking_level="low", max_output_tokens=24576)
+    writer_fallback = _build_gemini(fallback_model, temperature=temperature, max_output_tokens=24576)
+    stable_fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=24576)
+    return primary.with_fallbacks([pro_fallback_low, writer_fallback, stable_fallback])
 
 
 def _get_chart_llm(
@@ -369,23 +369,10 @@ def _get_chart_llm(
     Fix: 16384 tokens de output garantizan margen para hasta 10 charts Plotly complejos.
     Fallback automático a gemini-2.5-flash si el primary falla.
     """
-    primary = ChatGoogleGenerativeAI(
-        model=model,
-        temperature=temperature,
-        thinking_level=thinking_level,
-        max_retries=2,
-        max_output_tokens=16384,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
+    primary = _build_gemini(
+        model, temperature=temperature, thinking_level=thinking_level, max_output_tokens=16384
     )
-    fallback = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        temperature=temperature,
-        max_output_tokens=16384,
-        max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
+    fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=16384)
     return primary.with_fallbacks([fallback])
 
 
@@ -402,32 +389,11 @@ def _get_m5_llm(
     same model with lower reasoning; then use configured writer/stable Flash
     fallbacks so operations can route around preview-model incidents.
     """
-    common_kwargs = dict(
-        model=model,
-        temperature=temperature,
-        max_retries=2,
-        max_output_tokens=_M5_MAX_OUTPUT_TOKENS,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
-    primary = ChatGoogleGenerativeAI(thinking_level="medium", **common_kwargs)
-    pro_fallback_low = ChatGoogleGenerativeAI(thinking_level="low", **common_kwargs)
-    writer_fallback = ChatGoogleGenerativeAI(
-        model=fallback_model,
-        temperature=temperature,
-        max_retries=2,
-        max_output_tokens=_M5_MAX_OUTPUT_TOKENS,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
-    stable_fallback = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        temperature=temperature,
-        max_retries=2,
-        max_output_tokens=_M5_MAX_OUTPUT_TOKENS,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
+    _max = _M5_MAX_OUTPUT_TOKENS
+    primary = _build_gemini(model, temperature=temperature, thinking_level="medium", max_output_tokens=_max)
+    pro_fallback_low = _build_gemini(model, temperature=temperature, thinking_level="low", max_output_tokens=_max)
+    writer_fallback = _build_gemini(fallback_model, temperature=temperature, max_output_tokens=_max)
+    stable_fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=_max)
     return primary.with_fallbacks([pro_fallback_low, writer_fallback, stable_fallback])
 
 
@@ -836,7 +802,13 @@ def _build_base_context(state: ADAMState) -> dict:
 def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
     """Diseña los cimientos del caso: empresa, dilema, exhibits e instrucciones."""
     cfg = Configuration.from_runnable_config(config)
-    llm = _get_architect_llm(cfg.architect_model, temperature=0.3, thinking_level="high")
+    # Fase 1 cost cut: thinking "high"→"medium". case_architect stays on Pro
+    # (Code Execution + downstream dependency), but trims Pro-rate reasoning tokens.
+    llm = _get_architect_llm(
+        resolve_node_model(cfg, NODE_CASE_ARCHITECT, cfg.architect_model),
+        temperature=0.3,
+        thinking_level="medium",
+    )
 
     context = _build_base_context(state)
     context.update({
@@ -2491,12 +2463,13 @@ def _augment_schema_with_contract(schema: dict, contract: dict | None) -> dict:
 # NODO 1 — SCHEMA DESIGNER (Pro, thinking activo, output pequeño)
 # ─────────────────────────────────────────────────────────
 
-def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: ARG001
+def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     """NODO 1 del pipeline de dataset. Diseña schema y constraints.
-    Usa gemini-3.1-pro-preview con thinking_level="medium" para máxima calidad.
+    Modelo Pro vía Configuration (overridable por-nodo), thinking_level="medium".
     Dos candidatos con .with_fallbacks() para resiliencia ante 503.
     Responsabilidad ÚNICA: diseñar. NO genera filas.
     """
+    cfg = Configuration.from_runnable_config(config)
     profile = state.get("studentProfile", "business")
 
     # Resolve primary family BEFORE max_rows — both max_rows and the fallback schema
@@ -2561,7 +2534,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: 
     # max_output_tokens=24576 da margen extra para el JSON (~5-6k tokens) sobre el
     # reasoning de "medium" (~3-8k), reduciendo riesgo de truncamiento.
     _common_kwargs = dict(
-        model="gemini-3.1-pro-preview",
+        model=resolve_node_model(cfg, NODE_SCHEMA_DESIGNER, cfg.architect_model),
         temperature=0.2,
         max_retries=2,
         max_output_tokens=24576,
@@ -3261,7 +3234,11 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         cfg = Configuration.from_runnable_config(config)
         # temperature=0.5: balance entre creatividad en enunciados y consistencia estructural
         # Usa Gemini Pro medium + fallback Pro low: M5 es evaluación final integrativa.
-        llm = _get_m5_llm(cfg.architect_model, cfg.writer_model, temperature=0.5)
+        llm = _get_m5_llm(
+            resolve_node_model(cfg, NODE_M5_QUESTIONS, cfg.architect_model),
+            cfg.writer_model,
+            temperature=0.5,
+        )
 
         # Filtrar preguntas complejas de M1 (bloom Level 2/3) como historial de referencia.
         # Prioridad: synthesis → evaluation → analysis. Máx 3 para no saturar el contexto.
@@ -3919,7 +3896,7 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             # Modelos vía Configuration para respetar overrides por env var
             # (ARCHITECT_MODEL / WRITER_MODEL) — útil para rollouts y tests.
             _m3_common = dict(
-                model=cfg.architect_model,
+                model=resolve_node_model(cfg, NODE_M3_CONTENT, cfg.architect_model),
                 temperature=0.6,
                 max_retries=2,
                 max_output_tokens=16384,
@@ -4398,26 +4375,15 @@ class _M3NotebookGenerationContext:
 
 
 def _get_m3_notebook_llm(cfg: Configuration) -> Any:
-    _nb_common = dict(
-        model=cfg.architect_model,
-        temperature=0.3,
-        max_retries=2,
-        max_output_tokens=24576,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
-    nb_primary = ChatGoogleGenerativeAI(thinking_level="medium", **_nb_common)
-    nb_pro_low = ChatGoogleGenerativeAI(thinking_level="low", **_nb_common)
-    nb_flash = ChatGoogleGenerativeAI(
-        model=cfg.writer_model,
-        temperature=0.3,
-        thinking_level="medium",
-        max_retries=2,
-        max_output_tokens=24576,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
-    return nb_primary.with_fallbacks([nb_pro_low, nb_flash])
+    # Fase 1 downgrade-now: the notebook primary defaults to Flash (writer_model).
+    # LOW-risk because m3_notebook_executor runs the notebook for real and gates on
+    # AUC∈[0.55,0.99], and _validate_notebook_family_consistency reprompts once.
+    # Reversible per-node via node_model_overrides (e.g. canary back to Pro).
+    model = resolve_node_model(cfg, NODE_M3_NOTEBOOK, cfg.writer_model)
+    nb_primary = _build_gemini(model, temperature=0.3, thinking_level="medium", max_output_tokens=24576)
+    # Stable Flash fallback for transient API errors on the primary.
+    nb_stable_flash = _build_gemini("gemini-2.5-flash", temperature=0.3, max_output_tokens=24576)
+    return nb_primary.with_fallbacks([nb_stable_flash])
 
 
 def _prepare_m3_notebook_generation_context(
@@ -4761,7 +4727,11 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """
     try:
         cfg = Configuration.from_runnable_config(config)
-        llm = _get_m4_llm(cfg.architect_model, cfg.writer_model, temperature=0.5)
+        llm = _get_m4_llm(
+            resolve_node_model(cfg, NODE_M4_CONTENT, cfg.architect_model),
+            cfg.writer_model,
+            temperature=0.5,
+        )
 
         context = _build_base_context(state)
         context.update({
@@ -4924,7 +4894,11 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """
     try:
         cfg = Configuration.from_runnable_config(config)
-        llm = _get_m5_llm(cfg.architect_model, cfg.writer_model, temperature=0.6)
+        llm = _get_m5_llm(
+            resolve_node_model(cfg, NODE_M5_CONTENT, cfg.architect_model),
+            cfg.writer_model,
+            temperature=0.6,
+        )
 
         context = _build_base_context(state)
         context.update({

@@ -733,9 +733,11 @@ def test_reprompt_includes_unanchored_prior_output_fragment(monkeypatch: pytest.
     assert "La tasa de rechazo del 70% asociada al AUC supera el umbral operativo." in fake_llm.prompts[1]
 
 
-def test_get_m4_llm_uses_pro_high_with_pro_medium_fallback(
+def test_get_m4_llm_uses_pro_medium_with_pro_low_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Fase 1 cost cut: M4 primary thinking "high"→"medium" (stays on Pro);
+    # the Pro fallback drops to "low". Model tier and fallback count unchanged.
     constructed: list[dict] = []
 
     class _FakeGemini:
@@ -752,10 +754,10 @@ def test_get_m4_llm_uses_pro_high_with_pro_medium_fallback(
 
     assert len(constructed) == 4
     assert result[0].kwargs["model"] == "pro-override"
-    assert result[0].kwargs["thinking_level"] == "high"
+    assert result[0].kwargs["thinking_level"] == "medium"
     assert result[0].kwargs["max_output_tokens"] == 24576
     assert constructed[1]["model"] == "pro-override"
-    assert constructed[1]["thinking_level"] == "medium"
+    assert constructed[1]["thinking_level"] == "low"
     assert constructed[1]["max_output_tokens"] == 24576
     assert constructed[2]["model"] == "writer-override"
     assert constructed[2]["max_output_tokens"] == 24576
