@@ -100,6 +100,16 @@ npm --prefix frontend run test
 npm --prefix frontend run build
 ```
 
+The backend test suite runs against a **dedicated test database** (`adam_test`), never your
+development database. `backend/tests/conftest.py` (via `tests/_bootstrap_test_db.py`) rewrites
+`DATABASE_URL` to `adam_test` on the same local Postgres (host `5434`) before importing the app,
+so `pytest` — which does `DROP SCHEMA ... CASCADE` to rebuild the schema — can never wipe the
+users, profiles, and courses you created in the dev `postgres` database. CI keeps its own
+ephemeral `postgres` database (`GITHUB_ACTIONS=true` skips the rewrite). Override the local
+target with `TEST_DATABASE_URL`; the `_assert_local_schema_reset_target` guard refuses to reset
+anything but `adam_test` locally. To (re)create a working dev baseline after a deliberate reset or
+a fresh clone, run `uv run --directory backend python scripts/seed_dev.py` (idempotent).
+
 Issue 23 adds a migration test that creates and drops temporary databases. In the default
 local Docker Postgres this works with the `postgres` user. On other Postgres environments,
 the backend test suite now assumes `CREATE DATABASE` and `DROP DATABASE` privileges.

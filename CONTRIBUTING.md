@@ -30,9 +30,11 @@ Mientras GitHub no fuerce toda la proteccion de rama, el equipo adopta estas reg
 5. Abre un pull request.
 6. Usa `squash merge` cuando el PR este aprobado y con checks verdes.
 
-Si una migracion nueva endurece contratos de identidad o esquema, no parchees datos locales
-a mano para forzar que pase. Resetea la base local y vuelve a sembrarla antes de rerun
-`uv run --directory backend alembic upgrade head`.
+Correr `pytest` ya no borra tu base de desarrollo: la suite usa una base dedicada `adam_test`
+(ver `docs/runbooks/local-dev-auth.md`). Si una migracion nueva endurece contratos de
+identidad o esquema y necesitas una base limpia, no parchees datos a mano: resetea y vuelve a
+sembrar con `uv run --directory backend python scripts/seed_dev.py` (idempotente) antes de
+rerun `uv run --directory backend alembic upgrade head`.
 
 Si el cambio introduce SQL operativo fuera de Alembic, como `backend/sql/rls_policies.sql`,
 documenta explicitamente como y donde se aplica. No asumas que `alembic upgrade head`

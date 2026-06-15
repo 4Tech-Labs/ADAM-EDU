@@ -1,25 +1,34 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Generator
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 import os
 import threading
 import uuid
+from collections.abc import Callable, Generator
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
-from alembic import command
-from alembic.config import Config
 import jwt
 import pytest
+
+# MUST import before any `from shared.*` below: importing this module rewrites
+# DATABASE_URL to point at the dedicated `adam_test` database, so the engine
+# built inside shared.database (via shared.app) never targets the dev database.
+from _bootstrap_test_db import TEST_DB_NAME, ensure_test_database_exists
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, close_all_sessions, sessionmaker
 
+from alembic import command
 from shared.app import app
-from shared.auth import get_auth_settings, get_jwt_verifier, get_supabase_admin_auth_client
+from shared.auth import (
+    get_auth_settings,
+    get_jwt_verifier,
+    get_supabase_admin_auth_client,
+)
 from shared.database import (
     SessionLocal,
     clean_authoring_runtime,
@@ -29,9 +38,23 @@ from shared.database import (
     reset_session_factory_override,
     settings,
 )
-from shared.models import Base, Course, CourseAccessLink, CourseMembership, Invite, Membership, Profile, Syllabus, SyllabusRevision, Tenant, User
-from shared.syllabus_schema import TeacherSyllabusPayload, derive_syllabus_grounding_context
-
+from shared.models import (
+    Base,
+    Course,
+    CourseAccessLink,
+    CourseMembership,
+    Invite,
+    Membership,
+    Profile,
+    Syllabus,
+    SyllabusRevision,
+    Tenant,
+    User,
+)
+from shared.syllabus_schema import (
+    TeacherSyllabusPayload,
+    derive_syllabus_grounding_context,
+)
 
 _CHECKPOINT_TABLES = (
     "checkpoint_writes",
@@ -45,7 +68,14 @@ def _assert_local_schema_reset_target() -> None:
     allowed_hosts = {"localhost", "127.0.0.1"}
     if settings.environment == "production":
         raise RuntimeError("Refusing to reset test schema against a production database URL.")
-    is_repo_local_postgres = db_url.host in allowed_hosts and db_url.port == 5434
+    # Repo-local target MUST be the dedicated test database, never the dev DB.
+    # If the URL still points at the dev database (e.g. the bootstrap override
+    # did not run), refuse instead of dropping the developer's schema.
+    is_repo_local_test_db = (
+        db_url.host in allowed_hosts
+        and db_url.port == 5434
+        and db_url.database == TEST_DB_NAME
+    )
     is_github_actions_postgres = (
         os.getenv("GITHUB_ACTIONS") == "true"
         and db_url.host in allowed_hosts
@@ -53,10 +83,10 @@ def _assert_local_schema_reset_target() -> None:
         and db_url.database == "postgres"
         and db_url.username == "postgres"
     )
-    if not (is_repo_local_postgres or is_github_actions_postgres):
+    if not (is_repo_local_test_db or is_github_actions_postgres):
         raise RuntimeError(
             "Refusing to reset test schema outside approved local test targets "
-            "(repo-local localhost:5434 or GitHub Actions 127.0.0.1:5432/postgres, "
+            f"(repo-local localhost:5434/{TEST_DB_NAME} or GitHub Actions 127.0.0.1:5432/postgres, "
             f"got {db_url.host}:{db_url.port}/{db_url.database})."
         )
 
@@ -64,6 +94,7 @@ def _assert_local_schema_reset_target() -> None:
 def ensure_db_schema() -> None:
     """Recreate the local test schema from Alembic so checkpoint tables exist."""
     _assert_local_schema_reset_target()
+    ensure_test_database_exists()
     close_all_sessions()
     with engine.begin() as connection:
         connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
