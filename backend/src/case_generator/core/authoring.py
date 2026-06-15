@@ -12,6 +12,7 @@ from typing import Any, Literal, Mapping, cast
 
 from case_generator.core.artifact_manager import ArtifactManager
 from case_generator.core.storage import get_storage_provider
+from case_generator.cost_metrics import CostCallbackHandler
 from case_generator.graph import DurableCheckpointUnavailableError, RESUME_CACHE_STATE_KEY, get_graph
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
 from langchain_core.runnables import RunnableConfig
@@ -604,6 +605,23 @@ def _extract_text_field(graph_output: Mapping[str, Any], key: str, max_chars: in
     return sanitize_untrusted_text(graph_output.get(key), max_chars=max_chars)
 
 
+def _attach_cost_breakdown(
+    payload: dict[str, Any], cost_handler: "CostCallbackHandler | None", job_id: str
+) -> None:
+    """Stamp the per-node token/USD summary onto a job payload. Best-effort: never raises.
+
+    Used on both finalization paths (success and failure) so cost is measured even
+    when a job fails after spending Pro tokens. A no-op when the handler was never
+    wired (e.g. a bootstrap failure before the graph run).
+    """
+    if cost_handler is None:
+        return
+    try:
+        payload["cost_breakdown"] = cost_handler.summary()
+    except Exception:  # noqa: BLE001 — telemetry is best-effort, must not block finalization
+        logger.warning("AuthoringService: cost_breakdown flush failed for Job %s", job_id, exc_info=True)
+
+
 def _is_useful_eda(eda_text: str) -> bool:
     """Ignore sentinel placeholders so only meaningful EDA text is summarized downstream."""
     normalized = eda_text.strip()
@@ -866,6 +884,11 @@ class AuthoringService:
         #     -> checkpoint reload + explicit node skip/hydration
         #     -> completed | failed_resumable | failed
         graph_output: dict[str, Any] | None = None
+        # Pre-declared so the per-node cost summary can be flushed on BOTH the
+        # success and failure finalization paths (a job that fails after burning
+        # Pro tokens is exactly the cost we want measured). None until the graph
+        # run is wired below; failures before that point flush an empty summary.
+        cost_handler: CostCallbackHandler | None = None
         error_msg: str | None = None
         clean_room_reason: str | None = None
         try:
@@ -953,7 +976,13 @@ class AuthoringService:
                     },
                 )
 
+                # Fase 0 cost instrumentation: one handler per job. Attached at the
+                # top-level graph config so callbacks propagate to every child LLM
+                # call; attribution is by LangGraph's injected metadata["langgraph_node"].
+                # Best-effort — the handler swallows all errors and never fails a job.
+                cost_handler = CostCallbackHandler()
                 run_config: RunnableConfig = {
+                    "callbacks": [cost_handler],
                     "configurable": {
                         "thread_id": job_id,
                         "writer_model": "gemini-3-flash-preview",
@@ -1142,6 +1171,9 @@ class AuthoringService:
                     error_trace=error_msg,
                 )
                 _clear_bootstrap_state(current_payload)
+                # Capture cost on failure too — a job that failed after Pro reprompts
+                # (e.g. a grounding RuntimeError) is exactly the spend worth measuring.
+                _attach_cost_breakdown(current_payload, cost_handler, job_id)
                 job.task_payload = current_payload
 
                 if failure_status == AUTHORING_JOB_STATUS_FAILED:
@@ -1213,6 +1245,9 @@ class AuthoringService:
                 current_step="completed",
             )
             _clear_bootstrap_state(completed_payload)
+            # Fase 0: persist per-node token/USD breakdown alongside progress in
+            # task_payload (Supabase-native write path — no new bus/SSE/table).
+            _attach_cost_breakdown(completed_payload, cost_handler, job_id)
             job.task_payload = completed_payload
 
             ArtifactManager.publish_job_artifacts(db, job_id)
