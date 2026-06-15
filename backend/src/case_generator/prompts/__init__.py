@@ -553,6 +553,17 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
   (CRÍTICO: Las columnas retention_mX representan el % de usuarios de esa cohorte
   retenidos en el mes X. Son obligatorias para el heatmap de análisis de cohortes.
   Asegúrate de que range_min/max respeten: retention_m1 > retention_m3 > retention_m6 > retention_m12.)
+
+  DEPENDENCIAS OBLIGATORIAS (business) — para que el Módulo 2 muestre relaciones
+  REALES y verificables (no correlaciones inventadas) y un margen financiero legible:
+  - `churn_rate`: dependency {{"depends_on": "revenue", "relationship": "inverse", "noise_factor": 0.15}}.
+  - `costs`: dependency {{"depends_on": "revenue", "relationship": "linear", "noise_factor": 0.12}}.
+    noise_factor BAJO a propósito: así el costo sigue al ingreso y el margen por fila
+    queda en una banda realista (NO genera meses con costos > ingresos ni márgenes absurdos).
+  - `nps`: dependency {{"depends_on": "revenue", "relationship": "linear", "noise_factor": 0.30}}.
+    Esto liga NPS y churn de forma INVERSA a través de revenue: una causa raíz real
+    (mayor satisfacción ↔ menor abandono) que el estudiante puede descubrir en los datos.
+  - `margin_pct`: dependency=null SIEMPRE (el generador lo recalcula como (revenue−costs)/revenue·100).
 - Para {student_profile}="ml_ds": MÍNIMO 14 columnas, al menos 2 con nullable=true.
   Las primeras 12 columnas son FIJAS en este orden:
   period, revenue, costs, margin_pct, churn_rate, nps,
@@ -997,7 +1008,7 @@ falló durante harvard_with_eda — M3 nunca se ejecuta en harvard_only):
 # Perfil del estudiante: business (Decision Evidence Reviewer)
 Riesgo gerencial. Hechos vs inferencias. Confiabilidad de fuentes (Alta/Media/Baja).
 Información faltante que un directivo necesitaría para decidir con confianza.
-
+{lr_business_block}
 # Formato de Salida (usar EXACTAMENTE estos H3)
 ## Longitud objetivo: 650-850 palabras
 
@@ -1031,6 +1042,34 @@ case_id: {case_id} | student_profile: {student_profile}
 
 # Alias backward-compatible — no usar en código nuevo
 M3_CONTENT_GENERATOR_PROMPT = M3_AUDIT_PROMPT
+
+
+# ── Bloque de coherencia LR para business (gated: profile==business AND
+# family==clasificacion). Se inyecta en {lr_business_block} de M3_AUDIT_PROMPT.
+# Lenguaje gerencial PLANO — sin jerga de ciencia de datos (nada de coeficientes,
+# log-odds, AUC). Teje la conciencia del modelo en las secciones 3.1–3.5 ya
+# existentes; NO agrega secciones nuevas. Cero placeholders de .format() (texto
+# estático) para que la concatenación con M3_AUDIT_PROMPT no rompa el formateo.
+M3_AUDIT_LR_BUSINESS_BLOCK = """
+# Enfoque del caso: decisión apoyada en un modelo de probabilidad de abandono
+La decisión de este caso se apoyará en un modelo de **regresión logística** que estima,
+para cada cliente, una **probabilidad de abandono** (un número entre 0% y 100%) a partir de
+las variables del negocio. NO expliques matemática, fórmulas ni términos técnicos
+(coeficientes, log-odds, AUC, umbrales estadísticos): el lector es un directivo, no un
+científico de datos. Audita la decisión en lenguaje gerencial, integrando estos puntos
+en las secciones 3.1–3.5 (NO agregues secciones nuevas):
+- **Qué hace el modelo (3.1):** ordena a los clientes por riesgo de abandono para priorizar
+  intervenciones; es una ayuda a la decisión, no una verdad. Su utilidad depende de que los
+  datos del M2 sean representativos del futuro.
+- **Supuesto clave a auditar (3.2):** que las relaciones vistas en el M2 (p. ej. menor
+  satisfacción ↔ mayor abandono) se mantendrán y son accionables. Si no, priorizar por
+  probabilidad podría desviar el presupuesto de retención hacia el lugar equivocado.
+- **Trade-off de la decisión (3.3):** intervenir sobre un cliente que NO iba a abandonar
+  (falsa alarma → gasto de retención desperdiciado) frente a no intervenir sobre uno que SÍ
+  abandona (abandono no evitado → ingreso perdido). Nombra ambos costos en términos del caso.
+- **Información faltante (3.4):** qué dato falta para confiar en priorizar por probabilidad
+  (p. ej. el costo real de cada intervención y la efectividad histórica de las retenciones).
+"""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2410,6 +2449,7 @@ __all__ = [
   "EDA_QUESTIONS_PROMPT_BY_FAMILY",
   "EDA_TEXT_ANALYST_PROMPT",
   "EDA_TEXT_ANALYST_PROMPT_BY_FAMILY",
+  "M3_AUDIT_LR_BUSINESS_BLOCK",
   "M3_AUDIT_PROMPT",
   "M3_AUDIT_QUESTIONS_PROMPT",
   "M3_CLASSIFICATION_QUESTIONS_BY_VARIANT",
