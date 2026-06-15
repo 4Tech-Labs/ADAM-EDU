@@ -774,6 +774,7 @@ Genera **EXACTAMENTE 3 gráficos** en este orden:
    - Tipo: `heatmap`
    - El motor Python inyectará la matriz de cohortes automáticamente. NO incluyas `x`, `y` ni `z` en el trace.
    - Dentro del trace incluye ÚNICAMENTE: `"type": "heatmap"`, `"colorscale": "YlOrRd"`, `"reversescale": true`, `"texttemplate": "%{{z:.0%}}"`, `"showscale": true`.
+   - En `layout` define `"yaxis": {{"type": "category", "title": "Cohorte"}}` y `"xaxis": {{"title": "Meses desde adquisición"}}` para que cada cohorte sea una fila etiquetada explícita.
    - Explicación Pedagógica: Mostrar la insostenibilidad del modelo actual observando cómo se degradan las cohortes mes a mes.
 
    **CASO B — Si NO existe `"cohort_matrix"` en `{precalculated_metrics}`:**

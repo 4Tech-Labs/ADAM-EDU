@@ -67,6 +67,12 @@ SUPPORTED_CONTEXT_KEYS = [
 NARRATIVE_ARTIFACT_LIMIT = 30000
 EDA_ARTIFACT_LIMIT = 40000
 
+# End-to-end LangGraph execution budget per authoring job (~31 min). Raised from
+# 900s to accommodate ml_ds notebook execution + correction passes (issues #239/#240),
+# which can run long on heavy classification cases. Single source of truth — keep the
+# graph.py module docstring ("Timeout global") in sync if this changes.
+GRAPH_EXECUTION_TIMEOUT_SECONDS = 1900
+
 # Keep this list synchronized with frontend PIPELINE_STEPS ids in
 # frontend/src/features/teacher-authoring/AuthoringProgressTimeline.tsx.
 CANONICAL_TIMELINE_STEP_IDS = (
@@ -1005,7 +1011,9 @@ class AuthoringService:
                 graph_task = register_authoring_task(
                     asyncio.create_task(_run_graph_stream(), name=f"authoring-job-{job_id}")
                 )
-                graph_output = await asyncio.wait_for(graph_task, timeout=900)
+                graph_output = await asyncio.wait_for(
+                    graph_task, timeout=GRAPH_EXECUTION_TIMEOUT_SECONDS
+                )
                 logger.info("AuthoringService: LangGraph execution finished for Job %s.", job_id)
             finally:
                 unregister_active_authoring_job(job_id)
@@ -1031,7 +1039,11 @@ class AuthoringService:
             )
             clean_room_reason = "authoring_checkpoint_bootstrap_timeout"
         except asyncio.TimeoutError:
-            logger.error("AuthoringService: TIMEOUT — Job %s exceeded 900s", job_id)
+            logger.error(
+                "AuthoringService: TIMEOUT — Job %s exceeded %ss",
+                job_id,
+                GRAPH_EXECUTION_TIMEOUT_SECONDS,
+            )
             error_code = "llm_timeout"
             error_msg = (
                 "Nuestros servidores de IA estan a maxima capacidad y el tiempo de espera se agoto. "

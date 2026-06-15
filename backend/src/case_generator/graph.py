@@ -43,7 +43,7 @@ Resiliencia (v9):
   - .with_fallbacks: primary → gemini-2.5-flash automático en caída de API
   - Fallback graceful: todos los nodos LLM retornan sentinel en vez de raise
   - RetryPolicy: backoff exponencial (1s → 2s → 4s, max 30s, jitter ON)
-    - Timeout global: 900 segundos por job (authoring.py)
+    - Timeout global: 1900 segundos por job (authoring.GRAPH_EXECUTION_TIMEOUT_SECONDS)
   - AsyncPostgresSaver: checkpointer para resume-from-failure
     - get_graph(): singleton lazy por event loop para evitar reuse cruzado en tests/workers async
 """
@@ -1221,16 +1221,23 @@ def _calculate_eda_regressions(state: ADAMState, dataset: list[dict]) -> dict:
             key=lambda x: int(x.split("_m")[1])
         )
         if len(retention_cols) >= 2 and "period" in df.columns:
+            # Limita a las primeras MAX_COHORT_ROWS cohortes: legibles, todas
+            # históricas (empiezan en 2023-01 → sin fechas futuras) y las más
+            # observadas a M12. Sin recorte, las 80-120 filas del dataset business
+            # vuelven ilegible el heatmap y apilan las etiquetas de texto por celda
+            # en bandas verticales solapadas.
+            MAX_COHORT_ROWS = 12
+            cohort_df = df.head(MAX_COHORT_ROWS)
             # None en lugar de 0/NaN → Plotly los deja transparentes en el heatmap
             # (fillna(0) pintaría los huecos con el color más oscuro de la escala)
-            cohort_rounded = df[retention_cols].round(4)
+            cohort_rounded = cohort_df[retention_cols].round(4)
             cohort_z = [
                 [None if pd.isna(v) else float(v) for v in row]
                 for row in cohort_rounded.values.tolist()
             ]
             results["cohort_matrix"] = {
                 "x": [c.replace("retention_", "").upper() for c in retention_cols],
-                "y": df["period"].tolist(),
+                "y": cohort_df["period"].tolist(),
                 "z": cohort_z,
             }
 

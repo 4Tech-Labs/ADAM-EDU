@@ -151,11 +151,25 @@ export function sanitizeTraces(traces: Record<string, unknown>[]): Record<string
                 }
                 sanitized.zauto = false;
 
-                if (!sanitized.texttemplate) {
-                    sanitized.texttemplate = "%{z:.2f}";
-                }
-                if (sanitized.textfont == null) {
-                    sanitized.textfont = { size: 11, color: "#ffffff" };
+                const nRows = validation.normalizedZ.length;
+                const nCols = validation.normalizedZ[0]?.length ?? 0;
+                // Apunta a heatmaps densos (p.ej. la matriz de correlación ml_ds ~17×17).
+                // El heatmap de cohortes (12×4 tras el cap del backend MAX_COHORT_ROWS=12)
+                // NUNCA entra aquí y conserva su texto por celda vía el else.
+                const isDense = nRows > 15 || nCols > 15;
+                if (isDense) {
+                    // El texto por celda sobre una matriz densa se apila ilegible
+                    // en bandas solapadas. Dejar solo color + hover (aun si el
+                    // backend mandó texttemplate).
+                    delete sanitized.texttemplate;
+                    delete sanitized.textfont;
+                } else {
+                    if (!sanitized.texttemplate) {
+                        sanitized.texttemplate = "%{z:.2f}";
+                    }
+                    if (sanitized.textfont == null) {
+                        sanitized.textfont = { size: 11, color: "#ffffff" };
+                    }
                 }
             } else {
                 sanitized.z = [];
