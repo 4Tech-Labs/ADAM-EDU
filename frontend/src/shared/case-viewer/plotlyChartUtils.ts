@@ -168,7 +168,12 @@ export function sanitizeTraces(traces: Record<string, unknown>[]): Record<string
                         sanitized.texttemplate = "%{z:.2f}";
                     }
                     if (sanitized.textfont == null) {
-                        sanitized.textfont = { size: 11, color: "#ffffff" };
+                        // Sin color explícito: Plotly elige por celda un color que
+                        // contraste con el fondo (texto oscuro sobre celdas claras
+                        // como la columna M12 amarilla del heatmap de cohortes,
+                        // blanco sobre celdas oscuras). Forzar "#ffffff" volvía
+                        // ilegibles los porcentajes en las celdas pálidas.
+                        sanitized.textfont = { size: 11 };
                     }
                 }
             } else {
