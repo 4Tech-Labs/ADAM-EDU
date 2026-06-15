@@ -1176,9 +1176,18 @@ def _calculate_eda_regressions(state: ADAMState, dataset: list[dict]) -> dict:
         results: dict = {}
 
         # ── 1. Correlation matrix (siempre, independiente del target) ─────────
-        # Filtra solo numéricas, redondea, y reemplaza NaN (varianza cero) con 0
-        # para evitar errores de serialización JSON (json.dumps rechaza NaN nativo).
-        numeric_df = df.select_dtypes(include=["number"])
+        # Issue #294: una columna numérica de varianza cero (constante) tiene
+        # correlación INDEFINIDA (no 0). Incluirla hacía que Series.corr (np.corrcoef,
+        # usado más abajo contra el target) dividiera por std=0 y emitiera un
+        # RuntimeWarning, y que el heatmap mostrara una "0 correlación" engañosa.
+        # Calculamos las columnas constantes UNA vez y reutilizamos el set para la
+        # matriz y para las regresiones. fillna(0) queda solo como red de seguridad
+        # (json.dumps rechaza NaN nativo).
+        numeric_all = df.select_dtypes(include=["number"])
+        constant_cols = {
+            c for c in numeric_all.columns if numeric_all[c].nunique(dropna=True) <= 1
+        }
+        numeric_df = numeric_all.drop(columns=list(constant_cols))
         if len(numeric_df.columns) >= 2:
             corr_matrix = numeric_df.corr().round(2).fillna(0)
             results["correlation_matrix"] = {
@@ -1227,7 +1236,18 @@ def _calculate_eda_regressions(state: ADAMState, dataset: list[dict]) -> dict:
             else:
                 return results  # non-numeric target with >2 categories → skip regressions
 
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        # Issue #294: un target constante haría que toda corr(feature, target) divida
+        # por std=0 (np.corrcoef). Sin regresiones útiles → devolvemos las matrices ya
+        # calculadas. (El fallback de _identify_target_variable es la última columna
+        # numérica, que podría ser justamente la constante.)
+        if target_col in constant_cols:
+            return results
+
+        numeric_cols = [
+            c
+            for c in df.select_dtypes(include=[np.number]).columns
+            if c not in constant_cols  # Issue #294: no correlacionar columnas constantes
+        ]
         if target_col in numeric_cols:
             numeric_cols.remove(target_col)
 
