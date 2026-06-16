@@ -395,3 +395,159 @@ def test_n7_binary_target_stays_pure_int_no_outlier_float() -> None:
     vals = [r["late_partner_flag"] for r in rows if r.get("late_partner_flag") is not None]
     assert all(isinstance(v, int) for v in vals)  # ningún 0.0/1.0 float del outlier
     assert set(vals) == {0, 1}
+
+
+# ─────────────────────────────────────────────────────────
+# PR2a — Fix 1: el guard anti-degeneración balancea SOLO el target etiquetado
+#               por el spine, no features binarias no-target.
+# ─────────────────────────────────────────────────────────
+
+
+def test_pr2a_binary_target_column_is_tagged_domain_target() -> None:
+    """El único constructor del target de dominio lo etiqueta con ``is_domain_target``."""
+    col = _binary_target_column("evento_flag", depends_on="driver_x", description="evento")
+    assert col["is_domain_target"] is True
+    assert col["type"] == "int" and col["range_min"] == 0 and col["range_max"] == 1
+
+
+def _append_non_target_binary(schema: dict, name: str, depends_on: str) -> None:
+    """Añade una feature binaria {0,1} int dependiente SIN etiqueta de target.
+
+    Reproduce las binarias no-target que el LLM emite (p. ej. compliance_flag/late_flag):
+    int en [0,1], dependientes → caen en el mismo loop+branch que dispara el guard.
+    """
+    schema["columns"].append({
+        "name": name, "type": "int", "range_min": 0, "range_max": 1,
+        "nullable": False, "trend": None,
+        "dependency": {"depends_on": depends_on, "relationship": "linear", "noise_factor": 0.1},
+    })
+
+
+def test_pr2a_guard_balances_only_tagged_target_not_other_binaries(monkeypatch) -> None:
+    """Spy determinista: con el target etiquetado + 2 binarias no-target, el guard
+    (`_ensure_both_classes`) se invoca EXACTAMENTE una vez (solo el target).
+    Antes del fix se invocaba 3× (una por cada binaria {0,1} dependiente).
+    """
+    import case_generator.graph as g
+
+    real = g._ensure_both_classes
+    calls: list[int] = []
+
+    def _spy(values):
+        calls.append(1)
+        return real(values)
+
+    monkeypatch.setattr(g, "_ensure_both_classes", _spy)
+
+    schema = _enforced_schema(_LOGISTICS_CONTRACT)  # target late_partner_flag → etiquetado
+    _append_non_target_binary(schema, "compliance_flag", "partner_history_score")
+    _append_non_target_binary(schema, "late_flag", "partner_history_score")
+
+    rows = g._generate_dataset_from_schema(schema, profile="business")
+
+    assert len(calls) == 1, f"el guard tocó {len(calls)} columnas — debe ser solo el target"
+    df = pd.DataFrame(rows)
+    # el target etiquetado sí queda con ambas clases
+    assert {int(v) for v in df["late_partner_flag"].dropna().unique()} == {0, 1}
+    # las features no-target conservan sus valores binarios (no se mutaron silenciosamente)
+    for nm in ("compliance_flag", "late_flag"):
+        assert set(int(v) for v in df[nm].dropna().unique()).issubset({0, 1})
+
+
+def test_pr2a_guard_never_runs_for_ml_ds(monkeypatch) -> None:
+    """ml_ds tiene `categoria` binaria {0,1} dependiente, pero el gate ``profile==business``
+    impide que el guard corra: `_ensure_both_classes` no se invoca (0 veces)."""
+    import case_generator.graph as g
+
+    calls: list[int] = []
+
+    def _spy(values):
+        calls.append(1)
+        return values
+
+    monkeypatch.setattr(g, "_ensure_both_classes", _spy)
+
+    schema = g._build_fallback_schema(
+        {"studentProfile": "ml_ds", "doc1_anexo_financiero": "$10M"}, 600, "ml_ds",
+        primary_family="clasificacion",
+    )
+    g._generate_dataset_from_schema(schema, profile="ml_ds")
+    assert calls == []  # gate de perfil: el guard nunca corre en ml_ds
+
+
+# ─────────────────────────────────────────────────────────
+# PR2a — Fix 2: el recompute financiero no pisa un target binario nombrado
+#               margin_pct/ebitda; los financieros float normales se recomputan igual.
+# ─────────────────────────────────────────────────────────
+
+_MARGIN_BINARY_CONTRACT = {
+    "target_column": {"name": "margin_pct", "role": "classification_target",
+                      "dtype": "int", "description": "el margen cae bajo el umbral (evento)"},
+    "feature_columns": [{"name": "ops_score", "role": "feature", "dtype": "float",
+                        "is_leakage_risk": False, "description": "score operativo del período"}],
+}
+
+
+def test_pr2a_binary_int_margin_target_stays_binary_and_chart_not_box() -> None:
+    """Edge: un classification_target nombrado literal ``margin_pct`` marcado int [0,1]
+    sigue binario {0,1} tras la generación (el recompute NO lo devolvió a continuo) y el
+    3er chart M2 NO degrada a una caja de distribución."""
+    schema = _enforced_schema(_MARGIN_BINARY_CONTRACT)
+    mp = _col(schema, "margin_pct")
+    assert mp is not None
+    assert mp["type"] == "int" and mp["range_min"] == 0 and mp["range_max"] == 1
+    assert mp.get("is_domain_target") is True
+
+    rows = _generate_dataset_from_schema(schema, profile="business")
+    df = pd.DataFrame(rows)
+    # Fix 2: el recompute financiero NO lo pisó a continuo.
+    assert {int(v) for v in df["margin_pct"].dropna().unique()} == {0, 1}
+
+    # symptom cerrado: 3er chart = balance de clases, NO target_distribution/box.
+    from case_generator.datagen.eda_charts_business import generate_business_eda_charts
+
+    charts = generate_business_eda_charts(df, "margin_pct", {}, {"case_id": "pr2a"})
+    assert any(c["id"] == "class_balance" for c in charts)
+    assert not any(c.get("id") == "target_distribution" for c in charts)
+
+
+def test_pr2a_normal_float_financials_still_recomputed_business_and_ml_ds() -> None:
+    """No-regresión (crítico): margin_pct/ebitda float continuos se recomputan EXACTAMENTE
+    como hoy (ebitda = revenue - costs; margin = (rev-cost)/rev*100). Idéntico en business
+    y ml_ds — Fix 2 solo cambia el camino de una columna declarada binaria int [0,1]."""
+    schema = {
+        # n_rows < 50 desactiva la inyección de outliers (B-05), que en ml_ds infla `costs`
+        # DESPUÉS del recompute (comportamiento pre-existente, ajeno a Fix 2) y rompería la
+        # igualdad exacta ebitda == rev - cost. Así aislamos el recompute que Fix 2 toca.
+        "n_rows": 40,
+        "time_granularity": "monthly",
+        "columns": [
+            {"name": "period", "type": "str", "range_min": None, "range_max": None,
+             "nullable": False, "trend": None, "dependency": None},
+            {"name": "revenue", "type": "float", "range_min": 80_000, "range_max": 120_000,
+             "nullable": False, "trend": "up", "dependency": None},
+            {"name": "costs", "type": "float", "range_min": 50_000, "range_max": 90_000,
+             "nullable": False, "trend": None,
+             "dependency": {"depends_on": "revenue", "relationship": "linear", "noise_factor": 0.12}},
+            {"name": "margin_pct", "type": "float", "range_min": 0, "range_max": 100,
+             "nullable": False, "trend": None, "dependency": None},
+            {"name": "ebitda", "type": "float", "range_min": 0, "range_max": 50_000,
+             "nullable": False, "trend": None, "dependency": None},
+        ],
+        "constraints": {
+            "revenue_annual_total": 1_200_000, "cost_annual_total": 800_000,
+            "revenue_column": "revenue", "tolerance_pct": 0.05,
+        },
+    }
+    for profile in ("business", "ml_ds"):
+        rows = _generate_dataset_from_schema(schema, profile=profile)
+        for r in rows:
+            assert r["ebitda"] == round(r["revenue"] - r["costs"], 2)
+            expected_margin = (
+                round((r["revenue"] - r["costs"]) / r["revenue"] * 100, 2)
+                if r["revenue"] > 0 else 0.0
+            )
+            assert r["margin_pct"] == expected_margin
+        # margin_pct quedó continuo (NO degenerado a {0,1}) → el recompute corrió.
+        df = pd.DataFrame(rows)
+        assert not set(int(v) for v in df["margin_pct"]).issubset({0, 1})

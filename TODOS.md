@@ -1539,3 +1539,31 @@ business.
 `eda_charts_business.py` + dispatch en `eda_chart_generator`.
 
 **Depends on / blocked by:** PR1 de Issue #301 (títulos/fallback) mergeado.
+
+---
+
+## TODO-301-PR2a-A: Anunciar el flip legítimo del target en `data_gap_warnings`
+
+**What:** Cuando `_ensure_both_classes` balancea un target binario degenerado en
+`_generate_dataset_from_schema` (`backend/src/case_generator/graph.py`), emitir una nota en
+`data_gap_warnings` con el conteo de filas volteadas (p. ej. "target binario degenerado:
+N filas sintéticas inyectadas para garantizar ambas clases").
+
+**Why:** Honestidad #296/#298 — un flip sintético sobre el target hoy es SILENCIOSO. PR2a
+detuvo los flips sobre features no-target (Fix 1), pero el flip legítimo del target sigue sin
+anunciarse. El docente debería ver que el dataset tuvo intervención determinista.
+
+**Pros:** Cierra el último flip silencioso del generador; coherente con el resto de avisos de
+honestidad que ya alimentan M2/M3.
+
+**Cons:** `_generate_dataset_from_schema` hoy devuelve solo `rows`; los warnings se ensamblan
+aguas arriba en `schema_designer` (graph.py:2941-2947, 2975-2981). Anunciar el flip exige
+cambiar la forma de retorno (p. ej. `(rows, notes)`) y enhebrarlo por `data_generator`
+(graph.py:3383) → fuera de la "tajada segura" de PR2a.
+
+**Context:** Detectado en la verificación adversarial de PR #302 ("8 filas volteadas, flip
+sintético no anunciado") y registrado en la plan-eng-review de PR2a. `_ensure_both_classes`
+(graph.py) ya conoce cuántas filas voltea (`k`); solo falta propagar esa señal.
+
+**Depends on / blocked by:** Empareja naturalmente con PR2b (que ya toca el camino del target
+y del architect). Independiente del resto de PR2b — puede hacerse en su propio PR de honestidad.
