@@ -56,6 +56,22 @@ def test_is_retention_match_false_for_non_churn(name: str) -> None:
     assert is_retention_match(name) is False
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        # Hard churn token MUST win even when a governance/HR compound is also present
+        # (audit finding: the veto used to run first and false-negatived these).
+        "loyalty_program_churn_flag",
+        "churn_after_loyalty_program",
+        "renewal_after_loyalty_program",
+        "loyalty_index_attrition",
+        "data_retention_churn_flag",
+    ],
+)
+def test_hard_token_beats_governance_veto(name: str) -> None:
+    assert is_retention_match(name) is True
+
+
 def test_is_retention_match_handles_none() -> None:
     assert is_retention_match(None) is False
 
