@@ -1445,3 +1445,97 @@ emparejarlo con [TODO-294-A] una vez confirmada la ruta de escritura de `data_ga
 
 **Depends on / blocked by:** Confirmar cómo se persiste `data_gap_warnings` desde el nodo de EDA.
 Idealmente junto con [TODO-294-A].
+
+---
+
+## TODO-301-A: Aplicar el guard `_ensure_both_classes` también a `categoria` (ml_ds)
+
+**What:** Extender el guard anti-degeneración de clases `_ensure_both_classes` (hoy
+business-only, en el branch int dependiente de `_generate_dataset_from_schema`) al target
+binario `categoria` de ml_ds + clasificación.
+
+**Why:** El guard se introdujo en Issue #301 gateado a `profile == "business"` para no
+alterar el output de ml_ds (invariante "ml_ds intacto / golden sin cambios"). Pero
+`categoria` tiene el MISMO riesgo probabilístico de colapsar a una sola clase
+(`round(parent_norm + noise)` con `churn_rate` sesgado), lo que produciría un notebook M3
+con AUC indefinido sin aviso.
+
+**Pros:** Cierra el bug latente en el perfil de alto valor; un solo guard en todas partes.
+
+**Cons:** Cambia el output de `categoria` en el seed degenerado → exige re-baseline del
+golden/snapshot de ml_ds, que el invariante de #301 prohíbe tocar ahora.
+
+**Context:** El guard vive junto a `_generate_dataset_from_schema` en `graph.py`; `categoria`
+se define inline en `_build_fallback_schema` (~L2018-2027). Aplicarlo a ml_ds requiere mover
+el gate y regenerar el golden en un PR dedicado.
+
+**Depends on / blocked by:** PR1 de Issue #301 (el guard) mergeado. Re-baseline del golden ml_ds.
+
+---
+
+## TODO-301-B: Eliminar la duplicación verbatim de `CASE_ARCHITECT_PROMPT`
+
+**What:** Extraer el cuerpo genérico de `CASE_ARCHITECT_PROMPT` a una constante compartida y
+componer `CASE_ARCHITECT_PROMPT_CLASSIFICATION = _BASE + _ANCHOR`, eliminando la copia
+verbatim en `prompts/clasificacion/M1_clasificacion/architect.py` (L67-276).
+
+**Why:** Hoy cada cambio al prompt base debe replicarse a mano en dos archivos (el header del
+módulo lo admite explícitamente). El test de sincronización de #301 PR2 DETECTA el drift pero
+no lo previene; este refactor lo elimina en la raíz.
+
+**Pros:** DRY real; futuros edits del architect tocan un solo lugar; el test guard se vuelve
+redundante.
+
+**Cons:** Reestructura el módulo sensible de ensamblaje de prompts; riesgo de romper variables
+`.format()`; fuera del alcance de #301.
+
+**Context:** Detectado en la plan-eng-review de Issue #301 (issue 5, opción 5B diferida).
+Depende de que PR2 (condicionamiento de la "regla 7" por perfil) aterrice primero para partir
+del texto corregido. Requiere snapshot de prompts para verificar.
+
+**Depends on / blocked by:** PR2 de Issue #301 mergeado.
+
+---
+
+## TODO-301-C: Consumir `min_signal_strength` en el umbral del chart + validador suave
+
+**What:** Cablear `min_signal_strength` del contrato al umbral "sin driver fuerte" de
+`churn_drivers` (`_DRIVERS_MIN_ABS_CORR`, hoy fijo en 0.10) y añadir un validador SUAVE que
+avise (no falle el job) cuando `|corr|` alcanzada < `min_signal_strength`.
+
+**Why:** #301 PR1 usa `min_signal_strength` solo como objetivo de síntesis (deriva el
+`noise_factor` del driver). Leerlo también en display + validación lo vuelve un campo del
+contrato totalmente load-bearing en vez de medio decorativo.
+
+**Pros:** El campo pasa a ser la única fuente de verdad para "señal suficiente"; umbral
+ajustable por caso.
+
+**Cons:** Acopla el display del chart al contrato; un validador DURO podría fallar casos de
+señal débil honestos (por eso 8A lo difirió).
+
+**Context:** Detectado en la plan-eng-review de Issue #301 (issue 8, opción 8B diferida).
+Toca `eda_charts_business.py` (`_DRIVERS_MIN_ABS_CORR`) + un validador en `graph.py`.
+
+**Depends on / blocked by:** PR1 de Issue #301 mergeado.
+
+---
+
+## TODO-301-D: Chart 3 dedicado para clasificación (tasa de evento / balance en el tiempo)
+
+**What:** Construir un tercer chart hecho a medida para casos de clasificación binaria — p. ej.
+tasa del evento por período, o balance de clases en el tiempo — en vez del `class_balance`
+(barra de conteo) que #301 PR1 reutiliza en el slot de cohorte.
+
+**Why:** 4A reutiliza el slot de cohorte con una barra simple de balance de clases (diff
+mínimo). Un chart dedicado podría contar una historia pedagógica más rica para un target
+binario (tendencia de la tasa del evento, desglose por segmento).
+
+**Pros:** Mejor pedagogía del M2 para clasificación no-churn; completa la familia de charts
+business.
+
+**Cons:** Nuevo builder + dispatch + tests en el módulo datagen sensible; requiere diseño.
+
+**Context:** Detectado en la plan-eng-review de Issue #301 (issue 4, opción 4B diferida).
+`eda_charts_business.py` + dispatch en `eda_chart_generator`.
+
+**Depends on / blocked by:** PR1 de Issue #301 (títulos/fallback) mergeado.
