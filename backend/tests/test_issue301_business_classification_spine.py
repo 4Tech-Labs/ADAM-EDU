@@ -18,6 +18,7 @@ from case_generator.graph import (
     _augment_schema_with_contract,
     _binary_target_column,
     _build_fallback_schema,
+    _contract_with_enforced_target,
     _ensure_both_classes,
     _enforce_business_classification_schema,
     _generate_dataset_from_schema,
@@ -60,7 +61,7 @@ def _enforced_schema(contract: dict | None) -> dict:
     """Replica el orden real del pipeline: fallback base → augment → enforce."""
     base = _build_fallback_schema(_business_state(), 100, "business", primary_family="clasificacion")
     base = _augment_schema_with_contract(base, contract)
-    schema, _notes = _enforce_business_classification_schema(
+    schema, _notes, _target = _enforce_business_classification_schema(
         base, contract, profile="business", primary_family="clasificacion"
     )
     return schema
@@ -174,9 +175,10 @@ def test_enforce_with_contract_builds_binary_domain_target() -> None:
 
 def test_enforce_no_contract_synthesizes_target_with_note() -> None:
     base = _build_fallback_schema(_business_state(), 100, "business", primary_family="clasificacion")
-    schema, notes = _enforce_business_classification_schema(
+    schema, notes, target_name = _enforce_business_classification_schema(
         base, None, profile="business", primary_family="clasificacion"
     )
+    assert target_name == "target_event_flag"
     target = _col(schema, "target_event_flag")
     assert target is not None and target["range_min"] == 0 and target["range_max"] == 1
     assert _col(schema, "domain_driver_score") is not None  # driver sintetizado
@@ -204,20 +206,22 @@ def test_enforce_noop_for_ml_ds() -> None:
         primary_family="clasificacion",
     )
     before = [c["name"] for c in base["columns"]]
-    schema, notes = _enforce_business_classification_schema(
+    schema, notes, target_name = _enforce_business_classification_schema(
         base, _LOGISTICS_CONTRACT, profile="ml_ds", primary_family="clasificacion"
     )
-    assert [c["name"] for c in schema["columns"]] == before  # ml_ds intacto
-    assert notes == []
+    assert schema is base  # ml_ds: mismo objeto, intacto
+    assert [c["name"] for c in schema["columns"]] == before
+    assert notes == [] and target_name is None
 
 
 def test_enforce_noop_for_business_non_classification() -> None:
     base = _build_fallback_schema(_business_state(), 100, "business", primary_family="regresion")
     before = [c["name"] for c in base["columns"]]
-    schema, _notes = _enforce_business_classification_schema(
+    schema, _notes, target_name = _enforce_business_classification_schema(
         base, _LOGISTICS_CONTRACT, profile="business", primary_family="regresion"
     )
     assert [c["name"] for c in schema["columns"]] == before
+    assert target_name is None
 
 
 # ─────────────────────────────────────────────────────────
@@ -278,3 +282,116 @@ def test_ml_ds_fallback_categoria_unchanged() -> None:
     assert cat["type"] == "int" and cat["range_min"] == 0 and cat["range_max"] == 1
     assert cat["dependency"]["depends_on"] == "churn_rate"
     assert cat["dependency"]["noise_factor"] == 0.30  # literal inline preservado
+
+
+# ─────────────────────────────────────────────────────────
+# H-1 (audit) — contrato CONTINUO: la selección debe elegir el binario sintetizado,
+# no el target continuo del contrato (síntoma de #301 desplazado a margin_pct)
+# ─────────────────────────────────────────────────────────
+
+_CONTINUOUS_CONTRACT = {
+    "target_column": {"name": "margin_pct", "role": "regression_target",
+                      "dtype": "float", "description": "margen objetivo continuo"},
+    "feature_columns": [{"name": "ops_score", "role": "feature", "dtype": "float",
+                        "is_leakage_risk": False, "description": "score operativo"}],
+}
+
+
+def test_continuous_contract_synthesizes_binary_and_rewrites_contract_target() -> None:
+    base = _build_fallback_schema(_business_state(), 100, "business", primary_family="clasificacion")
+    base = _augment_schema_with_contract(base, _CONTINUOUS_CONTRACT)
+    schema, _notes, target_name = _enforce_business_classification_schema(
+        base, _CONTINUOUS_CONTRACT, profile="business", primary_family="clasificacion"
+    )
+    # spine sintetiza un binario, NO usa margin_pct (continuo) como target
+    assert target_name == "target_event_flag"
+    assert _col(schema, "target_event_flag")["range_max"] == 1
+    # H-1: el contrato propagado apunta al binario → _build_metadata elegirá el correcto
+    updated = _contract_with_enforced_target(_CONTINUOUS_CONTRACT, target_name)
+    assert updated["target_column"]["name"] == "target_event_flag"
+    assert updated["target_column"]["role"] == "classification_target"
+    assert updated["target_column"]["dtype"] == "int"
+
+
+def test_continuous_contract_identify_picks_binary_not_continuous() -> None:
+    base = _build_fallback_schema(_business_state(), 100, "business", primary_family="clasificacion")
+    base = _augment_schema_with_contract(base, _CONTINUOUS_CONTRACT)
+    schema, _notes, target_name = _enforce_business_classification_schema(
+        base, _CONTINUOUS_CONTRACT, profile="business", primary_family="clasificacion"
+    )
+    rows = _generate_dataset_from_schema(schema, profile="business")
+    df = pd.DataFrame(rows)
+    # metadata = lo que _build_metadata produce desde el contrato propagado
+    updated = _contract_with_enforced_target(_CONTINUOUS_CONTRACT, target_name)
+    state = {
+        "dataset_metadata": {"target_variable": updated["target_column"]["name"]},
+        "dataset_schema": schema,
+    }
+    picked = _identify_target_variable(state, df)
+    assert picked == "target_event_flag"
+    assert picked != "margin_pct"  # ya NO se grafica el target continuo (síntoma cerrado)
+    assert {int(v) for v in df[picked].dropna().unique()} == {0, 1}
+
+
+def test_contract_with_enforced_target_noop_when_no_target() -> None:
+    assert _contract_with_enforced_target(_LOGISTICS_CONTRACT, None) is None
+
+
+# ─────────────────────────────────────────────────────────
+# L-2 / L-5 / L-6 / N-7 (audit) — hardening de correctitud
+# ─────────────────────────────────────────────────────────
+
+
+def test_l2_domain_feature_substring_of_existing_is_still_added() -> None:
+    """'rate' NO debe saltarse por ser substring de 'churn_rate' (match exacto)."""
+    contract = {
+        "target_column": {"name": "churn_flag", "role": "classification_target",
+                          "dtype": "int", "description": "abandona"},
+        "feature_columns": [{"name": "tenure_months", "dtype": "float",
+                            "is_leakage_risk": False, "description": "x"}],
+        "domain_features_required": ["rate"],  # substring de churn_rate (retención → se mantiene)
+    }
+    schema = _enforced_schema(contract)
+    assert _col(schema, "churn_rate") is not None  # retención conserva el template
+    assert _col(schema, "rate") is not None  # y 'rate' SÍ se añade (no se saltó)
+
+
+def test_l5_str_dtype_target_emits_coercion_note() -> None:
+    contract = {
+        "target_column": {"name": "weird_cat", "role": "classification_target",
+                          "dtype": "str", "description": "categoría rara"},
+        "feature_columns": [{"name": "ops_score", "dtype": "float",
+                            "is_leakage_risk": False, "description": "x"}],
+    }
+    base = _build_fallback_schema(_business_state(), 100, "business", primary_family="clasificacion")
+    base = _augment_schema_with_contract(base, contract)
+    schema, notes, _t = _enforce_business_classification_schema(
+        base, contract, profile="business", primary_family="clasificacion"
+    )
+    assert _col(schema, "weird_cat")["type"] == "int"  # coercido a binario
+    assert any("coercido a binario" in n for n in notes)  # avisado
+
+
+def test_l6_driver_never_equals_target() -> None:
+    """Contrato malformado que lista el target dentro de feature_columns → driver != target."""
+    contract = {
+        "target_column": {"name": "flag", "role": "classification_target",
+                          "dtype": "int", "description": "evento"},
+        "feature_columns": [
+            {"name": "flag", "dtype": "int", "is_leakage_risk": False, "description": "dup"},
+            {"name": "real_driver", "dtype": "float", "is_leakage_risk": False, "description": "x"},
+        ],
+    }
+    name, _synth = _select_driver_feature(contract, target_name="flag")
+    assert name == "real_driver"  # saltó el target duplicado
+    schema = _enforced_schema(contract)
+    assert _col(schema, "flag")["dependency"]["depends_on"] != "flag"
+
+
+def test_n7_binary_target_stays_pure_int_no_outlier_float() -> None:
+    """El outlier B-05 no debe tocar el target binario (evita dtype mixto int/float)."""
+    schema = _enforced_schema(_LOGISTICS_CONTRACT)
+    rows = _generate_dataset_from_schema(schema, profile="business")
+    vals = [r["late_partner_flag"] for r in rows if r.get("late_partner_flag") is not None]
+    assert all(isinstance(v, int) for v in vals)  # ningún 0.0/1.0 float del outlier
+    assert set(vals) == {0, 1}

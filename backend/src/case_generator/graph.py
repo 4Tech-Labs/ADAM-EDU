@@ -2599,24 +2599,28 @@ def _is_retention_target_name(name: str, role: str = "") -> bool:
     return (role or "").strip().lower() == "forecasting_target" and "retention" in n
 
 
-def _select_driver_feature(contract: dict | None) -> tuple[str, dict | None]:
+def _select_driver_feature(
+    contract: dict | None, *, target_name: str | None = None
+) -> tuple[str, dict | None]:
     """Elige la feature de dominio que el target binario usará como driver (#298 absorbido).
 
     Regla (7A): primera ``feature_columns`` con ``is_leakage_risk=False`` y dtype numérico
     (un driver de leakage haría que el modelo 'haga trampa'). Si no hay ninguna usable,
     sintetiza un driver numérico neutro para que exista UNA señal real GENERADA en los
     datos (no afirmada en prosa). El chart conserva el aviso 'sin driver fuerte' si la
-    señal resultante igual es débil.
+    señal resultante igual es débil. ``target_name`` (si se pasa) se excluye para que el
+    target nunca dependa de sí mismo (contrato malformado que lista el target como feature).
 
     Devuelve ``(driver_name, synth_column_or_None)``.
     """
     for feat in (contract or {}).get("feature_columns") or []:
         if feat.get("is_leakage_risk"):
             continue
-        if feat.get("dtype") in ("int", "float"):
-            fname = (feat.get("name") or "").strip()
-            if fname:
-                return fname, None
+        fname = (feat.get("name") or "").strip()
+        if target_name and fname == target_name:
+            continue  # L-6: el target no puede ser su propio driver
+        if feat.get("dtype") in ("int", "float") and fname:
+            return fname, None
     synth = {
         "name": "domain_driver_score",
         "type": "float",
@@ -2660,25 +2664,35 @@ def _binary_target_column(
 
 def _enforce_business_classification_schema(
     schema: dict, contract: dict | None, *, profile: str, primary_family: str | None
-) -> tuple[dict, list[str]]:
+) -> tuple[dict, list[str], str | None]:
     """Garantiza un dataset coherente con el dilema para business + clasificación (#301).
 
     Determinista, 0 tokens LLM, business-only (gate ``profile == "business"`` +
     ``primary_family == "clasificacion"``). NO toca el dict de entrada ni ml_ds.
-    Devuelve ``(schema, notes)`` — ``notes`` alimenta ``data_gap_warnings``.
+    Devuelve ``(schema, notes, target_name)``: ``notes`` alimenta ``data_gap_warnings`` y
+    ``target_name`` es el nombre del target binario garantizado (``None`` fuera del gate) —
+    schema_designer lo propaga al contrato para que la selección downstream lo elija
+    (Issue #301 H-1).
     """
     notes: list[str] = []
     if profile != "business" or primary_family != "clasificacion":
-        return schema, notes
+        return schema, notes, None
 
     contract = contract or {}
     target_spec = contract.get("target_column") or {}
     role = (target_spec.get("role") or "").strip().lower()
     cname = (target_spec.get("name") or "").strip()
     cdesc = (target_spec.get("description") or "").strip()
+    cdtype = (target_spec.get("dtype") or "").strip().lower()
 
     if role == "classification_target" and cname:
         target_name = cname
+        if cdtype and cdtype != "int":
+            # L-5 — el dtype declarado se coerciona a binario {0,1}; avisar al docente.
+            notes.append(
+                f"target '{cname}' declarado dtype='{cdtype}' coercido a binario {{0,1}} (int) "
+                "para clasificación business."
+            )
     else:
         # 3A — síntesis determinista honesta cuando no hay contrato de clasificación.
         target_name = "target_event_flag"
@@ -2690,7 +2704,7 @@ def _enforce_business_classification_schema(
 
     is_retention = _is_retention_target_name(target_name, role)
     min_signal = float(contract.get("min_signal_strength") or 0.15)
-    driver_name, synth_driver = _select_driver_feature(contract)
+    driver_name, synth_driver = _select_driver_feature(contract, target_name=target_name)
 
     new_schema = dict(schema)
     columns = [dict(c) for c in new_schema.get("columns", [])]
@@ -2721,10 +2735,11 @@ def _enforce_business_classification_schema(
         existing.add(target_name)
 
     # 4. Cobertura de domain_features_required (8A): añade una columna por categoría no
-    #    cubierta por nombre (el contrato deja el nombre concreto a schema_designer).
+    #    cubierta (L-2: match EXACTO de nombre — `in` por substring saltaba una categoría
+    #    'rate' por ser substring de 'churn_rate' y la dejaba sin cubrir).
     for cat in contract.get("domain_features_required") or []:
         cat_name = str(cat).strip()
-        if not cat_name or any(cat_name in n for n in existing):
+        if not cat_name or cat_name in existing:
             continue
         columns.append({
             "name": cat_name,
@@ -2739,7 +2754,29 @@ def _enforce_business_classification_schema(
         existing.add(cat_name)
 
     new_schema["columns"] = columns
-    return new_schema, notes
+    return new_schema, notes, target_name
+
+
+def _contract_with_enforced_target(contract: dict | None, target_name: str | None) -> dict | None:
+    """Reescribe ``target_column`` del contrato al target binario que el spine garantizó.
+
+    Issue #301 H-1: ``_build_metadata``/``_identify_target_variable`` eligen el target vía
+    ``contract.target_column.name``. Cuando el architect emitió un target CONTINUO
+    (p. ej. ``margin_pct``, role regresión) o ninguno, el spine sintetiza un binario, pero
+    el contrato seguía nombrando la columna continua → la selección downstream graficaba el
+    target equivocado (el síntoma de #301 desplazado). Propagar el target binario al
+    contrato cierra el bucle de forma determinista. Devuelve ``None`` si no aplica.
+    """
+    if not target_name:
+        return None
+    updated = dict(contract or {})
+    tcol = dict(updated.get("target_column") or {})
+    prev_desc = (tcol.get("description") or "").strip()
+    tcol.update({"name": target_name, "role": "classification_target", "dtype": "int"})
+    if not prev_desc:
+        tcol["description"] = "Variable objetivo binaria del caso (0/1)"
+    updated["target_column"] = tcol
+    return updated
 
 
 # ─────────────────────────────────────────────────────────
@@ -2894,7 +2931,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
             # Issue #301 — spine determinista business+clasificación: garantiza un target
             # binario de dominio + driver (no el template fijo de churn). Business-only;
             # no toca ml_ds. Corre tras el augment para sobrescribir el target int genérico.
-            schema_result, biz_notes = _enforce_business_classification_schema(
+            schema_result, biz_notes, biz_target = _enforce_business_classification_schema(
                 schema_result, contract, profile=profile, primary_family=primary_family
             )
             missing, leakage = _validate_schema_against_contract(schema_result, contract)
@@ -2908,10 +2945,17 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 warnings_payload.extend(leakage)
             if biz_notes:
                 warnings_payload.extend(biz_notes)
-            return {
+            node_out: dict[str, Any] = {
                 "dataset_schema": schema_result,
                 "data_gap_warnings": warnings_payload,
             }
+            # Issue #301 H-1 — si el spine sintetizó/forzó el target binario, propágalo al
+            # contrato para que _build_metadata/_identify_target_variable lo elijan (y no un
+            # target de contrato continuo). Solo cuando realmente cambia algo.
+            updated_contract = _contract_with_enforced_target(contract, biz_target)
+            if updated_contract is not None and updated_contract != (contract or {}):
+                node_out["dataset_schema_required"] = updated_contract
+            return node_out
         except (ValidationError, Exception) as e:
             logger.error("[schema_designer] %s ERROR: %s", model_label, e, exc_info=True)
 
@@ -2923,7 +2967,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     contract = state.get("dataset_schema_required")
     fallback_schema = _augment_schema_with_contract(fallback_schema, contract)
     # Issue #301 — el spine determinista también aplica en fallback (red de seguridad).
-    fallback_schema, biz_notes = _enforce_business_classification_schema(
+    fallback_schema, biz_notes, biz_target = _enforce_business_classification_schema(
         fallback_schema, contract, profile=profile, primary_family=primary_family
     )
     missing, leakage = _validate_schema_against_contract(fallback_schema, contract)
@@ -2935,10 +2979,15 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         warnings_payload.extend(leakage)
     if biz_notes:
         warnings_payload.extend(biz_notes)
-    return {
+    node_out = {
         "dataset_schema": fallback_schema,
         "data_gap_warnings": warnings_payload,
     }
+    # Issue #301 H-1 — propaga el target binario garantizado al contrato (ver call-site happy).
+    updated_contract = _contract_with_enforced_target(contract, biz_target)
+    if updated_contract is not None and updated_contract != (contract or {}):
+        node_out["dataset_schema_required"] = updated_contract
+    return node_out
 
 
 # ─────────────────────────────────────────────────────────
@@ -3277,6 +3326,15 @@ def _generate_dataset_from_schema(schema: dict, profile: str = "business") -> li
         and not (
             profile == "business"
             and any(tok in c["name"].lower() for tok in _financial_tokens)
+        )
+        # N-7 (Issue #301): nunca inyectes el outlier en el target binario {0,1} de
+        # business — un ×3.5 capado lo convertiría en float 0.0/1.0 (dtype mixto en una
+        # columna de clasificación). Se excluye toda columna int declarada en [0,1].
+        and not (
+            profile == "business"
+            and c["type"] == "int"
+            and c.get("range_min") == 0
+            and c.get("range_max") == 1
         )
     ]
     if numeric_non_revenue and n_rows >= 50:
