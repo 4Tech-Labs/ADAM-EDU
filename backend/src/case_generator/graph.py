@@ -2654,6 +2654,10 @@ def _binary_target_column(
         "range_max": 1,
         "nullable": False,
         "trend": None,
+        # Issue #301 PR2a — marca el target de dominio resuelto por el spine. El guard
+        # anti-degeneración (_ensure_both_classes) honra ESTA bandera en vez de asumir que
+        # cualquier binaria {0,1} dependiente es el target (rompía con varias binarias).
+        "is_domain_target": True,
         "dependency": {
             "depends_on": depends_on,
             "relationship": "linear",
@@ -3099,6 +3103,20 @@ def _ensure_both_classes(values: "np.ndarray") -> "np.ndarray":
     return out
 
 
+def _is_declared_binary_int(col: dict) -> bool:
+    """Una columna declarada como binaria {0,1} (int, rango [0,1]) — target o feature.
+
+    Predicado único (Issue #301 PR2a): lo comparten el guard N-7 del outlier (no inyectar
+    atípicos en una binaria) y el recompute financiero (no pisar un target binario nombrado
+    ``margin_pct``/``ebitda``). Una sola fuente de verdad evita que las dos reglas deriven.
+    """
+    return (
+        col.get("type") == "int"
+        and col.get("range_min") == 0
+        and col.get("range_max") == 1
+    )
+
+
 # ─────────────────────────────────────────────────────────
 # HELPER — _generate_dataset_from_schema (Python puro, 0 tokens LLM)
 # ─────────────────────────────────────────────────────────
@@ -3244,9 +3262,17 @@ def _generate_dataset_from_schema(schema: dict, profile: str = "business") -> li
             result = [None if null_mask[i] else round(float(values[i]), 2) for i in range(n_rows)]
         else:
             # Issue #301 — guard anti-degeneración del target binario de dominio (business).
-            # Un target dependiente declarado en [0,1] es el target sintetizado/de contrato;
-            # garantizar ambas clases evita una LR sin sentido por una sola clase.
-            if profile == "business" and low == 0.0 and high == 1.0:
+            # SOLO el target que el spine etiquetó con ``is_domain_target`` se balancea;
+            # las demás binarias {0,1} (features no-target emitidas por el LLM, p. ej.
+            # compliance_flag/late_flag) se dejan EXACTAMENTE como se generaron — no se
+            # voltean filas sintéticas no anunciadas (PR2a). Garantizar ambas clases en el
+            # target evita una LR sin sentido por una sola clase.
+            if (
+                profile == "business"
+                and low == 0.0
+                and high == 1.0
+                and col.get("is_domain_target")
+            ):
                 values = _ensure_both_classes(np.asarray(values, dtype=float))
             result = [None if null_mask[i] else int(round(float(values[i]))) for i in range(n_rows)]
         df_data[name] = result
@@ -3285,12 +3311,20 @@ def _generate_dataset_from_schema(schema: dict, profile: str = "business") -> li
         (c["name"] for c in columns if "cost" in c["name"].lower()),
         None
     )
+    # Issue #301 PR2a — si el case_architect nombró un classification_target literal
+    # ``margin_pct``/``ebitda``, el spine lo marcó binario int [0,1] (correcto). NO lo
+    # recalcules a continuo: ello degradaba el 3er chart M2 a box. Simetría con el guard
+    # N-7. Se resuelve UNA vez desde el spec (no por fila); business-gated → ml_ds intacto.
+    binary_int_names = {
+        c["name"] for c in columns
+        if profile == "business" and _is_declared_binary_int(c)
+    }
     for row in rows:
         rev  = float(row.get(revenue_col, 0) or 0)
         cost = float(row.get(cost_col_name, 0) or 0) if cost_col_name else 0
-        if "ebitda" in row:
+        if "ebitda" in row and "ebitda" not in binary_int_names:
             row["ebitda"] = round(rev - cost, 2)
-        if "margin_pct" in row:
+        if "margin_pct" in row and "margin_pct" not in binary_int_names:
             row["margin_pct"] = round(((rev - cost) / rev * 100), 2) if rev > 0 else 0.0
 
     # ── Enforcement retenciones: m1 >= m3 >= m6 >= m12 por fila ──
@@ -3330,12 +3364,7 @@ def _generate_dataset_from_schema(schema: dict, profile: str = "business") -> li
         # N-7 (Issue #301): nunca inyectes el outlier en el target binario {0,1} de
         # business — un ×3.5 capado lo convertiría en float 0.0/1.0 (dtype mixto en una
         # columna de clasificación). Se excluye toda columna int declarada en [0,1].
-        and not (
-            profile == "business"
-            and c["type"] == "int"
-            and c.get("range_min") == 0
-            and c.get("range_max") == 1
-        )
+        and not (profile == "business" and _is_declared_binary_int(c))
     ]
     if numeric_non_revenue and n_rows >= 50:
         target_col_def = numeric_non_revenue[0]
