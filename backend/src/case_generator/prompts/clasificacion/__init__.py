@@ -4,6 +4,7 @@ from case_generator.prompts.clasificacion.M1_clasificacion import (
     CASE_ARCHITECT_PROMPT_CLASSIFICATION,
     CASE_QUESTIONS_PROMPT_CLASSIFICATION,
     CASE_WRITER_PROMPT_CLASSIFICATION,
+    M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK,
 )
 from case_generator.prompts.clasificacion.M2_clasificacion import (
     EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
@@ -53,6 +54,7 @@ from case_generator.prompts.clasificacion.notebooks import (
 
 __all__ = [
     "CASE_ARCHITECT_PROMPT_CLASSIFICATION",
+    "M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK",
     "CASE_WRITER_PROMPT_CLASSIFICATION",
     "CASE_QUESTIONS_PROMPT_CLASSIFICATION",
     "EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION",
