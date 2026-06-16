@@ -781,3 +781,72 @@ def test_aggregate_by_grain_uneven_buckets_use_mean_not_sum() -> None:
     periods, series = _aggregate_by_grain(df, ["revenue"], "annual")
     assert periods == ["2023", "2024"]
     assert series["revenue"].tolist() == [105_500.0, 112_000.0]  # media, no suma
+
+
+# ─────────────────────────────────────────────────────────
+# Issue #301 — títulos sin asumir churn + barra de balance de clases
+# ─────────────────────────────────────────────────────────
+
+
+def _df_business_binary() -> pd.DataFrame:
+    """Caso NO-retención (logística): target binario, sin columnas de retención."""
+    periods = [f"2023-{m:02d}" for m in range(1, 13)]
+    driver = [i / 11 for i in range(12)]  # 0..1, correlado con el target
+    return pd.DataFrame(
+        {
+            "period": periods,
+            "revenue": [100_000 + i * 2_000 for i in range(12)],
+            "costs": [70_000 + i * 1_000 for i in range(12)],
+            "margin_pct": [30.0] * 12,
+            "partner_history_score": driver,
+            "late_partner_flag": [0 if d < 0.5 else 1 for d in driver],
+        }
+    )
+
+
+def test_drivers_title_non_churn_target_is_neutral() -> None:
+    """Un caso de logística no debe titular el chart de drivers como 'abandono'."""
+    df = _df_business_binary()
+    charts = generate_business_eda_charts(df, "late_partner_flag", {}, CONTRACT)
+    drivers = next(c for c in charts if c["id"] == "churn_drivers")
+    assert drivers["title"] == "Factores asociados al objetivo"
+    assert "abandono" not in drivers["title"].lower()
+    assert "late_partner_flag" in drivers["subtitle"]  # subtítulo nombra el target real
+
+
+def test_drivers_title_retention_target_keeps_abandono() -> None:
+    """No-regresión: un target de churn conserva el título clásico."""
+    df = _df_business_binary().rename(columns={"late_partner_flag": "churn_flag"})
+    charts = generate_business_eda_charts(df, "churn_flag", {}, CONTRACT)
+    drivers = next(c for c in charts if c["id"] == "churn_drivers")
+    assert drivers["title"] == "Factores asociados al abandono"
+
+
+def test_cohort_fallback_binary_target_uses_class_balance_bar() -> None:
+    """Sin cohortes + target binario → barra de balance de clases (no una caja inútil)."""
+    df = _df_business_binary()
+    charts = generate_business_eda_charts(df, "late_partner_flag", {}, CONTRACT)
+    third = charts[2]
+    assert third["id"] == "class_balance"
+    assert third["chart_type"] == "bar"
+    assert "late_partner_flag" in third["title"]
+    assert "Retención" not in third["title"]
+    # cuenta de cada clase {0,1}
+    assert sorted(third["traces"][0]["x"]) == ["0", "1"]
+
+
+def test_churn_business_non_regression_three_retention_charts(
+    df_business, precalc_with_cohort
+) -> None:
+    """No-regresión business churn/SaaS: 3 charts con cohorte de retención + eje [0,1]."""
+    charts = generate_business_eda_charts(
+        df_business, "churn_rate", precalc_with_cohort, CONTRACT
+    )
+    ids = [c["id"] for c in charts]
+    assert ids == ["financial_mirage", "churn_drivers", "cohort_collapse"]
+    cohort = next(c for c in charts if c["id"] == "cohort_collapse")
+    assert cohort["chart_type"] == "heatmap"  # matriz de retención intacta
+    assert "Retención de Cohortes" in cohort["title"]
+    drivers = next(c for c in charts if c["id"] == "churn_drivers")
+    assert drivers["title"] == "Factores asociados al abandono"
+    assert drivers["layout"]["xaxis"]["range"] == [0, 1]  # honestidad #296

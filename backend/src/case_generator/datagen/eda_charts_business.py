@@ -59,6 +59,19 @@ logger = logging.getLogger("adam.graph")
 _DRIVERS_TOP_K = 8
 _DRIVERS_MIN_ABS_CORR = 0.10
 
+# Issue #301 — el título del chart de drivers no debe asumir "abandono"/churn cuando el
+# caso no es de retención. Si el target pertenece a la familia retención usamos el título
+# clásico; en cualquier otro dominio (logística, fraude, crédito…) usamos uno neutro.
+_RETENTION_TITLE_TOKENS = ("churn", "retention", "renewal", "attrition", "loyalty", "abandon")
+
+
+def _drivers_title(target_col: str) -> str:
+    """Título de `churn_drivers` derivado del target real (no asume churn/retención)."""
+    t = (target_col or "").lower()
+    if any(tok in t for tok in _RETENTION_TITLE_TOKENS):
+        return "Factores asociados al abandono"
+    return "Factores asociados al objetivo"
+
 # Período mensual válido "YYYY-MM" con mes 01–12. Validar el mes (no solo \d{2})
 # hace que un mes malformado (p. ej. "2023-13") caiga al fallback honesto sin
 # agregación, en vez de producir una etiqueta de trimestre absurda (Q5/Q0).
@@ -340,11 +353,12 @@ def _build_churn_drivers(
     respaldaban. El eje fijo [0, 1] impide exagerar correlaciones pequeñas, y si
     ninguna supera el umbral lo decimos en `notes` en vez de sugerir un driver.
     """
+    title = _drivers_title(target_col)
     corrs = _target_correlations(df, target_col, precalculated_metrics)
     if not corrs:
         return empty_chart(
             "churn_drivers",
-            "Factores asociados al abandono",
+            title,
             "Sin correlaciones calculables con el objetivo",
             "bar",
             source,
@@ -365,7 +379,7 @@ def _build_churn_drivers(
     target_label = target_col or "objetivo"
     return {
         "id": "churn_drivers",
-        "title": "Factores asociados al abandono",
+        "title": title,
         "subtitle": f"Correlación absoluta de cada variable con {target_label} (mayor = más asociada)",
         "library": "plotly",
         "chart_type": "bar",
@@ -434,10 +448,46 @@ def _build_cohort_collapse(
             "data_source": "python_builder",
         }
 
-    # Fallback: distribución del objetivo (sin cohortes que graficar).
+    # Fallback (sin cohortes de retención que graficar — caso NO-retención, Issue #301).
     if target_col in df.columns and pd.api.types.is_numeric_dtype(df[target_col]):
-        vals = pd.to_numeric(df[target_col], errors="coerce").dropna().tolist()
-        if vals:
+        s = pd.to_numeric(df[target_col], errors="coerce").dropna()
+        if not s.empty:
+            # Target binario {0,1}: una caja es inútil (masa en dos puntos). Mostramos el
+            # balance de clases (conteo por clase) → la tasa del evento objetivo, honesta.
+            uniq = {float(v) for v in s.unique()}
+            is_binary = uniq == {0.0, 1.0}
+            if is_binary:
+                counts = s.astype(int).value_counts().sort_index()
+                labels = [str(int(k)) for k in counts.index]
+                vals_count = [int(v) for v in counts.values]
+                return {
+                    "id": "class_balance",
+                    "title": f"Balance de clases del objetivo ({target_col})",
+                    "subtitle": "Número de casos por clase del evento objetivo (0 = no ocurre, 1 = ocurre)",
+                    "library": "plotly",
+                    "chart_type": "bar",
+                    "traces": [
+                        {
+                            "type": "bar",
+                            "x": labels,
+                            "y": vals_count,
+                            "name": "casos",
+                            "text": [str(v) for v in vals_count],
+                            "textposition": "outside",
+                        }
+                    ],
+                    "layout": {
+                        "template": "plotly_white",
+                        "xaxis": {"title": "Clase del objetivo", "type": "category"},
+                        "yaxis": {"title": "Número de casos"},
+                        "showlegend": False,
+                    },
+                    "source": source,
+                    "description": "",
+                    "notes": "",
+                    "data_source": "python_builder",
+                }
+            # Target continuo: caja de distribución (comportamiento previo).
             return {
                 "id": "target_distribution",
                 "title": f"Distribución de {target_col}",
@@ -447,7 +497,7 @@ def _build_cohort_collapse(
                 "traces": [
                     {
                         "type": "box",
-                        "y": vals,
+                        "y": s.tolist(),
                         "name": target_col,
                         "boxpoints": "outliers",
                     }

@@ -553,6 +553,12 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
   (CRÍTICO: Las columnas retention_mX representan el % de usuarios de esa cohorte
   retenidos en el mes X. Son obligatorias para el heatmap de análisis de cohortes.
   Asegúrate de que range_min/max respeten: retention_m1 > retention_m3 > retention_m6 > retention_m12.)
+  NOTA: este set de 10 columnas es el BASELINE de retención. Cuando el dilema del caso
+  es de CLASIFICACIÓN y NO trata de retención/churn (p. ej. incumplimiento logístico,
+  fraude, aprobación de crédito), el pipeline reemplaza determinísticamente las columnas
+  churn/retención por el target binario de dominio + sus features. Mantén SIEMPRE el set
+  financiero base (period, revenue, costs, margin_pct); las columnas churn_rate/nps/
+  retention_mX solo se conservan cuando el dilema ES de retención.
 
   DEPENDENCIAS OBLIGATORIAS (business) — para que el Módulo 2 muestre relaciones
   REALES y verificables (no correlaciones inventadas) y un margen financiero legible:

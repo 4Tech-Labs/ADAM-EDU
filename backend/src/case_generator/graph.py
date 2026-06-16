@@ -2570,6 +2570,216 @@ def _augment_schema_with_contract(schema: dict, contract: dict | None) -> dict:
 
 
 # ─────────────────────────────────────────────────────────
+# HELPER — Spine determinista business + clasificación (Issue #301)
+# ─────────────────────────────────────────────────────────
+#
+#   business + clasificacion ?
+#     ├─ contrato con target_column.role == "classification_target"
+#     │     → target binario de dominio + driver de dominio + features del contrato
+#     │       (set financiero mínimo; churn/retention SOLO si el dilema es de retención)
+#     ├─ sin contrato / target continuo
+#     │     → síntesis determinista: target_event_flag {0,1} + 1 driver + aviso honesto
+#     └─ dilema de retención → conserva el template churn/SaaS  (NO-REGRESIÓN)
+#
+# 0 tokens LLM, business-only. NO toca ml_ds (usa prompts por familia + `categoria`).
+
+# Columnas del template churn/SaaS que SOLO pertenecen a un dilema de retención.
+# En un caso business+clasificación NO-retención se eliminan para que el dataset
+# hable del dominio del caso (logística, fraude, crédito…) en vez de churn.
+_CHURN_TEMPLATE_COLUMNS: frozenset[str] = frozenset({
+    "churn_rate", "nps", "retention_m1", "retention_m3", "retention_m6", "retention_m12",
+})
+
+
+def _is_retention_target_name(name: str, role: str = "") -> bool:
+    """True si el target pertenece a la familia retención/churn (por nombre o rol)."""
+    n = (name or "").lower()
+    if any(tok in n for tok in _RETENTION_TARGET_NAME_TOKENS):
+        return True
+    return (role or "").strip().lower() == "forecasting_target" and "retention" in n
+
+
+def _select_driver_feature(
+    contract: dict | None, *, target_name: str | None = None
+) -> tuple[str, dict | None]:
+    """Elige la feature de dominio que el target binario usará como driver (#298 absorbido).
+
+    Regla (7A): primera ``feature_columns`` con ``is_leakage_risk=False`` y dtype numérico
+    (un driver de leakage haría que el modelo 'haga trampa'). Si no hay ninguna usable,
+    sintetiza un driver numérico neutro para que exista UNA señal real GENERADA en los
+    datos (no afirmada en prosa). El chart conserva el aviso 'sin driver fuerte' si la
+    señal resultante igual es débil. ``target_name`` (si se pasa) se excluye para que el
+    target nunca dependa de sí mismo (contrato malformado que lista el target como feature).
+
+    Devuelve ``(driver_name, synth_column_or_None)``.
+    """
+    for feat in (contract or {}).get("feature_columns") or []:
+        if feat.get("is_leakage_risk"):
+            continue
+        fname = (feat.get("name") or "").strip()
+        if target_name and fname == target_name:
+            continue  # L-6: el target no puede ser su propio driver
+        if feat.get("dtype") in ("int", "float") and fname:
+            return fname, None
+    synth = {
+        "name": "domain_driver_score",
+        "type": "float",
+        "description": "Driver de dominio sintetizado correlado con el objetivo del caso",
+        "range_min": 0.0,
+        "range_max": 1.0,
+        "nullable": False,
+        "trend": None,
+        "dependency": None,
+    }
+    return "domain_driver_score", synth
+
+
+def _binary_target_column(
+    name: str, *, depends_on: str, description: str, min_signal_strength: float = 0.15
+) -> dict:
+    """Construye una columna target binaria {0,1} con señal correlada a ``depends_on``.
+
+    Mismo patrón estructural que la columna ``categoria`` de ml_ds (int, range[0,1],
+    dependency lineal), extraído para no duplicar la definición (6A). ``noise_factor``
+    se deriva de ``min_signal_strength``: a mayor señal requerida, menor ruido (mayor
+    correlación). La ``description`` incluye 'objetivo' para que
+    ``_identify_target_variable`` la capture aun sin metadata (belt-and-suspenders).
+    """
+    noise_factor = max(0.08, min(0.30, 0.30 - float(min_signal_strength)))
+    return {
+        "name": name,
+        "type": "int",
+        "description": f"Variable objetivo binaria del caso (0/1): {description}".strip(),
+        "range_min": 0,
+        "range_max": 1,
+        "nullable": False,
+        "trend": None,
+        "dependency": {
+            "depends_on": depends_on,
+            "relationship": "linear",
+            "noise_factor": round(noise_factor, 3),
+        },
+    }
+
+
+def _enforce_business_classification_schema(
+    schema: dict, contract: dict | None, *, profile: str, primary_family: str | None
+) -> tuple[dict, list[str], str | None]:
+    """Garantiza un dataset coherente con el dilema para business + clasificación (#301).
+
+    Determinista, 0 tokens LLM, business-only (gate ``profile == "business"`` +
+    ``primary_family == "clasificacion"``). NO toca el dict de entrada ni ml_ds.
+    Devuelve ``(schema, notes, target_name)``: ``notes`` alimenta ``data_gap_warnings`` y
+    ``target_name`` es el nombre del target binario garantizado (``None`` fuera del gate) —
+    schema_designer lo propaga al contrato para que la selección downstream lo elija
+    (Issue #301 H-1).
+    """
+    notes: list[str] = []
+    if profile != "business" or primary_family != "clasificacion":
+        return schema, notes, None
+
+    contract = contract or {}
+    target_spec = contract.get("target_column") or {}
+    role = (target_spec.get("role") or "").strip().lower()
+    cname = (target_spec.get("name") or "").strip()
+    cdesc = (target_spec.get("description") or "").strip()
+    cdtype = (target_spec.get("dtype") or "").strip().lower()
+
+    if role == "classification_target" and cname:
+        target_name = cname
+        if cdtype and cdtype != "int":
+            # L-5 — el dtype declarado se coerciona a binario {0,1}; avisar al docente.
+            notes.append(
+                f"target '{cname}' declarado dtype='{cdtype}' coercido a binario {{0,1}} (int) "
+                "para clasificación business."
+            )
+    else:
+        # 3A — síntesis determinista honesta cuando no hay contrato de clasificación.
+        target_name = "target_event_flag"
+        notes.append(
+            "target sintetizado sin contrato de dominio (business+clasificación): se generó "
+            "un objetivo binario y un driver para mantener la coherencia M1↔M2; revisar que "
+            "refleje el dilema del caso."
+        )
+
+    is_retention = _is_retention_target_name(target_name, role)
+    min_signal = float(contract.get("min_signal_strength") or 0.15)
+    driver_name, synth_driver = _select_driver_feature(contract, target_name=target_name)
+
+    new_schema = dict(schema)
+    columns = [dict(c) for c in new_schema.get("columns", [])]
+
+    # 1. En dilemas NO-retención, eliminar el template churn/SaaS (deja financiero mínimo).
+    if not is_retention:
+        columns = [c for c in columns if c.get("name") not in _CHURN_TEMPLATE_COLUMNS]
+
+    existing = {c.get("name", "") for c in columns}
+
+    # 2. Asegurar el driver (synth solo si no hay feature numérica usable en el contrato).
+    if synth_driver is not None and driver_name not in existing:
+        columns.append(synth_driver)
+        existing.add(driver_name)
+
+    # 3. Construir/forzar el target binario (override aunque exista, p. ej. tras augment,
+    #    que lo habría inyectado con range[0,100] en vez de {0,1}).
+    binary_target = _binary_target_column(
+        target_name,
+        depends_on=driver_name,
+        description=cdesc or "evento objetivo del dilema",
+        min_signal_strength=min_signal,
+    )
+    if target_name in existing:
+        columns = [binary_target if c.get("name") == target_name else c for c in columns]
+    else:
+        columns.append(binary_target)
+        existing.add(target_name)
+
+    # 4. Cobertura de domain_features_required (8A): añade una columna por categoría no
+    #    cubierta (L-2: match EXACTO de nombre — `in` por substring saltaba una categoría
+    #    'rate' por ser substring de 'churn_rate' y la dejaba sin cubrir).
+    for cat in contract.get("domain_features_required") or []:
+        cat_name = str(cat).strip()
+        if not cat_name or cat_name in existing:
+            continue
+        columns.append({
+            "name": cat_name,
+            "type": "float",
+            "description": f"Feature de dominio requerida por el contrato ({cat_name})",
+            "range_min": 0.0,
+            "range_max": 1.0,
+            "nullable": False,
+            "trend": None,
+            "dependency": None,
+        })
+        existing.add(cat_name)
+
+    new_schema["columns"] = columns
+    return new_schema, notes, target_name
+
+
+def _contract_with_enforced_target(contract: dict | None, target_name: str | None) -> dict | None:
+    """Reescribe ``target_column`` del contrato al target binario que el spine garantizó.
+
+    Issue #301 H-1: ``_build_metadata``/``_identify_target_variable`` eligen el target vía
+    ``contract.target_column.name``. Cuando el architect emitió un target CONTINUO
+    (p. ej. ``margin_pct``, role regresión) o ninguno, el spine sintetiza un binario, pero
+    el contrato seguía nombrando la columna continua → la selección downstream graficaba el
+    target equivocado (el síntoma de #301 desplazado). Propagar el target binario al
+    contrato cierra el bucle de forma determinista. Devuelve ``None`` si no aplica.
+    """
+    if not target_name:
+        return None
+    updated = dict(contract or {})
+    tcol = dict(updated.get("target_column") or {})
+    prev_desc = (tcol.get("description") or "").strip()
+    tcol.update({"name": target_name, "role": "classification_target", "dtype": "int"})
+    if not prev_desc:
+        tcol["description"] = "Variable objetivo binaria del caso (0/1)"
+    updated["target_column"] = tcol
+    return updated
+
+
+# ─────────────────────────────────────────────────────────
 # NODO 1 — SCHEMA DESIGNER (Pro, thinking activo, output pequeño)
 # ─────────────────────────────────────────────────────────
 
@@ -2604,7 +2814,11 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     # business: always "" → generic schema prompt, regardless of primary_family.
     # The classification and future family-specific prompts contain ml_ds-only sections
     # (18-col contract, GridSearchCV row counts) that should never reach business cases.
-    # The generic prompt handles both profiles via its existing 10-col / 14-col rules.
+    # The generic prompt seeds the financial base; for business+clasificacion the
+    # deterministic spine `_enforce_business_classification_schema` (Issue #301) then
+    # OWNS the target/feature columns (binary domain target + driver), replacing the
+    # rigid churn template when the dilemma is not about retention. `primary_family`
+    # (the resolved family, not "") gates that spine.
     _effective_family = (primary_family or "clasificacion") if profile == "ml_ds" else ""
 
     # ml_ds+clasificacion: 600 filas (Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV).
@@ -2714,6 +2928,12 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
             #      como data_gap_warnings que M2 EDA y M3 notebook leerán.
             contract = state.get("dataset_schema_required")
             schema_result = _augment_schema_with_contract(schema_result, contract)
+            # Issue #301 — spine determinista business+clasificación: garantiza un target
+            # binario de dominio + driver (no el template fijo de churn). Business-only;
+            # no toca ml_ds. Corre tras el augment para sobrescribir el target int genérico.
+            schema_result, biz_notes, biz_target = _enforce_business_classification_schema(
+                schema_result, contract, profile=profile, primary_family=primary_family
+            )
             missing, leakage = _validate_schema_against_contract(schema_result, contract)
             # Issue #228 — preserva semillas de data_gap_warnings emitidas por
             # case_architect (ej: target_semantic_mismatch). LangGraph reemplaza
@@ -2723,10 +2943,19 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 warnings_payload.extend(missing)
             if leakage:
                 warnings_payload.extend(leakage)
-            return {
+            if biz_notes:
+                warnings_payload.extend(biz_notes)
+            node_out: dict[str, Any] = {
                 "dataset_schema": schema_result,
                 "data_gap_warnings": warnings_payload,
             }
+            # Issue #301 H-1 — si el spine sintetizó/forzó el target binario, propágalo al
+            # contrato para que _build_metadata/_identify_target_variable lo elijan (y no un
+            # target de contrato continuo). Solo cuando realmente cambia algo.
+            updated_contract = _contract_with_enforced_target(contract, biz_target)
+            if updated_contract is not None and updated_contract != (contract or {}):
+                node_out["dataset_schema_required"] = updated_contract
+            return node_out
         except (ValidationError, Exception) as e:
             logger.error("[schema_designer] %s ERROR: %s", model_label, e, exc_info=True)
 
@@ -2737,6 +2966,10 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     # Issue #225 — incluso en fallback respetamos el contrato del architect.
     contract = state.get("dataset_schema_required")
     fallback_schema = _augment_schema_with_contract(fallback_schema, contract)
+    # Issue #301 — el spine determinista también aplica en fallback (red de seguridad).
+    fallback_schema, biz_notes, biz_target = _enforce_business_classification_schema(
+        fallback_schema, contract, profile=profile, primary_family=primary_family
+    )
     missing, leakage = _validate_schema_against_contract(fallback_schema, contract)
     # Issue #228 — preserva warnings sembrados por case_architect.
     warnings_payload = list(state.get("data_gap_warnings") or [])
@@ -2744,10 +2977,17 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         warnings_payload.extend(missing)
     if leakage:
         warnings_payload.extend(leakage)
-    return {
+    if biz_notes:
+        warnings_payload.extend(biz_notes)
+    node_out = {
         "dataset_schema": fallback_schema,
         "data_gap_warnings": warnings_payload,
     }
+    # Issue #301 H-1 — propaga el target binario garantizado al contrato (ver call-site happy).
+    updated_contract = _contract_with_enforced_target(contract, biz_target)
+    if updated_contract is not None and updated_contract != (contract or {}):
+        node_out["dataset_schema_required"] = updated_contract
+    return node_out
 
 
 # ─────────────────────────────────────────────────────────
@@ -2821,6 +3061,42 @@ def _generate_independent_values(
         base = np.full(n_rows, center)
 
     return np.clip(base + rng.normal(0, (high - low) * 0.10, n_rows), low, high)
+
+
+# Fracción mínima de clase minoritaria que inyecta el guard cuando un target binario
+# degenera a una sola clase (Issue #301). 15% deja una clase aprendible por LR sin
+# sobre-balancear (no es un balanceador, es una red de seguridad anti-degeneración).
+_BINARY_MIN_MINORITY_FRACTION = 0.15
+
+
+def _ensure_both_classes(values: "np.ndarray") -> "np.ndarray":
+    """Garantiza que una serie continua en [0,1] redondee a AMBAS clases {0,1}.
+
+        round(values) tiene 2 clases ?  ── sí ──►  passthrough (sin tocar la señal)
+                       └─ no (degenerado) ──►  voltea las k filas más cercanas a 0.5
+                                               hacia la clase ausente (mínimo daño)
+
+    Determinista (orden estable por distancia a 0.5). Red de seguridad business-only
+    (Issue #301): un target de una sola clase deja corr indefinida y una LR sin sentido,
+    y se enviaría SILENCIOSAMENTE. Opera sobre los valores continuos PRE-redondeo para
+    elegir las filas más ambiguas. Si tras forzar el balance la señal queda débil, el
+    chart conserva el aviso 'sin driver fuerte' (honestidad #296/#298).
+    """
+    import numpy as np
+
+    if values.size == 0:
+        return values
+    rounded = np.rint(values)
+    if np.unique(rounded).size >= 2:
+        return values
+    only_class = float(rounded.flat[0])
+    k = max(1, int(round(_BINARY_MIN_MINORITY_FRACTION * values.size)))
+    order = np.argsort(np.abs(values - 0.5), kind="stable")
+    flip_idx = order[:k]
+    out = values.astype(float).copy()
+    # 0.4 redondea a 0; 0.6 redondea a 1 → introduce la clase ausente con mínimo desvío.
+    out[flip_idx] = 0.4 if only_class == 1.0 else 0.6
+    return out
 
 
 # ─────────────────────────────────────────────────────────
@@ -2967,6 +3243,11 @@ def _generate_dataset_from_schema(schema: dict, profile: str = "business") -> li
         if col_type == "float":
             result = [None if null_mask[i] else round(float(values[i]), 2) for i in range(n_rows)]
         else:
+            # Issue #301 — guard anti-degeneración del target binario de dominio (business).
+            # Un target dependiente declarado en [0,1] es el target sintetizado/de contrato;
+            # garantizar ambas clases evita una LR sin sentido por una sola clase.
+            if profile == "business" and low == 0.0 and high == 1.0:
+                values = _ensure_both_classes(np.asarray(values, dtype=float))
             result = [None if null_mask[i] else int(round(float(values[i]))) for i in range(n_rows)]
         df_data[name] = result
 
@@ -3045,6 +3326,15 @@ def _generate_dataset_from_schema(schema: dict, profile: str = "business") -> li
         and not (
             profile == "business"
             and any(tok in c["name"].lower() for tok in _financial_tokens)
+        )
+        # N-7 (Issue #301): nunca inyectes el outlier en el target binario {0,1} de
+        # business — un ×3.5 capado lo convertiría en float 0.0/1.0 (dtype mixto en una
+        # columna de clasificación). Se excluye toda columna int declarada en [0,1].
+        and not (
+            profile == "business"
+            and c["type"] == "int"
+            and c.get("range_min") == 0
+            and c.get("range_max") == 1
         )
     ]
     if numeric_non_revenue and n_rows >= 50:
