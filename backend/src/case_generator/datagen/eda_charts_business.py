@@ -52,6 +52,7 @@ from typing import Any
 import pandas as pd
 
 from case_generator.datagen.eda_charts_common import empty_chart, source_label
+from case_generator.retention_tokens import is_retention_match
 
 logger = logging.getLogger("adam.graph")
 
@@ -60,15 +61,12 @@ _DRIVERS_TOP_K = 8
 _DRIVERS_MIN_ABS_CORR = 0.10
 
 # Issue #301 — el título del chart de drivers no debe asumir "abandono"/churn cuando el
-# caso no es de retención. Si el target pertenece a la familia retención usamos el título
-# clásico; en cualquier otro dominio (logística, fraude, crédito…) usamos uno neutro.
-_RETENTION_TITLE_TOKENS = ("churn", "retention", "renewal", "attrition", "loyalty", "abandon")
-
-
+# caso no es de retención. El match de retención vive en el vocab único
+# `retention_tokens.is_retention_match` (mismo usado por el spine en graph.py), que además
+# excluye falsos positivos de gobernanza (`data_retention_days`, `employee_loyalty_index`).
 def _drivers_title(target_col: str) -> str:
     """Título de `churn_drivers` derivado del target real (no asume churn/retención)."""
-    t = (target_col or "").lower()
-    if any(tok in t for tok in _RETENTION_TITLE_TOKENS):
+    if is_retention_match(target_col):
         return "Factores asociados al abandono"
     return "Factores asociados al objetivo"
 

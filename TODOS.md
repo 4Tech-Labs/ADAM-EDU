@@ -1567,3 +1567,55 @@ sintético no anunciado") y registrado en la plan-eng-review de PR2a. `_ensure_b
 
 **Depends on / blocked by:** Empareja naturalmente con PR2b (que ya toca el camino del target
 y del architect). Independiente del resto de PR2b — puede hacerse en su propio PR de honestidad.
+
+---
+
+## TODO-301-PR2b-A: Deduplicar el prompt del architect (copia verbatim base→clasificación)
+
+**What:** `CASE_ARCHITECT_PROMPT_CLASSIFICATION`
+(`backend/src/case_generator/prompts/clasificacion/M1_clasificacion/architect.py`) es una **copia
+verbatim** de ~200 líneas del `CASE_ARCHITECT_PROMPT` base (`prompts/__init__.py`) con el ancla
+`_M1_CLASSIFICATION_ANCHOR_ARCHITECT` concatenada. El docstring del módulo declara una regla manual
+de "mirror changes". Componer el prompt como `base + ancla` (en vez de copiarlo) elimina la
+duplicación.
+
+**Why:** Cualquier edición futura al prompt base debe hacerse dos veces o las copias divergen
+silenciosamente — exactamente la clase de bug que PR2b evitó tocando solo un bloque añadido.
+
+**Pros:** Una sola fuente de verdad para el prompt del architect; el snapshot ml_ds de PR2b
+(`tests/test_issue301_pr2b_architect.py`, hash + differential) hace el refactor seguro de verificar.
+
+**Cons:** Tocar el ensamblado de un prompt compartido con ml_ds es sensible; necesita su propio PR
+con el snapshot vigilando y revisión de `graph.py`/`prompts`.
+
+**Context:** PR2b (#301) eligió el bloque `M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK` añadido en
+ensamblado (`graph._assemble_architect_prompt`) precisamente para NO tocar el texto duplicado y
+mantener el prompt ml_ds byte-idéntico. La deuda de duplicación queda intacta (ni peor ni mejor).
+
+**Depends on / blocked by:** Snapshot ml_ds de PR2b mergeado (ya disponible tras este PR).
+
+---
+
+## TODO-301-PR2b-B: Limpiar las líneas stale "business puede emitir null/continuo"
+
+**What:** En el prompt de clasificación, la rule 7 (~L263-265) y la prosa de
+`## dataset_schema_required` (~L195-198) todavía dicen que business puede emitir `null` o un target
+continuo. Para business+clasificación eso ya está contradicho por el ancla y por el bloque business
+de PR2b. Condicionarlas por familia/perfil (o eliminarlas del prompt de clasificación) cierra la
+contradicción textual.
+
+**Why:** Un prompt auto-contradictorio es deuda de honestidad/claridad y puede subir la tasa de
+fallo crudo del LLM (más dependencia del net determinista que cae a `target_event_flag`).
+
+**Pros:** Prompt coherente para business+clasificación; menos ruido para el modelo → mejor tasa de
+nombre de dominio (medida por las evals multi-dominio 9A).
+
+**Cons:** Editar esas líneas cambia el string del prompt ml_ds → rompe la garantía byte-idéntica de
+PR2b a menos que se haga junto con la composición del prompt (TODO-301-PR2b-A).
+
+**Context:** PR2b dejó estas líneas intactas a propósito (decisión 2A: bloque business añadido en
+ensamblado, sin tocar texto compartido). El ancla ya las sobreescribe en runtime, así que la
+contradicción es cosmética hoy.
+
+**Depends on / blocked by:** TODO-301-PR2b-A (un prompt compuesto permite condicionar estas líneas
+sin duplicar la edición ni romper el snapshot ml_ds).

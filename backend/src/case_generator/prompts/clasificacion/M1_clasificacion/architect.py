@@ -63,6 +63,39 @@ _M1_CLASSIFICATION_ANCHOR_ARCHITECT = """
    clases real del caso, comprometiendo la coherencia pedagógica del notebook M3.
 """
 
+# ── business + clasificación: bloque de target binario de dominio (Issue #301 PR2b) ──
+# Se AÑADE en tiempo de ensamblado (graph._assemble_architect_prompt) SOLO cuando
+# `student_profile == "business"` y la familia es `clasificacion`. NO se concatena al
+# prompt constante, de modo que el prompt ensamblado para ml_ds queda byte-idéntico
+# (el snapshot de Item 4 lo vigila — Riesgo #1).
+#
+# Resuelve la contradicción que para business+clasificación dejan las reglas base
+# (rule 7 / `dataset_schema_required`: "business puede emitir null/continuo"): el ancla ya
+# exige `classification_target`, y este bloque lo hace explícito para business y empuja un
+# NOMBRE de dominio (la forma binaria la garantiza además el spine determinista downstream).
+#
+# Sin llaves `{}` → seguro para `str.format()` (no introduce placeholders).
+M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK = """
+
+# ── Instrucción business + clasificación: target binario de dominio ───────────
+# Activo SOLO para perfil "business" en la familia `clasificacion`. Anula la opción de
+# target gerencial continuo/`null` de las reglas base: en clasificación el caso DEBE
+# resolverse con un evento binario, también para business.
+
+1. `dataset_schema_required.target_column` es OBLIGATORIO (nunca `null` en clasificación).
+2. `role` DEBE ser `classification_target` y `dtype` DEBE ser `int` binario (valores 0/1).
+   PROHIBIDO un target continuo (`revenue`, `margin_pct`) o un índice compuesto.
+3. El `name` debe nombrar el EVENTO del dilema en snake_case inglés, terminado en `_flag`
+   cuando sea natural — deriva el nombre del sustantivo central del título:
+     - incumplimiento / entrega de socios → `late_partner_flag`
+     - fraude → `fraud_flag`
+     - mora / default crediticio → `default_60d`
+     - abandono / churn → `churn_flag`
+   Evita el genérico `target_event_flag` salvo que el dilema no sugiera ningún evento concreto.
+4. Declara al menos 1 feature de dominio con señal plausible hacia ese evento (no leakage).
+"""
+
+
 # ── Full prompt: generic base + classification anchor ─────────────────────────
 CASE_ARCHITECT_PROMPT_CLASSIFICATION = """\
 # Your Identity

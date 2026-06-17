@@ -93,6 +93,7 @@ from case_generator.configuration import (
 from case_generator.prompts import (
     CASE_ARCHITECT_PROMPT,
     CASE_ARCHITECT_PROMPT_BY_FAMILY,
+    M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK,
     CASE_QUESTIONS_PROMPT,
     CASE_QUESTIONS_PROMPT_BY_FAMILY,
     CASE_WRITER_PROMPT,
@@ -140,6 +141,10 @@ from case_generator.suggest_service import (
     family_of,
     get_dispatch_meta,
     resolve_legacy_family,
+)
+from case_generator.retention_tokens import (
+    RETENTION_CHURN_TOKENS,
+    is_retention_match,
 )
 from case_generator.narrative_grounding import (
     NARRATIVE_GROUNDING_WARNING,
@@ -801,6 +806,24 @@ def _build_base_context(state: ADAMState) -> dict:
     }
 
 
+def _assemble_architect_prompt(context: dict) -> str:
+    """Selecciona el prompt M1 por familia y lo formatea con el contexto.
+
+    Punto único de ensamblado del prompt del architect. El gate por perfil para
+    business+clasificación (#301 PR2b) vive AQUÍ, de modo que el prompt ensamblado para
+    ml_ds queda byte-idéntico (el snapshot de Item 4 lo vigila).
+    """
+    family = str(context.get("primary_family") or "")
+    profile = str(context.get("student_profile") or "")
+    template = CASE_ARCHITECT_PROMPT_BY_FAMILY.get(family, CASE_ARCHITECT_PROMPT)
+    # business + clasificación: exige un target binario de dominio (resuelve la
+    # contradicción rule 7 ↔ ancla). Gate por perfil → ml_ds queda byte-idéntico.
+    # El bloque no tiene placeholders, así que pasa intacto por `.format()`.
+    if profile == "business" and family == "clasificacion":
+        template = template + M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK
+    return template.format(**context)
+
+
 # ─────────────────────────────────────────────────────────
 # NODO 1 — CASE ARCHITECT (Pro con Code Execution)
 # ─────────────────────────────────────────────────────────
@@ -833,9 +856,7 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         }, per_field_limit=800, total_limit=2500),
     })
 
-    prompt = CASE_ARCHITECT_PROMPT_BY_FAMILY.get(
-        context["primary_family"], CASE_ARCHITECT_PROMPT
-    ).format(**context)
+    prompt = _assemble_architect_prompt(context)
 
     try:
         result, profile_resolved, family_resolved, pregunta_eje = (
@@ -871,12 +892,26 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         )
         contract_dict = _infer_leakage_risk_from_naming(contract_dict)
 
+        # Issue #301 PR2b (A1/A4) — convierte la detección de #228 en ACCIÓN para
+        # business+clasificación: null/continuo/rol no-clasificación → classification_target
+        # int binario. El spine downstream construye la columna; el nombre de dominio es
+        # LLM-primario (lo empuja el bloque del prompt). NO reescribe por mismatch
+        # título↔target (eso permanece como warning de coherencia, arriba).
+        contract_dict, target_enforced = _normalize_business_classification_target(
+            contract_dict, profile=profile_resolved, family=family_resolved
+        )
+
         # Issue #238/#242 — valida matriz de costos con la misma resolución de
         # familia que usan los dispatchers downstream.
         contract_dict, cost_warnings = _validate_business_cost_matrix(
             contract_dict, family_resolved, result.titulo
         )
         coherence_warnings = list(coherence_warnings) + cost_warnings
+        if target_enforced:
+            coherence_warnings.append(
+                "target business+clasificación normalizado a classification_target binario "
+                "(#301): revisar que el nombre refleje el evento del dilema."
+            )
 
         return {
             "current_agent": "case_architect",
@@ -2133,15 +2168,17 @@ _CONTRACT_TYPE_TO_SCHEMA_TYPE = {
 # el valor es la lista de tokens (snake_case) que el target debería contener
 # para considerarse coherente. Mantener corto y de alta precisión: si el
 # título no matchea ninguna clave, NO emitimos warning (silent OK).
+# Retention-family rows are sourced from RETENTION_CHURN_TOKENS (the single vocab) so
+# the lists cannot drift again (#301 PR2b). Keys with an extra domain token compose it.
 _TITLE_TO_TARGET_TOKENS: dict[str, tuple[str, ...]] = {
-    "retencion": ("churn", "retention", "renewal", "attrition"),
-    "retención": ("churn", "retention", "renewal", "attrition"),
-    "churn": ("churn", "retention", "attrition"),
-    "abandono": ("churn", "attrition", "abandon"),
-    "cancelacion": ("churn", "cancel", "attrition"),
-    "cancelación": ("churn", "cancel", "attrition"),
-    "fidelizacion": ("churn", "retention", "loyalty"),
-    "fidelización": ("churn", "retention", "loyalty"),
+    "retencion": RETENTION_CHURN_TOKENS,
+    "retención": RETENTION_CHURN_TOKENS,
+    "churn": RETENTION_CHURN_TOKENS,
+    "abandono": RETENTION_CHURN_TOKENS,
+    "cancelacion": RETENTION_CHURN_TOKENS + ("cancel",),
+    "cancelación": RETENTION_CHURN_TOKENS + ("cancel",),
+    "fidelizacion": RETENTION_CHURN_TOKENS,
+    "fidelización": RETENTION_CHURN_TOKENS,
     "retraso": ("delay", "late", "lateness", "delivery_time"),
     "demora": ("delay", "late", "lateness", "delivery_time"),
     "fraude": ("fraud", "fraudulent", "anomaly"),
@@ -2151,8 +2188,8 @@ _TITLE_TO_TARGET_TOKENS: dict[str, tuple[str, ...]] = {
     "ventas": ("sales", "revenue", "demand", "units_sold"),
     "demanda": ("demand", "sales", "units_sold", "forecast"),
     "ingresos": ("revenue", "sales", "income"),
-    "rotacion": ("turnover", "attrition", "churn"),
-    "rotación": ("turnover", "attrition", "churn"),
+    "rotacion": RETENTION_CHURN_TOKENS + ("turnover",),
+    "rotación": RETENTION_CHURN_TOKENS + ("turnover",),
     "produccion": ("output", "production", "throughput"),
     "producción": ("output", "production", "throughput"),
     "calidad": ("defect", "quality", "reject"),
@@ -2172,13 +2209,10 @@ _LEAKAGE_NAMING_PATTERN = re.compile(
     r")"
 )
 
-# Tokens de nombre del target que identifican targets de retención/churn;
-# se usan para evitar inferir leakage por naming cuando el propio objetivo
-# pertenece a esa misma familia (las retention_* features podrían ser lags
-# válidos de auditoría temporal en ese caso).
-_RETENTION_TARGET_NAME_TOKENS: tuple[str, ...] = (
-    "churn", "retention", "renewal", "attrition", "loyalty",
-)
+# Targets de retención/churn (por nombre) se identifican vía `_is_retention_target_name`,
+# que envuelve `retention_tokens.is_retention_match` (vocab único + denylist de gobernanza).
+# Se usa para no inferir leakage por naming cuando el propio objetivo pertenece a esa
+# familia (las retention_* features podrían ser lags válidos de auditoría temporal).
 
 
 def _validate_target_semantic_coherence(
@@ -2240,11 +2274,7 @@ def _infer_leakage_risk_from_naming(contract: dict | None) -> dict | None:
     target_name = (target.get("name") or "").lower()
     target_role = (target.get("role") or "").lower()
 
-    target_is_retention = (
-        any(tok in target_name for tok in _RETENTION_TARGET_NAME_TOKENS)
-        or target_role == "forecasting_target" and "retention" in target_name
-    )
-    if target_is_retention:
+    if _is_retention_target_name(target_name, target_role):
         # No inferimos leakage: retention_m* podría ser un lag válido del propio target.
         return contract
 
@@ -2281,6 +2311,68 @@ def _infer_leakage_risk_from_naming(contract: dict | None) -> dict | None:
         inferred_count, target_name, target_role,
     )
     return new_contract
+
+
+# Roles que ya nombran un evento de clasificación (preservamos el nombre de dominio que
+# el LLM eligió; solo corregimos el rol/dtype). regression/forecasting NO están aquí: sus
+# nombres suelen ser métricas continuas (margin_pct, churn_rate) → caen a target_event_flag.
+_CLASSIFICATION_ADJACENT_ROLES: frozenset[str] = frozenset({
+    "classification_target", "anomaly_target", "ranking_target",
+})
+
+
+def _normalize_business_classification_target(
+    contract: dict | None, *, profile: str, family: str | None
+) -> tuple[dict | None, bool]:
+    """Endurece SOLO la FORMA del target para business+clasificación (#301 PR2b, A1/A4).
+
+    Convierte la detección de #228 en ACCIÓN: ``null`` / target continuo / rol no-clasificación
+    → ``classification_target`` ``int`` binario. El spine downstream construye la columna
+    (no se duplica aquí). El NOMBRE de dominio es LLM-primario — lo empuja el bloque del prompt
+    business; aquí se PRESERVA si vino con un rol de clasificación-adyacente, y solo se cae a
+    ``target_event_flag`` como último recurso (sin slugging del título — 3B descartado).
+
+    Árbol de decisión (business+clasificación)::
+
+        target = contract.target_column
+        ¿binario de dominio ya? (role==classification_target ∧ dtype==int ∧ name)
+            ├─ sí → (contract, False)          # passthrough — NO reescribe por mismatch (A4)
+            └─ no → reescribe forma:
+                      role→classification_target, dtype→int
+                      name→ se conserva si (name ∧ role ∈ clasificación-adyacente)
+                            si no → "target_event_flag"   (último recurso)
+                      (contract', True)
+
+    NO muta el dict de entrada. Fuera del gate (ml_ds / business no-clasificación) devuelve
+    ``(contract, False)`` intacto.
+    """
+    if profile != "business" or family != "clasificacion":
+        return contract, False
+
+    src = contract or {}
+    target = src.get("target_column") or {}
+    name = (target.get("name") or "").strip()
+    role = (target.get("role") or "").strip().lower()
+    dtype = (target.get("dtype") or "").strip().lower()
+
+    if name and role == "classification_target" and dtype == "int":
+        return contract, False  # ya es un classification_target binario — passthrough
+
+    keep_name = bool(name) and role in _CLASSIFICATION_ADJACENT_ROLES
+    new_name = name if keep_name else "target_event_flag"
+
+    new_target = dict(target)
+    new_target.update({
+        "name": new_name,
+        "role": "classification_target",
+        "dtype": "int",
+    })
+    if not (new_target.get("description") or "").strip():
+        new_target["description"] = "Variable objetivo binaria del caso (0/1)"
+
+    new_contract = dict(src)
+    new_contract["target_column"] = new_target
+    return new_contract, True
 
 
 def _validate_business_cost_matrix(
@@ -2592,10 +2684,15 @@ _CHURN_TEMPLATE_COLUMNS: frozenset[str] = frozenset({
 
 
 def _is_retention_target_name(name: str, role: str = "") -> bool:
-    """True si el target pertenece a la familia retención/churn (por nombre o rol)."""
-    n = (name or "").lower()
-    if any(tok in n for tok in _RETENTION_TARGET_NAME_TOKENS):
+    """True si el target pertenece a la familia retención/churn (por nombre o rol).
+
+    Delega el match de nombre en `retention_tokens.is_retention_match` (vocab único +
+    denylist de gobernanza: `data_retention_days`/`employee_loyalty_index` NO son churn,
+    `customer_abandon_flag` SÍ). Conserva la rama de rol `forecasting_target`.
+    """
+    if is_retention_match(name):
         return True
+    n = (name or "").lower()
     return (role or "").strip().lower() == "forecasting_target" and "retention" in n
 
 
