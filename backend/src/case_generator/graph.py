@@ -931,8 +931,9 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         # Issue #301 PR2b (A1/A4) — convierte la detección de #228 en ACCIÓN para
         # business+clasificación: null/continuo/rol no-clasificación → classification_target
         # int binario. El spine downstream construye la columna; el nombre de dominio es
-        # LLM-primario (lo empuja el bloque del prompt). NO reescribe por mismatch
-        # título↔target (eso permanece como warning de coherencia, arriba).
+        # LLM-primario (lo empuja el bloque del prompt). Esta normalización solo corrige la
+        # FORMA; el mismatch título↔target (nombre válido pero desalineado) lo maneja el
+        # bloque Gate 2 de más abajo (#305), no esta función.
         contract_dict, target_enforced = _normalize_business_classification_target(
             contract_dict, profile=profile_resolved, family=family_resolved
         )
@@ -943,11 +944,11 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         # vez para que el LLM lo renombre. Se acepta cualquier nombre de clasificación
         # válido sin re-juzgarlo con la heurística (a prueba de falsos positivos); el
         # re-_normalize garantiza la forma binaria pase lo que pase. Nunca falla el job.
-        if (
-            not target_enforced
-            and profile_resolved == "business"
-            and family_resolved == "clasificacion"
-            and any(w.startswith("target_semantic_mismatch") for w in coherence_warnings)
+        if _should_reprompt_on_target_mismatch(
+            target_enforced=target_enforced,
+            profile=profile_resolved,
+            family=family_resolved,
+            warnings=coherence_warnings,
         ):
             contract_dict, mismatch_note = _reprompt_business_target_on_mismatch(
                 llm=llm, prompt=prompt, contract=contract_dict, title=result.titulo
@@ -2272,6 +2273,12 @@ _LEAKAGE_NAMING_PATTERN = re.compile(
 # Se usa para no inferir leakage por naming cuando el propio objetivo pertenece a esa
 # familia (las retention_* features podrían ser lags válidos de auditoría temporal).
 
+# Token único del warning de mismatch título↔target. Lo EMITE
+# `_validate_target_semantic_coherence` y lo CONSUME `_should_reprompt_on_target_mismatch`
+# (#305 Gate 2). Constante compartida para que productor y consumidor no se acoplen por un
+# string literal duplicado.
+_TARGET_SEMANTIC_MISMATCH_TOKEN = "target_semantic_mismatch"
+
 
 def _validate_target_semantic_coherence(
     case_title: str | None, target_spec: dict | None
@@ -2309,7 +2316,7 @@ def _validate_target_semantic_coherence(
     expected_str = ", ".join(sorted(expected_tokens))
     matched_str = ", ".join(sorted(set(matched_keys)))
     return [
-        f"target_semantic_mismatch: el título sugiere [{matched_str}] "
+        f"{_TARGET_SEMANTIC_MISMATCH_TOKEN}: el título sugiere [{matched_str}] "
         f"(tokens esperados: {expected_str}) pero target_column.name='{target_name}' "
         f"(role={target_role or 'n/a'}). Revisa que el dataset y el dilema "
         f"resuelvan la misma pregunta de negocio."
@@ -2433,6 +2440,19 @@ def _normalize_business_classification_target(
     return new_contract, True
 
 
+def _should_reprompt_on_target_mismatch(
+    *, target_enforced: bool, profile: str, family: str | None, warnings: list[str]
+) -> bool:
+    """#305 Gate 2 — gate the mismatch reprompt. True only when the shape was NOT
+    normalized (``target_enforced`` is False → the target is already a valid binary
+    classification target) for business+clasificación AND a ``target_semantic_mismatch``
+    warning is present (valid shape, wrong NAME). Extracted from ``case_architect`` so the
+    exact condition is unit-testable in isolation."""
+    if target_enforced or profile != "business" or family != "clasificacion":
+        return False
+    return any(w.startswith(_TARGET_SEMANTIC_MISMATCH_TOKEN) for w in warnings)
+
+
 def _reprompt_business_target_on_mismatch(
     *, llm: Any, prompt: str, contract: dict | None, title: str | None
 ) -> tuple[dict | None, str | None]:
@@ -2486,8 +2506,8 @@ def _reprompt_business_target_on_mismatch(
             "original válido; revisar coherencia título↔target."
         )
     return new_contract, (
-        "target_column corregido vía reprompt (#305 Gate 2) para alinear el nombre con el "
-        "evento del título."
+        "target_column reemplazado por la respuesta del reprompt (#305 Gate 2): se solicitó "
+        "alinear el nombre con el evento del título; aceptado sin re-juzgar."
     )
 
 
