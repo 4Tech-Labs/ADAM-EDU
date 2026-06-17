@@ -75,7 +75,7 @@ export const FORM_STYLES = `
 .teacher-form .input-base:hover:not(:focus):not(:disabled) {
   border-color: #94a3b8;
 }
-.teacher-form .input-base:read-only, .teacher-form .input-base:disabled {
+.teacher-form input.input-base:read-only, .teacher-form textarea.input-base:read-only, .teacher-form .input-base:disabled {
   background-color: #f8fafc;
   color: #64748b;
   cursor: not-allowed;

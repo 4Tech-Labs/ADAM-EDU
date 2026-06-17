@@ -47,7 +47,7 @@ export function GroupsCombobox({ courses, value, onAdd, onRemove, hasError }: Gr
                         type="button"
                         aria-expanded={open}
                         className={cn(
-                            "input-base w-full flex items-center justify-between rounded-lg border bg-white px-3.5 py-2.5 text-sm text-left transition hover:border-[#0144a0]",
+                            "input-base w-full flex items-center justify-between rounded-lg border bg-white px-3.5 py-2.5 text-sm text-left transition cursor-pointer hover:border-[#0144a0]",
                             hasError ? "border-red-500 input-error" : "border-slate-200"
                         )}
                     >
