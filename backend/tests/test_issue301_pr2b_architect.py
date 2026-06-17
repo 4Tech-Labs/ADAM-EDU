@@ -25,12 +25,17 @@ import hashlib
 import pytest
 
 from case_generator.graph import (
+    _BUSINESS_CLF_PERMISSIVE_SUBSTITUTIONS,
     _assemble_architect_prompt,
     _normalize_business_classification_target,
 )
 from case_generator.prompts import (
+    CASE_ARCHITECT_PROMPT,
     CASE_ARCHITECT_PROMPT_CLASSIFICATION,
     M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK,
+)
+from case_generator.prompts.clasificacion.M1_clasificacion.architect import (
+    _M1_CLASSIFICATION_ANCHOR_ARCHITECT,
 )
 
 # Full format context (union of _build_base_context keys + per-node injections), mirroring
@@ -97,6 +102,18 @@ def test_mlds_architect_prompt_frozen_hash() -> None:
     )
 
 
+# ── 1b. dedup identity (#305 Gate 1a) ─────────────────────────────────────────
+
+def test_classification_prompt_is_base_plus_anchor_not_a_copy() -> None:
+    """#305 Gate 1a: the classification prompt is assembled from the single-source
+    base + anchor, NOT a verbatim ~200-line copy. This is the DRY guard — if someone
+    reintroduces a literal copy that drifts from the base, this fails."""
+    assert (
+        CASE_ARCHITECT_PROMPT_CLASSIFICATION
+        == CASE_ARCHITECT_PROMPT + _M1_CLASSIFICATION_ANCHOR_ARCHITECT
+    )
+
+
 # ── 2. business gate fires for business+clf ───────────────────────────────────
 
 def test_business_clf_prompt_includes_target_block() -> None:
@@ -109,6 +126,51 @@ def test_business_regresion_prompt_excludes_target_block() -> None:
     ctx["primary_family"] = "regresion"
     assembled = _assemble_architect_prompt(ctx)
     assert M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK.strip() not in assembled
+
+
+# ── 2b. in-text rule-7 surgery (#305 Gate 1b) ─────────────────────────────────
+# Placeholder-free fragments unique to the PERMISSIVE rule 7 / dataset_schema_required
+# prose. (`{student_profile}` is gone post-format, so we assert on these stable phrases.)
+_PERMISSIVE_PROSE = "el pipeline mantiene el comportamiento heurístico previo"
+_PERMISSIVE_RULE7_NULL = 'puedes emitir `null` o un contrato simple'
+_PERMISSIVE_RULE7_CONT = "target gerencial (ej: `revenue`, `margin_pct`)"
+_RESTRICTIVE_RULE7 = "el target es OBLIGATORIO y binario de dominio"
+
+
+def test_business_clf_prompt_drops_permissive_null_continuous() -> None:
+    """The assembled business+clf prompt must NOT permit null/continuous (no contradiction)."""
+    assembled = _assemble_architect_prompt(_business_ctx())
+    assert _PERMISSIVE_PROSE not in assembled
+    assert _PERMISSIVE_RULE7_NULL not in assembled
+    assert _PERMISSIVE_RULE7_CONT not in assembled
+    # restrictive replacement + obligatory block both present
+    assert _RESTRICTIVE_RULE7 in assembled
+    assert M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK.strip() in assembled
+
+
+def test_business_regresion_keeps_permissive_text_no_overreach() -> None:
+    """Surgery is gated to clasificación: business+regresión keeps the permissive base."""
+    ctx = _business_ctx()
+    ctx["primary_family"] = "regresion"
+    assembled = _assemble_architect_prompt(ctx)
+    assert _PERMISSIVE_PROSE in assembled
+    assert _PERMISSIVE_RULE7_CONT in assembled
+
+
+def test_mlds_clf_keeps_permissive_text_no_overreach() -> None:
+    """Surgery is gated to business: ml_ds+clf keeps the permissive base (byte-identical)."""
+    assembled = _assemble_architect_prompt(dict(_MLDS_CTX))
+    assert _PERMISSIVE_PROSE in assembled
+    assert _PERMISSIVE_RULE7_NULL in assembled
+
+
+def test_permissive_substitution_targets_still_match_raw_template() -> None:
+    """Drift guard: if the base prompt wording changes, the .replace() would silently
+    no-op and the contradiction would return. Assert each `old` still matches the raw
+    (un-surgered) assembled template so any drift fails loudly in CI."""
+    raw = CASE_ARCHITECT_PROMPT_CLASSIFICATION + M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK
+    for old, _new in _BUSINESS_CLF_PERMISSIVE_SUBSTITUTIONS:
+        assert old in raw, f"surgery target drifted, would no-op: {old[:50]!r}"
 
 
 # ── 3. contract normalization (A1/A4) ─────────────────────────────────────────
