@@ -1473,7 +1473,7 @@ el gate y regenerar el golden en un PR dedicado.
 
 ---
 
-## TODO-301-B: Eliminar la duplicación verbatim de `CASE_ARCHITECT_PROMPT`
+## TODO-301-B: Eliminar la duplicación verbatim de `CASE_ARCHITECT_PROMPT` [RESUELTO por #305]
 
 **What:** Extraer el cuerpo genérico de `CASE_ARCHITECT_PROMPT` a una constante compartida y
 componer `CASE_ARCHITECT_PROMPT_CLASSIFICATION = _BASE + _ANCHOR`, eliminando la copia
@@ -1570,7 +1570,7 @@ y del architect). Independiente del resto de PR2b — puede hacerse en su propio
 
 ---
 
-## TODO-301-PR2b-A: Deduplicar el prompt del architect (copia verbatim base→clasificación)
+## TODO-301-PR2b-A: Deduplicar el prompt del architect (copia verbatim base→clasificación) [RESUELTO por #305]
 
 **What:** `CASE_ARCHITECT_PROMPT_CLASSIFICATION`
 (`backend/src/case_generator/prompts/clasificacion/M1_clasificacion/architect.py`) es una **copia
@@ -1596,7 +1596,7 @@ mantener el prompt ml_ds byte-idéntico. La deuda de duplicación queda intacta 
 
 ---
 
-## TODO-301-PR2b-B: Limpiar las líneas stale "business puede emitir null/continuo"
+## TODO-301-PR2b-B: Limpiar las líneas stale "business puede emitir null/continuo" [RESUELTO por #305]
 
 **What:** En el prompt de clasificación, la rule 7 (~L263-265) y la prosa de
 `## dataset_schema_required` (~L195-198) todavía dicen que business puede emitir `null` o un target
@@ -1619,3 +1619,52 @@ contradicción es cosmética hoy.
 
 **Depends on / blocked by:** TODO-301-PR2b-A (un prompt compuesto permite condicionar estas líneas
 sin duplicar la edición ni romper el snapshot ml_ds).
+
+---
+
+## TODO-305-A: Deduplicar `CASE_WRITER_PROMPT_CLASSIFICATION` / `CASE_QUESTIONS_PROMPT_CLASSIFICATION`
+
+**What:** Igual que el architect en #305: `CASE_WRITER_PROMPT_CLASSIFICATION`
+(`prompts/clasificacion/M1_clasificacion/writer.py`) y `CASE_QUESTIONS_PROMPT_CLASSIFICATION`
+(`.../questions.py`) son copias verbatim de sus bases (`CASE_WRITER_PROMPT` /
+`CASE_QUESTIONS_PROMPT` en `prompts/__init__.py`) + un ancla. Componerlas como `base + ancla`
+extrayendo las bases a módulos leaf (patrón `prompts/_architect_base.py` de #305).
+
+**Why:** Misma deuda de duplicación que el architect: cualquier edición a la base hay que
+replicarla a mano y el header del módulo declara una regla manual de "mirror changes".
+
+**Pros:** DRY consistente en las tres copias M1 de clasificación; un solo lugar por prompt base.
+
+**Cons:** No son auto-contradictorias hoy (a diferencia del architect), así que NO hay bug
+funcional — es limpieza. Cada copia es su propia superficie de snapshot; conviene un guard
+de identidad por prompt como el de #305 antes de tocar.
+
+**Context:** #305 dedupló SOLO el architect (era el único con la contradicción rule-7) y extrajo
+`CASE_ARCHITECT_PROMPT` a `prompts/_architect_base.py` para romper el ciclo de import. Usar ese
+PR como plantilla exacta: leaf module + import en `__init__.py` (bloque top, evita E402) + import
+en el módulo de familia + test de identidad `X_CLASSIFICATION == BASE + ANCHOR`.
+
+**Depends on / blocked by:** #305 mergeado (provee la plantilla de extracción + import ordering).
+
+---
+
+## TODO-305-B: Ampliar la cobertura de `_TITLE_TO_TARGET_TOKENS` (blind spots del detector de mismatch)
+
+**What:** Añadir keywords de dominio que el detector `_validate_target_semantic_coherence`
+(`graph.py`) no cubre hoy — p. ej. logística/incumplimiento/socios/SLA. El caso FastRoute que
+motivó #301 ni siquiera dispara el warning porque su título no matchea ningún keyword del mapa.
+
+**Why:** El enforcement de mismatch de #305 Gate 2 (reprompt) SOLO se dispara cuando la heurística
+detecta el mismatch. Los blind spots = passthrough silencioso de un target con nombre desalineado.
+
+**Pros:** Más casos business+clasificación reciben el reprompt de corrección de nombre.
+
+**Cons:** #301 de-enfatiza explícitamente el keyword-matching (no escala — por eso la síntesis
+determinista y el reprompt son la red). Más keywords también amplían la superficie de FALSOS
+positivos del detector, justo ahora que es accionable (reprompt). Prioridad baja.
+
+**Context:** El mapa `_TITLE_TO_TARGET_TOKENS` mapea sustantivos de título (es/en) a tokens
+esperados de target. El reprompt de #305 es false-positive-safe (acepta cualquier target de
+clasificación válido en el reprompt), así que ampliar tokens es seguro pero de bajo retorno.
+
+**Depends on / blocked by:** #305 mergeado (Gate 2 enforcement). Independiente por lo demás.

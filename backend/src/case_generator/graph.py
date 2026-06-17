@@ -53,6 +53,7 @@ Resiliencia (v9):
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -806,20 +807,55 @@ def _build_base_context(state: ADAMState) -> dict:
     }
 
 
+# #305 Gate 1b — Condiciona POR PERFIL la "regla 7" y la prosa de `dataset_schema_required`
+# en el texto ENSAMBLADO para business+clasificación. La base (compartida) permite `null`/
+# continuo, legítimo para ml_ds y para business en otras familias; aquí se NEUTRALIZA esa
+# permisión SOLO para business+clasificación, de modo que el prompt ya no se contradiga con
+# `M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK`. La sustitución corre ANTES de `.format()` (el
+# template aún tiene `{student_profile}` sin formatear) y los reemplazos NO introducen llaves
+# nuevas. Si la base deriva y un `old` deja de encontrarse, el `.replace` es no-op y el guard
+# test (permisivo ABSENT / restrictivo PRESENT) lo detecta en CI — nunca falla un job en runtime.
+_BUSINESS_CLF_PERMISSIVE_SUBSTITUTIONS: tuple[tuple[str, str], ...] = (
+    (
+        '**Obligatorio cuando {student_profile}="ml_ds"**. Para "business" puedes\n'
+        "emitir `null` (el pipeline mantiene el comportamiento heurístico previo).",
+        '**Obligatorio** (también para "business" en clasificación). En clasificación el '
+        "contrato de target es OBLIGATORIO y binario — NO `null`, NO continuo "
+        "(ver el bloque de target binario de dominio más abajo).",
+    ),
+    (
+        '7. Para "business" perfil puedes emitir `null` o un contrato simple con un único\n'
+        "   target gerencial (ej: `revenue`, `margin_pct`).",
+        '7. Para "business" en clasificación NO emitas `null` ni un target continuo '
+        "(`revenue`, `margin_pct`): el target es OBLIGATORIO y binario de dominio "
+        "(ver el bloque de target binario de dominio más abajo).",
+    ),
+)
+
+
 def _assemble_architect_prompt(context: dict) -> str:
     """Selecciona el prompt M1 por familia y lo formatea con el contexto.
 
-    Punto único de ensamblado del prompt del architect. El gate por perfil para
-    business+clasificación (#301 PR2b) vive AQUÍ, de modo que el prompt ensamblado para
-    ml_ds queda byte-idéntico (el snapshot de Item 4 lo vigila).
+    Punto único de ensamblado del prompt del architect. El gate por perfil (#301) vive AQUÍ,
+    de modo que el prompt ensamblado para ml_ds queda byte-idéntico (el snapshot de Item 4 /
+    Riesgo #1 lo vigila)::
+
+        family/profile
+          ├─ ml_ds + clasificación ──────► base+anchor, SIN cirugía  → byte-idéntico
+          ├─ business + clasificación ───► base+anchor
+          │       + cirugía: neutraliza regla 7 / prosa permisiva (#305 Gate 1b)
+          │       + M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK (PR2b)
+          └─ business/otros + otra fam ──► base, SIN cirugía  (null/continuo legítimo)
     """
     family = str(context.get("primary_family") or "")
     profile = str(context.get("student_profile") or "")
     template = CASE_ARCHITECT_PROMPT_BY_FAMILY.get(family, CASE_ARCHITECT_PROMPT)
-    # business + clasificación: exige un target binario de dominio (resuelve la
-    # contradicción rule 7 ↔ ancla). Gate por perfil → ml_ds queda byte-idéntico.
-    # El bloque no tiene placeholders, así que pasa intacto por `.format()`.
+    # business + clasificación: exige un target binario de dominio. Primero NEUTRALIZA la
+    # permisión `null`/continuo en el texto (Gate 1b) y luego añade el bloque obligatorio
+    # (PR2b). Gate por perfil → ml_ds queda byte-idéntico. El bloque no tiene placeholders.
     if profile == "business" and family == "clasificacion":
+        for old, new in _BUSINESS_CLF_PERMISSIVE_SUBSTITUTIONS:
+            template = template.replace(old, new)
         template = template + M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK
     return template.format(**context)
 
@@ -900,6 +936,28 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         contract_dict, target_enforced = _normalize_business_classification_target(
             contract_dict, profile=profile_resolved, family=family_resolved
         )
+
+        # Issue #301 #305 Gate 2 — enforcement de #228 por mismatch título↔target.
+        # Si la forma NO se tuvo que normalizar (target ya era un classification_target
+        # válido) pero su NOMBRE está semánticamente desalineado del título, reprompt UNA
+        # vez para que el LLM lo renombre. Se acepta cualquier nombre de clasificación
+        # válido sin re-juzgarlo con la heurística (a prueba de falsos positivos); el
+        # re-_normalize garantiza la forma binaria pase lo que pase. Nunca falla el job.
+        if (
+            not target_enforced
+            and profile_resolved == "business"
+            and family_resolved == "clasificacion"
+            and any(w.startswith("target_semantic_mismatch") for w in coherence_warnings)
+        ):
+            contract_dict, mismatch_note = _reprompt_business_target_on_mismatch(
+                llm=llm, prompt=prompt, contract=contract_dict, title=result.titulo
+            )
+            contract_dict = _infer_leakage_risk_from_naming(contract_dict)
+            contract_dict, _ = _normalize_business_classification_target(
+                contract_dict, profile=profile_resolved, family=family_resolved
+            )
+            if mismatch_note:
+                coherence_warnings = list(coherence_warnings) + [mismatch_note]
 
         # Issue #238/#242 — valida matriz de costos con la misma resolución de
         # familia que usan los dispatchers downstream.
@@ -2375,6 +2433,64 @@ def _normalize_business_classification_target(
     return new_contract, True
 
 
+def _reprompt_business_target_on_mismatch(
+    *, llm: Any, prompt: str, contract: dict | None, title: str | None
+) -> tuple[dict | None, str | None]:
+    """#305 Gate 2 — reprompt-once enforcement for a title↔target NAME mismatch.
+
+    Precondition (checked by the caller): business+clasificación, a
+    ``target_semantic_mismatch`` warning is present, and the target is a *valid* binary
+    classification target whose NAME is semantically misaligned with the título. The shape
+    is fine; only the LLM can rename it to the domain event (deterministic title-slugging
+    was rejected — 3B). So we reprompt ONCE and let the caller re-run
+    ``_normalize_business_classification_target`` to guarantee the binary shape regardless::
+
+        reprompt ONCE (wrapped — any exception is swallowed)
+          ├─ usable classification target returned ─► swap it in (NOT re-judged by the
+          │                                            heuristic → false-positive-safe)
+          ├─ null / unusable target returned ───────► keep original (still valid) + note
+          └─ LLM call raises ───────────────────────► keep original (still valid) + note
+
+    Returns ``(contract, note)``. NEVER raises — a mismatch was only a warning before, so
+    enforcement must not regress reliability by failing the job.
+    """
+    correction = (
+        prompt
+        + "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA TÍTULO↔TARGET (#228/#301)\n"
+        + f'El título del caso es: "{title}". Tu `dataset_schema_required.target_column.name` '
+        + "anterior NO refleja el evento central de ese título. Reescribe la respuesta "
+        + "COMPLETA respetando el schema, manteniendo `role`=`classification_target` y "
+        + "`dtype`=`int` binario, pero renombrando `target_column.name` (snake_case inglés) "
+        + "para que nombre el EVENTO binario del título (p. ej. incumplimiento→`late_partner_flag`, "
+        + "fraude→`fraud_flag`, mora→`default_60d`, abandono→`churn_flag`). No menciones Python, "
+        + "notebooks, AUC ni hiperparámetros."
+    )
+    try:
+        structured_llm = llm.with_structured_output(CaseArchitectOutput)
+        result: CaseArchitectOutput = structured_llm.invoke(correction)
+    except Exception as e:  # noqa: BLE001 — best-effort; never fail the job on a reprompt
+        logger.warning("[case_architect] reprompt #305 Gate2 falló: %s", e)
+        return contract, (
+            "target_semantic_mismatch no corregido (reprompt falló): se conserva el target "
+            "original válido; revisar coherencia título↔target."
+        )
+
+    new_contract = (
+        result.dataset_schema_required.model_dump()
+        if result.dataset_schema_required is not None
+        else None
+    )
+    if not new_contract or not ((new_contract.get("target_column") or {}).get("name") or "").strip():
+        return contract, (
+            "reprompt no produjo un target de clasificación usable: se conserva el target "
+            "original válido; revisar coherencia título↔target."
+        )
+    return new_contract, (
+        "target_column corregido vía reprompt (#305 Gate 2) para alinear el nombre con el "
+        "evento del título."
+    )
+
+
 def _validate_business_cost_matrix(
     contract: dict | None, family: str | None, case_title: str | None
 ) -> tuple[dict | None, list[str]]:
@@ -3236,8 +3352,13 @@ def _generate_dataset_from_schema(schema: dict, profile: str = "business") -> li
     constraints = schema.get("constraints", {})
 
     # Seed determinista: mismo schema → mismo dataset siempre.
+    # hashlib (no el builtin hash()) porque hash() de un str está aleatorizado por
+    # proceso (PYTHONHASHSEED), lo que rompía la reproducibilidad entre corridas.
     # RNG local (no global) para evitar race conditions con usuarios concurrentes.
-    case_seed = hash(json.dumps(schema, sort_keys=True)) % (2**31)
+    case_seed = (
+        int(hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(), 16)
+        % (2**31)
+    )
     rng = np.random.default_rng(case_seed)       # numpy — thread-safe (instancia local)
     rng_std = random.Random(case_seed)            # stdlib — thread-safe (instancia local)
 
