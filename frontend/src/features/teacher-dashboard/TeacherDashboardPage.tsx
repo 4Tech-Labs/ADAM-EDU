@@ -1,4 +1,5 @@
 import { TeacherLayout } from "@/features/teacher-layout/TeacherLayout";
+import { PORTAL_CONTENT_SHELL_CLASSNAME } from "@/shared/ui/layout";
 
 import { CasosActivosSection } from "./CasosActivosSection";
 import { CursosActivosSection } from "./CursosActivosSection";
@@ -8,7 +9,7 @@ export function TeacherDashboardPage() {
     return (
         <TeacherLayout
             testId="teacher-dashboard-page"
-            contentClassName="mx-auto max-w-6xl space-y-10 px-6 py-9"
+            contentClassName={`${PORTAL_CONTENT_SHELL_CLASSNAME} space-y-10 py-9`}
         >
                 <QuickActionsSection />
                 <CursosActivosSection />

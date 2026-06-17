@@ -15,6 +15,7 @@ import {
     matchesStudentCourseSearch,
 } from "./studentDashboardModel";
 import { StudentUserHeader } from "@/features/student-layout/StudentUserHeader";
+import { PORTAL_CONTENT_SHELL_CLASSNAME } from "@/shared/ui/layout";
 import { useStudentCases, useStudentCourses } from "./useStudentDashboard";
 
 const EMPTY_STUDENT_COURSES: StudentCourseItem[] = [];
@@ -328,7 +329,7 @@ export function StudentDashboardPage() {
         <div className="min-h-screen bg-[#F0F4F8]" data-testid="student-dashboard-page">
             <StudentUserHeader />
 
-            <main className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-9">
+            <main className={`${PORTAL_CONTENT_SHELL_CLASSNAME} flex flex-col gap-8 py-9`}>
                 {initialError ? (
                     <ErrorState message={resolveErrorMessage(initialError)} onRetry={handleRetry} />
                 ) : (
@@ -379,7 +380,7 @@ export function StudentDashboardPage() {
                             ) : coursesInitialLoading ? (
                                 <LoadingState />
                             ) : filteredCourses.length ? (
-                                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                                <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
                                     {filteredCourses.map((course) => (
                                         <StudentCourseCard key={course.id} course={course} />
                                     ))}

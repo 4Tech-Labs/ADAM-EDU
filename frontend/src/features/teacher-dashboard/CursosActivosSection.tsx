@@ -234,7 +234,8 @@ export function CursosActivosSection() {
             </div>
 
             {isLoading ? (
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+                    <CourseCardSkeleton />
                     <CourseCardSkeleton />
                     <CourseCardSkeleton />
                 </div>
@@ -255,7 +256,7 @@ export function CursosActivosSection() {
             ) : null}
 
             {!isLoading && !isError && filteredCourses.length > 0 ? (
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
                     {filteredCourses.map((course, index) => (
                         <div
                             key={course.id}
