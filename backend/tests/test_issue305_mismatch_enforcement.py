@@ -22,6 +22,7 @@ import pytest
 from case_generator.graph import (
     _normalize_business_classification_target,
     _reprompt_business_target_on_mismatch,
+    _should_reprompt_on_target_mismatch,
 )
 
 # ── Fakes: a structured LLM whose .invoke() returns a scripted result or raises ───
@@ -78,9 +79,11 @@ def _mislabeled_contract() -> dict:
 _FRAUD_TITLE = "PayShield — Detección de transacciones fraudulentas"
 
 
-# ── 1. reprompt corrects the name ─────────────────────────────────────────────
+# ── 1. reprompt replaces the name ─────────────────────────────────────────────
+# (the helper reprompts and accepts the LLM's replacement WITHOUT verifying alignment —
+#  see fix #2: the note says "reemplazado ... aceptado sin re-juzgar", not "corregido")
 
-def test_reprompt_corrects_target_name() -> None:
+def test_reprompt_replaces_target_name() -> None:
     corrected = {
         "target_column": {
             "name": "fraud_flag",
@@ -96,7 +99,7 @@ def test_reprompt_corrects_target_name() -> None:
     )
     assert out is not None
     assert out["target_column"]["name"] == "fraud_flag"
-    assert note and "corregido" in note
+    assert note and "reemplazado" in note
 
 
 def test_reprompt_correction_is_not_re_judged_false_positive_safe() -> None:
@@ -176,3 +179,53 @@ def test_reprompt_then_normalize_preserves_domain_name_and_fixes_shape() -> None
     assert t["role"] == "classification_target"
     assert t["dtype"] == "int"                # shape guaranteed binary
     assert changed is True
+
+
+# ── 5. gating predicate (the case_architect wiring condition) ─────────────────
+
+_MISMATCH_W = ["target_semantic_mismatch: el título sugiere [...] pero target_column.name='x'"]
+
+
+def test_predicate_fires_for_business_clf_mismatch_unenforced() -> None:
+    """The positive case: valid-shape (not enforced) business+clf with a mismatch warning."""
+    assert _should_reprompt_on_target_mismatch(
+        target_enforced=False, profile="business", family="clasificacion", warnings=_MISMATCH_W
+    ) is True
+
+
+@pytest.mark.parametrize(
+    "target_enforced,profile,family,warnings,why",
+    [
+        (True, "business", "clasificacion", _MISMATCH_W, "shape was already enforced (null/continuo)"),
+        (False, "ml_ds", "clasificacion", _MISMATCH_W, "ml_ds is out of scope"),
+        (False, "business", "regresion", _MISMATCH_W, "non-classification family"),
+        (False, "business", None, _MISMATCH_W, "unresolved family"),
+        (False, "business", "clasificacion", [], "no mismatch warning"),
+        (False, "business", "clasificacion", ["data_gap: foo"], "unrelated warning only"),
+        (False, "business", "clasificacion", ["prefix target_semantic_mismatch: x"],
+         "token mid-string, not a line prefix — pins startswith vs in"),
+    ],
+    ids=["enforced", "ml_ds", "regresion", "no_family", "no_warning", "other_warning",
+         "token_not_prefix"],
+)
+def test_predicate_does_not_fire(target_enforced, profile, family, warnings, why) -> None:
+    """Every negative branch must gate the reprompt OFF — no wasted LLM call, and (for the
+    'enforced' / 'no_warning' cases) no destructive action on a fine contract."""
+    assert _should_reprompt_on_target_mismatch(
+        target_enforced=target_enforced, profile=profile, family=family, warnings=warnings
+    ) is False, why
+
+
+def test_predicate_token_matches_real_validator_output() -> None:
+    """Coupling guard: the predicate matches the SAME token the validator emits, so the two
+    can't drift. Drive the real validator and assert its warning trips the predicate."""
+    from case_generator.graph import _validate_target_semantic_coherence
+
+    warnings = _validate_target_semantic_coherence(
+        "Estrategia de retención de clientes",  # title keyword 'retencion'
+        {"name": "fraud_flag", "role": "classification_target"},  # unrelated target
+    )
+    assert warnings, "expected the validator to emit a mismatch warning for this pair"
+    assert _should_reprompt_on_target_mismatch(
+        target_enforced=False, profile="business", family="clasificacion", warnings=warnings
+    ) is True
