@@ -743,28 +743,53 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 
 ---
 
-## TODO-LR-M4M5: Conectar probabilidad LR ↔ impacto financiero en M4/M5 (business)
+## TODO-LR-GATE-UNIFY: Unificar el gate business+clasificación de M3 con el helper de M4/M5
 
-**What:** Hacer que M4 (impacto económico) y M5 (resolución) del perfil business referencien
-explícitamente la decisión apoyada en regresión logística (probabilidad de abandono × valor del
-cliente en riesgo), en lenguaje gerencial. Hoy M4/M5 business caen al prompt default sin esa conexión.
+**What:** Refactorizar el gate inline de `m3_content_generator` (`graph.py`, inyección de
+`M3_AUDIT_LR_BUSINESS_BLOCK` vía `context["lr_business_block"]`) para que comparta el mismo origen
+de verdad que `_maybe_business_classification_prompt` (Issue #306), de modo que la condición
+`profile=="business" AND family=="clasificacion"` se defina UNA sola vez para M3/M4/M5.
 
-**Why:** La pregunta guía del caso ya pide priorizar "basándose en la probabilidad de abandono
-estimada por el modelo y el impacto financiero". El bloque LR de M3 (Issue 3A) abrió el arco; M4/M5
-aún no lo cierran.
+**Why:** Hoy la condición del gate está duplicada: inline en M3 y dentro del helper para M4/M5.
+Tres copias del mismo predicado de negocio derivan con el tiempo (p. ej. al añadir una familia o
+cambiar la normalización de `profile`).
 
-**Pros:** Coherencia narrativa completa del caso business+LR (M2→M3→M4→M5 alrededor del mismo modelo).
+**Pros:** Una única definición del gate business-LR en los tres módulos del arco.
 
-**Cons:** Cruza el umbral de complejidad del cambio original; toca M4/M5 (área sensible) y posiblemente
-un dispatch business por familia; sube el riesgo cerca de entregas.
+**Cons:** Toca `m3_content_generator` (código ya mergeado, área sensible) para un refactor no
+funcional; además los MECANISMOS de inyección difieren — M3 rellena un placeholder
+(`{lr_business_block}`) mientras M4/M5 sustituyen el prompt completo (variante por concatenación),
+así que un helper único probablemente necesite una segunda forma. La CONDICIÓN es idéntica; el
+mecanismo no.
 
-**Context:** `_resolve_family_prompt` solo despacha para ml_ds; business usa el prompt default. La
-inserción debe ser análoga al bloque LR de M3 (gate `profile==business AND family==clasificacion`),
-empezando por `M4_CONTENT_GENERATOR_PROMPT` / `M5_CONTENT_GENERATOR_PROMPT` en `prompts/__init__.py`.
-Mantener lenguaje gerendial plano, sin jerga DS (igual que `M3_AUDIT_LR_BUSINESS_BLOCK`).
+**Context:** Introducido en Issue #306. `_maybe_business_classification_prompt` vive junto a
+`_resolve_generation_focus` en `graph.py`. M3 usa el idiom placeholder; M4/M5 usan swap de prompt.
 
-**Depends on / blocked by:** Patrón de gate business+clasificacion introducido en el PR de
-"business LR + gráficos M2" (rama feature/business-lr-m2-charts).
+**Depends on / blocked by:** Issue #306 mergeado (este PR).
+
+---
+
+## TODO-MLDS-M4M5-FROZEN-HASH: Frozen-hash invariante para los prompts ml_ds de M4/M5
+
+**What:** Añadir tests con digest SHA256 congelado para los prompts ml_ds ensamblados de M4/M5,
+espejo de `_MLDS_ARCHITECT_PROMPT_SHA256` en `tests/test_issue301_pr2b_architect.py`.
+
+**Why:** Hoy solo el prompt ml_ds del ARQUITECTO está congelado por hash. Los prompts ml_ds de
+M4/M5 no tienen guard byte-level, así que una futura edición del lado business podría filtrarse al
+path ml_ds y solo lo detectarían los tests de ausencia-de-sentinela (más débiles).
+
+**Pros:** Tripwire explícito y fuerte de que el output ml_ds de M4/M5 nunca deriva por un cambio
+del lado business.
+
+**Cons:** Los hashes congelados son fricción de mantenimiento — toda edición intencional del prompt
+ml_ds de M4/M5 debe actualizar el digest; alcance más amplio que #306.
+
+**Context:** El approach 1B de Issue #306 ya mantiene el base byte-idéntico y el test
+`test_lr_business_block_m4m5_absent_from_ml_ds_prompts` cubre el riesgo inmediato de filtración. El
+frozen-hash es defensa-en-profundidad para cambios FUTUROS. Referencia:
+`tests/test_issue301_pr2b_architect.py:71-102`.
+
+**Depends on / blocked by:** Ninguno (hardening independiente).
 
 ---
 
