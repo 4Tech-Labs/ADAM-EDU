@@ -66,7 +66,7 @@ describe("CursosActivosSection", () => {
         expect(screen.getByRole("searchbox", { name: "Buscar curso" })).toBeTruthy();
     });
 
-    it("shows two skeleton cards while loading", () => {
+    it("shows skeleton cards while loading", () => {
         useTeacherCourses.mockReturnValue({
             data: undefined,
             isLoading: true,
@@ -75,7 +75,7 @@ describe("CursosActivosSection", () => {
 
         const { container } = renderWithProviders(<CursosActivosSection />);
 
-        expect(container.querySelectorAll(".animate-pulse")).toHaveLength(2);
+        expect(container.querySelectorAll(".animate-pulse")).toHaveLength(3);
     });
 
     it("shows an error message when the query fails", () => {

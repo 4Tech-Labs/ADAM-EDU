@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { PORTAL_CONTENT_SHELL_CLASSNAME } from "@/shared/ui/layout";
+
 import { TeacherUserHeader } from "./TeacherUserHeader";
 
 interface TeacherLayoutProps {
@@ -10,7 +12,7 @@ interface TeacherLayoutProps {
 
 export function TeacherLayout({
     children,
-    contentClassName = "mx-auto w-full max-w-6xl px-6 py-9",
+    contentClassName = `${PORTAL_CONTENT_SHELL_CLASSNAME} py-9`,
     testId,
 }: TeacherLayoutProps) {
     return (

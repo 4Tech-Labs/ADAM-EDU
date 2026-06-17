@@ -57,7 +57,8 @@ describe("TeacherDashboardPage", () => {
         expect(teacherLayoutSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 testId: "teacher-dashboard-page",
-                contentClassName: "mx-auto max-w-6xl space-y-10 px-6 py-9",
+                contentClassName:
+                    "mx-auto w-full max-w-[2400px] px-4 sm:px-6 lg:px-8 space-y-10 py-9",
             }),
         );
         expect(quickActionsSectionSpy).toHaveBeenCalledWith(
