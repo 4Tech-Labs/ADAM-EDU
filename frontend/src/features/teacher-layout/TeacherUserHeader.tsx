@@ -23,7 +23,7 @@ export function TeacherUserHeader() {
             className="w-full"
             style={{ background: "linear-gradient(135deg, #0144a0 0%, #0255c5 100%)" }}
         >
-            <div className={`mx-auto flex ${PORTAL_HEADER_HEIGHT_CLASSNAME} max-w-6xl items-center justify-between gap-4 px-6`}>
+            <div className={`flex ${PORTAL_HEADER_HEIGHT_CLASSNAME} items-center justify-between gap-4 px-6`}>
                 <div className="flex min-w-0 items-center gap-3.5">
                     <Link
                         to="/teacher/dashboard"
