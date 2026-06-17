@@ -53,6 +53,7 @@ Resiliencia (v9):
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -3351,8 +3352,13 @@ def _generate_dataset_from_schema(schema: dict, profile: str = "business") -> li
     constraints = schema.get("constraints", {})
 
     # Seed determinista: mismo schema → mismo dataset siempre.
+    # hashlib (no el builtin hash()) porque hash() de un str está aleatorizado por
+    # proceso (PYTHONHASHSEED), lo que rompía la reproducibilidad entre corridas.
     # RNG local (no global) para evitar race conditions con usuarios concurrentes.
-    case_seed = hash(json.dumps(schema, sort_keys=True)) % (2**31)
+    case_seed = (
+        int(hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(), 16)
+        % (2**31)
+    )
     rng = np.random.default_rng(case_seed)       # numpy — thread-safe (instancia local)
     rng_std = random.Random(case_seed)            # stdlib — thread-safe (instancia local)
 
