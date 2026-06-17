@@ -499,7 +499,7 @@ export function AdminDashboardPage() {
     return (
         <div className="min-h-screen bg-[#f0f4f8] text-slate-800" data-testid="admin-dashboard-shell">
             <header className="border-b-[3px] border-[#0144a0] bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800" data-testid="admin-dashboard-header">
-                <div className="mx-auto flex h-20 w-full max-w-7xl items-center justify-between gap-5 px-6">
+                <div className="flex h-20 w-full items-center justify-between gap-5 px-6">
                     <div className="flex items-center gap-3.5">
                         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 shadow-lg">
                             <BarChart3 className="h-5 w-5 text-white" strokeWidth={2.2} />
