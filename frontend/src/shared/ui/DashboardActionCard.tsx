@@ -12,6 +12,8 @@ interface DashboardActionCardProps {
     icon: ReactNode;
     onClick: () => void;
     className?: string;
+    topAccentClassName?: string;
+    leftBarClassName?: string;
 }
 
 export function DashboardActionCard({
@@ -24,6 +26,8 @@ export function DashboardActionCard({
     icon,
     onClick,
     className,
+    topAccentClassName = "bg-gradient-to-r from-transparent via-white/50 to-transparent",
+    leftBarClassName,
 }: DashboardActionCardProps) {
     return (
         <button
@@ -32,14 +36,14 @@ export function DashboardActionCard({
             className={cn(
                 "group relative h-[100px] overflow-hidden rounded-2xl p-5 text-left text-white shadow-lg transition-all duration-200",
                 "hover:scale-[1.02] hover:shadow-2xl active:scale-[0.98]",
-                "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0144a0]",
+                "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4f8ef7]",
                 className,
             )}
             style={{ background: gradient, borderRadius: 16 }}
         >
             <div
                 aria-hidden="true"
-                className="absolute inset-x-0 top-0 h-px rounded-t-2xl bg-gradient-to-r from-transparent via-white/50 to-transparent"
+                className={cn("absolute inset-x-0 top-0 h-px rounded-t-2xl", topAccentClassName)}
             />
             <div
                 aria-hidden="true"
@@ -56,13 +60,21 @@ export function DashboardActionCard({
                 )}
             />
             <div className="relative z-10 flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                    <h3 className="text-[16px] font-bold tracking-tight">{title}</h3>
-                    <p className={cn("mt-1 text-xs font-medium opacity-80", subtitleClassName)}>
-                        {subtitle}
-                    </p>
+                <div className="flex min-w-0 items-center gap-3">
+                    {leftBarClassName ? (
+                        <span
+                            aria-hidden="true"
+                            className={cn("h-10 w-[3px] shrink-0 rounded-full", leftBarClassName)}
+                        />
+                    ) : null}
+                    <div className="min-w-0">
+                        <h3 className="text-[16px] font-bold tracking-tight">{title}</h3>
+                        <p className={cn("mt-1 text-xs font-medium opacity-80", subtitleClassName)}>
+                            {subtitle}
+                        </p>
+                    </div>
                 </div>
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/20 backdrop-blur-sm transition-colors group-hover:bg-white/30">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-white/10 backdrop-blur-sm transition-colors group-hover:bg-white/20">
                     {icon}
                 </div>
             </div>

@@ -1,31 +1,8 @@
+import { FileText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { useToast } from "@/shared/toast-context";
 import { DashboardActionCard } from "@/shared/ui/DashboardActionCard";
-
-function SparklesIcon() {
-    return (
-        <svg
-            aria-hidden="true"
-            className="h-5 w-5 text-white"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.8}
-        >
-            <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"
-            />
-            <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"
-            />
-        </svg>
-    );
-}
 
 function ArchiveIcon() {
     return (
@@ -50,7 +27,7 @@ function ChartIcon() {
     return (
         <svg
             aria-hidden="true"
-            className="h-5 w-5 text-white"
+            className="h-5 w-5"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -79,38 +56,56 @@ export function QuickActionsSection() {
                 <DashboardActionCard
                     title="Crear Nuevo Caso"
                     subtitle="Genera con ADAM IA"
-                    subtitleClassName="text-blue-100"
-                    gradient="linear-gradient(to bottom right, #06b6d4, #3b82f6, #1d4ed8)"
-                    decorativeBlurLeftClassName="bg-cyan-300/20 group-hover:bg-cyan-300/30"
-                    decorativeBlurRightClassName="bg-white/10 group-hover:bg-white/20"
+                    subtitleClassName="text-[#bcd3f0]"
+                    gradient="linear-gradient(135deg, #0a5bc4 0%, #0144a0 55%, #00337a 100%)"
+                    topAccentClassName="bg-gradient-to-r from-transparent via-[#8fb8f5] to-transparent"
+                    leftBarClassName="bg-gradient-to-b from-white/80 to-white/30"
+                    decorativeBlurLeftClassName="bg-white/10 group-hover:bg-white/20"
+                    decorativeBlurRightClassName="bg-white/5 group-hover:bg-white/10"
                     onClick={() => navigate("/teacher/case-designer")}
-                    icon={<SparklesIcon />}
+                    icon={<FileText className="h-5 w-5 text-white" strokeWidth={1.8} />}
                 />
                 <DashboardActionCard
                     title="Gestión de Casos"
                     subtitle="Administra y edita casos activos"
-                    subtitleClassName="text-indigo-100"
-                    gradient="linear-gradient(to bottom right, #8b5cf6, #6366f1, #4338ca)"
-                    decorativeBlurLeftClassName="bg-violet-300/20 group-hover:bg-violet-300/30"
-                    decorativeBlurRightClassName="bg-white/10 group-hover:bg-white/20"
+                    subtitleClassName="text-[#bcd3f0]"
+                    gradient="linear-gradient(135deg, #0a5bc4 0%, #0144a0 55%, #00337a 100%)"
+                    leftBarClassName="bg-gradient-to-b from-white/80 to-white/30"
+                    decorativeBlurLeftClassName="bg-white/5 group-hover:bg-white/10"
+                    decorativeBlurRightClassName="bg-white/5 group-hover:bg-white/10"
                     onClick={scrollToCases}
                     icon={<ArchiveIcon />}
                 />
-                <DashboardActionCard
-                    title="Reportes Globales"
-                    subtitle="Próximamente en nuevas versiones"
-                    subtitleClassName="text-emerald-100"
-                    gradient="linear-gradient(to bottom right, #10b981, #14b8a6, #0f766e)"
-                    decorativeBlurLeftClassName="bg-emerald-300/20 group-hover:bg-emerald-300/30"
-                    decorativeBlurRightClassName="bg-white/10 group-hover:bg-white/20"
+                <button
+                    type="button"
+                    aria-disabled="true"
                     onClick={() =>
                         showToast(
                             "Reportes Globales - Próximamente en nuevas versiones...",
                             "info",
                         )
                     }
-                    icon={<ChartIcon />}
-                />
+                    style={{ borderRadius: 16, cursor: "not-allowed" }}
+                    className="flex h-[100px] items-center justify-between gap-4 border border-dashed border-[#d8d3ca] bg-[#f0ece6] p-5 text-left transition-colors hover:border-[#cfc9bf]"
+                >
+                    <div className="flex min-w-0 items-center gap-3">
+                        <span
+                            aria-hidden="true"
+                            className="h-10 w-[3px] shrink-0 rounded-full bg-gradient-to-b from-[#b9bec6] to-[#d7d3ca]"
+                        />
+                        <div className="min-w-0">
+                            <h3 className="text-[16px] font-bold tracking-tight text-[#8b93a0]">
+                                Reportes Globales
+                            </h3>
+                            <p className="mt-1 text-xs font-medium text-[#aab1bb]">
+                                Próximamente en nuevas versiones
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#e1dcd3] bg-[#e8e3da] text-[#a3a69f]">
+                        <ChartIcon />
+                    </div>
+                </button>
             </div>
         </section>
     );
