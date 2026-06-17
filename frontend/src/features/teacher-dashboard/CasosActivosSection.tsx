@@ -51,6 +51,26 @@ function DeadlineBadge({ days }: { days: number | null }) {
     );
 }
 
+function PublicationBadge({ availableFrom }: { availableFrom?: string | null }) {
+    const parsed = availableFrom ? new Date(availableFrom) : null;
+    const isScheduled =
+        parsed !== null && !Number.isNaN(parsed.getTime()) && parsed.getTime() > Date.now();
+
+    if (isScheduled) {
+        return (
+            <span className="inline-flex items-center rounded-[7px] border border-amber-100 bg-amber-50 px-[10px] py-1 text-[11.5px] font-semibold text-amber-700 whitespace-nowrap">
+                Disponible desde: {SPANISH_DEADLINE_FORMATTER.format(parsed)}
+            </span>
+        );
+    }
+
+    return (
+        <span className="inline-flex items-center rounded-[7px] border border-green-100 bg-[#dcfce7] px-[10px] py-1 text-[11.5px] font-semibold text-[#15803d] whitespace-nowrap">
+            Publicado
+        </span>
+    );
+}
+
 function formatDeadline(deadline: string | null): string | null {
     if (!deadline) {
         return null;
@@ -76,7 +96,9 @@ function CasoRow({ caso, onEdit }: CasoRowProps) {
         <tr className="group transition-colors hover:bg-slate-50">
             <td className="px-6 py-5 align-middle">
                 <div className="text-[15px] font-bold text-slate-900">{caso.title}</div>
-                <div className="mt-1 text-[12.5px] text-slate-400">{caso.status}</div>
+                <div className="mt-1.5">
+                    <PublicationBadge availableFrom={caso.available_from} />
+                </div>
             </td>
             <td className="px-6 py-5 align-middle">
                 {caso.course_codes.length > 0 ? (

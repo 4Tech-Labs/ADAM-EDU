@@ -169,6 +169,49 @@ describe("CasosActivosSection", () => {
         expect(normal.className).toContain("bg-[#e8f0fe]");
     });
 
+    it("renders 'Publicado' badge when available_from is null or in the past", () => {
+        useTeacherCases.mockReturnValue({
+            data: {
+                cases: [
+                    createCase(1, { available_from: null }),
+                    createCase(2, { available_from: "2020-01-01T00:00:00Z" }),
+                ],
+                total: 2,
+            },
+            isLoading: false,
+            isError: false,
+        });
+
+        renderWithProviders(<CasosActivosSection />);
+
+        const badges = screen.getAllByText("Publicado");
+        expect(badges).toHaveLength(2);
+        expect(badges[0].className).toContain("bg-[#dcfce7]");
+        expect(screen.queryByText(/Disponible desde:/)).toBeNull();
+    });
+
+    it("renders 'Disponible desde' badge with formatted date when available_from is in the future", () => {
+        const futureAvailableFrom = "2099-01-01T12:00:00Z";
+        useTeacherCases.mockReturnValue({
+            data: {
+                cases: [createCase(1, { available_from: futureAvailableFrom })],
+                total: 1,
+            },
+            isLoading: false,
+            isError: false,
+        });
+
+        renderWithProviders(<CasosActivosSection />);
+
+        const expectedDate = formatDeadline(futureAvailableFrom);
+        const badge = screen.getByText(
+            (content) =>
+                normalizeText(content) === normalizeText(`Disponible desde: ${expectedDate}`),
+        );
+        expect(badge.className).toContain("bg-amber-50");
+        expect(screen.queryByText("Publicado")).toBeNull();
+    });
+
     it("click 'Ver Caso' navigates to /teacher/cases/:id", () => {
         useTeacherCases.mockReturnValue({
             data: { cases: [createCase(1)], total: 1 },
