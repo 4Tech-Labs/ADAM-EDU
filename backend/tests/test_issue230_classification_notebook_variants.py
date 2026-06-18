@@ -154,6 +154,48 @@ def test_variant_prompts_keep_three_chart_budget(prompt: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("prompt", "model_tag"),
+    [
+        pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY, "(LR)", id="lr_only"),
+        pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY, "(RF)", id="rf_only"),
+        pytest.param(
+            M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST,
+            "(LR)",
+            id="lr_rf_contrast",
+        ),
+    ],
+)
+def test_variant_cost_cell_restores_legacy_pedagogy(prompt: str, model_tag: str) -> None:
+    """Issue #334: each variant's cost_matrix cell must keep parity with the
+    legacy rich cell — contract-extraction guide, cost_at_optimal/cost_at_default
+    scalars, an fp/fn-interpolated title carrying the correct model tag, and the
+    3-branch business interpretation (edge / near-default / savings). This guards
+    against the per-variant builder silently re-dropping the rich cell, which is
+    exactly how the original regression slipped in."""
+    start = prompt.index("# === SECTION:cost_matrix ===")
+    header_start = prompt.rindex("# %% [markdown]", 0, start)
+    nxt = prompt.index("# %% [markdown]", start)
+    header = prompt[header_start:start]
+    cell = prompt[start:nxt]
+
+    # A — contract-extraction guidance in the markdown header.
+    assert "extraer los costos" in header
+    assert "business_cost_matrix" in header
+    # D — savings scalars (without these the savings branch is uncomputable).
+    assert "cost_at_optimal" in cell
+    assert "cost_at_default" in cell
+    # E — fp/fn-interpolated title carrying the correct model tag.
+    assert ("Curva costo-vs-threshold " + model_tag) in cell
+    assert "fp={{fp_cost}} {{currency}}, fn={{fn_cost}} {{currency}}" in cell
+    # F — 3-branch interpretation: edge / near-default / savings.
+    assert "borde del barrido" in cell
+    assert "no compensa mover el umbral" in cell
+    assert "ahorro estimado vs 0.5" in cell
+    # Budget — the restored pedagogy is print-only: still exactly one render call.
+    assert cell.count("plt.show()") == 1
+
+
+@pytest.mark.parametrize(
     "prompt",
     [
         pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY, id="lr_only"),
