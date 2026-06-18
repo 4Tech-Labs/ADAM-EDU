@@ -26,19 +26,30 @@ import inspect as _inspect
 import string as _string
 
 from case_generator.graph import (
+    _build_base_context,
+    _extract_state_algorithm_mode,
+    _extract_state_algoritmos,
     _maybe_business_classification_prompt,
+    _resolve_classification_notebook_variant,
     _resolve_family_prompt,
+    _resolve_generation_focus,
 )
 from case_generator.prompts import (
+    M4_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_GENERATOR_PROMPT,
     M4_CHARTS_PROMPT_BY_FAMILY,
+    M4_CONTENT_GENERATOR_PROMPT,
+    M4_PROMPT_BY_FAMILY,
     M4_QUESTIONS_GENERATOR_PROMPT,
     M4_QUESTIONS_PROMPT_BY_FAMILY,
 )
 from case_generator.prompts.clasificacion.M4_clasificacion import (
     M4_CHART_PROMPT_CLASSIFICATION,
     M4_NARRATIVE_PROMPT_CLASSIFICATION,
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_LR_ONLY,
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_RF_ONLY,
     M4_QUESTIONS_PROMPT_CLASSIFICATION,
 )
 from case_generator.prompts.clasificacion.narrative import M4_PROMPT_CLASSIFICATION
@@ -348,3 +359,187 @@ def test_m4_chart_prompts_format_smoke() -> None:
     """.format(**context) no lanza KeyError para business y ml_ds (caza llaves sin escapar)."""
     assert M4_CHART_BUSINESS_PROMPT_CLASSIFICATION.format(**_CHART_CONTEXT)
     assert M4_CHARTS_PROMPT_BY_FAMILY["clasificacion"].format(**_CHART_CONTEXT)
+
+
+# ── 12. Issue #330 — narrativa M4 variant-aware (lr_only / rf_only / lr_rf_contrast) ─
+#
+# m4_content_generator resuelve la variante (réplica del dispatch de m3_content_generator)
+# y sobreescribe SOLO la clave "clasificacion" en un _effective_prompt_by_family, antes de
+# _select_narrative_prompt. El swap business y las familias no-clasificación quedan intactos.
+
+_VARIANT_KEYS = {"lr_only", "rf_only", "lr_rf_contrast"}
+
+
+def _effective_m4_clasificacion_prompt(state: dict) -> dict[str, str]:
+    """Mirror del override de variante de m4_content_generator (Issue #330).
+
+    Reproduce exactamente el bloque del nodo: solo para ml_ds + clasificación construye
+    el dict efectivo con la clave "clasificacion" sobreescrita por la variante resuelta;
+    en cualquier otro caso devuelve M4_PROMPT_BY_FAMILY sin cambios.
+    """
+    algoritmos = _extract_state_algoritmos(state)
+    mode = _extract_state_algorithm_mode(state)
+    profile, primary_family = _resolve_generation_focus(state)
+    if profile == "ml_ds" and primary_family == "clasificacion":
+        variant, _warning = _resolve_classification_notebook_variant(
+            algorithm_mode=mode, algoritmos=algoritmos
+        )
+        return {
+            **M4_PROMPT_BY_FAMILY,
+            "clasificacion": M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT[variant],
+        }
+    return M4_PROMPT_BY_FAMILY
+
+
+def _make_state_mode(
+    *, student_profile: str, algoritmos: list[str], algorithm_mode: str | None
+) -> dict:
+    state: dict = {"studentProfile": student_profile, "algoritmos": algoritmos}
+    if algorithm_mode is not None:
+        state["algorithm_mode"] = algorithm_mode
+    return state
+
+
+# Context completo del nodo m4_content_generator: _build_base_context + el .update del nodo.
+# NO se reutiliza _CHART_CONTEXT (carece de pregunta_eje y contexto_m1/m2/m3 → KeyError).
+def _m4_narrative_context() -> dict:
+    state = _make_state_mode(
+        student_profile="ml_ds",
+        algoritmos=["Logistic Regression", "Random Forest"],
+        algorithm_mode="contrast",
+    )
+    ctx = _build_base_context(state)
+    ctx.update(
+        {
+            "contexto_m1": "M1 narrativa",
+            "contexto_m2": "M2 EDA",
+            "contexto_m3": "M3 experimento",
+            "anexo_financiero": "Exhibit 1",
+            "computed_metrics_block": "auc_lr: 0.80\nauc_rf: 0.86",
+        }
+    )
+    return ctx
+
+
+def test_m4_narrative_by_variant_has_exactly_three_keys() -> None:
+    assert set(M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT) == _VARIANT_KEYS
+    for key, prompt in M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT.items():
+        assert isinstance(prompt, str) and prompt.strip(), f"{key} prompt must be non-empty"
+
+
+def test_m4_narrative_contrast_alias_and_identity() -> None:
+    """El alias back-compat y la clave de contraste apuntan al canónico."""
+    assert M4_PROMPT_CLASSIFICATION is M4_NARRATIVE_PROMPT_CLASSIFICATION
+    assert (
+        M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT["lr_rf_contrast"]
+        is M4_NARRATIVE_PROMPT_CLASSIFICATION
+    )
+    assert M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT["lr_only"] is M4_NARRATIVE_PROMPT_CLASSIFICATION_LR_ONLY
+    assert M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT["rf_only"] is M4_NARRATIVE_PROMPT_CLASSIFICATION_RF_ONLY
+
+
+def test_m4_narrative_contrast_mentions_both_models() -> None:
+    contrast = M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT["lr_rf_contrast"]
+    assert "Logistic Regression" in contrast
+    assert "Random Forest" in contrast
+
+
+def test_m4_narrative_lr_only_omits_random_forest() -> None:
+    lr_only = M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT["lr_only"]
+    assert "Logistic Regression" in lr_only
+    assert "Random Forest" not in lr_only
+    assert "RandomForest" not in lr_only
+
+
+def test_m4_narrative_rf_only_omits_logistic_regression() -> None:
+    rf_only = M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT["rf_only"]
+    assert "Random Forest" in rf_only
+    assert "Logistic Regression" not in rf_only
+    assert "LogisticRegression" not in rf_only
+
+
+def test_m4_narrative_all_variants_keep_grounding_block() -> None:
+    """Las 3 variantes citan {computed_metrics_block} (grounding clasificación siempre activo)."""
+    for key, prompt in M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT.items():
+        assert "{computed_metrics_block}" in prompt, f"{key} must keep the grounding placeholder"
+
+
+def test_m4_narrative_variants_share_placeholder_set() -> None:
+    """Paridad ENTRE variantes (no contra el canónico anterior): mismo set de placeholders."""
+    sets = [_placeholders(p) for p in M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT.values()]
+    assert sets[0] == sets[1] == sets[2], f"variant placeholder sets diverge: {sets}"
+    # El anclaje a la pregunta eje y el grounding deben estar en el set compartido.
+    assert "pregunta_eje" in sets[0]
+    assert "computed_metrics_block" in sets[0]
+
+
+def test_m4_narrative_variants_format_smoke() -> None:
+    """.format(**context) con el context COMPLETO del nodo no lanza KeyError en ninguna variante."""
+    ctx = _m4_narrative_context()
+    for key, prompt in M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT.items():
+        assert prompt.format(**ctx), f"{key} render must be non-empty"
+    # Cada placeholder de cada variante existe como key del context del nodo.
+    for prompt in M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT.values():
+        assert _placeholders(prompt) <= set(ctx)
+
+
+def test_m4_effective_dispatch_resolves_variant_for_ml_ds_classification() -> None:
+    lr = _make_state_mode(student_profile="ml_ds", algoritmos=["Logistic Regression"], algorithm_mode="single")
+    rf = _make_state_mode(student_profile="ml_ds", algoritmos=["Random Forest"], algorithm_mode="single")
+    contrast = _make_state_mode(
+        student_profile="ml_ds",
+        algoritmos=["Logistic Regression", "Random Forest"],
+        algorithm_mode="contrast",
+    )
+    assert _effective_m4_clasificacion_prompt(lr)["clasificacion"] is M4_NARRATIVE_PROMPT_CLASSIFICATION_LR_ONLY
+    assert _effective_m4_clasificacion_prompt(rf)["clasificacion"] is M4_NARRATIVE_PROMPT_CLASSIFICATION_RF_ONLY
+    assert (
+        _effective_m4_clasificacion_prompt(contrast)["clasificacion"]
+        is M4_NARRATIVE_PROMPT_CLASSIFICATION
+    )
+
+
+def test_m4_effective_dispatch_no_variant_for_non_classification_ml_ds() -> None:
+    """ml_ds + regresion/clustering/serie_temporal: dict sin override (familia intacta)."""
+    for algo in ("Linear Regression", "K-Means"):
+        state = _make_state_mode(student_profile="ml_ds", algoritmos=[algo], algorithm_mode="single")
+        eff = _effective_m4_clasificacion_prompt(state)
+        assert eff is M4_PROMPT_BY_FAMILY
+    # Las claves no-clasificación siguen apuntando al prompt genérico global.
+    for family in ("regresion", "clustering", "serie_temporal"):
+        assert M4_PROMPT_BY_FAMILY[family] is M4_CONTENT_GENERATOR_PROMPT
+
+
+def test_m4_business_classification_swap_intact() -> None:
+    """No-regresión: business+clasificación → M4_BUSINESS_PROMPT_CLASSIFICATION; ml_ds no-op."""
+    business = _make_state_mode(
+        student_profile="business", algoritmos=["Logistic Regression"], algorithm_mode="single"
+    )
+    # El nodo no construye override para business (el dict efectivo queda intacto).
+    assert _effective_m4_clasificacion_prompt(business) is M4_PROMPT_BY_FAMILY
+    # Y el swap business posterior sí intercambia al prompt LR business.
+    swapped = _maybe_business_classification_prompt(
+        business, M4_PROMPT_BY_FAMILY["clasificacion"], M4_BUSINESS_PROMPT_CLASSIFICATION
+    )
+    assert swapped is M4_BUSINESS_PROMPT_CLASSIFICATION
+    # Para ml_ds el swap es no-op (preserva la variante ya resuelta).
+    ml_ds = _make_state_mode(
+        student_profile="ml_ds", algoritmos=["Logistic Regression"], algorithm_mode="single"
+    )
+    assert (
+        _maybe_business_classification_prompt(
+            ml_ds, M4_NARRATIVE_PROMPT_CLASSIFICATION_LR_ONLY, M4_BUSINESS_PROMPT_CLASSIFICATION
+        )
+        is M4_NARRATIVE_PROMPT_CLASSIFICATION_LR_ONLY
+    )
+
+
+def test_m4_content_generator_node_wires_variant_dispatch() -> None:
+    """getsource: el nodo referencia el resolvedor de variante y el dict BY_VARIANT (cierra wiring)."""
+    from case_generator import graph as _graph
+
+    source = _inspect.getsource(_graph.m4_content_generator)
+    assert "_resolve_classification_notebook_variant" in source
+    assert "M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT" in source
+    # El override está gateado a ml_ds + clasificación (no toca business ni otras familias).
+    assert '"clasificacion"' in source

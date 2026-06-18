@@ -47,6 +47,9 @@ from case_generator.prompts.clasificacion.M4_clasificacion.charts import (
 )
 from case_generator.prompts.clasificacion.M4_clasificacion.narrative import (
     M4_NARRATIVE_PROMPT_CLASSIFICATION,
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_LR_ONLY,
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_RF_ONLY,
 )
 from case_generator.prompts.clasificacion.M4_clasificacion.questions import (
     M4_QUESTIONS_PROMPT_CLASSIFICATION,
@@ -54,6 +57,9 @@ from case_generator.prompts.clasificacion.M4_clasificacion.questions import (
 
 __all__ = [
     "M4_NARRATIVE_PROMPT_CLASSIFICATION",
+    "M4_NARRATIVE_PROMPT_CLASSIFICATION_LR_ONLY",
+    "M4_NARRATIVE_PROMPT_CLASSIFICATION_RF_ONLY",
+    "M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT",
     "M4_QUESTIONS_PROMPT_CLASSIFICATION",
     "M4_CHART_PROMPT_CLASSIFICATION",
 ]

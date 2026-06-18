@@ -43,6 +43,9 @@ Relationship with parent packages
 
 from case_generator.prompts.clasificacion.M5_clasificacion.narrative import (
     M5_NARRATIVE_PROMPT_CLASSIFICATION,
+    M5_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
+    M5_NARRATIVE_PROMPT_CLASSIFICATION_LR_ONLY,
+    M5_NARRATIVE_PROMPT_CLASSIFICATION_RF_ONLY,
 )
 from case_generator.prompts.clasificacion.M5_clasificacion.questions import (
     M5_QUESTIONS_PROMPT_CLASSIFICATION,
@@ -50,5 +53,8 @@ from case_generator.prompts.clasificacion.M5_clasificacion.questions import (
 
 __all__ = [
     "M5_NARRATIVE_PROMPT_CLASSIFICATION",
+    "M5_NARRATIVE_PROMPT_CLASSIFICATION_LR_ONLY",
+    "M5_NARRATIVE_PROMPT_CLASSIFICATION_RF_ONLY",
+    "M5_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT",
     "M5_QUESTIONS_PROMPT_CLASSIFICATION",
 ]
