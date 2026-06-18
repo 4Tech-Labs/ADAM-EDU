@@ -61,6 +61,47 @@ _M1_CLASSIFICATION_ANCHOR_ARCHITECT = """
    - Completitud de campos críticos (ej: "% registros con campo contractual sin dato: 12 %").
    Sin estas filas el `schema_designer` downstream no puede modelar el desbalance de
    clases real del caso, comprometiendo la coherencia pedagógica del notebook M3.
+
+## Matriz de costos de negocio (`business_cost_matrix`) — opcional, condicional
+
+Emite `business_cost_matrix` SOLO para el perfil ml_ds con target binario (matriz de
+confusión 2×2). Para el perfil business, target multiclase, u otras familias: NO la
+emitas (déjala ausente / `null`).
+
+Esta clave CUANTIFICA los dos errores de decisión que la regla 3 ya te obligó a narrar
+en el dilema:
+- `fp_cost` = costo del error de comisión (intervenir/actuar donde NO hacía falta).
+- `fn_cost` = costo del error de omisión (NO actuar donde la pérdida era evitable).
+Deriva ambos números del `dilema_brief` y de los Exhibits financieros (Exhibit 1/2):
+deben ser TRAZABLES al caso, NUNCA inventados. Anclaje típico: `fn_cost` ≈ pérdida de
+no detectar el evento (LTV del cliente perdido, monto del fraude no bloqueado);
+`fp_cost` ≈ costo de la acción innecesaria (retención/descuento regalado, revisión
+manual sin causa).
+
+Condición de emisión (si NO se cumple, deja la clave ausente / `null`):
+- SOLO cuando los costos de mala clasificación sean genuinamente ASIMÉTRICOS y
+  derivables del caso. Si son simétricos o no inferibles → `null` (no fabriques una
+  asimetría).
+
+Valores VÁLIDOS o el pipeline la descarta en silencio:
+- `fp_cost` y `fn_cost` ambos > 0 y finitos; cada uno ≤ 1e9.
+- ratio max(fp,fn)/min(fp,fn) ≤ 1000:1 (en cualquier dirección).
+- `currency` en MAYÚSCULAS dentro de {{USD, EUR, GBP, COP, MXN, BRL, CLP, PEN, ARS}}
+  (default "USD"); elige la moneda coherente con los Exhibits del caso.
+
+Ubicación EXACTA: añade `business_cost_matrix` como clave ANIDADA dentro de
+`dataset_schema_required` (junto a `target_column` / `feature_columns`), NUNCA como
+clave de nivel superior. La regla base "NO incluir claves extra" aplica a las claves de
+NIVEL SUPERIOR; este es un sub-campo declarado y validado del schema, no una clave extra.
+
+Forma exacta (dentro de `dataset_schema_required`):
+{{
+  "business_cost_matrix": {{
+    "fp_cost": 200,
+    "fn_cost": 5000,
+    "currency": "USD"
+  }}
+}}
 """
 
 # ── business + clasificación: bloque de target binario de dominio (Issue #301 PR2b) ──
