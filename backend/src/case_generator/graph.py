@@ -163,6 +163,7 @@ from case_generator.m3_notebook_execution import (
     execute_m3_notebook,
     format_execution_failure_for_prompt,
     is_m3_quality_warning_blocking,
+    scrub_notebook_for_safe_execution,
 )
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
@@ -5104,6 +5105,41 @@ def _validate_notebook_family_consistency(
     return violations
 
 
+def _detect_unsafe_constructs(code: str) -> list[str]:
+    """Return safety violations for a generated notebook, generation-side.
+
+    Reuses the AST-only ``scrub_notebook_for_safe_execution`` (no subprocess) so
+    the single denylist (``locals``/``globals``/``eval``/denied imports/…) is the
+    one source of truth shared with the execution-time scrub in
+    ``m3_notebook_executor``. The scrubber fails fast on the first offending cell,
+    so this returns at most one finding per call — enough to drive the
+    reprompt-once mechanism. The finding is prefixed with ``"INSEGURO: "`` so it
+    flows through the same ``violations`` list as ``FALTANTE:``/prohibited entries
+    in ``_invoke_m3_notebook_algo_section``.
+
+    Empty list = clean. Catching the unsafe construct here (before the notebook is
+    stored in state) lets the SAME reprompt that strips ``locals()`` also keep the
+    family-required APIs/sentinels intact, instead of the disjoint two-stage path
+    where the execution-time scrub triggers a blind full regeneration that can drop
+    a required artefact (Issue: M3 ml_ds clasificación ``locals()`` escalation).
+    """
+    try:
+        scrub_notebook_for_safe_execution(code)
+    except M3NotebookExecutionError as exc:
+        if exc.kind in ("unsafe_code", "syntax_error"):
+            return [f"INSEGURO: {exc}"]
+        return [f"INSEGURO: {exc.kind}"]
+    except Exception as exc:
+        # Defensivo: el detector NUNCA debe crashear el job. `ast.parse` puede
+        # lanzar RecursionError/ValueError (no SyntaxError) ante código patológico
+        # generado por el LLM (p. ej. una expresión plana de miles de términos).
+        # Cualquier fallo inesperado del scrubber se reporta como INSEGURO y se
+        # enruta por el reprompt-once → falla cerrada con mensaje claro, jamás
+        # como excepción opaca.
+        return [f"INSEGURO: scrub_error:{type(exc).__name__}"]
+    return []
+
+
 @dataclass(frozen=True)
 class _M3NotebookGenerationContext:
     llm: Any
@@ -5223,12 +5259,34 @@ def _build_m3_notebook_validation_correction(
     notebook_variant: str | None = None,
 ) -> str:
     missing = [v.removeprefix("FALTANTE: ") for v in violations if v.startswith("FALTANTE: ")]
-    prohibited_hits = [v for v in violations if not v.startswith("FALTANTE: ")]
+    unsafe_hits = [v.removeprefix("INSEGURO: ") for v in violations if v.startswith("INSEGURO: ")]
+    prohibited_hits = [
+        v
+        for v in violations
+        if not v.startswith("FALTANTE: ") and not v.startswith("INSEGURO: ")
+    ]
     corrective_blocks: list[str] = ["\n\n# CORRECCIÓN OBLIGATORIA"]
     if notebook_variant:
         corrective_blocks.append(
             f"# Variante de notebook requerida: {notebook_variant}. "
             "No agregues secciones, métricas ni imports de modelos fuera de esa variante."
+        )
+    if unsafe_hits:
+        bullet_list = "\n".join(f"#   - {tok}" for tok in unsafe_hits)
+        corrective_blocks.append(
+            "# Tu salida anterior usó introspección dinámica o un escape de runtime PROHIBIDO\n"
+            "# en una celda ejecutable (el kernel limpio la rechaza):\n"
+            f"{bullet_list}\n"
+            "# PROHIBIDO usar globals(), locals(), vars(), getattr(...), __builtins__,\n"
+            "# __import__, eval(...) o exec(...) en cualquier celda ejecutable.\n"
+            "# Si necesitas comprobar si una variable existe, usa try/except NameError.\n"
+            "# Ejemplo permitido:\n"
+            "# try:\n"
+            "#     X_train\n"
+            "#     y_train\n"
+            "# except NameError:\n"
+            "#     # recrear splits con train_test_split(...)\n"
+            "# Reescribe la salida COMPLETA conservando TODAS las sentinelas y APIs requeridas."
         )
     if prohibited_hits:
         corrective_blocks.append(
@@ -5265,14 +5323,28 @@ def _invoke_m3_notebook_algo_section(
     print(f"[{node_name}] Sección módulos LLM (1ª pasada): {len(algo_section)} chars")
 
     violations = _validate_notebook_family_consistency(family, algo_section, notebook_variant)
+    # Safety scrub is scoped to clasificacion — the ONLY family the executor runs
+    # and scrubs (graph.py m3_notebook_executor gate), the only family the bug
+    # occurred in, and the only one with a required-API contract. The other 3
+    # families' notebooks are never executed server-side, so applying the denylist
+    # there would be new policy with false-positive risk (e.g. dir()/getattr() in
+    # pedagogical code), not a bug fix. Keep blast radius == executor scope.
+    if family == "clasificacion":
+        violations += _detect_unsafe_constructs(algo_section)
     if not violations:
         return algo_section
 
     missing = [v.removeprefix("FALTANTE: ") for v in violations if v.startswith("FALTANTE: ")]
-    prohibited_hits = [v for v in violations if not v.startswith("FALTANTE: ")]
+    unsafe_hits = [v.removeprefix("INSEGURO: ") for v in violations if v.startswith("INSEGURO: ")]
+    prohibited_hits = [
+        v
+        for v in violations
+        if not v.startswith("FALTANTE: ") and not v.startswith("INSEGURO: ")
+    ]
     print(
-        f"[{node_name}] Violación de familia detectada (familia={family}, "
-        f"prohibited={prohibited_hits}, faltantes={missing}). Reprompt explícito (1/1)."
+        f"[{node_name}] Violación detectada (familia={family}, "
+        f"prohibited={prohibited_hits}, faltantes={missing}, inseguros={unsafe_hits}). "
+        "Reprompt explícito (1/1)."
     )
     reprompt = prompt_with_context + _build_m3_notebook_validation_correction(
         family,
@@ -5282,14 +5354,17 @@ def _invoke_m3_notebook_algo_section(
     response2 = llm.invoke(reprompt)
     algo_section = sanitize_markdown(_extract_text(response2))
     violations2 = _validate_notebook_family_consistency(family, algo_section, notebook_variant)
+    if family == "clasificacion":
+        violations2 += _detect_unsafe_constructs(algo_section)
     if violations2:
         logger.error(
             "[%s] Reprompt falló — familia=%s violations=%s",
             node_name, family, violations2,
         )
         raise RuntimeError(
-            f"M3 notebook generator no satisfizo la familia "
-            f"'{family}' incluso tras un reprompt: {violations2}. "
+            f"M3 notebook generator no satisfizo las validaciones de notebook "
+            f"(familia/seguridad) para '{family}' incluso tras un reprompt: "
+            f"{violations2}. "
             f"Job marcado como fallido para evitar shipping de notebook roto."
         )
     print(f"[{node_name}] Reprompt OK — familia={family}, chars={len(algo_section)}")
