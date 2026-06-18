@@ -21,8 +21,8 @@ Pipeline (no LLM calls; pandas only):
    │                                             para el display; lo declara)      │
    │  2. churn_drivers      (bar horizontal)    |corr| reales con el objetivo,    │
    │                                            eje fijo [0,1] → sin exagerar      │
-   │  3. cohort_collapse    (heatmap)           retención por cohorte             │
-   │                                            (reusa precalculated cohort_matrix)│
+   │  3. cohort_collapse    (heatmap/bar/box)   retención por cohorte si el target │
+   │                                            es churn; si no, balance/box (#322) │
    └────────────────────────────────────────────────────────────────────────────┘
                                         ▼
             list[EDAChartSpec]  (data_source="python_builder",
@@ -444,14 +444,33 @@ def _build_churn_drivers(
 def _build_cohort_collapse(
     df: pd.DataFrame, target_col: str, precalculated_metrics: dict | None, source: str
 ) -> dict[str, Any]:
-    """Heatmap de retención por cohorte (reusa la matriz ya row-capped).
+    """3er chart M2 business — heatmap de retención SOLO si el target es de retención.
 
-    Si no hay matriz de cohortes, cae a una caja (box) de la distribución del
-    objetivo — nunca falsea una cohorte inexistente.
+    `cohort_matrix` se computa siempre en graph.py para cualquier dataset con
+    `retention_m*`+`period`, sin mirar el objetivo del caso (Issue #322). Por eso aquí
+    se gatea por `is_retention_match(target_col)`: un caso binario NO-retención (fraude,
+    impago, entrega tardía) que arrastre columnas de retención NO debe rotular un heatmap
+    "de Retención" — cae al chart relevante. Nunca falsea una cohorte inexistente.
+
+        cohort dict AND cohort["z"] AND is_retention ?        ◀━ gate (#322)
+          ├─ YES ─▶ [HEATMAP] "Retención de Cohortes"
+          └─ NO  ─▶ target in df AND numérico ?
+                      ├─ SÍ ─▶ binario {0,1} ? ─ SÍ ─▶ [CLASS_BALANCE bar]
+                      │                         └ NO ─▶ [BOX target_distribution]
+                      └─ NO ─▶ [EMPTY_CHART] título retention-aware (sin "Retención"
+                                             cuando is_retention es False)
     """
     pm = precalculated_metrics or {}
     cohort = pm.get("cohort_matrix")
-    if isinstance(cohort, dict) and cohort.get("z"):
+    # `is_retention_match` ya acepta str|None y vetea compuestos de gobernanza/RR.HH.
+    # (mismo predicado que `_drivers_title`); se computa una vez y se reutiliza en el
+    # gate del heatmap y en el título del empty_chart.
+    is_retention = is_retention_match(target_col)
+    # Issue #322 — el heatmap "de Retención" solo gana si el target ES de retención.
+    # Trade-off aceptado: un caso de churn con target de nombre genérico (p. ej.
+    # `categoria`) que el vocab no detecte cae a class_balance/box en vez de heatmap —
+    # seguro y relevante, y preferible a un heatmap "de Retención" en un caso de fraude.
+    if isinstance(cohort, dict) and cohort.get("z") and is_retention:
         return {
             "id": "cohort_collapse",
             "title": "El colapso del valor (Retención de Cohortes)",
@@ -565,13 +584,24 @@ def _build_cohort_collapse(
                 "data_source": "python_builder",
             }
 
+    # Issue #322 — título retention-aware: no rotular "Retención" cuando el caso no es
+    # de retención (mismo gate que el heatmap, vía `is_retention`).
+    if is_retention:
+        return empty_chart(
+            "cohort_collapse",
+            "El colapso del valor (Retención de Cohortes)",
+            "Sin columnas de retención ni objetivo numérico",
+            "heatmap",
+            source,
+            notes="No hay matriz de cohortes ni objetivo numérico para graficar.",
+        )
     return empty_chart(
         "cohort_collapse",
-        "El colapso del valor (Retención de Cohortes)",
-        "Sin columnas de retención ni objetivo numérico",
+        "El objetivo del caso",
+        "Sin objetivo numérico para graficar",
         "heatmap",
         source,
-        notes="No hay matriz de cohortes ni objetivo numérico para graficar.",
+        notes="No hay un objetivo numérico del caso para graficar.",
     )
 
 

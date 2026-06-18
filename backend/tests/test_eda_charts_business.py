@@ -1133,3 +1133,86 @@ def test_churn_business_non_regression_three_retention_charts(
     assert drivers["title"] == "Factores asociados al abandono"
     # Eje simétrico [-1,1] (#320): conserva el anti-exageración de #296 y muestra dirección.
     assert drivers["layout"]["xaxis"]["range"] == [-1, 1]
+
+
+# ─────────────────────────────────────────────────────────
+# Issue #322 — el heatmap de cohortes se gatea por retención del target
+#
+# `cohort_matrix` se computa en graph.py para CUALQUIER dataset con retention_m*+period,
+# sin mirar el objetivo. Aquí inyectamos esa matriz en casos NO-retención para probar que
+# el 3er chart YA NO la usa para rotular un heatmap "de Retención", y que un caso de churn
+# sí lo conserva.
+# ─────────────────────────────────────────────────────────
+
+
+def test_cohort_non_retention_binary_with_cohort_uses_class_balance(
+    precalc_with_cohort,
+) -> None:
+    """Caso binario NO-retención que arrastra cohort_matrix → barra de balance de clases,
+    NO un heatmap "de Retención". Sin el gate este test fallaría (rendiría heatmap)."""
+    df = _df_business_binary()  # target NO-retención `late_partner_flag` {0,1}
+    charts = generate_business_eda_charts(
+        df,
+        "late_partner_flag",
+        {"cohort_matrix": precalc_with_cohort["cohort_matrix"]},
+        CONTRACT,
+    )
+    third = charts[2]
+    assert third["id"] == "class_balance"
+    assert third["chart_type"] == "bar"
+    assert "Retención" not in third["title"]
+
+
+def test_cohort_retention_binary_with_cohort_keeps_heatmap(precalc_with_cohort) -> None:
+    """No-regresión: un target de churn binario {0,1} con cohort presente sigue rindiendo
+    el heatmap de retención (el gate aprueba por el token 'churn')."""
+    df = _df_business_binary().rename(columns={"late_partner_flag": "churn_flag"})
+    charts = generate_business_eda_charts(
+        df,
+        "churn_flag",
+        {"cohort_matrix": precalc_with_cohort["cohort_matrix"]},
+        CONTRACT,
+    )
+    third = charts[2]
+    assert third["id"] == "cohort_collapse"
+    assert third["chart_type"] == "heatmap"
+    assert "Retención de Cohortes" in third["title"]
+
+
+def test_cohort_non_retention_continuous_with_cohort_falls_to_box(
+    precalc_with_cohort,
+) -> None:
+    """Target continuo NO-retención con cohort presente → caja de distribución (no heatmap).
+    Cubre la 3ra combinación nueva creada por el gate (continuo × cohort presente)."""
+    df = _df_business_binary()  # `partner_history_score` es continuo y NO-retención
+    charts = generate_business_eda_charts(
+        df,
+        "partner_history_score",
+        {"cohort_matrix": precalc_with_cohort["cohort_matrix"]},
+        CONTRACT,
+    )
+    third = charts[2]
+    assert third["id"] == "target_distribution"
+    assert third["chart_type"] == "box"
+    assert "Retención" not in third["title"]
+
+
+def test_cohort_empty_fallback_title_is_retention_aware() -> None:
+    """Sin cohort y sin objetivo numérico en el df, el empty_chart no debe rotular
+    "Retención" para un caso NO-retención; un caso de retención sí conserva el título."""
+    df = _df_business_binary()  # no contiene las columnas objetivo que pasamos abajo
+    # NO-retención: target ausente del df + sin cohort → empty, título neutro.
+    non_ret = next(
+        c
+        for c in generate_business_eda_charts(df, "fraud_target", {}, CONTRACT)
+        if c["id"] == "cohort_collapse"
+    )
+    assert "Retención" not in non_ret["title"]
+    assert "Retención" not in non_ret["subtitle"]
+    # Retención: target de churn ausente + sin cohort → empty, conserva el título clásico.
+    ret = next(
+        c
+        for c in generate_business_eda_charts(df, "churn_flag", {}, CONTRACT)
+        if c["id"] == "cohort_collapse"
+    )
+    assert "Retención de Cohortes" in ret["title"]
