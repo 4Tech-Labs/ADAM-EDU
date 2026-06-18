@@ -13,10 +13,12 @@ the new instruction across profiles and families.
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 
 from case_generator.graph import _assemble_architect_prompt
+from case_generator.tools_and_schemas import _SUPPORTED_COST_CURRENCIES
 
 # Stable sentinels the subsection must expose. ``_COST_MATRIX_TOKEN`` is unique to the new
 # instruction (it appears nowhere in the base prompt), so its presence/absence cleanly
@@ -97,6 +99,24 @@ def test_business_classification_carries_gated_cost_matrix_text() -> None:
     assert _COST_MATRIX_TOKEN in assembled
     # The gate explicitly restricts emission to the ml_ds profile.
     assert _GATE_PHRASE in assembled
+
+
+# ── drift guard: prompt currency allowlist must stay in sync with the validator ──
+
+def test_prompt_currency_allowlist_stays_in_sync_with_validator() -> None:
+    """The anchor lists the supported currencies as prose; ``BusinessCostMatrix``
+    enforces the same set (``_SUPPORTED_COST_CURRENCIES``). If either drifts the LLM
+    would be taught a stale allowlist (and the validator would silently reject the
+    stray currency). Compare both directions so they can never diverge unnoticed."""
+    assembled = _assemble_architect_prompt(_ctx("ml_ds", "clasificacion"))
+    match = re.search(r"\{([A-Z]{3}(?:, [A-Z]{3})+)\}", assembled)
+    assert match is not None, "currency allowlist block not found in architect prompt"
+    prompt_codes = set(match.group(1).split(", "))
+    assert prompt_codes == set(_SUPPORTED_COST_CURRENCIES), (
+        "architect prompt currency list drifted from the BusinessCostMatrix validator "
+        f"(prompt={sorted(prompt_codes)}, validator={sorted(_SUPPORTED_COST_CURRENCIES)}); "
+        "update the anchor subsection and tools_and_schemas together."
+    )
 
 
 # ── (c) OPTIONAL live golden-eval (deferred) ──────────────────────────────────
