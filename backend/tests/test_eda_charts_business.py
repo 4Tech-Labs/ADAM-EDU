@@ -1030,6 +1030,23 @@ def _df_business_binary() -> pd.DataFrame:
     )
 
 
+def _df_business_binary_with_flags(flags: list[int]) -> pd.DataFrame:
+    """Variante de `_df_business_binary` con una distribución de clases controlada
+    (Issue #321). Conserva las columnas business y reemplaza el flag objetivo para
+    forzar balance/desbalance/borde sin cohort_matrix."""
+    n = len(flags)
+    return pd.DataFrame(
+        {
+            "period": [f"2023-{(m % 12) + 1:02d}" for m in range(n)],
+            "revenue": [100_000 + i * 2_000 for i in range(n)],
+            "costs": [70_000 + i * 1_000 for i in range(n)],
+            "margin_pct": [30.0] * n,
+            "partner_history_score": [i / max(n - 1, 1) for i in range(n)],
+            "late_partner_flag": list(flags),
+        }
+    )
+
+
 def test_drivers_title_non_churn_target_is_neutral() -> None:
     """Un caso de logística no debe titular el chart de drivers como 'abandono'."""
     df = _df_business_binary()
@@ -1059,6 +1076,45 @@ def test_cohort_fallback_binary_target_uses_class_balance_bar() -> None:
     assert "Retención" not in third["title"]
     # cuenta de cada clase {0,1}
     assert sorted(third["traces"][0]["x"]) == ["0", "1"]
+    # Issue #321 — balanceado (6/6 = 50%): el % se muestra siempre, sin aviso de desbalance.
+    assert third["notes"] == ""
+    assert "(50%)" in third["traces"][0]["text"][0]
+
+
+def test_class_balance_severe_imbalance_emits_managerial_note() -> None:
+    """Issue #321 — minoría < 20% ⇒ el propio gráfico marca el desbalance (% + nota gerencial)."""
+    df = _df_business_binary_with_flags([0] * 11 + [1])  # minoría 1/12 ≈ 8%
+    charts = generate_business_eda_charts(df, "late_partner_flag", {}, CONTRACT)
+    chart = next(c for c in charts if c["id"] == "class_balance")
+    notes = chart["notes"]
+    assert "poco frecuente" in notes
+    assert "8%" in notes  # % real de la minoría, en la nota
+    # % también visible en las barras, sin leer la nota
+    text = chart["traces"][0]["text"]
+    assert "1 (8%)" in text
+    assert "11 (92%)" in text
+    # registro gerencial — sin jerga DS
+    for jargon in (
+        "Accuracy Paradox",
+        "AUC-ROC",
+        "matriz de confusión",
+        "F1",
+        "precision",
+        "recall",
+    ):
+        assert jargon not in notes
+    # la nota cabe íntegra en el presupuesto de _annotate_validate_emit (300 chars)
+    assert len(notes) <= 300
+
+
+def test_class_balance_boundary_exactly_20pct_does_not_warn() -> None:
+    """Issue #321 — 20% exacto NO dispara (umbral estricto `<`, alinea 'menos del 20%')."""
+    df = _df_business_binary_with_flags([0] * 8 + [1] * 2)  # minoría 2/10 = 20%
+    charts = generate_business_eda_charts(df, "late_partner_flag", {}, CONTRACT)
+    chart = next(c for c in charts if c["id"] == "class_balance")
+    assert chart["notes"] == ""
+    # el % sigue presente en las barras aunque no haya aviso
+    assert "2 (20%)" in chart["traces"][0]["text"]
 
 
 def test_churn_business_non_regression_three_retention_charts(

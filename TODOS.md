@@ -1746,3 +1746,55 @@ normaliza heatmaps y `null→0` en x/y (no toca `marker`, no recorta negativos) 
 
 **Depends on / blocked by:** Ninguno. El fix backend de #320 es independiente; este TODO es hardening
 de cobertura FE.
+
+---
+
+## TODO-321-A: Paridad de aviso de desbalance en el chart ml_ds `class_distribution`
+
+**What:** Añadir una nota condicional de desbalance al chart ml_ds `_build_class_distribution`
+(`backend/src/case_generator/datagen/eda_charts_classification.py`, id `class_distribution`,
+hoy `notes=''`), espejando el patrón conditional-notes que #321 introdujo en el chart business
+`class_balance`.
+
+**Why:** Tras #321, el chart **business** marca el desbalance severo en el propio gráfico, pero
+el **ml_ds** sigue mostrando solo conteos+`pct` sin aviso, pese a que su prompt M2 ml_ds ya avisa
+(`prompts/clasificacion/M2_clasificacion/eda_text.py:51,77`). Esa asimetría la introduce #321.
+
+**Pros:** Restaura consistencia cross-perfil; el chart ml_ds ya computa `pct` y `total`, así que el
+follow-up es pequeño y aditivo.
+
+**Cons:** No es copy-paste: el registro ml_ds admite jerga DS (Accuracy Paradox, AUC-ROC, ratio
+N:1), a diferencia del registro gerencial sin jerga de business. Requiere redactar la nota ml_ds y
+decidir si usa el umbral 20% (clasificación binaria) o el 4:1 que ya cita el prompt ml_ds.
+
+**Context:** `_build_class_distribution` es un code path separado, sin cross-import con
+`eda_charts_business.py`. Punto de partida: replicar la rama condicional `notes = WARN if
+minority_share < THRESHOLD else ''` usando los `pct`/`total` ya calculados. NO hacerlo dentro de
+#321 (rompe el invariante business-only de ese PR).
+
+**Depends on / blocked by:** Independiente de #321. Building now NO — viola el scope business-only.
+
+---
+
+## TODO-321-B: Single-source-of-truth del umbral de desbalance (low priority)
+
+**What:** Unificar el umbral de desbalance severo (clase minoritaria < 20% ⇔ ratio > 4:1) que hoy
+vive en tres lugares: el prompt M2 business (`eda_text.py`, "menos del 20%"), el prompt M2 ml_ds
+(`eda_text.py:51,77`, 20% y 4:1) y la constante `_CLASS_BALANCE_MINORITY_WARN = 0.20` que #321
+añadió en `eda_charts_business.py`.
+
+**Why:** Esta superficie está en churn activo (#318/#319/#320/#321); con tres copias del umbral, un
+3.º consumidor o un cambio de política puede divergir en silencio.
+
+**Pros:** Una sola fuente de verdad numérica para los builders; menos riesgo de drift.
+
+**Cons:** Los prompts son prosa y no consumen trivialmente una constante numérica, así que la
+unificación es parcial (los prompts seguirían diciendo "20%" en texto) → payoff limitado hoy.
+
+**Context:** Decisión #321 (plan-eng-review 2A): se aceptó la duplicación con un comentario
+cross-ref en la constante. Disparador para actuar: aparece un 3.º consumidor en código o se pide
+cambiar el umbral → extraer un módulo `imbalance_thresholds` que importen los builders business y
+ml_ds; los prompts permanecen como prosa.
+
+**Depends on / blocked by:** Un 3.º consumidor de código del umbral o una solicitud de cambio del
+valor. No bloquea nada.

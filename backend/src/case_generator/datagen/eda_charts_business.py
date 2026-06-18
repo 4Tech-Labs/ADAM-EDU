@@ -60,6 +60,11 @@ logger = logging.getLogger("adam.graph")
 _DRIVERS_TOP_K = 8
 _DRIVERS_MIN_ABS_CORR = 0.10
 
+# Issue #321 — desbalance severo: clase minoritaria < 20% del total (⇔ ratio > 4:1).
+# El mismo umbral vive como prosa en el prompt M2 business (prompts/clasificacion/
+# M2_clasificacion/eda_text.py, "menos del 20%") — mantener ambos en sync.
+_CLASS_BALANCE_MINORITY_WARN = 0.20
+
 # Issue #320 — color por dirección de la asociación (mismo eje rojo↔azul que el
 # heatmap RdBu de correlación): rojo = la variable *aumenta* el evento (corr > 0);
 # azul = lo *reduce* / protege (corr < 0). Tonos distinguibles para daltonismo.
@@ -488,6 +493,25 @@ def _build_cohort_collapse(
                 counts = s.astype(int).value_counts().sort_index()
                 labels = [str(int(k)) for k in counts.index]
                 vals_count = [int(v) for v in counts.values]
+                # Issue #321 — marca el desbalance en el propio gráfico: % por barra
+                # (siempre) + nota gerencial sin jerga DS cuando la clase minoritaria
+                # es poco frecuente. Guard total==0 defensivo (is_binary ya implica
+                # total>=2; el builder corre en un try-except que omite el chart si lanza).
+                total = sum(vals_count)
+                bar_text = (
+                    [f"{v} ({v / total:.0%})" for v in vals_count]
+                    if total
+                    else [str(v) for v in vals_count]
+                )
+                minority_share = (min(vals_count) / total) if total else 1.0
+                imbalance_note = (
+                    "El evento es poco frecuente (solo "
+                    f"{minority_share:.0%} de los casos). Un análisis que asumiera que "
+                    "casi nunca ocurre parecería acertar casi siempre sin aportar valor; "
+                    "lo importante es anticipar los pocos casos en que sí ocurre."
+                    if minority_share < _CLASS_BALANCE_MINORITY_WARN
+                    else ""
+                )
                 return {
                     "id": "class_balance",
                     "title": f"Balance de clases del objetivo ({target_col})",
@@ -500,7 +524,7 @@ def _build_cohort_collapse(
                             "x": labels,
                             "y": vals_count,
                             "name": "casos",
-                            "text": [str(v) for v in vals_count],
+                            "text": bar_text,
                             "textposition": "outside",
                         }
                     ],
@@ -512,7 +536,7 @@ def _build_cohort_collapse(
                     },
                     "source": source,
                     "description": "",
-                    "notes": "",
+                    "notes": imbalance_note,
                     "data_source": "python_builder",
                 }
             # Target continuo: caja de distribución (comportamiento previo).
