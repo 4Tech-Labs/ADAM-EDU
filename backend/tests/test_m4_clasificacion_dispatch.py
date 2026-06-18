@@ -23,9 +23,14 @@ These are pure-Python unit tests — no LLM calls, no DB, no fixtures.
 """
 
 import inspect as _inspect
+import string as _string
 
-from case_generator.graph import _resolve_family_prompt
+from case_generator.graph import (
+    _maybe_business_classification_prompt,
+    _resolve_family_prompt,
+)
 from case_generator.prompts import (
+    M4_CHART_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_GENERATOR_PROMPT,
     M4_CHARTS_PROMPT_BY_FAMILY,
     M4_QUESTIONS_GENERATOR_PROMPT,
@@ -193,3 +198,153 @@ def test_m4_chart_generator_node_injects_computed_metrics_block() -> None:
     assert "computed_metrics_block" in source, (
         "m4_chart_generator must inject 'computed_metrics_block' into context"
     )
+
+
+# ── 10. Issue #319 — business+clasificación chart prompt swap ─────────────────
+#
+# m4_chart_generator resolves its prompt in two steps (graph.py):
+#     prompt = _resolve_family_prompt(state, M4_CHARTS_PROMPT_BY_FAMILY, M4_CHART_GENERATOR_PROMPT)
+#     prompt = _maybe_business_classification_prompt(state, prompt, M4_CHART_BUSINESS_PROMPT_CLASSIFICATION)
+# _resolve_chart_prompt() replicates that exact chain so the behaviour tests below
+# assert on the *composed* dispatch (not just the family table). A separate
+# getsource test proves the node is actually wired (catches a forgotten node line).
+
+
+def _resolve_chart_prompt(state: dict) -> str:
+    """Replica la cadena de resolución de prompt de m4_chart_generator."""
+    prompt = _resolve_family_prompt(
+        state, M4_CHARTS_PROMPT_BY_FAMILY, M4_CHART_GENERATOR_PROMPT
+    )
+    return _maybe_business_classification_prompt(
+        state, prompt, M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
+    )
+
+
+def test_m4_chart_business_clasificacion_resolves_business_prompt() -> None:
+    """business + clasificación → M4_CHART_BUSINESS_PROMPT_CLASSIFICATION (no genérico, no ml_ds)."""
+    state = _make_state(student_profile="business", algoritmos=["Logistic Regression"])
+    result = _resolve_chart_prompt(state)
+    assert result is M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
+    assert result is not M4_CHART_GENERATOR_PROMPT
+    assert result is not M4_CHARTS_PROMPT_BY_FAMILY["clasificacion"]  # not the ml_ds prompt
+
+
+def test_m4_chart_business_regresion_stays_generic() -> None:
+    """business + regresión → genérico (el swap es no-op fuera de clasificación)."""
+    state = _make_state(student_profile="business", algoritmos=["Linear Regression"])
+    result = _resolve_chart_prompt(state)
+    assert result is M4_CHART_GENERATOR_PROMPT
+    assert result is not M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
+
+
+def test_m4_chart_business_clustering_stays_generic() -> None:
+    """business + clustering → genérico (el swap es no-op fuera de clasificación)."""
+    state = _make_state(student_profile="business", algoritmos=["K-Means"])
+    result = _resolve_chart_prompt(state)
+    assert result is M4_CHART_GENERATOR_PROMPT
+    assert result is not M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
+
+
+def test_m4_chart_mlds_clasificacion_unchanged() -> None:
+    """ml_ds + clasificación → prompt ml_ds intacto (swap no-op para ml_ds)."""
+    state = _make_state(student_profile="ml_ds", algoritmos=["Logistic Regression"])
+    result = _resolve_chart_prompt(state)
+    assert result is M4_CHARTS_PROMPT_BY_FAMILY["clasificacion"]
+    assert result is not M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
+
+
+def test_m4_chart_mlds_regresion_unchanged() -> None:
+    """ml_ds + regresión → genérico (familias no-clasificación intactas)."""
+    state = _make_state(student_profile="ml_ds", algoritmos=["Linear Regression"])
+    result = _resolve_chart_prompt(state)
+    assert result is M4_CHART_GENERATOR_PROMPT
+    assert result is not M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
+
+
+def test_m4_chart_generator_node_wires_business_swap() -> None:
+    """m4_chart_generator debe llamar _maybe_business_classification_prompt con el prompt business.
+
+    Cierra F1: una línea olvidada en el nodo dejaría los charts business en el genérico
+    sin que las pruebas de comportamiento (que ejercitan los helpers) lo detecten.
+    """
+    from case_generator import graph as _graph
+
+    source = _inspect.getsource(_graph.m4_chart_generator)
+    assert "_maybe_business_classification_prompt" in source, (
+        "m4_chart_generator must apply the business+clasificación swap"
+    )
+    assert "M4_CHART_BUSINESS_PROMPT_CLASSIFICATION" in source, (
+        "m4_chart_generator must swap to M4_CHART_BUSINESS_PROMPT_CLASSIFICATION"
+    )
+
+
+# ── 11. Issue #319 — contrato del prompt business (jerga / placeholders / format) ─
+
+# Render gerencial: NO debe filtrar jerga DS. NO incluye 'churn'/'roi'/'npv': el genérico
+# base los usa legítimamente (p. ej. "Tasa de churn / retención"), así que prohibirlos
+# rompería contra el propio base, no contra el bloque #319.
+_DS_JARGON_TOKENS = (
+    "auc",
+    "f1",
+    "drift",
+    "umbral de decisión",
+    "matriz de confusión",
+    "precision",
+    "precisión",
+    "recall",
+    "log-odds",
+)
+
+# Context completo que cubre los placeholders de AMBOS prompts (genérico business = 6;
+# ml_ds clasificación = 9). Valores benignos para no introducir jerga vía sustitución.
+_CHART_CONTEXT: dict[str, object] = {
+    "m4_content": "Análisis de impacto del Módulo 4.",
+    "anexo_financiero": "Exhibit 1: inversión y flujos.",
+    "student_profile": "business",
+    "output_language": "Spanish",
+    "case_id": "case-0001",
+    "industria": "retail",
+    "algoritmos": "Logistic Regression",
+    "algorithm_mode": "single",
+    "computed_metrics_block": "[sin métricas ejecutadas]",
+}
+
+
+def _placeholders(template: str) -> set[str]:
+    """Extrae los nombres de placeholder de un template .format() (técnica de M2)."""
+    return {
+        fname.split(".")[0].split("[")[0]
+        for _, fname, _, _ in _string.Formatter().parse(template)
+        if fname
+    }
+
+
+def test_m4_chart_business_prompt_no_ds_jargon() -> None:
+    """El render business+clasificación NO expone jerga DS a una audiencia gerencial."""
+    rendered = M4_CHART_BUSINESS_PROMPT_CLASSIFICATION.format(**_CHART_CONTEXT).lower()
+    leaked = [t for t in _DS_JARGON_TOKENS if t in rendered]
+    assert not leaked, f"business chart render leaked DS jargon: {leaked}"
+
+
+def test_m4_chart_business_prompt_keeps_priorization_framing() -> None:
+    """El bloque #319 reorienta los gráficos hacia la lógica de priorización gerencial."""
+    rendered = M4_CHART_BUSINESS_PROMPT_CLASSIFICATION.lower()
+    assert "probabilidad de evento" in rendered
+    assert "valor en riesgo" in rendered
+
+
+def test_m4_chart_business_prompt_placeholder_contract() -> None:
+    """El bloque #319 NO añade placeholders: el set coincide con el genérico base.
+
+    m4_chart_generator hace un único prompt.format(**context); un placeholder nuevo
+    en el bloque (o una llave literal sin escapar) saldría como KeyError en runtime.
+    """
+    assert _placeholders(M4_CHART_BUSINESS_PROMPT_CLASSIFICATION) == _placeholders(
+        M4_CHART_GENERATOR_PROMPT
+    ), "M4_CHART_BUSINESS_PROMPT_CLASSIFICATION must not add/remove any placeholder vs the base"
+
+
+def test_m4_chart_prompts_format_smoke() -> None:
+    """.format(**context) no lanza KeyError para business y ml_ds (caza llaves sin escapar)."""
+    assert M4_CHART_BUSINESS_PROMPT_CLASSIFICATION.format(**_CHART_CONTEXT)
+    assert M4_CHARTS_PROMPT_BY_FAMILY["clasificacion"].format(**_CHART_CONTEXT)

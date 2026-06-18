@@ -132,6 +132,7 @@ from case_generator.prompts import (
     M4_CONTENT_GENERATOR_PROMPT,
     M4_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_GENERATOR_PROMPT,
+    M4_CHART_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHARTS_PROMPT_BY_FAMILY,
     M5_PROMPT_BY_FAMILY,
     M5_CONTENT_GENERATOR_PROMPT,
@@ -5517,6 +5518,11 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
         })
 
         prompt = _resolve_family_prompt(state, M4_CHARTS_PROMPT_BY_FAMILY, M4_CHART_GENERATOR_PROMPT)
+        # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
+        # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
+        prompt = _maybe_business_classification_prompt(
+            state, prompt, M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
+        )
         result: EDAChartGeneratorOutput = llm.with_structured_output(
             EDAChartGeneratorOutput
         ).invoke(prompt.format(**context))
