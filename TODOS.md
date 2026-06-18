@@ -1801,40 +1801,54 @@ valor. No bloquea nada.
 
 ---
 
-## TODO-COHORT-PRECOMPUTE-322: gatear el cómputo de `cohort_matrix` por retención (y reconciliar el prompt)
+## TODO-COHORT-PRECOMPUTE-322: gatear el cómputo de `cohort_matrix` por retención — ✅ RESUELTO (#326)
 
-**What:** `_calculate_eda_regressions` en `backend/src/case_generator/graph.py` (líneas 1309-1333)
-computa `cohort_matrix` para CUALQUIER dataset con `retention_m*` (≥2) + `period`, sin mirar si el
-objetivo del caso es de retención. Además, el prompt (`prompts/__init__.py:345-350`) promete que para
-clasificación NO-retención el pipeline "reemplaza determinísticamente las columnas churn/retención",
-pero no existe código que lo haga (grep no encontró `drop`/`exclude`/`filter` de `retention_m*` por
-tipo de caso; `_enforce_business_classification_schema` solo fuerza el decaimiento m1≥m3≥m6≥m12 en
-graph.py:3579, nunca elimina columnas). Gatear el cómputo (o eliminar las columnas de retención del
-schema) para casos business NO-retención, y reconciliar la promesa del prompt con la realidad.
-Además, el path LLM-JSON legacy (`EDA_CHART_GENERATOR_PROMPT`, `prompts/__init__.py:576-590`,
-vivo para business+familias-no-clasificación y ml_ds) tiene la MISMA selección de heatmap
-"de Retención" gateada solo por la existencia de `cohort_matrix` (CASO A, línea 578), sin mirar
-si el target es de retención — mismo bug que #322 fuera del path determinista. Gatearlo ahí también.
+**Estado:** RESUELTO por Issue #326 (`fix/issue-326-cohort-precompute-gate`). El cómputo de
+`cohort_matrix` en `_calculate_eda_regressions` (`graph.py`) ahora se gatea con
+`profile != "ml_ds" and is_retention_match(target_col)` — el MISMO predicado que la selección
+determinista business (`eda_charts_business.py`), así computar ⟺ seleccionar. Para casos
+NO-retención el artefacto desaparece de `precalculated_metrics`, por lo que el path LLM-JSON legacy
+(`EDA_CHART_GENERATOR_PROMPT`, CASO A "si existe la clave cohort_matrix") cae naturalmente a CASO B
+(box/violin) sin tocar el prompt. ml_ds nunca computa el artefacto (su panel determinista no
+renderiza cohort heatmap). #322 no se regresa: business churn sigue mostrando el heatmap.
 
-**Why:** Cierra la causa raíz que #322 solo mitigó en la SELECCIÓN del chart. Hoy se computa y se
-pasa una matriz de cohortes que el builder ya ignora para casos NO-retención (artefacto fantasma +
-cómputo desperdiciado), y el prompt afirma un paso que no se ejecuta (límite engañoso).
+**Corrección de premisa (el cuerpo original de este TODO y el de #326 eran incorrectos en un
+punto):** SÍ existe código que reemplaza determinísticamente las columnas churn/retención para
+business clasificación NO-retención — `_enforce_business_classification_schema` elimina
+`_CHURN_TEMPLATE_COLUMNS = {churn_rate, nps, retention_m1/m3/m6/m12}` en `graph.py:2962`, gateado por
+`profile=="business" AND family=="clasificacion"` y por `_is_retention_target_name(target)`. El grep
+original falló porque buscaba `drop`/`filter`/`retention_m`, pero el código usa un frozenset nombrado.
+La promesa del prompt (`prompts/__init__.py:345-350`) por tanto NO mentía para business. El residual
+real era (a) el cómputo incondicional del artefacto y (b) ml_ds, que conserva `retention_m*` en su
+schema fijo de 18 columnas → ambos cerrados por el gate del cómputo. Ver TODO-ML-DS-RETENTION-AWARE
+para el stripping del schema ml_ds (gated por ADR).
 
-**Pros:** Elimina el artefacto fantasma y el cómputo desperdiciado; defensa en profundidad detrás del
-gate del builder; el prompt deja de mentir sobre un paso inexistente.
+---
 
-**Cons:** Toca el precompute de `graph.py` + el schema/datagen (la parte MÁS sensible del repo, mayor
-blast radius); requiere primero investigar si el reemplazo prometido vive en otro punto antes de
-escribirlo. Mayor superficie de tests/mypy.
+## TODO-ML-DS-RETENTION-AWARE: ml_ds retention-awareness (stripping de schema + cohort heatmap) — ADR
 
-**Context:** Bug #322. El gate del builder (`eda_charts_business._build_cohort_collapse`, PR de #322)
-ya deja el OUTPUT correcto. Empezar por `graph.py:1309-1333` (cómputo incondicional) y
-`prompts/__init__.py:345-350` (promesa). El default del schema business siembra siempre
-`retention_m1/m3/m6/m12` (graph.py:2111-2114), así que un caso NO-retención los arrastra salvo que el
-case_architect los reemplace. Decidir: (a) gatear el cómputo por `is_retention_match` del target, o
-(b) eliminar `retention_m*` del schema en casos NO-retención e implementar de verdad la promesa del
-prompt. CLAUDE.md marca `case_generator/**` como sensible y `graph.py`/`prompts` sin ediciones
-cosméticas → requiere cuidado extra y tests.
+**What:** Hacer el perfil **ml_ds** clasificación consciente de retención, en simetría con business:
+(1) eliminar las columnas plantilla churn/retención (`retention_m*`, `churn_rate`, `nps`) del schema
+fijo de 18 columnas en casos NO-retención (hoy se conservan siempre); y (2) opcionalmente renderizar
+un cohort heatmap en el panel determinista ml_ds para casos de churn legítimos (la brecha de feature
+que deja la decisión 1A de #326: ml_ds nunca muestra cohort heatmap).
 
-**Depends on / blocked by:** PR del gate de #322 mergeado primero (este deja el output correcto sin
-tocar el precompute).
+**Why:** #326 elimina el ARTEFACTO fantasma (`cohort_matrix`) sin tocar el schema, pero un caso ml_ds
+de fraude/crédito/logística sigue arrastrando columnas `retention_m*`/`churn_rate`/`nps` fantasma en
+el dataset. Cerrar del todo la causa raíz exige cambiar el schema ml_ds.
+
+**Pros:** El dataset habla del dominio real del caso (sin columnas churn en un caso de fraude);
+elimina el último fantasma; simetría con el path business.
+
+**Cons:** Cambia el contrato documentado del schema ml_ds (18 columnas exactas en
+`prompts/clasificacion/M2_clasificacion/dataset.py:88-107`). CLAUDE.md trata el schema como contrato
+→ **requiere un ADR** + actualizaciones coordinadas backend/frontend/docs. Mayor blast radius, zona
+más sensible del repo.
+
+**Context:** Carved out de TODO-COHORT-PRECOMPUTE-322 al resolver #326. El gate del cómputo (#326) ya
+deja el output correcto sin tocar el schema. La señal de retención para ml_ds es no trivial: el target
+es siempre `categoria` e `is_retention_match` es English-only (no matchea prosa española "retención"),
+así que el ADR debe definir la señal (p. ej. `target_column.description`/`is_leakage_risk` del
+contrato, o un detector de tema bilingüe) antes de implementar.
+
+**Depends on / blocked by:** ADR aprobado; PR de #326 mergeado primero.
