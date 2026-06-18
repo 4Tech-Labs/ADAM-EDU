@@ -129,10 +129,12 @@ from case_generator.prompts import (
     PROMPT_BY_FAMILY,
     M4_PROMPT_BY_FAMILY,
     M4_CONTENT_GENERATOR_PROMPT,
+    M4_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_GENERATOR_PROMPT,
     M4_CHARTS_PROMPT_BY_FAMILY,
     M5_PROMPT_BY_FAMILY,
     M5_CONTENT_GENERATOR_PROMPT,
+    M5_BUSINESS_PROMPT_CLASSIFICATION,
     TEACHING_NOTE_PART1_PROMPT,
     TEACHING_NOTE_PART2_PROMPT,
     SCHEMA_DESIGNER_PROMPT,
@@ -4146,6 +4148,22 @@ def _resolve_generation_focus(
     return profile, family
 
 
+def _maybe_business_classification_prompt(
+    state: ADAMState, default_prompt: str, business_clasif_prompt: str
+) -> str:
+    """Swap to the business+classification LR prompt variant; else keep ``default_prompt``.
+
+    Issue #306 — shared gate for M4/M5 (DRY): only business + family==clasificacion gets the
+    LR-business block (mirrors the M3 gate of ``M3_AUDIT_LR_BUSINESS_BLOCK``). ml_ds and
+    business non-classification keep their original prompt untouched. The variant is purely
+    additive (base + block), so ``.format(**context)`` is unaffected — no new placeholder.
+    """
+    profile, family = _resolve_generation_focus(state)
+    if profile == "business" and family == "clasificacion":
+        return business_clasif_prompt
+    return default_prompt
+
+
 def _is_ml_ds_classification(
     state: ADAMState,
     *,
@@ -5447,6 +5465,11 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 M4_CONTENT_GENERATOR_PROMPT,
             )
         )
+        # Issue #306 — business+clasificación cierra el arco LR (probabilidad × valor en riesgo).
+        # No-op para ml_ds y para business no-clasificación.
+        prompt_template = _maybe_business_classification_prompt(
+            state, prompt_template, M4_BUSINESS_PROMPT_CLASSIFICATION
+        )
         context["computed_metrics_block"] = metrics_block
 
         m4 = _invoke_narrative_with_grounding(
@@ -5612,6 +5635,11 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 M5_PROMPT_BY_FAMILY,
                 M5_CONTENT_GENERATOR_PROMPT,
             )
+        )
+        # Issue #306 — business+clasificación prioriza por el ranking de riesgo del modelo.
+        # No-op para ml_ds y para business no-clasificación.
+        prompt_template = _maybe_business_classification_prompt(
+            state, prompt_template, M5_BUSINESS_PROMPT_CLASSIFICATION
         )
         context["computed_metrics_block"] = metrics_block
 

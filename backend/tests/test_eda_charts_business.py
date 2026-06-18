@@ -410,6 +410,158 @@ def test_lr_business_block_absent_from_ml_ds_prompts() -> None:
 
 
 # ─────────────────────────────────────────────────────────
+# M4/M5 LR-business — cierre del arco (Issue #306)
+#
+# Gate: business + clasificación → la variante por concatenación (base + bloque LR) se despacha;
+# business + clustering / ml_ds → prompt base intacto. Sentinelas de heading (únicas por módulo):
+_M4_SENTINEL = "impacto económico apoyado en probabilidad de evento"
+_M5_SENTINEL = "resolución apoyada en el ranking de riesgo del modelo"
+# ─────────────────────────────────────────────────────────
+
+
+def test_m4m5_business_classification_prompt_is_additive() -> None:
+    """La variante business+clasif es PURAMENTE aditiva (base + bloque): garantiza que el base
+    compartido con ml_ds queda byte-idéntico. Los bloques son gerenciales (sin jerga DS al lector).
+    """
+    from case_generator.prompts import (
+        M4_BUSINESS_PROMPT_CLASSIFICATION,
+        M4_CONTENT_GENERATOR_PROMPT,
+        M4_LR_BUSINESS_BLOCK,
+        M5_BUSINESS_PROMPT_CLASSIFICATION,
+        M5_CONTENT_GENERATOR_PROMPT,
+        M5_LR_BUSINESS_BLOCK,
+    )
+
+    # Aditivo ⇒ base intacto (ml_ds usa el mismo base; no puede contaminarse).
+    assert (
+        M4_BUSINESS_PROMPT_CLASSIFICATION
+        == M4_CONTENT_GENERATOR_PROMPT + M4_LR_BUSINESS_BLOCK
+    )
+    assert (
+        M5_BUSINESS_PROMPT_CLASSIFICATION
+        == M5_CONTENT_GENERATOR_PROMPT + M5_LR_BUSINESS_BLOCK
+    )
+
+    # Lenguaje gerencial: "valor en riesgo" presente; el bloque enmarca al lector como directivo
+    # (la jerga DS solo se nombra para prohibirla, igual que en M3 — no se asserta su ausencia).
+    assert "valor en riesgo" in M4_LR_BUSINESS_BLOCK
+    assert "directivo" in M4_LR_BUSINESS_BLOCK
+    assert "valor en riesgo" in M5_LR_BUSINESS_BLOCK
+    assert "Junta Directiva" in M5_LR_BUSINESS_BLOCK
+
+    # Sin placeholders .format() nuevos en los bloques (no pueden romper el formateo).
+    for block in (M4_LR_BUSINESS_BLOCK, M5_LR_BUSINESS_BLOCK):
+        assert "{" not in block and "}" not in block
+
+
+def test_m4_lr_block_gate_business_classification() -> None:
+    """business + Logistic Regression → el prompt M4 lleva el bloque LR;
+    business + clustering → no lo lleva.
+    """
+    from case_generator.graph import m4_content_generator
+
+    captured: dict[str, str] = {}
+
+    def _capture(*, node_name, llm, prompt, metrics_block, grounding_enabled):
+        captured["prompt"] = prompt
+        return "m4 content"
+
+    base_state = {
+        "doc1_narrativa": "n",
+        "doc2_eda": "eda report",
+        "studentProfile": "business",
+        "case_id": "c1",
+    }
+
+    with patch("case_generator.graph._invoke_narrative_with_grounding", _capture), patch(
+        "case_generator.graph.Configuration.from_runnable_config",
+        return_value=MagicMock(
+            writer_model="gemini-2.5-flash",
+            architect_model="gemini-pro",
+            node_model_overrides={},
+        ),
+    ), patch("case_generator.graph._get_m4_llm", return_value=MagicMock()):
+        m4_content_generator(
+            {**base_state, "task_payload": {"algoritmos": ["Logistic Regression"]}},
+            config=None,
+        )
+        assert _M4_SENTINEL in captured["prompt"]
+
+        m4_content_generator(
+            {**base_state, "task_payload": {"algoritmos": ["K-Means"]}},
+            config=None,
+        )
+        assert _M4_SENTINEL not in captured["prompt"]
+
+
+def test_m5_lr_block_gate_business_classification() -> None:
+    """business + Logistic Regression → el prompt M5 lleva el bloque LR;
+    business + clustering → no lo lleva. (M5 enruta vía _invoke_m5_content_with_contract,
+    que delega en _invoke_narrative_with_grounding — el mismo punto de captura.)
+    """
+    from case_generator.graph import m5_content_generator
+
+    captured: dict[str, str] = {}
+
+    def _capture(*, node_name, llm, prompt, metrics_block, grounding_enabled):
+        captured["prompt"] = prompt
+        return "m5 content"
+
+    base_state = {
+        "doc1_narrativa": "n",
+        "doc2_eda": "eda report",
+        "studentProfile": "business",
+        "case_id": "c1",
+    }
+
+    with patch("case_generator.graph._invoke_narrative_with_grounding", _capture), patch(
+        "case_generator.graph.Configuration.from_runnable_config",
+        return_value=MagicMock(
+            writer_model="gemini-2.5-flash",
+            architect_model="gemini-pro",
+            node_model_overrides={},
+        ),
+    ), patch("case_generator.graph._get_m5_llm", return_value=MagicMock()):
+        m5_content_generator(
+            {**base_state, "task_payload": {"algoritmos": ["Logistic Regression"]}},
+            config=None,
+        )
+        assert _M5_SENTINEL in captured["prompt"]
+
+        m5_content_generator(
+            {**base_state, "task_payload": {"algoritmos": ["K-Means"]}},
+            config=None,
+        )
+        assert _M5_SENTINEL not in captured["prompt"]
+
+
+def test_lr_business_block_m4m5_absent_from_ml_ds_prompts() -> None:
+    """Invariante 'ml_ds intacto': el bloque LR-business de M4/M5 vive SOLO en la variante
+    business; no está horneado en el base compartido ni en ningún prompt ml_ds (por familia).
+    """
+    from case_generator.prompts import (
+        M4_CONTENT_GENERATOR_PROMPT,
+        M4_PROMPT_BY_FAMILY,
+        M4_PROMPT_CLASSIFICATION,
+        M5_CONTENT_GENERATOR_PROMPT,
+        M5_PROMPT_BY_FAMILY,
+        M5_PROMPT_CLASSIFICATION,
+    )
+
+    # Base compartido y prompt ml_ds de clasificación: sin sentinela.
+    assert _M4_SENTINEL not in M4_CONTENT_GENERATOR_PROMPT
+    assert _M4_SENTINEL not in M4_PROMPT_CLASSIFICATION
+    assert _M5_SENTINEL not in M5_CONTENT_GENERATOR_PROMPT
+    assert _M5_SENTINEL not in M5_PROMPT_CLASSIFICATION
+
+    # Toda la tabla de dispatch ml_ds (cualquier familia): sin sentinela.
+    for family_prompt in M4_PROMPT_BY_FAMILY.values():
+        assert _M4_SENTINEL not in family_prompt
+    for family_prompt in M5_PROMPT_BY_FAMILY.values():
+        assert _M5_SENTINEL not in family_prompt
+
+
+# ─────────────────────────────────────────────────────────
 # financial_mirage — honestidad ante márgenes no positivos (anti-inversión)
 # ─────────────────────────────────────────────────────────
 
