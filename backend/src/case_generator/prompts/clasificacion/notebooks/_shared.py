@@ -487,6 +487,18 @@ COST_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
 # ### 3.0.6 — Matriz de costos del negocio + threshold tuning
+# El threshold default 0.5 SOLO es óptimo si FP y FN cuestan igual. En la
+# mayoría de los problemas de negocio (churn, fraude, mantenimiento) los
+# costos son asimétricos. Esta celda lee la matriz de costos del contrato
+# (`dataset_schema_required.business_cost_matrix`), barre 100 thresholds
+# y elige el que minimiza el costo total esperado en el hold-out.
+#
+# **Cómo extraer los costos:**
+# Inspecciona el JSON del contrato del caso (bloque `dataset_contract_block`
+# que recibiste en el prompt). Si contiene `business_cost_matrix` con
+# `fp_cost`, `fn_cost`, `currency`, EMITE esos números literales en la celda.
+# Si NO está presente, usa el fallback `fp_cost=1.0`, `fn_cost=5.0`,
+# `currency="USD"` Y añade un `print` explicando que se usó fallback.
 
 # %%
 # === SECTION:cost_matrix ===
@@ -496,9 +508,17 @@ try:
   else:
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import confusion_matrix
-    fp_cost = 1.0
-    fn_cost = 5.0
-    currency = "USD"
+    # Costos del negocio extraídos del contrato dataset_schema_required
+    # .business_cost_matrix. Si el contrato no los traía, fallback fp=1, fn=5.
+    # IMPORTANTE: emite los 3 valores como literales Python (NO leas un
+    # diccionario `dataset_schema_required` en runtime — el notebook se
+    # ejecuta standalone).
+    fp_cost = 1.0   # ← reemplaza por business_cost_matrix.fp_cost del contrato
+    fn_cost = 5.0   # ← reemplaza por business_cost_matrix.fn_cost del contrato
+    currency = "USD"  # ← reemplaza por business_cost_matrix.currency del contrato
+    # Si el contrato NO traía business_cost_matrix, deja los valores fallback
+    # de arriba y añade un print pedagógico explicando el fallback:
+    # print(f"⚠️ Sin matriz de costos en el contrato — usando fallback fp={{fp_cost}}, fn={{fn_cost}} {{currency}}")
     _Xtr_cm, _Xte_cm, _ytr_cm, _yte_cm = train_test_split(X_raw, y, test_size=0.2, random_state=42, stratify=y if y.value_counts().min() >= 2 else None)
     pipe_lr.fit(_Xtr_cm, _ytr_cm)
     proba = pipe_lr.predict_proba(_Xte_cm)[:, 1]
@@ -511,19 +531,54 @@ try:
       costs.append(fp * fp_cost + fn * fn_cost)
     costs = np.array(costs)
     optimal = float(thresholds[int(np.argmin(costs))])
+    cost_at_optimal = float(costs[int(np.argmin(costs))])
+    cost_at_default = float(costs[int(np.argmin(np.abs(thresholds - 0.5)))])
     plt.figure(figsize=(8, 5))
     plt.plot(thresholds, costs, label="Costo total esperado")
     plt.axvline(optimal, color="red", linestyle="-", label=f"Óptimo = {{optimal:.2f}}")
     plt.axvline(0.5, color="gray", linestyle="--", alpha=0.7, label="Default 0.5")
     plt.xlabel("Threshold de decisión"); plt.ylabel(f"Costo total ({{currency}})")
-    plt.title("Curva costo-vs-threshold — Logistic Regression")
+    plt.title(f"Curva costo-vs-threshold (LR) — fp={{fp_cost}} {{currency}}, fn={{fn_cost}} {{currency}}")
     plt.legend(loc="best"); plt.tight_layout(); plt.show()
+    # Pedagogía 3 ramas:
+    if optimal in (float(thresholds[0]), float(thresholds[-1])):
+      print(
+          f"⚠️ El threshold óptimo {{optimal:.2f}} está en el borde del barrido "
+          f"[0.05, 0.95]. Esto sugiere que la matriz de costos es muy desbalanceada "
+          f"o que el modelo no separa bien las clases — revisa fp/fn antes de productivizar."
+      )
+    elif abs(optimal - 0.5) < 0.05:
+      print(
+          f"El threshold óptimo {{optimal:.2f}} es prácticamente el default 0.5: "
+          f"para esta matriz de costos (fp={{fp_cost}}, fn={{fn_cost}} {{currency}}) "
+          f"el sesgo asimétrico no compensa mover el umbral."
+      )
+    else:
+      ahorro = cost_at_default - cost_at_optimal
+      print(
+          f"Threshold óptimo: {{optimal:.2f}} (vs default 0.5). "
+          f"Costo total: {{cost_at_optimal:,.0f}} {{currency}} (ahorro estimado vs 0.5: "
+          f"{{ahorro:,.0f}} {{currency}}). Productivizar este threshold puede traducirse "
+          f"directamente a un caso de negocio cuantificable."
+      )
 except Exception as e:
   print(f"⚠️ Cost matrix LR falló: {{e}}")
 """,
     "rf_only": """
 # %% [markdown]
 # ### 3.0.6 — Matriz de costos del negocio + threshold tuning
+# El threshold default 0.5 SOLO es óptimo si FP y FN cuestan igual. En la
+# mayoría de los problemas de negocio (churn, fraude, mantenimiento) los
+# costos son asimétricos. Esta celda lee la matriz de costos del contrato
+# (`dataset_schema_required.business_cost_matrix`), barre 100 thresholds
+# y elige el que minimiza el costo total esperado en el hold-out.
+#
+# **Cómo extraer los costos:**
+# Inspecciona el JSON del contrato del caso (bloque `dataset_contract_block`
+# que recibiste en el prompt). Si contiene `business_cost_matrix` con
+# `fp_cost`, `fn_cost`, `currency`, EMITE esos números literales en la celda.
+# Si NO está presente, usa el fallback `fp_cost=1.0`, `fn_cost=5.0`,
+# `currency="USD"` Y añade un `print` explicando que se usó fallback.
 
 # %%
 # === SECTION:cost_matrix ===
@@ -533,9 +588,17 @@ try:
   else:
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import confusion_matrix
-    fp_cost = 1.0
-    fn_cost = 5.0
-    currency = "USD"
+    # Costos del negocio extraídos del contrato dataset_schema_required
+    # .business_cost_matrix. Si el contrato no los traía, fallback fp=1, fn=5.
+    # IMPORTANTE: emite los 3 valores como literales Python (NO leas un
+    # diccionario `dataset_schema_required` en runtime — el notebook se
+    # ejecuta standalone).
+    fp_cost = 1.0   # ← reemplaza por business_cost_matrix.fp_cost del contrato
+    fn_cost = 5.0   # ← reemplaza por business_cost_matrix.fn_cost del contrato
+    currency = "USD"  # ← reemplaza por business_cost_matrix.currency del contrato
+    # Si el contrato NO traía business_cost_matrix, deja los valores fallback
+    # de arriba y añade un print pedagógico explicando el fallback:
+    # print(f"⚠️ Sin matriz de costos en el contrato — usando fallback fp={{fp_cost}}, fn={{fn_cost}} {{currency}}")
     _Xtr_cm, _Xte_cm, _ytr_cm, _yte_cm = train_test_split(X_raw, y, test_size=0.2, random_state=42, stratify=y if y.value_counts().min() >= 2 else None)
     pipe_rf.fit(_Xtr_cm, _ytr_cm)
     proba = pipe_rf.predict_proba(_Xte_cm)[:, 1]
@@ -548,13 +611,36 @@ try:
       costs.append(fp * fp_cost + fn * fn_cost)
     costs = np.array(costs)
     optimal = float(thresholds[int(np.argmin(costs))])
+    cost_at_optimal = float(costs[int(np.argmin(costs))])
+    cost_at_default = float(costs[int(np.argmin(np.abs(thresholds - 0.5)))])
     plt.figure(figsize=(8, 5))
     plt.plot(thresholds, costs, label="Costo total esperado")
     plt.axvline(optimal, color="red", linestyle="-", label=f"Óptimo = {{optimal:.2f}}")
     plt.axvline(0.5, color="gray", linestyle="--", alpha=0.7, label="Default 0.5")
     plt.xlabel("Threshold de decisión"); plt.ylabel(f"Costo total ({{currency}})")
-    plt.title("Curva costo-vs-threshold — Random Forest")
+    plt.title(f"Curva costo-vs-threshold (RF) — fp={{fp_cost}} {{currency}}, fn={{fn_cost}} {{currency}}")
     plt.legend(loc="best"); plt.tight_layout(); plt.show()
+    # Pedagogía 3 ramas:
+    if optimal in (float(thresholds[0]), float(thresholds[-1])):
+      print(
+          f"⚠️ El threshold óptimo {{optimal:.2f}} está en el borde del barrido "
+          f"[0.05, 0.95]. Esto sugiere que la matriz de costos es muy desbalanceada "
+          f"o que el modelo no separa bien las clases — revisa fp/fn antes de productivizar."
+      )
+    elif abs(optimal - 0.5) < 0.05:
+      print(
+          f"El threshold óptimo {{optimal:.2f}} es prácticamente el default 0.5: "
+          f"para esta matriz de costos (fp={{fp_cost}}, fn={{fn_cost}} {{currency}}) "
+          f"el sesgo asimétrico no compensa mover el umbral."
+      )
+    else:
+      ahorro = cost_at_default - cost_at_optimal
+      print(
+          f"Threshold óptimo: {{optimal:.2f}} (vs default 0.5). "
+          f"Costo total: {{cost_at_optimal:,.0f}} {{currency}} (ahorro estimado vs 0.5: "
+          f"{{ahorro:,.0f}} {{currency}}). Productivizar este threshold puede traducirse "
+          f"directamente a un caso de negocio cuantificable."
+      )
 except Exception as e:
   print(f"⚠️ Cost matrix RF falló: {{e}}")
 """,
@@ -562,6 +648,18 @@ except Exception as e:
 # %% [markdown]
 # ### 3.0.6 — Matriz de costos del negocio + threshold tuning
 # En contraste usamos LR como soporte de threshold por interpretabilidad.
+# El threshold default 0.5 SOLO es óptimo si FP y FN cuestan igual. En la
+# mayoría de los problemas de negocio (churn, fraude, mantenimiento) los
+# costos son asimétricos. Esta celda lee la matriz de costos del contrato
+# (`dataset_schema_required.business_cost_matrix`), barre 100 thresholds
+# y elige el que minimiza el costo total esperado en el hold-out.
+#
+# **Cómo extraer los costos:**
+# Inspecciona el JSON del contrato del caso (bloque `dataset_contract_block`
+# que recibiste en el prompt). Si contiene `business_cost_matrix` con
+# `fp_cost`, `fn_cost`, `currency`, EMITE esos números literales en la celda.
+# Si NO está presente, usa el fallback `fp_cost=1.0`, `fn_cost=5.0`,
+# `currency="USD"` Y añade un `print` explicando que se usó fallback.
 
 # %%
 # === SECTION:cost_matrix ===
@@ -571,9 +669,17 @@ try:
   else:
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import confusion_matrix
-    fp_cost = 1.0
-    fn_cost = 5.0
-    currency = "USD"
+    # Costos del negocio extraídos del contrato dataset_schema_required
+    # .business_cost_matrix. Si el contrato no los traía, fallback fp=1, fn=5.
+    # IMPORTANTE: emite los 3 valores como literales Python (NO leas un
+    # diccionario `dataset_schema_required` en runtime — el notebook se
+    # ejecuta standalone).
+    fp_cost = 1.0   # ← reemplaza por business_cost_matrix.fp_cost del contrato
+    fn_cost = 5.0   # ← reemplaza por business_cost_matrix.fn_cost del contrato
+    currency = "USD"  # ← reemplaza por business_cost_matrix.currency del contrato
+    # Si el contrato NO traía business_cost_matrix, deja los valores fallback
+    # de arriba y añade un print pedagógico explicando el fallback:
+    # print(f"⚠️ Sin matriz de costos en el contrato — usando fallback fp={{fp_cost}}, fn={{fn_cost}} {{currency}}")
     _Xtr_cm, _Xte_cm, _ytr_cm, _yte_cm = train_test_split(X_raw, y, test_size=0.2, random_state=42, stratify=y if y.value_counts().min() >= 2 else None)
     pipe_lr.fit(_Xtr_cm, _ytr_cm)
     proba = pipe_lr.predict_proba(_Xte_cm)[:, 1]
@@ -586,13 +692,36 @@ try:
       costs.append(fp * fp_cost + fn * fn_cost)
     costs = np.array(costs)
     optimal = float(thresholds[int(np.argmin(costs))])
+    cost_at_optimal = float(costs[int(np.argmin(costs))])
+    cost_at_default = float(costs[int(np.argmin(np.abs(thresholds - 0.5)))])
     plt.figure(figsize=(8, 5))
     plt.plot(thresholds, costs, label="Costo total esperado")
     plt.axvline(optimal, color="red", linestyle="-", label=f"Óptimo = {{optimal:.2f}}")
     plt.axvline(0.5, color="gray", linestyle="--", alpha=0.7, label="Default 0.5")
     plt.xlabel("Threshold de decisión"); plt.ylabel(f"Costo total ({{currency}})")
-    plt.title("Curva costo-vs-threshold — LR como baseline interpretable")
+    plt.title(f"Curva costo-vs-threshold (LR) — fp={{fp_cost}} {{currency}}, fn={{fn_cost}} {{currency}}")
     plt.legend(loc="best"); plt.tight_layout(); plt.show()
+    # Pedagogía 3 ramas:
+    if optimal in (float(thresholds[0]), float(thresholds[-1])):
+      print(
+          f"⚠️ El threshold óptimo {{optimal:.2f}} está en el borde del barrido "
+          f"[0.05, 0.95]. Esto sugiere que la matriz de costos es muy desbalanceada "
+          f"o que el modelo no separa bien las clases — revisa fp/fn antes de productivizar."
+      )
+    elif abs(optimal - 0.5) < 0.05:
+      print(
+          f"El threshold óptimo {{optimal:.2f}} es prácticamente el default 0.5: "
+          f"para esta matriz de costos (fp={{fp_cost}}, fn={{fn_cost}} {{currency}}) "
+          f"el sesgo asimétrico no compensa mover el umbral."
+      )
+    else:
+      ahorro = cost_at_default - cost_at_optimal
+      print(
+          f"Threshold óptimo: {{optimal:.2f}} (vs default 0.5). "
+          f"Costo total: {{cost_at_optimal:,.0f}} {{currency}} (ahorro estimado vs 0.5: "
+          f"{{ahorro:,.0f}} {{currency}}). Productivizar este threshold puede traducirse "
+          f"directamente a un caso de negocio cuantificable."
+      )
 except Exception as e:
   print(f"⚠️ Cost matrix contraste falló: {{e}}")
 """,
