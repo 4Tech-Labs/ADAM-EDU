@@ -71,7 +71,9 @@ _MLDS_CTX: dict[str, object] = {
 # Frozen digest of the assembled ml_ds+clasificación prompt. If this changes, the ml_ds
 # prompt changed — confirm it was NOT the business gate leaking in before updating.
 _MLDS_ARCHITECT_PROMPT_SHA256 = (
-    "2cb71906c5f8599b54a5a212da2f824bc4778167ca24a386deb30cb01d4b6422"
+    # Issue #340 — regenerated deliberately after adding the conditional
+    # `business_cost_matrix` emission subsection to the classification anchor.
+    "87df26d56913add9211b1bb9e3825957835689807383e1b152b36778a24b9762"
 )
 
 
