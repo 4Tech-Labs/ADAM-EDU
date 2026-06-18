@@ -1266,10 +1266,12 @@ def _identify_target_variable(state: ADAMState, df: 'pd.DataFrame') -> str:
 def _calculate_eda_regressions(state: ADAMState, dataset: list[dict]) -> dict:
     """Calcula métricas precalculadas para el EDA Chart Generator.
 
-    Siempre computa correlation_matrix y cohort_matrix cuando hay datos
-    suficientes — independientemente de si se identifica un target_col.
-    Las regresiones lineales (target_vs_X) son opcionales y se omiten
-    sin early-return cuando target_col no está disponible.
+    Siempre computa correlation_matrix cuando hay datos suficientes. cohort_matrix
+    (artefacto de retención) SOLO se computa en casos de retención — Issue #326:
+    business con target de retención (mismo predicado que la selección determinista,
+    eda_charts_business.py); nunca para ml_ds (su panel determinista no renderiza
+    cohort heatmap). Las regresiones lineales (target_vs_X) son opcionales y se
+    omiten sin early-return cuando target_col no está disponible.
 
     Fix v8.2: el early-return previo en "target_col not found" dejaba
     precalculated_metrics = {} y el LLM no tenía matriz para heatmaps.
@@ -1306,12 +1308,27 @@ def _calculate_eda_regressions(state: ADAMState, dataset: list[dict]) -> dict:
                 "z": corr_matrix.values.tolist(),
             }
 
-        # ── 2. Cohort matrix (siempre, si las columnas existen) ───────────────
+        # ── 2. Cohort matrix (SOLO en casos de RETENCIÓN — Issue #326) ────────
+        # El heatmap de cohortes es un artefacto de retención. Antes se computaba
+        # para CUALQUIER dataset con retention_m* (≥2) + period, dejando un
+        # artefacto fantasma en casos NO-retención. Lo gateamos con el MISMO
+        # predicado que la selección determinista business (is_retention_match,
+        # eda_charts_business.py:473), así computar ⟺ seleccionar: nunca queda un
+        # fantasma ni se suprime un heatmap legítimo de #322.
+        #
+        #   business + target de retención → cohort COMPUTADO  (preserva #322)
+        #   business + target NO-retención → cohort AUSENTE     (builder→box; LLM-JSON→CASO B)
+        #   ml_ds (cualquier tema)         → cohort AUSENTE     (el panel determinista
+        #                                                        ml_ds no renderiza cohort heatmap)
+        target_col = _identify_target_variable(state, df)
+        profile = state.get("studentProfile", "business")
+        is_retention_case = profile != "ml_ds" and is_retention_match(target_col)
+
         retention_cols = sorted(
             [c for c in df.columns if c.startswith("retention_m")],
             key=lambda x: int(x.split("_m")[1])
         )
-        if len(retention_cols) >= 2 and "period" in df.columns:
+        if is_retention_case and len(retention_cols) >= 2 and "period" in df.columns:
             # Limita a las primeras MAX_COHORT_ROWS cohortes: legibles, todas
             # históricas (empiezan en 2023-01 → sin fechas futuras) y las más
             # observadas a M12. Sin recorte, las 80-120 filas del dataset business
@@ -1333,8 +1350,7 @@ def _calculate_eda_regressions(state: ADAMState, dataset: list[dict]) -> dict:
             }
 
         # ── 3. Regresiones lineales (opcional — requiere target_col) ──────────
-        target_col = _identify_target_variable(state, df)
-
+        # target_col ya se identificó arriba (gate de cohort) — se reutiliza aquí.
         if not target_col or target_col not in df.columns:
             # No target → skip regressions, but still return matrices above
             return results
