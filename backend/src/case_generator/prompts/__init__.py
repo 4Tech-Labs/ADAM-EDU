@@ -1187,6 +1187,36 @@ nuevas):
   probabilidades, tasas ni valores nuevos; razona sobre la lógica de priorización, no sobre métricas.
 """
 
+# Bloque para los GRÁFICOS de M4 business+clasificación (Issue #319). Aditivo sobre el chart
+# prompt genérico, despachado en graph.py::m4_chart_generator vía _maybe_business_classification_prompt.
+# Cierra el desfase entre la narrativa LR (#306) y unos gráficos hoy financieros-genéricos.
+# A diferencia de M4_LR_BUSINESS_BLOCK, este bloque NO nombra jerga DS (AUC/umbral/drift/precision/
+# recall) ni siquiera para prohibirla: steerea con framing gerencial positivo, de modo que el render
+# sea genuinamente libre de jerga (el test de ausencia de jerga corre sobre el prompt renderizado).
+# Texto ESTÁTICO (cero placeholders .format()); reusa los chart_type del genérico (waterfall/bar).
+M4_CHART_LR_BUSINESS_BLOCK = """
+
+# Enfoque business+clasificación: gráficos alineados a la lógica de priorización
+Este caso decide con un modelo que estima, por cliente u operación, una probabilidad de evento
+(abandono, impago, incumplimiento…). Reorienta el CONTENIDO de los 3 gráficos ya definidos arriba
+hacia esa lógica, en lenguaje gerencial. NO añadas ni quites gráficos: mantén EXACTAMENTE 3, con
+los mismos chart_type del perfil business (Gráfico 1 = waterfall; Gráficos 2 y 3 = bar). Escribe
+para un directivo: usa lenguaje de negocio y evita la jerga técnica y los nombres de métricas
+internas del modelo.
+- Gráfico 1 (flujo / punto de equilibrio): el costo de poner en marcha la intervención priorizada
+  frente al valor que se protege período a período hasta recuperar la inversión.
+- Gráfico 2 (sensibilidad / tornado): sensibiliza variables de NEGOCIO —tasa de eventos esperada,
+  valor en riesgo por cliente, costo de intervenir, cobertura del presupuesto, efectividad de la
+  acción—, nunca parámetros internos del modelo.
+- Gráfico 3 (comparativa A/B/C): reorienta hacia "a quién priorizar y con qué presupuesto". Cada
+  escenario es una política de cobertura (intervenir, por ejemplo, al 10%, 25% o 50% de mayor
+  probabilidad de evento × valor en riesgo). Compara valor protegido esperado, costo total de
+  intervención, falsas alarmas (intervenir sin que ocurra el evento) y eventos no evitados.
+- Honestidad: usa solo cifras del caso (Exhibits, M2, M4). NO inventes probabilidades, tasas ni
+  valores; razona sobre la lógica de priorización (probabilidad de evento × valor en riesgo), no
+  sobre métricas del modelo.
+"""
+
 M5_LR_BUSINESS_BLOCK = """
 # Enfoque del caso: resolución apoyada en el ranking de riesgo del modelo
 La decisión de este caso se apoya en un modelo que ordena a los clientes u operaciones por su
@@ -1209,6 +1239,8 @@ las Secciones 1–3 ya existentes (NO agregues secciones nuevas):
 # en graph.py::_maybe_business_classification_prompt; aquí solo se declara la composición.
 M4_BUSINESS_PROMPT_CLASSIFICATION = M4_CONTENT_GENERATOR_PROMPT + M4_LR_BUSINESS_BLOCK
 M5_BUSINESS_PROMPT_CLASSIFICATION = M5_CONTENT_GENERATOR_PROMPT + M5_LR_BUSINESS_BLOCK
+# Issue #319 — variante de GRÁFICOS business+clasificación (aditiva sobre el chart prompt genérico).
+M4_CHART_BUSINESS_PROMPT_CLASSIFICATION = M4_CHART_GENERATOR_PROMPT + M4_CHART_LR_BUSINESS_BLOCK
 
 # ── SCHEMA_DESIGNER_PROMPT_BY_FAMILY — dispatch table consumed by
 # graph.py::schema_designer.  Keys MUST match values returned by
@@ -2332,7 +2364,9 @@ __all__ = [
   "M3_NOTEBOOK_BASE_TEMPLATE",
   "M3_QUESTIONS_GENERATOR_PROMPT",
   "M4_BUSINESS_PROMPT_CLASSIFICATION",
+  "M4_CHART_BUSINESS_PROMPT_CLASSIFICATION",
   "M4_CHART_GENERATOR_PROMPT",
+  "M4_CHART_LR_BUSINESS_BLOCK",
   "M4_CHART_PROMPT_CLASSIFICATION",
   "M4_CHARTS_PROMPT_BY_FAMILY",
   "M4_CONTENT_GENERATOR_PROMPT",

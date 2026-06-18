@@ -1693,3 +1693,28 @@ esperados de target. El reprompt de #305 es false-positive-safe (acepta cualquie
 clasificación válido en el reprompt), así que ampliar tokens es seguro pero de bajo retorno.
 
 **Depends on / blocked by:** #305 mergeado (Gate 2 enforcement). Independiente por lo demás.
+
+---
+
+## TODO-319-A: Auditar coherencia gráfico↔narrativa en M2 EDA charts para business+clasificación
+
+**What:** Verificar si los gráficos EDA de M2 (`eda_chart_generator`) para business+clasificación
+reflejan el framing gerencial (probabilidad de evento × valor en riesgo) o siguen genéricos como
+estaban los de M4 antes de #319.
+
+**Why:** #318 ajustó el *texto* EDA business y #237 hizo los *charts* EDA para ml_ds clasificación,
+pero el framing de los charts EDA business quedó sin verificar; #319 solo cierra M4. Si el desfase
+es simétrico, los gráficos de M2 razonarían en ROI/financiero genérico mientras el texto EDA ya
+habla en lenguaje de priorización.
+
+**Pros:** Cierra un gap probablemente simétrico al de #319; UX coherente entre módulos M2 y M4.
+
+**Cons:** Investigación separada + posible nuevo bloque de prompt; puede resultar que los charts de
+M2 business ya estén bien y el TODO se cierre como no necesario.
+
+**Context:** Mirar `eda_chart_generator` en `backend/src/case_generator/graph.py` y los prompts EDA;
+superficie de test en `backend/tests/test_eda_charts_business.py` y
+`backend/tests/test_issue237_eda_charts_classification.py`. Si hay desfase, replicar el patrón
+exacto de #306/#319: bloque estático placeholder-free + `_maybe_business_classification_prompt`.
+
+**Depends on / blocked by:** Independiente de #319.
