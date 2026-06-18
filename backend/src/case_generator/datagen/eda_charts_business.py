@@ -60,6 +60,12 @@ logger = logging.getLogger("adam.graph")
 _DRIVERS_TOP_K = 8
 _DRIVERS_MIN_ABS_CORR = 0.10
 
+# Issue #320 — color por dirección de la asociación (mismo eje rojo↔azul que el
+# heatmap RdBu de correlación): rojo = la variable *aumenta* el evento (corr > 0);
+# azul = lo *reduce* / protege (corr < 0). Tonos distinguibles para daltonismo.
+_DRIVER_COLOR_RISK = "#d6604d"  # aumenta el evento
+_DRIVER_COLOR_PROTECT = "#4393c3"  # reduce el evento
+
 # Issue #301 — el título del chart de drivers no debe asumir "abandono"/churn cuando el
 # caso no es de retención. El match de retención vive en el vocab único
 # `retention_tokens.is_retention_match` (mismo usado por el spine en graph.py), que además
@@ -188,7 +194,11 @@ def _indexed_base_100(series: pd.Series) -> list[float | None] | None:
 def _target_correlations(
     df: pd.DataFrame, target_col: str, precalculated_metrics: dict | None
 ) -> dict[str, float]:
-    """``{feature: |corr con el objetivo|}``.
+    """``{feature: corr con signo con el objetivo}`` (r ∈ [-1, 1]).
+
+    Conserva el signo (Issue #320): el consumidor distingue factores que
+    *aumentan* el evento (corr > 0) de los que lo *reducen* (corr < 0). Quien
+    necesite magnitud aplica ``abs()`` en el call site.
 
     Prefiere la ``correlation_matrix`` ya calculada (consistencia con otras
     vistas y exclusión de columnas constantes ya aplicada). Si no está
@@ -206,7 +216,7 @@ def _target_correlations(
                 if name == target_col:
                     continue
                 try:
-                    out[name] = abs(float(z[ti][j]))
+                    out[name] = float(z[ti][j])
                 except (TypeError, ValueError, IndexError):
                     continue
             if out:
@@ -224,7 +234,7 @@ def _target_correlations(
             continue
         corr = numeric[name].corr(numeric[target_col])
         if pd.notna(corr):
-            out[name] = abs(float(corr))
+            out[name] = float(corr)
     return out
 
 
@@ -345,11 +355,16 @@ def _build_financial_mirage(df: pd.DataFrame, source: str) -> dict[str, Any]:
 def _build_churn_drivers(
     df: pd.DataFrame, target_col: str, precalculated_metrics: dict | None, source: str
 ) -> dict[str, Any]:
-    """Barra horizontal de |correlación| real de cada variable con el objetivo.
+    """Barra horizontal divergente: dirección + fuerza de cada variable vs. el objetivo.
 
-    Reemplaza el scatter+recta que afirmaba un –0.89 que los puntos no
-    respaldaban. El eje fijo [0, 1] impide exagerar correlaciones pequeñas, y si
-    ninguna supera el umbral lo decimos en `notes` en vez de sugerir un driver.
+    Issue #320 — antes mostrábamos solo la magnitud (|correlación|), así que un
+    factor protector (corr < 0) y uno de riesgo (corr > 0) se veían idénticos. Ahora
+    el signo se codifica espacialmente: a la derecha = *aumenta* el evento, a la
+    izquierda = lo *reduce*; el color refuerza la dirección. El eje simétrico [-1, 1]
+    conserva la propiedad anti-exageración (una asociación pequeña sigue siendo una
+    barra corta). La etiqueta numérica muestra la *fuerza* (valor absoluto, 0–1) para
+    que un número nunca se lea como "peor". El orden sigue por fuerza (mayor |r| arriba)
+    y, si ninguna la supera, lo decimos en `notes` en vez de sugerir un driver.
     """
     title = _drivers_title(target_col)
     corrs = _target_correlations(df, target_col, precalculated_metrics)
@@ -357,19 +372,25 @@ def _build_churn_drivers(
         return empty_chart(
             "churn_drivers",
             title,
-            "Sin correlaciones calculables con el objetivo",
+            "Sin asociaciones calculables con el objetivo",
             "bar",
             source,
-            notes="No se pudieron calcular correlaciones con la variable objetivo.",
+            notes="No se pudo medir la relación de las variables con la variable objetivo.",
         )
 
-    pairs = sorted(corrs.items(), key=lambda kv: kv[1], reverse=True)[:_DRIVERS_TOP_K]
+    # Orden por fuerza (|r|): la asociación más marcada queda arriba, sin importar
+    # si aumenta o reduce el evento.
+    pairs = sorted(corrs.items(), key=lambda kv: abs(kv[1]), reverse=True)[:_DRIVERS_TOP_K]
     feats = [p[0] for p in pairs]
-    vals = [round(p[1], 3) for p in pairs]
-    strongest = vals[0] if vals else 0.0
+    vals = [round(p[1], 3) for p in pairs]  # con signo
+    # Color derivado del MISMO `vals` → len(colors) == len(x) siempre (evita que
+    # Plotly recicle colores y pinte la barra equivocada). r == 0 → PROTECT; es
+    # inofensivo porque |0| < 0.10 dispara el aviso de driver débil de abajo.
+    colors = [_DRIVER_COLOR_RISK if v > 0 else _DRIVER_COLOR_PROTECT for v in vals]
+    strongest = abs(vals[0]) if vals else 0.0
     note = (
-        "Ninguna variable supera |correlación| ≥ 0.10 con el objetivo: no hay un "
-        "driver lineal fuerte en estos datos; interpretar con cautela."
+        "Ninguna variable muestra una asociación fuerte con el objetivo en estos "
+        "datos: no hay un factor claro que lo aumente o lo reduzca; interpretar con cautela."
         if strongest < _DRIVERS_MIN_ABS_CORR
         else ""
     )
@@ -378,24 +399,33 @@ def _build_churn_drivers(
     return {
         "id": "churn_drivers",
         "title": title,
-        "subtitle": f"Correlación absoluta de cada variable con {target_label} (mayor = más asociada)",
+        "subtitle": (
+            f"Asociación de cada variable con {target_label}: "
+            "a la derecha aumenta el evento, a la izquierda lo reduce"
+        ),
         "library": "plotly",
         "chart_type": "bar",
         "traces": [
             {
                 "type": "bar",
-                "x": vals,
+                "x": vals,  # con signo: posición izq/der = reduce/aumenta
                 "y": feats,
                 "orientation": "h",
-                "name": "|correlación|",
-                "text": [f"{v:.2f}" for v in vals],
+                "name": "asociación",
+                # La etiqueta muestra la fuerza (0–1); la dirección la dan posición y color.
+                "text": [f"{abs(v):.2f}" for v in vals],
                 "textposition": "outside",
+                "marker": {"color": colors},
             }
         ],
         "layout": {
             "template": "plotly_white",
-            # Eje fijo [0,1]: |corr| siempre cae aquí → no exagera magnitudes.
-            "xaxis": {"title": f"|correlación| con {target_label}", "range": [0, 1]},
+            # Eje simétrico [-1,1]: conserva el anti-exageración y deja ver el lado
+            # (izquierda reduce, derecha aumenta).
+            "xaxis": {
+                "title": f"Relación con {target_label}  (← reduce · aumenta →)",
+                "range": [-1, 1],
+            },
             "yaxis": {"title": "Variable", "autorange": "reversed"},
             "showlegend": False,
         },
