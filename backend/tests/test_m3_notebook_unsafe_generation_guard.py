@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 
+import case_generator.graph as graph_module
 from case_generator.graph import (
     _build_m3_notebook_validation_correction,
     _detect_unsafe_constructs,
@@ -224,12 +225,28 @@ def test_fixing_locals_but_dropping_required_api_is_caught_in_one_pass() -> None
 # expression an LLM can emit under the 24576-token cap).
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_detect_unsafe_is_defensive_on_pathological_recursion() -> None:
-    pathological = "# %%\nx = " + "+".join(["1"] * 4000) + "\n"
-    findings = _detect_unsafe_constructs(pathological)
-    # No exception escapes; the pathological input is funneled as an INSEGURO
-    # finding so the reprompt-once path handles it (fail-closed, not a crash).
-    assert findings and findings[0].startswith("INSEGURO: ")
+@pytest.mark.parametrize("exc", [RecursionError("deep"), ValueError("bad")])
+def test_detect_unsafe_is_defensive_against_unexpected_scrubber_errors(
+    monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    """ast.parse can raise RecursionError/ValueError (NOT SyntaxError, NOT
+    M3NotebookExecutionError) on pathological LLM output. Whatever the scrubber
+    raises, the detector must funnel it as an INSEGURO finding — never let it
+    escape and crash the job.
+
+    The exact input that trips ast.parse's recursion limit is platform-dependent
+    (OS/stack size/recursion limit), so we inject the error deterministically
+    instead of relying on a giant expression that only overflows on some hosts.
+    """
+
+    def _boom(_code: str) -> None:
+        raise exc
+
+    monkeypatch.setattr(graph_module, "scrub_notebook_for_safe_execution", _boom)
+    findings = graph_module._detect_unsafe_constructs("# %%\nx = 1\n")
+    assert len(findings) == 1
+    assert findings[0].startswith("INSEGURO: ")
+    assert type(exc).__name__ in findings[0]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
