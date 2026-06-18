@@ -34,6 +34,7 @@ from case_generator.prompts.clasificacion.M2_clasificacion.eda_questions import 
 )
 from case_generator.prompts.clasificacion.M2_clasificacion.eda_text import (
     EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION,
+    select_eda_text_blocks,
 )
 from case_generator.prompts import (
     EDA_ANNOTATE_ONLY_PROMPT,
@@ -241,8 +242,119 @@ def test_eda_text_analyst_placeholder_contract():
         "operational_exhibit",
         "case_id",
         "output_depth",
+        # P1 — profile-gated blocks injected by select_eda_text_blocks()
+        "event_label",
+        "class_balance_block",
+        "target_distribution_block",
+        "feature_engineering_block",
     }
     assert placeholders == expected, (
         f"Placeholder contract violated for EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION. "
         f"Missing: {expected - placeholders}, Extra: {placeholders - expected}"
     )
+
+
+# ── P1 (audit business+clasificacion): profile-gated M2 EDA blocks ───────────
+# The classification EDA narrative used to force DS jargon (AUC-ROC, Accuracy
+# Paradox, Matriz de Confusión, imbalance-ratio formula, Leakage Guard) and a
+# hardcoded "churn" framing onto BOTH profiles. These are now injected per
+# profile via select_eda_text_blocks(): ml_ds keeps the rigor, business gets
+# managerial language with no jargon and no "churn".
+
+# Tokens that must reach the technical (ml_ds) render but never the business one.
+_DS_JARGON_TOKENS = (
+    "AUC-ROC",
+    "Accuracy Paradox",
+    "Matriz de Confusión",
+    "imbalance_ratio",
+    "F1-Score",
+    "Leakage Guard",
+)
+
+
+def _render_classification_eda(profile: str) -> str:
+    """Render EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION exactly as eda_text_analyst does:
+    base 14-key context + the 4 profile-gated keys from select_eda_text_blocks()."""
+    ctx = {
+        "dilema_hypotheses": "hipotesis",
+        "dataset_instruction": "DATASET_AVAILABLE",
+        "data_gap_warnings_block": "(sin brechas)",
+        "output_language": "Spanish",
+        "student_profile": profile,
+        "algoritmos": '["Logistic Regression"]',
+        "case_context": "contexto del caso",
+        "dataset_str": "[]",
+        "dataset_summary": "{}",
+        "dataset_total_rows": 100,
+        "financial_exhibit": "exhibit financiero",
+        "operational_exhibit": "exhibit operativo",
+        "case_id": "case-1",
+        "output_depth": "visual_plus_technical",
+    }
+    ctx.update(select_eda_text_blocks(profile))
+    return EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION.format(**ctx)
+
+
+def test_select_eda_text_blocks_contract():
+    """Selector returns exactly the 4 keys the prompt template needs, for both
+    profiles, with the right event label."""
+    expected_keys = {
+        "class_balance_block",
+        "target_distribution_block",
+        "feature_engineering_block",
+        "event_label",
+    }
+    business = select_eda_text_blocks("business")
+    ml_ds = select_eda_text_blocks("ml_ds")
+    assert set(business) == expected_keys
+    assert set(ml_ds) == expected_keys
+    assert ml_ds["event_label"] == "el churn"
+    assert business["event_label"] == "el evento objetivo"
+    # Default / unknown / None → business (the safe non-technical variant).
+    assert select_eda_text_blocks(None) == business
+    assert select_eda_text_blocks("") == business
+    assert select_eda_text_blocks("teacher") == business
+
+
+def test_eda_text_ml_ds_preserves_technical_rigor():
+    """ml_ds render keeps the DS jargon — the technical audience must not regress."""
+    rendered = _render_classification_eda("ml_ds")
+    for token in _DS_JARGON_TOKENS:
+        assert token in rendered, f"ml_ds render lost technical token: {token!r}"
+    # imbalance-ratio formula and class labels intact.
+    assert "max(count_cat0, count_cat1)" in rendered
+    assert "churn" in rendered  # ml_ds keeps the churn framing
+
+
+def test_eda_text_business_has_no_ds_jargon():
+    """business render must NOT expose DS jargon to a managerial audience."""
+    rendered = _render_classification_eda("business")
+    leaked = [t for t in _DS_JARGON_TOKENS if t in rendered]
+    assert not leaked, f"business render leaked DS jargon: {leaked}"
+
+
+def test_eda_text_business_not_churn_hardcoded():
+    """business render must not assume the target is 'churn' — works for any binary
+    event (fraude, impago, entrega tardía…)."""
+    rendered = _render_classification_eda("business").lower()
+    assert "churn" not in rendered, "business render still hardcodes 'churn'"
+    assert "el evento objetivo" in rendered
+
+
+def test_eda_text_format_smoke_both_profiles():
+    """format(**context) must not raise for either profile (catches orphan
+    placeholders / unescaped braces arriving via an injected block)."""
+    for profile in ("business", "ml_ds"):
+        rendered = _render_classification_eda(profile)
+        assert rendered  # non-empty after substitution
+        # No unresolved placeholder leaked through as a literal brace token.
+        for key in (
+            "class_balance_block",
+            "target_distribution_block",
+            "feature_engineering_block",
+            "event_label",
+        ):
+            assert "{" + key + "}" not in rendered, (
+                f"placeholder {{{key}}} survived .format() for profile={profile} — "
+                "an injected block must not contain nested placeholders"
+            )

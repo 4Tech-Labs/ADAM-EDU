@@ -44,6 +44,7 @@ from case_generator.prompts.clasificacion.M2_clasificacion.eda_questions import 
 )
 from case_generator.prompts.clasificacion.M2_clasificacion.eda_text import (
     EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION,
+    select_eda_text_blocks,
 )
 
 __all__ = [
@@ -51,4 +52,5 @@ __all__ = [
     "EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION",
     "EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION",
     "EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION",
+    "select_eda_text_blocks",
 ]
