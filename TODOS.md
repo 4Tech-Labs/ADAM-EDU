@@ -1798,3 +1798,43 @@ ml_ds; los prompts permanecen como prosa.
 
 **Depends on / blocked by:** Un 3.º consumidor de código del umbral o una solicitud de cambio del
 valor. No bloquea nada.
+
+---
+
+## TODO-COHORT-PRECOMPUTE-322: gatear el cómputo de `cohort_matrix` por retención (y reconciliar el prompt)
+
+**What:** `_calculate_eda_regressions` en `backend/src/case_generator/graph.py` (líneas 1309-1333)
+computa `cohort_matrix` para CUALQUIER dataset con `retention_m*` (≥2) + `period`, sin mirar si el
+objetivo del caso es de retención. Además, el prompt (`prompts/__init__.py:345-350`) promete que para
+clasificación NO-retención el pipeline "reemplaza determinísticamente las columnas churn/retención",
+pero no existe código que lo haga (grep no encontró `drop`/`exclude`/`filter` de `retention_m*` por
+tipo de caso; `_enforce_business_classification_schema` solo fuerza el decaimiento m1≥m3≥m6≥m12 en
+graph.py:3579, nunca elimina columnas). Gatear el cómputo (o eliminar las columnas de retención del
+schema) para casos business NO-retención, y reconciliar la promesa del prompt con la realidad.
+Además, el path LLM-JSON legacy (`EDA_CHART_GENERATOR_PROMPT`, `prompts/__init__.py:576-590`,
+vivo para business+familias-no-clasificación y ml_ds) tiene la MISMA selección de heatmap
+"de Retención" gateada solo por la existencia de `cohort_matrix` (CASO A, línea 578), sin mirar
+si el target es de retención — mismo bug que #322 fuera del path determinista. Gatearlo ahí también.
+
+**Why:** Cierra la causa raíz que #322 solo mitigó en la SELECCIÓN del chart. Hoy se computa y se
+pasa una matriz de cohortes que el builder ya ignora para casos NO-retención (artefacto fantasma +
+cómputo desperdiciado), y el prompt afirma un paso que no se ejecuta (límite engañoso).
+
+**Pros:** Elimina el artefacto fantasma y el cómputo desperdiciado; defensa en profundidad detrás del
+gate del builder; el prompt deja de mentir sobre un paso inexistente.
+
+**Cons:** Toca el precompute de `graph.py` + el schema/datagen (la parte MÁS sensible del repo, mayor
+blast radius); requiere primero investigar si el reemplazo prometido vive en otro punto antes de
+escribirlo. Mayor superficie de tests/mypy.
+
+**Context:** Bug #322. El gate del builder (`eda_charts_business._build_cohort_collapse`, PR de #322)
+ya deja el OUTPUT correcto. Empezar por `graph.py:1309-1333` (cómputo incondicional) y
+`prompts/__init__.py:345-350` (promesa). El default del schema business siembra siempre
+`retention_m1/m3/m6/m12` (graph.py:2111-2114), así que un caso NO-retención los arrastra salvo que el
+case_architect los reemplace. Decidir: (a) gatear el cómputo por `is_retention_match` del target, o
+(b) eliminar `retention_m*` del schema en casos NO-retención e implementar de verdad la promesa del
+prompt. CLAUDE.md marca `case_generator/**` como sensible y `graph.py`/`prompts` sin ediciones
+cosméticas → requiere cuidado extra y tests.
+
+**Depends on / blocked by:** PR del gate de #322 mergeado primero (este deja el output correcto sin
+tocar el precompute).
