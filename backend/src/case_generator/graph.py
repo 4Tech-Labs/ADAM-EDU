@@ -130,12 +130,14 @@ from case_generator.prompts import (
     PROMPT_BY_FAMILY,
     M4_PROMPT_BY_FAMILY,
     M4_CONTENT_GENERATOR_PROMPT,
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
     M4_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_GENERATOR_PROMPT,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHARTS_PROMPT_BY_FAMILY,
     M5_PROMPT_BY_FAMILY,
     M5_CONTENT_GENERATOR_PROMPT,
+    M5_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
     M5_BUSINESS_PROMPT_CLASSIFICATION,
     TEACHING_NOTE_PART1_PROMPT,
     TEACHING_NOTE_PART2_PROMPT,
@@ -5557,11 +5559,36 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "contexto_m3": state.get("m3_content", "") or "[M3_NOT_EXECUTED]",
             "anexo_financiero": state.get("doc1_anexo_financiero", ""),
         })
+        # Issue #330 — narrativa M4 variant-aware para ml_ds + clasificación.
+        # Réplica del dispatch de M3 (m3_content_generator): resolver lr_only/rf_only/
+        # lr_rf_contrast y sobreescribir solo la clave "clasificacion" para que la prosa
+        # de impacto contraste (o NO contraste) según la intención del docente. Cualquier
+        # otro caso (business, o familias no-clasificación) pasa el dict original intacto.
+        _algoritmos_raw = _extract_state_algoritmos(state)
+        _algorithm_mode = _extract_state_algorithm_mode(state)
+        _profile, _primary_family = _resolve_generation_focus(state)
+        if _profile == "ml_ds" and _primary_family == "clasificacion":
+            _variant, _variant_warning = _resolve_classification_notebook_variant(
+                algorithm_mode=_algorithm_mode,
+                algoritmos=_algoritmos_raw,
+            )
+            if _variant_warning:
+                logger.warning(
+                    "[m4_content_generator] narrative variant fallback — "
+                    "variant=%s algoritmos=%r reason: %s",
+                    _variant, _algoritmos_raw, _variant_warning,
+                )
+            _effective_prompt_by_family: dict[str, str] = {
+                **M4_PROMPT_BY_FAMILY,
+                "clasificacion": M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT[_variant],
+            }
+        else:
+            _effective_prompt_by_family = M4_PROMPT_BY_FAMILY
         prompt_template, metrics_block, grounding_enabled, grounding_update = (
             _select_narrative_prompt(
                 state,
                 "m4_content_generator",
-                M4_PROMPT_BY_FAMILY,
+                _effective_prompt_by_family,
                 M4_CONTENT_GENERATOR_PROMPT,
             )
         )
@@ -5733,11 +5760,37 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "contexto_m3": state.get("m3_content", "") or "[M3_NOT_EXECUTED]",
             "contexto_m4": state.get("m4_content", "") or "",
         })
+        # Issue #330 — narrativa M5 variant-aware para ml_ds + clasificación.
+        # Réplica del dispatch de M3/M4: la matriz de decisión ajusta su columna
+        # "modelo soporte" a lr_only/rf_only/lr_rf_contrast. La cabecera de la matriz
+        # se conserva en las 3 variantes, así que el contrato require_decision_matrix
+        # de _invoke_m5_content_with_contract sigue intacto. business y familias
+        # no-clasificación pasan el dict original sin cambios.
+        _algoritmos_raw = _extract_state_algoritmos(state)
+        _algorithm_mode = _extract_state_algorithm_mode(state)
+        _profile, _primary_family = _resolve_generation_focus(state)
+        if _profile == "ml_ds" and _primary_family == "clasificacion":
+            _variant, _variant_warning = _resolve_classification_notebook_variant(
+                algorithm_mode=_algorithm_mode,
+                algoritmos=_algoritmos_raw,
+            )
+            if _variant_warning:
+                logger.warning(
+                    "[m5_content_generator] narrative variant fallback — "
+                    "variant=%s algoritmos=%r reason: %s",
+                    _variant, _algoritmos_raw, _variant_warning,
+                )
+            _effective_prompt_by_family: dict[str, str] = {
+                **M5_PROMPT_BY_FAMILY,
+                "clasificacion": M5_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT[_variant],
+            }
+        else:
+            _effective_prompt_by_family = M5_PROMPT_BY_FAMILY
         prompt_template, metrics_block, grounding_enabled, grounding_update = (
             _select_narrative_prompt(
                 state,
                 "m5_content_generator",
-                M5_PROMPT_BY_FAMILY,
+                _effective_prompt_by_family,
                 M5_CONTENT_GENERATOR_PROMPT,
             )
         )

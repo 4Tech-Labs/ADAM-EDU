@@ -555,6 +555,9 @@ def test_prompts_inject_computed_metrics_block_only_for_classification() -> None
         algoritmos='["Logistic Regression"]',
         case_id="case-243",
         computed_metrics_block="auc_lr: 0.7234\nauc_lr_pct: 72.34%",
+        # Issue #330 — la narrativa M4 de clasificación ahora ancla a la pregunta eje
+        # (siempre presente en el context del nodo vía _build_base_context).
+        pregunta_eje="¿Conviene subir el precio del plan premium?",
     )
 
     literal_rule = (
