@@ -1718,3 +1718,31 @@ superficie de test en `backend/tests/test_eda_charts_business.py` y
 exacto de #306/#319: bloque estático placeholder-free + `_maybe_business_classification_prompt`.
 
 **Depends on / blocked by:** Independiente de #319.
+
+---
+
+## TODO-320-A: Test de snapshot/regresión visual frontend para el chart de drivers divergente
+
+**What:** Añadir un test automatizado de frontend que cubra el render del chart `churn_drivers`
+divergente de M2 business: que el encoding con signo (x ∈ [-1,1]), el `marker.color` por barra y
+el `xaxis.range=[-1,1]` sobreviven a `sanitizeTraces` y llegan intactos a Plotly.
+
+**Why:** Hoy **no existe ninguna cobertura de test de frontend** para estos charts Plotly; el fix de
+#320 se apoya en verificación manual del JSON de la traza (e inspección visual) para confirmar que
+`sanitizeTraces` no descarta `marker` ni recorta valores negativos. Un cambio futuro en
+`sanitizeTraces`/`buildLayout` podría romper el encoding direccional sin que ningún test lo detecte.
+
+**Pros:** Cierra el gap de cero cobertura FE para los charts EDA; bloquea regresiones silenciosas del
+encoding con signo y del color por barra (modo de fallo F2 del plan-eng-review de #320).
+
+**Cons:** No existe aún harness de test para componentes de chart en `frontend/` — es infraestructura
+net-new (Vitest/RTL + setup de Plotly mock). Mayor que un test puntual.
+
+**Context:** Render en `frontend/src/shared/case-viewer/PlotlyChartsRenderer.tsx` +
+`plotlyChartUtils.ts` (`sanitizeTraces`, `buildLayout`). Verificado en #320 que `sanitizeTraces` solo
+normaliza heatmaps y `null→0` en x/y (no toca `marker`, no recorta negativos) y que el tipo TS
+`Data`/`PlotMarker` ya admite `Color[]`. Punto de partida sugerido: un snapshot de la salida de
+`sanitizeTraces` para una spec de barra divergente con `marker.color` por barra y x con signo.
+
+**Depends on / blocked by:** Ninguno. El fix backend de #320 es independiente; este TODO es hardening
+de cobertura FE.

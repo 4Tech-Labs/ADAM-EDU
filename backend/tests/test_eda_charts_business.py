@@ -24,6 +24,8 @@ import pandas as pd
 import pytest
 
 from case_generator.datagen.eda_charts_business import (
+    _DRIVER_COLOR_PROTECT,
+    _DRIVER_COLOR_RISK,
     _aggregate_by_grain,
     _detect_period_grain,
     _indexed_base_100,
@@ -40,13 +42,18 @@ CONTRACT = {"case_id": "test_case_business"}
 
 @pytest.fixture
 def df_business() -> pd.DataFrame:
-    """12 meses; revenue sube, churn baja, nps sube (→ nps↔churn negativo)."""
+    """12 meses; revenue sube, churn baja, nps sube (→ nps↔churn negativo).
+
+    `payment_failures` baja junto con churn (ambos descienden) → correlación
+    POSITIVA con el objetivo: un factor que *aumenta* el evento (Issue #320).
+    """
     periods = [f"2023-{m:02d}" for m in range(1, 13)]
     revenue = [100_000 + i * 2_000 for i in range(12)]
     costs = [round(r * 0.7, 2) for r in revenue]
     margin_pct = [round((r - c) / r * 100, 2) for r, c in zip(revenue, costs)]
     churn = [round(0.20 - i * 0.005, 4) for i in range(12)]
     nps = [30 + i * 2 for i in range(12)]
+    payment_failures = [60 - i * 4 for i in range(12)]  # baja con churn → corr > 0
     return pd.DataFrame(
         {
             "period": periods,
@@ -55,6 +62,7 @@ def df_business() -> pd.DataFrame:
             "margin_pct": margin_pct,
             "churn_rate": churn,
             "nps": nps,
+            "payment_failures": payment_failures,
             "retention_m1": [0.90] * 12,
             "retention_m3": [0.70] * 12,
             "retention_m6": [0.50] * 12,
@@ -68,13 +76,15 @@ def precalc_with_cohort() -> dict:
     """Métricas precalculadas con matriz de correlación + cohortes (forma real)."""
     return {
         "correlation_matrix": {
-            "x": ["revenue", "costs", "churn_rate", "nps"],
-            "y": ["revenue", "costs", "churn_rate", "nps"],
+            # payment_failures (corr +0.6 con churn) prueba un driver POSITIVo (#320).
+            "x": ["revenue", "costs", "churn_rate", "nps", "payment_failures"],
+            "y": ["revenue", "costs", "churn_rate", "nps", "payment_failures"],
             "z": [
-                [1.0, 0.8, -0.9, 0.7],
-                [0.8, 1.0, -0.5, 0.4],
-                [-0.9, -0.5, 1.0, -0.85],  # fila del target churn_rate
-                [0.7, 0.4, -0.85, 1.0],
+                [1.0, 0.8, -0.9, 0.7, -0.6],
+                [0.8, 1.0, -0.5, 0.4, -0.3],
+                [-0.9, -0.5, 1.0, -0.85, 0.6],  # fila del target churn_rate
+                [0.7, 0.4, -0.85, 1.0, -0.5],
+                [-0.6, -0.3, 0.6, -0.5, 1.0],
             ],
         },
         "cohort_matrix": {
@@ -147,8 +157,8 @@ def test_financial_mirage_missing_revenue_degrades(df_business) -> None:
 def test_churn_drivers_values_come_from_precalculated_corr(
     df_business, precalc_with_cohort
 ) -> None:
-    """Las magnitudes mostradas == |corr| reales de la matriz precalculada,
-    ordenadas desc. NO números inventados por el LLM.
+    """Los valores mostrados == corr CON SIGNO reales de la matriz precalculada,
+    ordenados por fuerza (|r|) desc. NO números inventados por el LLM (#320).
     """
     charts = generate_business_eda_charts(
         df_business, "churn_rate", precalc_with_cohort, CONTRACT
@@ -157,21 +167,27 @@ def test_churn_drivers_values_come_from_precalculated_corr(
     trace = drivers["traces"][0]
     assert drivers["chart_type"] == "bar"
     assert trace["orientation"] == "h"
-    # |corr| de churn_rate vs {revenue:0.9, nps:0.85, costs:0.5} → orden desc
-    assert trace["y"] == ["revenue", "nps", "costs"]
-    assert trace["x"] == [0.9, 0.85, 0.5]
-    # Eje fijo [0,1] impide exagerar magnitudes pequeñas.
-    assert drivers["layout"]["xaxis"]["range"] == [0, 1]
+    # corr de churn_rate: revenue -0.9, nps -0.85, payment_failures +0.6, costs -0.5
+    # → orden por |r| desc; el signo se CONSERVA en x.
+    assert trace["y"] == ["revenue", "nps", "payment_failures", "costs"]
+    assert trace["x"] == [-0.9, -0.85, 0.6, -0.5]
+    # La etiqueta muestra la fuerza (valor absoluto, 0–1), sin el signo.
+    assert trace["text"] == ["0.90", "0.85", "0.60", "0.50"]
+    # Eje simétrico [-1,1]: conserva el anti-exageración y muestra la dirección.
+    assert drivers["layout"]["xaxis"]["range"] == [-1, 1]
 
 
 def test_churn_drivers_fallback_computes_from_df(df_business) -> None:
-    """Sin correlation_matrix precalculada, computa |corr| del df (no se rinde)."""
+    """Sin correlation_matrix precalculada, computa corr CON SIGNO del df (no se rinde)."""
     charts = generate_business_eda_charts(df_business, "churn_rate", {}, CONTRACT)
     drivers = next(c for c in charts if c["id"] == "churn_drivers")
     trace = drivers["traces"][0]
-    # nps sube y churn baja → |corr| alto y real.
+    # nps sube y churn baja → corr fuerte y NEGATIVA (reduce el evento).
     nps_idx = trace["y"].index("nps")
-    assert trace["x"][nps_idx] > 0.8
+    assert trace["x"][nps_idx] < -0.8
+    # payment_failures baja con churn → corr POSITIVA (aumenta el evento).
+    pf_idx = trace["y"].index("payment_failures")
+    assert trace["x"][pf_idx] > 0.8
 
 
 def test_churn_drivers_no_computable_correlations_returns_empty() -> None:
@@ -212,9 +228,67 @@ def test_churn_drivers_weak_but_present_correlation_is_flagged() -> None:
     charts = generate_business_eda_charts(df, "churn_rate", precalc, CONTRACT)
     drivers = next(c for c in charts if c["id"] == "churn_drivers")
     assert drivers["traces"] != []  # hay barra real
-    assert drivers["traces"][0]["x"] == [0.05]
-    assert "0.10" in drivers["notes"]  # nota de cautela explícita
-    assert drivers["layout"]["xaxis"]["range"] == [0, 1]  # eje fijo anti-exageración
+    assert drivers["traces"][0]["x"] == [0.05]  # signo conservado (aquí positivo y débil)
+    assert "cautela" in drivers["notes"]  # nota de cautela explícita
+    assert drivers["layout"]["xaxis"]["range"] == [-1, 1]  # eje simétrico anti-exageración
+
+
+def test_churn_drivers_encodes_direction_with_sign_and_color(
+    df_business, precalc_with_cohort
+) -> None:
+    """Issue #320: el signo distingue factor de riesgo (aumenta) de protector (reduce).
+
+    Un driver con corr negativa → x < 0 y color PROTECT; uno con corr positiva →
+    x > 0 y color RISK. La etiqueta numérica nunca lleva signo (es la fuerza).
+    """
+    charts = generate_business_eda_charts(
+        df_business, "churn_rate", precalc_with_cohort, CONTRACT
+    )
+    trace = next(c for c in charts if c["id"] == "churn_drivers")["traces"][0]
+    colors = trace["marker"]["color"]
+
+    nps_idx = trace["y"].index("nps")  # corr -0.85 → reduce el evento
+    assert trace["x"][nps_idx] < 0
+    assert colors[nps_idx] == _DRIVER_COLOR_PROTECT
+
+    pf_idx = trace["y"].index("payment_failures")  # corr +0.6 → aumenta el evento
+    assert trace["x"][pf_idx] > 0
+    assert colors[pf_idx] == _DRIVER_COLOR_RISK
+
+    # La fuerza se muestra sin signo (un "-0.85" se leería como "peor").
+    assert all(not t.startswith("-") for t in trace["text"])
+
+
+def test_churn_drivers_marker_color_length_matches_x(
+    df_business, precalc_with_cohort
+) -> None:
+    """Guard anti-mis-render (F2): si len(color) != len(x), Plotly recicla colores
+    y pinta la barra equivocada. Deben coincidir siempre."""
+    charts = generate_business_eda_charts(
+        df_business, "churn_rate", precalc_with_cohort, CONTRACT
+    )
+    trace = next(c for c in charts if c["id"] == "churn_drivers")["traces"][0]
+    assert len(trace["marker"]["color"]) == len(trace["x"])
+
+
+def test_churn_drivers_has_no_ds_jargon(df_business, precalc_with_cohort) -> None:
+    """La dirección se comunica en lenguaje de negocio, sin jerga DS (#320)."""
+    charts = generate_business_eda_charts(
+        df_business, "churn_rate", precalc_with_cohort, CONTRACT
+    )
+    drivers = next(c for c in charts if c["id"] == "churn_drivers")
+    trace = drivers["traces"][0]
+    surfaces = " ".join(
+        [
+            drivers["subtitle"],
+            drivers["notes"],
+            trace["name"],
+            drivers["layout"]["xaxis"]["title"],
+            *trace["text"],
+        ]
+    ).lower()
+    for jargon in ("pearson", "coeficiente", "r=", "|correlación|", "absoluta"):
+        assert jargon not in surfaces
 
 
 # ─────────────────────────────────────────────────────────
@@ -990,7 +1064,7 @@ def test_cohort_fallback_binary_target_uses_class_balance_bar() -> None:
 def test_churn_business_non_regression_three_retention_charts(
     df_business, precalc_with_cohort
 ) -> None:
-    """No-regresión business churn/SaaS: 3 charts con cohorte de retención + eje [0,1]."""
+    """No-regresión business churn/SaaS: 3 charts con cohorte de retención + eje [-1,1]."""
     charts = generate_business_eda_charts(
         df_business, "churn_rate", precalc_with_cohort, CONTRACT
     )
@@ -1001,4 +1075,5 @@ def test_churn_business_non_regression_three_retention_charts(
     assert "Retención de Cohortes" in cohort["title"]
     drivers = next(c for c in charts if c["id"] == "churn_drivers")
     assert drivers["title"] == "Factores asociados al abandono"
-    assert drivers["layout"]["xaxis"]["range"] == [0, 1]  # honestidad #296
+    # Eje simétrico [-1,1] (#320): conserva el anti-exageración de #296 y muestra dirección.
+    assert drivers["layout"]["xaxis"]["range"] == [-1, 1]
