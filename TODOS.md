@@ -1811,6 +1811,10 @@ pero no existe código que lo haga (grep no encontró `drop`/`exclude`/`filter` 
 tipo de caso; `_enforce_business_classification_schema` solo fuerza el decaimiento m1≥m3≥m6≥m12 en
 graph.py:3579, nunca elimina columnas). Gatear el cómputo (o eliminar las columnas de retención del
 schema) para casos business NO-retención, y reconciliar la promesa del prompt con la realidad.
+Además, el path LLM-JSON legacy (`EDA_CHART_GENERATOR_PROMPT`, `prompts/__init__.py:576-590`,
+vivo para business+familias-no-clasificación y ml_ds) tiene la MISMA selección de heatmap
+"de Retención" gateada solo por la existencia de `cohort_matrix` (CASO A, línea 578), sin mirar
+si el target es de retención — mismo bug que #322 fuera del path determinista. Gatearlo ahí también.
 
 **Why:** Cierra la causa raíz que #322 solo mitigó en la SELECCIÓN del chart. Hoy se computa y se
 pasa una matriz de cohortes que el builder ya ignora para casos NO-retención (artefacto fantasma +
