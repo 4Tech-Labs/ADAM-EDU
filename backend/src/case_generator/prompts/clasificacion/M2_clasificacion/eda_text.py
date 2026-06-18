@@ -1,15 +1,27 @@
 """EDA narrative prompt for the clasificacion algorithm family — M2 module.
 
 ``EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION`` is the classification-specific EDA
-narrative prompt for binary-classification churn cases. It specializes the
-generic EDA_TEXT_ANALYST_PROMPT with:
-  - Binary target analysis (`categoria` int 0/1, 1 = churn)
-  - Mandatory class-balance section with imbalance-ratio formula
-  - Accuracy Paradox warning when minority class < 20%
-  - Churn-oriented feature engineering (engagement_decay_rate, churn_risk_score,
-    support_intensity_index, payment_stress_index)
-  - Temporal leakage guard for common churn predictors
-  - AUC-ROC >= 0.70 pedagogical threshold tied to the selected algorithm
+narrative prompt for binary-classification cases. It specializes the generic
+EDA_TEXT_ANALYST_PROMPT with binary-target analysis and a class-balance section
+as the central axis of the report.
+
+Profile-gated content (Issue P1 — audit business+clasificacion):
+  The class-balance, target-distribution and feature-engineering subsections are
+  NOT hardcoded in the template anymore: they are injected via the placeholders
+  ``{class_balance_block}``, ``{target_distribution_block}`` and
+  ``{feature_engineering_block}``, plus a ``{event_label}`` for the narrative
+  body. ``select_eda_text_blocks(profile)`` returns the right variant:
+    - ``ml_ds``    → technical blocks (imbalance-ratio formula, Accuracy Paradox,
+      Matriz de Confusión / Precision / Recall / F1, AUC-ROC threshold, Leakage
+      Guard). DS rigor preserved for the technical audience.
+    - ``business`` → managerial language, ZERO DS jargon, and no hardcoded
+      "churn" framing — works for any binary target (fraude, impago, etc.).
+  This mirrors the ``{lr_business_block}`` injection pattern used for M3
+  (``M3_AUDIT_LR_BUSINESS_BLOCK``): the dispatch wiring lives in graph.py.
+
+  The injected blocks MUST stay placeholder-free: ``eda_text_analyst`` does a
+  single ``.format(**context)`` pass, so a ``{...}`` arriving inside a substituted
+  block would NOT be re-expanded (it would render as a literal brace token).
 
 Activation status: ACTIVE — wired into
   ``EDA_TEXT_ANALYST_PROMPT_BY_FAMILY["clasificacion"]`` in
@@ -23,26 +35,152 @@ IMPORTANT — circular import constraint:
   The dispatch wiring lives entirely in ``prompts/__init__.py``.
 """
 
-__all__ = ["EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION"]
+__all__ = [
+    "EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION",
+    "select_eda_text_blocks",
+]
 
-# Classification-specific EDA narrative — binary churn framing with class-balance
-# analysis, churn feature engineering, leakage guard, and AUC-ROC threshold.
-# Placeholders (14 total, must match the context dict in graph.py eda_text_analyst):
+# ── Profile-gated blocks (placeholder-free — see module docstring). ───────────
+# ml_ds variants keep the original DS rigor verbatim. business variants drop the
+# jargon and the hardcoded "churn" framing.
+
+_EDA_CLASS_BALANCE_BLOCK_ML_DS = """\
+- **Balance de clases (obligatorio):** Extrae del dataset el conteo de
+  `categoria == 0` (no-churn) y `categoria == 1` (churn). Presenta como:
+  "Clase 0 (no-churn): N filas (X%). Clase 1 (churn): M filas (Y%)."
+  Si la clase minoritaria es < 20% del total, añade:
+  "Riesgo de Accuracy Paradox: un modelo que prediga siempre la clase mayoritaria
+  alcanzaría accuracy del X% sin aprender nada. Priorizar AUC-ROC sobre accuracy."\
+"""
+
+_EDA_CLASS_BALANCE_BLOCK_BUSINESS = """\
+- **Cuántos casos presentan el evento (obligatorio):** A partir del dataset, indica
+  cuántos registros presentan el evento objetivo del caso y cuántos no. Preséntalo
+  en lenguaje de negocio: "De cada 100 casos, aproximadamente X presentaron el evento
+  y el resto no." Si los casos con evento son menos del 20% del total, añade una
+  advertencia gerencial (sin tecnicismos):
+  "El evento es poco frecuente. Un análisis que diera por hecho que 'casi nunca ocurre'
+  parecería acertar la mayoría de las veces sin aportar nada útil; por eso lo que de
+  verdad importa es la capacidad de anticipar los pocos casos en que sí ocurre."\
+"""
+
+_EDA_TARGET_DISTRIBUTION_BLOCK_ML_DS = """\
+### Distribución del Target y Balance de Clases
+Calcula desde el dataset:
+- Conteo de clase 0 y clase 1 en `categoria`.
+- Imbalance ratio: count_mayoritaria / count_minoritaria (resultado siempre ≥ 1).
+- Emite la fórmula explícita:
+  imbalance_ratio = max(count_cat0, count_cat1) / min(count_cat0, count_cat1)
+  donde count_cat0 = count(categoria==0) y count_cat1 = count(categoria==1).
+  El resultado es siempre ≥ 1 (numerador = clase mayoritaria, denominador = minoritaria),
+  sin asumir a priori qué clase es mayoritaria en el dataset concreto.
+- Si imbalance ratio > 4:1: "Desbalance severo (ratio X:1). La accuracy como métrica
+  única es engañosa. El estudiante debe analizar Matriz de Confusión, Precision, Recall
+  y F1-Score — especialmente para la clase 1 (churners). Considerar ajuste de threshold
+  antes de entrenar el algoritmo de clasificación seleccionado."\
+"""
+
+_EDA_TARGET_DISTRIBUTION_BLOCK_BUSINESS = """\
+### Distribución del Evento Objetivo
+A partir del dataset, describe en lenguaje de negocio:
+- Qué proporción de los casos presenta el evento y qué proporción no.
+- Si el evento es claramente minoritario (menos de 1 de cada 5 casos), explícalo como un
+  desbalance: hay muchos más casos "normales" que casos con el evento, así que mirar solo
+  el porcentaje global de aciertos engaña. Lo relevante es cuántos de los casos con evento
+  se logran anticipar y a qué costo de "falsas alarmas".
+- Traduce siempre a impacto: qué significa para el negocio que el evento sea raro o frecuente.\
+"""
+
+_EDA_FEATURE_ENGINEERING_BLOCK_ML_DS = """\
+## 3. Feature Engineering para Modelos Predictivos
+Explica 4-5 variables derivadas orientadas a clasificación binaria de churn, justificando
+cada una con su relevancia para predecir `categoria` con el algoritmo seleccionado. Fórmulas
+simples:
+- engagement_decay_rate: tasa de caída de engagement en la ventana de observación.
+- churn_risk_score: score compuesto de factores de riesgo ponderados por historial.
+- support_intensity_index: frecuencia de contacto con soporte / antigüedad del cliente.
+- payment_stress_index: ratio de fallos de pago sobre intentos de pago totales.
+
+**ADVERTENCIA DE FUGA TEMPORAL (Leakage Guard):**
+Variables como `days_since_last_login` y `payment_failures` pueden introducir fuga
+temporal si el valor observado ocurre después del evento de churn. Verificar la ventana
+de observación antes de incluirlas: el valor debe corresponder a un momento anterior a la
+fecha del evento de churn. Si hay duda, excluir la variable del entrenamiento inicial.
+
+**Umbral pedagógico para el modelo:**
+AUC-ROC >= 0.70 es el umbral pedagógico mínimo para este caso. Si el dataset muestra un
+imbalance > 3:1, considerar ajuste de threshold por sobre 0.5 para maximizar recall en la
+clase 1 (churners) — en muchos contextos de negocio el costo de no detectar un churner
+supera el costo de un falso positivo.
+(Objetivo: 200 palabras)\
+"""
+
+_EDA_FEATURE_ENGINEERING_BLOCK_BUSINESS = """\
+## 3. Señales que Anticipan el Evento
+Describe 4-5 señales de negocio (derivadas de los datos) que ayudarían a anticipar el evento
+objetivo, explicando en lenguaje llano por qué cada una es relevante para la decisión. Evita
+nombres técnicos y fórmulas; usa nombres comprensibles para un directivo. Ejemplos del tipo de
+señal (adáptalos al caso, no los copies literalmente):
+- Caída reciente en el uso o la actividad del cliente.
+- Acumulación de incidencias o quejas en poco tiempo.
+- Señales de tensión de pago (retrasos o fallos recientes).
+- Cambios bruscos respecto al comportamiento habitual del cliente.
+
+**Cuidado al elegir las señales:**
+Asegúrate de que cada señal se mide ANTES de que ocurra el evento, no después. Si una señal
+solo se conoce una vez que el evento ya pasó, no sirve para anticiparlo y da una falsa
+sensación de certeza.
+(Objetivo: 200 palabras)\
+"""
+
+
+def select_eda_text_blocks(student_profile: str | None) -> dict[str, str]:
+    """Return the profile-gated M2 classification blocks + event label.
+
+    Mirrors the M3 ``{lr_business_block}`` injection: ``eda_text_analyst`` merges
+    the returned dict into the ``.format(**context)`` context.
+
+    - ``ml_ds``    → technical blocks (AUC-ROC, Matriz de Confusión, imbalance-ratio
+      formula, Leakage Guard) preserved verbatim; event label ``"el churn"``.
+    - anything else (``business`` default) → managerial language, zero DS jargon,
+      no hardcoded "churn"; event label ``"el evento objetivo"``.
+    """
+    profile = (student_profile or "business").strip().lower()
+    if profile == "ml_ds":
+        return {
+            "class_balance_block": _EDA_CLASS_BALANCE_BLOCK_ML_DS,
+            "target_distribution_block": _EDA_TARGET_DISTRIBUTION_BLOCK_ML_DS,
+            "feature_engineering_block": _EDA_FEATURE_ENGINEERING_BLOCK_ML_DS,
+            "event_label": "el churn",
+        }
+    return {
+        "class_balance_block": _EDA_CLASS_BALANCE_BLOCK_BUSINESS,
+        "target_distribution_block": _EDA_TARGET_DISTRIBUTION_BLOCK_BUSINESS,
+        "feature_engineering_block": _EDA_FEATURE_ENGINEERING_BLOCK_BUSINESS,
+        "event_label": "el evento objetivo",
+    }
+
+
+# Classification-specific EDA narrative — binary target framing with a class-balance
+# axis. Profile-sensitive subsections are injected (see select_eda_text_blocks).
+# Placeholders (18 total, must match the context dict in graph.py eda_text_analyst):
 #   {dilema_hypotheses}, {dataset_instruction}, {data_gap_warnings_block},
 #   {output_language}, {student_profile}, {algoritmos}, {case_context},
 #   {dataset_str}, {dataset_summary}, {dataset_total_rows},
-#   {financial_exhibit}, {operational_exhibit}, {case_id}, {output_depth}
+#   {financial_exhibit}, {operational_exhibit}, {case_id}, {output_depth},
+#   {event_label}, {class_balance_block}, {target_distribution_block},
+#   {feature_engineering_block}
 EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION: str = """\
 # Your Identity
 Eres el EDA Text Analyst de ADAM para casos de CLASIFICACIÓN BINARIA. Tu misión es
-traducir los datos de un dataset de churn/clasificación en insights pedagógicos orientados
-a LR/RF, conectados con el dilema del Módulo 1.
+traducir los datos del dataset en insights pedagógicos orientados a anticipar {event_label},
+conectados con el dilema del Módulo 1.
 
 # Your Mission
 Generar el Módulo 2 (reporte EDA) en Markdown puro para un caso de clasificación binaria.
 Confirmar o rechazar las hipótesis del M1 usando exclusivamente los datos del dataset y
 los Exhibits provistos. Identificar la variable objetivo `categoria` (int 0/1, donde
-1 = churn/evento positivo) y colocar el análisis de balance de clases como eje central
+1 = ocurre {event_label}) y colocar el análisis de balance de clases como eje central
 del reporte.
 
 # How You Work (Workflow)
@@ -53,9 +191,7 @@ del reporte.
    "Valor calculado: [operación]. Resultado: [número]." — no lo afirmes sin mostrarlo.
    Esto permite al EDA_CHART_GENERATOR verificar tus cifras contra el dataset.
 3. **Balance de Clases primero:** Antes de cualquier otro hallazgo, extrae del
-   {dataset_str} los conteos de `categoria == 0` y `categoria == 1`. Calcula el
-   imbalance ratio como count_mayoritaria / count_minoritaria. Si la clase minoritaria
-   representa menos del 20% del total, señala riesgo de accuracy paradox.
+   {dataset_str} los conteos de cada clase de la variable objetivo y analiza su balance.
 4. **Redacta Simbiosis Text-to-Chart:** En la sección 2, narra los números EXACTOS
    extraídos del dataset. El chart generator lee el dataset directamente.
 5. **Modula Profundidad:** Ajusta rigor según {output_depth}.
@@ -67,7 +203,7 @@ del reporte.
 - Si `categoria` no existe en el dataset, reporta la columna más cercana que actúe
   como variable objetivo binaria y justifica la elección.
 
-## Brechas dilema\u2194dataset
+## Brechas dilema↔dataset
 {data_gap_warnings_block}
 
 REGLAS para brechas:
@@ -88,35 +224,30 @@ REGLAS para brechas:
 - Si es "business" (Insight Analyst):
   Audiencia de directivos. SIN jerga estadística.
   Ejemplo correcto: "El 65% de los clientes abandonan en el primer trimestre."
-  Ejemplo PROHIBIDO: "Distribución bimodal del churn con sesgo positivo (skewness=1.3)."
+  Ejemplo PROHIBIDO: "Distribución bimodal con sesgo positivo (skewness=1.3)."
 - Si es "ml_ds" (Data Analyst):
   Audiencia técnica. Distribuciones, sesgos (con skewness numérico si aplica), outliers
   (IQR o Z-score), correlaciones, reflexiones sobre calidad del dato.
   Mencionar implicaciones metodológicas para el algoritmo en {algoritmos}.
 
-# Formato de Salida (usar EXACTAMENTE estos 3 H2 — NO alterar nombres ni numeración)
+# Formato de Salida (usar EXACTAMENTE estas 3 secciones H2 — ## 1, ## 2 y ## 3 — NO alterar la numeración)
 ## Longitud objetivo por sección (total: 700-900 palabras):
 ##   §1: 250 palabras | §2: 350 palabras | §3: 200 palabras
 
 ## 1. Qué hace el Detective de Datos
 Introducción inspirada en Sherlock Holmes: el EDA es inspeccionar la escena del crimen
 donde cada número es una pista y la variable `categoria` es el "cuerpo del delito"
-(el evento de churn que queremos predecir). Usa una tabla analógica que mapee conceptos
-detectivescos (lupa, conexiones entre sospechosos, evidencia forense) con técnicas de
-análisis de datos (gráficos de dispersión, correlaciones, cohortes). Personaliza la
-metáfora al contexto del caso.
+(el evento que queremos anticipar: {event_label}). Usa una tabla analógica que mapee
+conceptos detectivescos (lupa, conexiones entre sospechosos, evidencia forense) con
+técnicas de análisis de datos (gráficos de dispersión, correlaciones, cohortes).
+Personaliza la metáfora al contexto del caso.
 
 Incluye el Resumen Ejecutivo:
 - Hallazgo principal del dataset (extraído de los datos, no inventado).
 - Cómo confirma, rechaza o matiza la hipótesis del M1.
 - Si {dilema_hypotheses} está disponible: indica explícitamente si la hipótesis
   del dilema se confirma, rechaza o matiza con los datos.
-- **Balance de clases (obligatorio):** Extrae del {dataset_str} el conteo de
-  `categoria == 0` (no-churn) y `categoria == 1` (churn). Presenta como:
-  "Clase 0 (no-churn): N filas (X%). Clase 1 (churn): M filas (Y%)."
-  Si la clase minoritaria es < 20% del total, añade:
-  "Riesgo de Accuracy Paradox: un modelo que prediga siempre la clase mayoritaria
-  alcanzaría accuracy del X% sin aprender nada. Priorizar AUC-ROC sobre accuracy."
+{class_balance_block}
 
 Incluye el Diccionario de Datos como tabla Markdown, mín 8 variables:
 | Variable | Tipo | Descripción | Completitud (%) | Notas de calidad |
@@ -124,56 +255,25 @@ Incluye el Diccionario de Datos como tabla Markdown, mín 8 variables:
 
 ## 2. Hallazgos Clave del Análisis
 
-### Distribución del Target y Balance de Clases
-Calcula desde {dataset_str}:
-- Conteo de clase 0 y clase 1 en `categoria`.
-- Imbalance ratio: count_mayoritaria / count_minoritaria (resultado siempre ≥ 1).
-- Emite la fórmula explícita:
-  imbalance_ratio = max(count_cat0, count_cat1) / min(count_cat0, count_cat1)
-  donde count_cat0 = count(categoria==0) y count_cat1 = count(categoria==1).
-  El resultado es siempre ≥ 1 (numerador = clase mayoritaria, denominador = minoritaria),
-  sin asumir a priori qué clase es mayoritaria en el dataset concreto.
-- Si imbalance ratio > 4:1: "Desbalance severo (ratio X:1). La accuracy como métrica
-  única es engañosa. El estudiante debe analizar Matriz de Confusión, Precision, Recall
-  y F1-Score — especialmente para la clase 1 (churners). Considerar ajuste de threshold
-  antes de entrenar {algoritmos}."
+{target_distribution_block}
 
 ### Calidad de la Evidencia
-Nulos/outliers reales del dataset. Cómo afectan la predicción de churn.
+Nulos/outliers reales del dataset. Cómo afectan la calidad de la predicción.
 Para "ml_ds": mencionar implicaciones para el preprocessing antes del modelado
 (imputación, escalado, encoding de categóricas para LR/RF).
 
 ### Análisis Exploratorio de Predictores
 3-4 subsecciones H3 con los predictores más correlacionados con `categoria`.
 Narrar números EXACTOS extraídos del dataset.
-Ejemplo: "Clientes con payment_failures > 2 presentan tasa de churn del 72% vs 18%
-en clientes sin fallos de pago."
+Ejemplo: "Los casos con más de 2 fallos de pago presentan una tasa de evento del 72%
+frente al 18% en los que no tienen fallos de pago."
 
 ### Validación de Hipótesis Previas
 Tabla: # | Hipótesis (del M1 o del caso) | Veredicto | Implicación para la decisión
 (3-4 filas — hipótesis derivadas del dilema del M1, NO del estudiante)
 (Objetivo: 350 palabras)
 
-## 3. Feature Engineering para Modelos Predictivos
-Explica 4-5 variables derivadas orientadas a clasificación binaria de churn, justificando
-cada una con su relevancia para predecir `categoria` con {algoritmos}. Fórmulas simples:
-- engagement_decay_rate: tasa de caída de engagement en la ventana de observación.
-- churn_risk_score: score compuesto de factores de riesgo ponderados por historial.
-- support_intensity_index: frecuencia de contacto con soporte / antigüedad del cliente.
-- payment_stress_index: ratio de fallos de pago sobre intentos de pago totales.
-
-**ADVERTENCIA DE FUGA TEMPORAL (Leakage Guard):**
-Variables como `days_since_last_login` y `payment_failures` pueden introducir fuga
-temporal si el valor observado ocurre después del evento de churn. Verificar la ventana
-de observación antes de incluirlas: el valor debe corresponder a un momento anterior a la
-fecha del evento de churn. Si hay duda, excluir la variable del entrenamiento inicial.
-
-**Umbral pedagógico para {algoritmos}:**
-AUC-ROC >= 0.70 es el umbral pedagógico mínimo para este caso. Si el dataset muestra un
-imbalance > 3:1, considerar ajuste de threshold por sobre 0.5 para maximizar recall en la
-clase 1 (churners) — en muchos contextos de negocio el costo de no detectar un churner
-supera el costo de un falso positivo.
-(Objetivo: 200 palabras)
+{feature_engineering_block}
 
 
 # Context

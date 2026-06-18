@@ -58,6 +58,7 @@ from case_generator.prompts.clasificacion import (
     SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
     TOC_MARKDOWN_CELL_BY_VARIANT,
     ClassificationNotebookVariant,
+    select_eda_text_blocks,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -106,6 +106,7 @@ from case_generator.prompts import (
     EDA_QUESTIONS_PROMPT_BY_FAMILY,
     EDA_TEXT_ANALYST_PROMPT,
     EDA_TEXT_ANALYST_PROMPT_BY_FAMILY,
+    select_eda_text_blocks,
     CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT,
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
@@ -1198,6 +1199,13 @@ def eda_text_analyst(state: ADAMState, config: RunnableConfig) -> dict:
                 empty_message="(sin brechas detectadas — el dataset cubre el contrato dilema↔datos)",
             ),
         })
+        # P1 (auditoría business+clasificacion) — secciones de balance/distribución/
+        # señales gated por perfil: business recibe lenguaje gerencial sin jerga DS y
+        # sin "churn" cableado; ml_ds conserva el rigor técnico verbatim (AUC-ROC,
+        # matriz de confusión, leakage guard). Espejo del patrón {lr_business_block}
+        # de M3. Solo afecta al prompt de clasificación (las demás familias ignoran
+        # estas claves extra en su .format()).
+        context.update(select_eda_text_blocks(state.get("studentProfile", "business")))
 
         prompt = EDA_TEXT_ANALYST_PROMPT_BY_FAMILY.get(
             context.get("primary_family", ""), EDA_TEXT_ANALYST_PROMPT
