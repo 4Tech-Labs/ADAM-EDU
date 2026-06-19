@@ -8,6 +8,12 @@ interface Props {
   bootstrapState?: AuthoringBootstrapState;
   scope: "narrative" | "technical";
   jobStatus?: "pending" | "processing" | "completed" | "failed" | "failed_resumable";
+  /**
+   * Slim variant: a single-line progress bar (active step + % + N/total) instead of the
+   * full-height card. Used once the live preview has content so the loader stops competing
+   * with the preview but still signals "sigue trabajando" (e.g. during the M3 notebook stall).
+   */
+  compact?: boolean;
 }
 
 const PIPELINE_STEPS: Array<{
@@ -80,7 +86,7 @@ function getStepStatus(
   return "pending";
 }
 
-export function AuthoringProgressTimeline({ activeAgent, bootstrapState, scope, jobStatus }: Props) {
+export function AuthoringProgressTimeline({ activeAgent, bootstrapState, scope, jobStatus, compact }: Props) {
   const [dots, setDots] = useState("");
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const lastValidIndexRef = useRef<number>(-1);
@@ -120,6 +126,47 @@ export function AuthoringProgressTimeline({ activeAgent, bootstrapState, scope, 
       }
     }
   }, [effectiveIndex]);
+
+  if (compact) {
+    const activeStep =
+      inferredActiveIndex >= 0
+        ? visibleSteps[Math.min(inferredActiveIndex, visibleSteps.length - 1)]
+        : undefined;
+    const heading = isBootstrapInitializing ? "Preparando generador" : "Generando caso";
+    return (
+      <div className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="relative h-5 w-5 flex-shrink-0">
+              <div className="absolute inset-0 rounded-full border-2 border-[#0144a0] border-t-transparent animate-spin" />
+            </div>
+            <p className="min-w-0 truncate text-sm font-semibold text-slate-800">
+              {heading}
+              <span className="inline-block w-4 text-left text-[#0144a0] animate-pulse">{dots}</span>
+              {activeStep && (
+                <>
+                  {" · "}
+                  <span className="font-bold text-[#0144a0]">{activeStep.label}</span>
+                </>
+              )}
+            </p>
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              {safeCurrentProgressIndex}/{visibleSteps.length}
+            </span>
+            <span className="text-sm font-black tabular-nums text-[#0144a0]">{progressPercent}%</span>
+          </div>
+        </div>
+        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-[#0144a0] to-blue-400 transition-all duration-1000"
+            style={{ width: `${progressPercent}%` }}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     // Redujimos el padding global de p-10 a p-4/p-6

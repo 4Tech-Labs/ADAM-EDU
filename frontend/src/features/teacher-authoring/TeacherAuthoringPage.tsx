@@ -152,11 +152,16 @@ export function TeacherAuthoringPage() {
   }, [jobStatus, resetJob, retryJob]);
 
   const isPreviewActive = appState === "success" || appState === "paused";
+  // The full-screen loader (shown until the first module lands) must bleed full-width;
+  // otherwise its cream background is boxed to max-w-6xl and the page's #F0F4F8 shows as
+  // two bluish stripes on the sides.
+  const isFullLoaderOnly = appState === "generating" && !jobResult;
+  const isFullBleed = isPreviewActive || isFullLoaderOnly;
 
   return (
     <TeacherLayout
       testId="teacher-authoring-page"
-      contentClassName={isPreviewActive ? "w-full p-0" : "mx-auto w-full max-w-6xl"}
+      contentClassName={isFullBleed ? "w-full p-0" : "mx-auto w-full max-w-6xl"}
     >
       {(appState === "idle" || appState === "editing") && (
         <AuthoringForm
@@ -168,19 +173,30 @@ export function TeacherAuthoringPage() {
       )}
 
       {appState === "generating" && (
-        <div className="flex flex-col gap-6">
+        jobResult ? (
+          // Once the first module lands: slim progress bar + the live preview as the
+          // spotlight (inside max-w-6xl, with breathing room from the sticky topbar).
+          <div className="flex w-full flex-col gap-4 px-4 pt-6 pb-10">
+            <AuthoringProgressTimeline
+              activeAgent={activeAgent}
+              bootstrapState={bootstrapState}
+              jobStatus={jobStatus || undefined}
+              scope={progressScope || (formData.caseType === "harvard_only" ? "narrative" : "technical")}
+              compact
+            />
+            <Suspense fallback={<CasePreviewFallback />}>
+              <LiveCasePreview caseData={jobResult} isStreaming={true} />
+            </Suspense>
+          </div>
+        ) : (
+          // Full-bleed loader until the first module is ready.
           <AuthoringProgressTimeline
             activeAgent={activeAgent}
             bootstrapState={bootstrapState}
             jobStatus={jobStatus || undefined}
             scope={progressScope || (formData.caseType === "harvard_only" ? "narrative" : "technical")}
           />
-          {jobResult && (
-            <Suspense fallback={<CasePreviewFallback />}>
-              <LiveCasePreview caseData={jobResult} isStreaming={true} />
-            </Suspense>
-          )}
-        </div>
+        )
       )}
 
       {(appState === "success" || appState === "paused") && caseResult && (
