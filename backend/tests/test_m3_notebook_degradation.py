@@ -212,6 +212,32 @@ def test_regenerate_notebook_still_degraded_leaves_state(monkeypatch: Any) -> No
     assert assignment.canonical_output["content"]["m3NotebookDegraded"] is True
 
 
+def test_regenerate_notebook_skips_when_already_cleared(monkeypatch: Any) -> None:
+    # Idempotency: a stale/duplicate trigger after a prior successful regen (flag
+    # already cleared) must be a no-op — never re-run the nodes with empty inputs.
+    job, assignment = _degraded_job_and_assignment()
+    job.task_payload.pop("m3_notebook_degraded")  # prior regen already cleared it
+    called = {"gen": False}
+
+    def _spy_gen(*_a: Any) -> dict:
+        called["gen"] = True
+        return {"m3_notebook_code": "SHOULD NOT RUN"}
+
+    monkeypatch.setattr(
+        authoring_module, "SessionLocal", lambda: _FakeSession(job, assignment)
+    )
+    monkeypatch.setattr(authoring_module, "m3_notebook_generator", _spy_gen)
+    monkeypatch.setattr(authoring_module, "m3_notebook_executor", lambda *_a: {})
+
+    AuthoringService.regenerate_notebook("job-1")
+
+    assert called["gen"] is False
+    # Canonical output untouched.
+    assert assignment.canonical_output["content"]["m3NotebookCode"] == (
+        graph_module.M3_NOTEBOOK_DEGRADED_PLACEHOLDER
+    )
+
+
 def test_build_notebook_regen_inputs_snapshot() -> None:
     snap = _build_notebook_regen_inputs(
         {

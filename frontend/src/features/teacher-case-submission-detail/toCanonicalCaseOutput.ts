@@ -363,6 +363,7 @@ function buildContent(detail: TeacherCaseSubmissionDetailResponse, source: Recor
         m3Charts: sanitizeChartArray(source.m3Charts),
         m3Questions,
         m3NotebookCode: readString(source.m3NotebookCode),
+        m3NotebookDegraded: source.m3NotebookDegraded === true ? true : undefined,
         m4Content: readString(source.m4Content),
         m4Charts: sanitizeChartArray(source.m4Charts),
         m5Content: readString(source.m5Content),

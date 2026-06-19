@@ -1363,6 +1363,16 @@ class AuthoringService:
                 return
 
             payload = dict(job.task_payload or {})
+            # Idempotency guard: a prior regeneration may have already succeeded and
+            # cleared the flag (e.g. a duplicate/stale trigger). Re-running now would
+            # rehydrate from emptied regen_inputs and overwrite a good notebook with a
+            # worse one — so skip if the notebook is no longer degraded.
+            if not payload.get("m3_notebook_degraded"):
+                logger.info(
+                    "AuthoringService.regenerate_notebook: job %s no longer degraded — skipping",
+                    job_id,
+                )
+                return
             regen_inputs = dict(payload.get("m3_notebook_regen_inputs") or {})
             canonical = dict(assignment.canonical_output or {})
             content = dict(canonical.get("content") or {})
