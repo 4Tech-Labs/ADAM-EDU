@@ -478,3 +478,90 @@ def test_base_template_toc_placeholder_is_replaced_for_non_classification_family
         "All families must call .replace('{toc_cell}', ...) before use."
     )
     assert "import io" in assembled, "Base template imports must survive the replacement"
+
+
+# ---------------------------------------------------------------------------
+# Issue #335 — TOC<->section coherence for RF interpretability (table-only)
+# ---------------------------------------------------------------------------
+#
+# The rf_only / lr_rf_contrast variants degrade RF interpretability to a
+# permutation-importance TABLE (RF_INTERP_TABLE_ONLY_SECTION, zero figures) so
+# the notebook stays within its hard 3-figure budget (ROC + confusion matrix +
+# cost matrix). Two artifacts had drifted out of sync: the TOC row still
+# promised "+ PDP top-2" and the section dragged a dead PartialDependenceDisplay
+# import. No existing test compared the TOC *descriptive text* against what the
+# section actually emits, so that incoherence shipped green. These tests close
+# that gap.
+#
+# The TOC and the algorithm body are assembled in SEPARATE layers (the TOC dict
+# is injected via {toc_cell}; the body is .format()-ed independently), so each
+# half asserts against its own object: Half A against TOC_MARKDOWN_CELL_BY_VARIANT,
+# Half B against the assembled body prompt.
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        pytest.param(CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY, id="rf_only"),
+        pytest.param(
+            CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST, id="lr_rf_contrast"
+        ),
+    ],
+)
+def test_rf_interp_toc_row_is_table_only_truthful(variant: str) -> None:
+    """Half A (the real bug guard): the RF-interp TOC row must not promise a PDP
+    and must describe the table-only reality, matching the section header. Fails
+    against the pre-fix '... permutation importance + PDP top-2' string and
+    passes after the fix."""
+    toc = TOC_MARKDOWN_CELL_BY_VARIANT[variant]
+    assert "PDP" not in toc, (
+        f"{variant} TOC must not promise a PDP — the RF interpretability section "
+        "is table-only (zero figures) to respect the 3-figure budget"
+    )
+    assert "permutation importance tabular" in toc, (
+        f"{variant} TOC must describe the table-only RF interpretability, "
+        "matching the section header"
+    )
+
+
+def test_lr_only_toc_has_no_rf_interp_or_pdp() -> None:
+    """Half A (lr_only stays clean): the single-LR deep dive must not leak the RF
+    interpretability section (3.0.10) or any PDP mention."""
+    toc = TOC_MARKDOWN_CELL_BY_VARIANT[CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY]
+    assert "PDP" not in toc
+    assert "3.0.10" not in toc
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY, id="rf_only"),
+        pytest.param(
+            M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST,
+            id="lr_rf_contrast",
+        ),
+    ],
+)
+def test_rf_interp_section_is_table_only_no_pdp_render(prompt: str) -> None:
+    """Half B (positive table-only invariants on the assembled body): the RF
+    interpretability section prints the permutation-importance table, adds no
+    figure, and keeps the PartialDependenceDisplay token alive ONLY inside the
+    explanatory print() note. That surviving token is load-bearing for the
+    runtime validator (_validate_notebook_family_consistency) and for
+    test_single_model_prompts_do_not_seed_unselected_model_text."""
+    assert "permutation importance tabular" in prompt
+    assert "Top 10 permutation importance (RF):" in prompt
+    # The RF-interp section adds zero figures — the budget stays at exactly 3
+    # (ROC + confusion matrix + cost matrix).
+    assert _executable_region(prompt).count("plt.show()") == 3
+    # The validator token survives via the print() note, not via an import or a
+    # render call.
+    assert "PartialDependenceDisplay" in prompt
+    # Belt-and-suspenders, VACUOUS BY CONSTRUCTION: the render call
+    # `PartialDependenceDisplay.from_estimator` never appears in _shared.py in any
+    # state (it lives only in the legacy monolith notebook.py), so this assertion
+    # is trivially true for every variant and does NOT distinguish a correct
+    # prompt from a broken one. It is kept only as a tripwire against a future
+    # PDP-render reintroduction; the real guards of this half are the positive
+    # assertions above.
+    assert "PartialDependenceDisplay.from_estimator" not in prompt
