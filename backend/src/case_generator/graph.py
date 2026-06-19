@@ -4116,6 +4116,29 @@ def _normalize_algorithm_pick(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", name.lower())
 
 
+def _safe_contract_target_name(schema_required: object) -> str:
+    """Resolve the contract target name for safe injection into the executed
+    ``dummy_baseline`` cell (#348).
+
+    The name is LLM-generated (``schema_designer``) and is only *described* as
+    snake_case in the schema Field — there is NO upstream validator — yet #353
+    injects it as a Python string literal (``_contract_target = "<name>"``) into
+    the notebook that the executor runs. To keep that LLM→executable-code
+    boundary airtight, ONLY a valid Python identifier is allowed through;
+    anything carrying quotes, spaces, operators or newlines (the code-injection
+    vectors) falls back to ``""`` so the cell uses the safe alias-first path.
+    Mirrors the ``.isidentifier()`` guard in ``m3_notebook_repair``. The
+    executor's AST scrub remains the defense-in-depth backstop.
+    """
+    if not isinstance(schema_required, dict):
+        return ""
+    spec = schema_required.get("target_column")
+    if not isinstance(spec, dict):
+        return ""
+    name = (spec.get("name") or "").strip()
+    return name if name.isidentifier() else ""
+
+
 def _resolve_classification_notebook_variant(
     *,
     algorithm_mode: str | None,
@@ -5289,17 +5312,12 @@ def _prepare_m3_notebook_generation_context(
     contract_block = _format_dataset_contract_block(
         state.get("dataset_schema_required")
     )
-    # #348 — target CONTRACT-FIRST en la celda ejecutada `dummy_baseline`. Se
-    # resuelve el nombre literal del target del contrato (mismo patrón que
-    # `_format_dataset_contract_block`, dict access) y se inyecta como literal
-    # Python en el notebook. Vacío ("") → la celda cae al alias-first heredado;
+    # #348 — target CONTRACT-FIRST en la celda ejecutada `dummy_baseline`. El
+    # nombre del contrato se inyecta como literal Python en el notebook, así que
+    # `_safe_contract_target_name` exige que sea un identificador válido (guarda
+    # del límite LLM→código). Vacío ("") → la celda cae al alias-first heredado;
     # presente → el notebook entrena ese target o emite REQUISITO FALTANTE.
-    contract_target_name = ""
-    _schema_req = state.get("dataset_schema_required")
-    if isinstance(_schema_req, dict):
-        _contract_target_spec = _schema_req.get("target_column") or {}
-        if isinstance(_contract_target_spec, dict):
-            contract_target_name = (_contract_target_spec.get("name") or "").strip()
+    contract_target_name = _safe_contract_target_name(state.get("dataset_schema_required"))
     gap_warnings = list(state.get("data_gap_warnings") or [])
     if legacy_warning:
         gap_warnings.append(legacy_warning)

@@ -11,6 +11,7 @@ import pytest
 
 from case_generator.graph import (
     _resolve_classification_notebook_variant,
+    _safe_contract_target_name,
     _validate_notebook_family_consistency,
 )
 from case_generator.m3_notebook_execution import scrub_notebook_for_safe_execution
@@ -614,3 +615,22 @@ def test_dummy_baseline_resolves_contract_target_first() -> None:
     alias_idx = region.index("find_first_matching_column(df.columns, label_aliases)")
     assert contract_idx < alias_idx, "el target del contrato debe consultarse antes que los alias"
     assert "REQUISITO FALTANTE: target" in region
+
+
+def test_contract_target_name_only_allows_valid_identifier() -> None:
+    """#348 hardening — el nombre del contrato se inyecta como literal Python en
+    la celda ejecutada, así que solo un identificador válido pasa; cualquier
+    vector de inyección (comillas/espacios/operadores/salto de línea) cae a ""
+    (alias-first). Cierra el límite LLM→código."""
+    # Identificadores snake_case válidos pasan tal cual.
+    assert _safe_contract_target_name({"target_column": {"name": "fraud_flag"}}) == "fraud_flag"
+    assert _safe_contract_target_name({"target_column": {"name": "  default_60d  "}}) == "default_60d"
+    # Vectores de inyección → "" (no se inyecta código).
+    assert _safe_contract_target_name({"target_column": {"name": 'x"; import os; os.system("rm -rf /")'}}) == ""
+    assert _safe_contract_target_name({"target_column": {"name": "has space"}}) == ""
+    assert _safe_contract_target_name({"target_column": {"name": "a\nb"}}) == ""
+    assert _safe_contract_target_name({"target_column": {"name": ""}}) == ""
+    # Formas degeneradas del schema → "".
+    assert _safe_contract_target_name({"target_column": None}) == ""
+    assert _safe_contract_target_name({}) == ""
+    assert _safe_contract_target_name(None) == ""
