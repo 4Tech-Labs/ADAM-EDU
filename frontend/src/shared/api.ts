@@ -24,6 +24,7 @@ import type {
     AuthoringJobRetryResponse,
     AuthoringProgressStep,
     AuthoringJobProgressSnapshotResponse,
+    AuthoringJobPreviewResponse,
     AuthoringJobResultResponse,
     AuthoringJobStatusResponse,
     ChangePasswordRequest,
@@ -962,6 +963,12 @@ export const api = {
         },
         async getResult(jobId: string): Promise<AuthoringJobResultResponse> {
             return parseJsonResponse<AuthoringJobResultResponse>(`/authoring/jobs/${jobId}/result`);
+        },
+        async getPreview(jobId: string, signal?: AbortSignal): Promise<AuthoringJobPreviewResponse> {
+            return parseJsonResponse<AuthoringJobPreviewResponse>(
+                `/authoring/jobs/${jobId}/preview`,
+                signal ? { signal } : undefined,
+            );
         },
         async streamProgress(
             jobId: string,

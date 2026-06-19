@@ -1879,3 +1879,56 @@ mecanismo correcto para durabilidad es log-based alerting, no `task_payload`. Re
 TODO-010 (salud del stream de authoring) y TODO-239-A (two-pass M3, rechazado).
 
 **Depends on / blocked by:** Demanda operativa real + estrategia de observabilidad de plataforma.
+
+---
+
+## TODO-M3-NOTEBOOK-SUBSTATUS: Sub-status fino durante la ejecución del notebook M3
+
+**What:** Emitir un sub-status fino ("ejecutando notebook…") durante `m3_notebook_executor`
+en `backend/src/case_generator/graph.py`, el único tramo largo (~2–3 min, `RUNNER_TIMEOUT_SECONDS=180`)
+del pipeline ml_ds que NO produce contenido nuevo para la vista previa en vivo. Hoy ese nodo
+mapea al paso canónico `m3_content_generator` en `_GRAPH_AGENT_TO_CANONICAL_STEP`
+(`core/authoring.py`) y no emite un avance propio.
+
+**Why:** Con la vista previa en vivo (preview progresivo por módulo), el docente acaba de leer
+M3-content y luego no ve nada nuevo por 2–3 min mientras el notebook ejecuta. Un sub-status fino
+cerraría ese único hueco de UX para ml_ds.
+
+**Pros:** Cierra el hueco; señal honesta de "sigue trabajando" durante el stall del notebook.
+
+**Cons:** `m3_notebook_executor` mapea hoy a `m3_content_generator`; añadir un sub-paso visible
+toca el contrato de progreso sincronizado en 3 lugares (`CANONICAL_TIMELINE_STEP_IDS` backend,
+`AUTHORING_PROGRESS_STEP_IDS` tipos frontend, `PIPELINE_STEPS` en `AuthoringProgressTimeline.tsx`).
+
+**Context:** Diferido en el PR de preview progresivo. Mitigación ya presente: durante la
+ejecución del notebook el paso activo SIGUE siendo M3, así que la tira de progreso 5A lo marca
+activo (honesto, no "colgado"). Punto de partida: introducir un sub-estado opcional que no
+rompa el mapeo canónico 1:1 existente.
+
+**Depends on / blocked by:** Tira de progreso split 5A del PR de preview progresivo (ya mergeado).
+
+---
+
+## TODO-TOKEN-STREAM: Streaming token-a-token dentro de cada módulo (requiere ADR)
+
+**What:** Revelar el texto palabra-por-palabra dentro de cada módulo durante la generación
+(estilo chat), en vez del revelado por-módulo actual donde el módulo aparece completo cuando
+el nodo del grafo lo termina.
+
+**Why:** Máxima sensación de "vivo". El revelado por-módulo del PR de preview progresivo ya
+entrega ~90% del valor percibido; esto es el último 10%.
+
+**Pros:** UX premium.
+
+**Cons:** Requiere cambiar cada llamada LLM de `.invoke()` a `.astream()` y un canal de tokens
+(SSE/WebSocket) que CHOCA con los Supabase Infrastructure Guardrails (no SSE/bus/fanout nuevo).
+Costo alto. Exige un ADR dedicado + actualización sincronizada de `README.md`, `CONTRIBUTING.md`,
+`AGENTS.md`, `CLAUDE.md`.
+
+**Context:** Hoy cada nodo usa `.invoke()` y el transporte es Supabase Realtime `postgres_changes`,
+no un token-stream. El preview progresivo por-módulo (este PR) lleva el contenido pesado por HTTP
+(`GET /authoring/jobs/{id}/preview`) y solo la señal por Realtime; el token-streaming rompería ese
+modelo. Diferido y explícitamente gateado por ADR.
+
+**Depends on / blocked by:** ADR que apruebe un canal de tokens fuera del modelo Realtime actual;
+PR de preview progresivo por-módulo primero.

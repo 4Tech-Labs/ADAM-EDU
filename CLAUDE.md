@@ -94,6 +94,13 @@ Use the repo-driven gstack runtime materialized from the pinned lock in `scripts
 - Do not introduce complex queue reclaimers/orchestrators for this progress path unless an approved ADR explicitly changes the architecture.
 - If a change proposes moving away from Supabase Realtime or Supavisor defaults, require a dedicated ADR and synchronized updates to `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and `CLAUDE.md` in the same PR.
 
+## Authoring Live Preview (module-by-module)
+
+- During generation the graph persists a PARTIAL `assignments.canonical_output` per completed canonical step so teachers read each module as it lands instead of only watching the step loader. This stays Supabase-native — no new SSE/bus/table/Realtime publication. `assignments` is NOT in the `supabase_realtime` publication, so the partial write does not bloat the Realtime broadcast.
+- Transport split: the SIGNAL rides the existing Realtime progress (`current_step`/`progress_seq` on `authoring_jobs.task_payload`); the heavy CONTENT travels by HTTP `GET /api/authoring/jobs/{id}/preview` (owner-gated, served only while `processing`/`failed*`). The raw dataset (`content.datasetRows`) is stripped from the preview and deferred to `/result`.
+- The per-node partial write (`_persist_partial_preview` in `core/authoring.py`) is BEST-EFFORT in its own short session AFTER the critical progress write — it swallows all errors and must never fail a job (mirrors `CostCallbackHandler`). The authoritative full write stays in MICRO-SESSION 2 at completion; `/result` still 409s until `completed`.
+- Kill-switch: `AUTHORING_LIVE_PREVIEW` (env, default true) gates the partial write. Off → backend writes no partials and the frontend degrades cleanly to the step loader. The frontend reuses the partial-tolerant `CaseContentRenderer` via a read-only `LiveCasePreview` (zero mutating actions on an incomplete case).
+
 ## Validation Commands
 
 - Default backend suite: `uv run --directory backend pytest -q`

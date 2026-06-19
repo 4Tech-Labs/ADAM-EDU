@@ -272,6 +272,15 @@ export interface AuthoringJobResultResponse {
     canonical_output?: CanonicalCaseOutput;    // v5.0 — Option D
 }
 
+// Live module-by-module preview while a job is still generating. canonical_output is
+// the partial case accumulated so far (heavy fields like datasetRows are deferred to
+// /result); null when there is nothing renderable yet.
+export interface AuthoringJobPreviewResponse {
+    job_id: string;
+    status: AuthoringJobStatus;
+    canonical_output: CanonicalCaseOutput | null;
+}
+
 export interface AuthoringJobRetryResponse {
     job_id: string;
     status: "accepted";
