@@ -64,9 +64,13 @@ _NUMBER_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
-# ``(Exhibit 1)``, ``(ver Exhibit 1)``, ``(Exhibit 1, …)``, ``(Exhibit 1 y 2)``.
+# ``(Exhibit 1)``, ``(ver Exhibit 1)``, ``(Exhibit 1, …)``, ``(Exhibit 1 y 2)``,
+# ``(Exhibits 1 y 2)``, ``(Exhibit 1 y Exhibit 2)`` — the second number may repeat the
+# (possibly plural) word ``Exhibit``; without that the second anexo would be lost and a
+# legitimate Exhibit-2 figure would be flagged against Exhibit 1 only (false positive).
 _EXHIBIT_MARKER_RE = re.compile(
-    r"\(\s*(?:ver\s+)?Exhibit\s+([1-3])(?:\s*(?:y|,|/|&|\sy\s)\s*([1-3]))?[^)]*\)",
+    r"\(\s*(?:ver\s+)?Exhibits?\s+([1-3])"
+    r"(?:\s*(?:y|,|/|&)\s*(?:Exhibits?\s+)?([1-3]))?[^)]*\)",
     re.IGNORECASE,
 )
 # Clause boundaries for narrative attribution. Note ``(`` / ``)`` are NOT boundaries
@@ -317,7 +321,7 @@ def _normalize_exhibit_ref(value: object) -> int | None:
     if not isinstance(value, str):
         return None
     normalized = value.strip().lower()
-    marker = re.search(r"exhibit\s*([1-3])", normalized)
+    marker = re.search(r"exhibits?\s*([1-3])", normalized)
     if marker:
         return int(marker.group(1))
     if re.fullmatch(r"[1-3]", normalized):

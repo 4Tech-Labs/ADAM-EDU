@@ -158,6 +158,20 @@ class TestNarrativeAttribution:
             "Los ingresos de $1.5M (ver Exhibit 1).", ANEXOS
         ) == []
 
+    @pytest.mark.parametrize(
+        "marker",
+        ["(Exhibit 1 y 2)", "(Exhibit 1 y Exhibit 2)", "(Exhibits 1 y 2)",
+         "(Exhibit 1, 2)"],
+    )
+    def test_multi_exhibit_repeated_or_plural_word_binds_both_anexos(
+        self, marker: str
+    ) -> None:
+        # $1.5M is in Exhibit 1 and 12,000 in Exhibit 2; every phrasing of the joint
+        # marker must accept both (no false positive on the second figure).
+        assert validate_narrative_exhibit_coherence(
+            f"Con $1.5M y 12,000 tickets {marker}.", ANEXOS
+        ) == []
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Pure validator — questions (exhibit_ref-driven)
@@ -479,4 +493,21 @@ def test_questions_gate_noop_for_business_classification(
     update = graph_module.case_questions(_state(profile="business"), config={})
 
     assert fake.calls == 1  # validator never runs for business
+    assert update["doc1_preguntas"][0]["enunciado"] == "el costo sería de $999,999"
+
+
+def test_questions_best_effort_when_validator_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeStructuredLLM([_questions_output("el costo sería de $999,999")])
+    monkeypatch.setattr(graph_module, "_get_writer_llm", lambda *a, **k: fake)
+
+    def _boom(*_a: object, **_k: object) -> list[str]:
+        raise RuntimeError("validator bug")
+
+    monkeypatch.setattr(graph_module, "validate_questions_exhibit_coherence", _boom)
+
+    update = graph_module.case_questions(_state(), config={})
+
+    assert fake.calls == 1  # validator raised before any reprompt; job still completes
     assert update["doc1_preguntas"][0]["enunciado"] == "el costo sería de $999,999"
