@@ -166,6 +166,7 @@ def test_scrub_allows_rendered_classification_prompt_jupytext_contract() -> None
         output_language="es",
         dataset_contract_block="(sin contrato)",
         data_gap_warnings_block="(sin brechas)",
+        contract_target_name="",
     )
     jupytext_start = rendered_prompt.index("# %%\n# === SECTION:dummy_baseline ===")
 

@@ -391,13 +391,27 @@ try:
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import f1_score as _f1_dummy
 
-    # 1) Resolver target_col vía alias-first (label_aliases → churn_aliases →
-    #    último categórico). Independiente del bloque per-algoritmo posterior.
-    target_col = find_first_matching_column(df.columns, label_aliases) or \
-                 find_first_matching_column(df.columns, churn_aliases)
-    if target_col is None:
-        _cat_cols_boot = df.select_dtypes(include=["object", "category"]).columns.tolist()
-        target_col = _cat_cols_boot[-1] if _cat_cols_boot else None
+    # 1) Resolver target_col CONTRACT-FIRST (#348). La celda ejecutada respeta
+    #    el target del contrato ANTES que cualquier alias: si el contrato declara
+    #    un target y está en df.columns, ESE es el target entrenado. Si el
+    #    contrato declara un target AUSENTE del dataset, NO se entrena otra
+    #    columna en silencio (REQUISITO FALTANTE → skip). Sin contrato, cae al
+    #    alias-first heredado (label_aliases → churn_aliases → último categórico).
+    _contract_target = "{contract_target_name}".strip()
+    if _contract_target and _contract_target in df.columns:
+        target_col = _contract_target
+    elif _contract_target:
+        print(
+            f"⚠️ REQUISITO FALTANTE: target '{{_contract_target}}' del contrato "
+            f"no está presente en el dataset; no se entrena otra columna."
+        )
+        target_col = None
+    else:
+        target_col = find_first_matching_column(df.columns, label_aliases) or \
+                     find_first_matching_column(df.columns, churn_aliases)
+        if target_col is None:
+            _cat_cols_boot = df.select_dtypes(include=["object", "category"]).columns.tolist()
+            target_col = _cat_cols_boot[-1] if _cat_cols_boot else None
 
     # 2) Construir feature_cols con la receta K-bis (sin target, sin IDs, sin
     #    constantes, sin >50%% nulos). NO usamos pd.get_dummies aquí —
@@ -502,6 +516,20 @@ try:
     ])
     pipe_lr.fit(X_raw, y)
     print("Pipeline LR ajustado:", pipe_lr.named_steps["clf"])
+    # Re-source barato de top_features para el grounding M4/M5 (#353): odds ratios
+    # desde coef_, sin bootstrap ni VIF. Define `or_df` que consume metrics_summary.
+    try:
+        _feat_names_lr = list(pipe_lr.named_steps["preprocess"].get_feature_names_out())
+    except Exception:
+        _feat_names_lr = [f"f{{i}}" for i in range(pipe_lr.named_steps["clf"].coef_.shape[1])]
+    _coef_lr = pipe_lr.named_steps["clf"].coef_.ravel()
+    if len(_feat_names_lr) != len(_coef_lr):
+        _feat_names_lr = [f"f{{i}}" for i in range(len(_coef_lr))]
+    or_df = pd.DataFrame(
+        {{"feature": _feat_names_lr, "odds_ratio": np.exp(_coef_lr)}}
+    ).sort_values("odds_ratio", ascending=False)
+    print("Top odds ratios (LR):")
+    print(or_df.head(10).to_string(index=False))
 except Exception as e:
     print(f"⚠️ Pipeline LR falló: {{e}}")
 
@@ -544,6 +572,21 @@ try:
     ])
     pipe_rf.fit(X_raw, y)
     print("Pipeline RF ajustado:", pipe_rf.named_steps["clf"])
+    # Re-source barato de top_features para el grounding M4/M5 (#353):
+    # feature_importances_ del RF, sin permutation_importance. Define `perm_df`
+    # (columna importance_mean) que consume metrics_summary.
+    try:
+        _feat_names_rf = list(pipe_rf.named_steps["preprocess"].get_feature_names_out())
+    except Exception:
+        _feat_names_rf = [f"f{{i}}" for i in range(len(pipe_rf.named_steps["clf"].feature_importances_))]
+    _imp_rf = pipe_rf.named_steps["clf"].feature_importances_
+    if len(_feat_names_rf) != len(_imp_rf):
+        _feat_names_rf = [f"f{{i}}" for i in range(len(_imp_rf))]
+    perm_df = pd.DataFrame(
+        {{"feature": _feat_names_rf, "importance_mean": _imp_rf}}
+    ).sort_values("importance_mean", ascending=False)
+    print("Top feature importances (RF):")
+    print(perm_df.head(10).to_string(index=False))
 except Exception as e:
     print(f"⚠️ Pipeline RF falló: {{e}}")
 

@@ -94,12 +94,12 @@ _UNSAFE_CLASSIFICATION_ALGO = (
     _COMPLETE_CLASSIFICATION_ALGO + '\nif "X_train" in locals():\n    pass\n'
 )
 
-# Safe (no locals) but drops the precision_recall_curve(...) CALL — reproduces the
-# axis the original blind regeneration failed on. The import name remains but has
-# no "(" so the validator (which requires "precision_recall_curve(") flags it.
-_MISSING_PR_CLASSIFICATION_ALGO = _COMPLETE_CLASSIFICATION_ALGO.replace(
-    "    prec, rec, _ = precision_recall_curve(y_te, proba)\n",
-    "    prec, rec = (0.0, 0.0)\n",
+# Safe (no locals) but drops a CORE required API CALL (#353: precision_recall_curve
+# left the contract, so this now targets predict_proba(, which is still required by
+# the cost_matrix cell). Reproduces the "fail-closed on a missing required API" axis.
+_MISSING_CORE_API_CLASSIFICATION_ALGO = _COMPLETE_CLASSIFICATION_ALGO.replace(
+    "    out = model.predict_proba(X_te)\n",
+    "    out = None\n",
 )
 
 # Family-complete (precision_recall_curve present) but carries an unsafe construct
@@ -261,12 +261,13 @@ def test_persistent_unsafe_fails_closed_after_all_attempts() -> None:
 
 
 def test_persistent_missing_api_fails_closed_with_faltante() -> None:
-    """A response that drops precision_recall_curve( on every attempt fails closed
-    with the FALTANTE axis (this is the bug's other reported violation)."""
-    seq = [_MISSING_PR_CLASSIFICATION_ALGO] * 3
+    """A response that drops a CORE required API (predict_proba() on every attempt
+    fails closed with the FALTANTE axis. #353: precision_recall_curve left the
+    contract; predict_proba is still required (cost_matrix cell)."""
+    seq = [_MISSING_CORE_API_CLASSIFICATION_ALGO] * 3
     llm = _SequenceLLM(seq)
 
-    with pytest.raises(M3NotebookValidationError, match="precision_recall_curve") as excinfo:
+    with pytest.raises(M3NotebookValidationError, match="predict_proba") as excinfo:
         _invoke_m3_notebook_algo_section(
             llm=llm,
             escalation_llm=_SequenceLLM(list(seq)),
@@ -275,7 +276,7 @@ def test_persistent_missing_api_fails_closed_with_faltante() -> None:
             notebook_variant=None,
             node_name="test",
         )
-    assert "FALTANTE: precision_recall_curve(" in str(excinfo.value)
+    assert "FALTANTE: predict_proba(" in str(excinfo.value)
 
 
 def test_validation_error_redacts_secrets() -> None:

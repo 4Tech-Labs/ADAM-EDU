@@ -110,6 +110,7 @@ def test_prompt_still_renders_with_existing_substitution_vars() -> None:
         output_language="es",
         dataset_contract_block="(sin contrato)",
         data_gap_warnings_block="(sin brechas)",
+        contract_target_name="",
     )
     # 1) Ningún placeholder canónico debe sobrevivir al .format()
     for placeholder in (
@@ -139,27 +140,24 @@ def test_prompt_still_renders_with_existing_substitution_vars() -> None:
 # PR #244 review: contract is now 7 sentinels (ROC and PR split into separate
 # cells per Rule L atomic-charting + Rule 6 cell isolation).
 # Issue #238: 8th sentinel ``cost_matrix`` added for business-cost threshold tuning.
-# Issue #240: 4 more sentinels (tuning_lr/tuning_rf/interp_lr/interp_rf) for
-# Harvard ml_ds tuning + advanced interpretability.
 # Issue #239: metrics_summary_json sentinel added atomically with the executor.
 # Issue #246: confusion_matrix sentinel added for ConfusionMatrixDisplay visual.
+# Issue #353: recorte al núcleo — se retiraron roc_curves/pr_curves (curvas) y
+# tuning_lr/tuning_rf/interp_lr/interp_rf (#240). Quedan 8 sentinelas de núcleo.
 _REQUIRED_SENTINELS = (
     "# === SECTION:dummy_baseline ===",
     "# === SECTION:pipeline_lr ===",
     "# === SECTION:pipeline_rf ===",
     "# === SECTION:cv_scores ===",
-    "# === SECTION:roc_curves ===",
-    "# === SECTION:pr_curves ===",
     "# === SECTION:comparison_table ===",
     "# === SECTION:confusion_matrix ===",
     "# === SECTION:cost_matrix ===",
-    "# === SECTION:tuning_lr ===",
-    "# === SECTION:tuning_rf ===",
-    "# === SECTION:interp_lr ===",
-    "# === SECTION:interp_rf ===",
     "# === SECTION:metrics_summary_json ===",
 )
 
+# Tokens que DEBEN aparecer en el prompt del núcleo (presencia textual). Issue
+# #353 retiró roc_curve(/precision_recall_curve( y GridSearchCV(/
+# RandomizedSearchCV(/permutation_importance(/PartialDependenceDisplay (#240).
 _REQUIRED_API_TOKENS = (
     "DummyClassifier",
     "ColumnTransformer",
@@ -167,17 +165,10 @@ _REQUIRED_API_TOKENS = (
     "OneHotEncoder",
     "StratifiedKFold",
     "cross_val_score",
-    "roc_curve(",
-    "precision_recall_curve(",
     "train_test_split(",
     # Issue #238 — cost matrix cell uses both APIs in executable code.
     "confusion_matrix(",
     "predict_proba(",
-    # Issue #240 — tuning + interpretability avanzada.
-    "GridSearchCV(",
-    "RandomizedSearchCV(",
-    "permutation_importance(",
-    "PartialDependenceDisplay",
     # Issue #246 — ConfusionMatrixDisplay visual normalizada por fila.
     "ConfusionMatrixDisplay",
 )
@@ -245,8 +236,8 @@ def test_validator_flags_missing_required_tokens_with_faltante_prefix() -> None:
         assert f"FALTANTE: {sentinel}" in violations, f"falta marca FALTANTE de {sentinel!r}"
     assert "FALTANTE: DummyClassifier" in violations
     assert "FALTANTE: StratifiedKFold" in violations
-    assert "FALTANTE: roc_curve(" in violations
-    assert "FALTANTE: precision_recall_curve(" in violations
+    assert "FALTANTE: confusion_matrix(" in violations
+    assert "FALTANTE: predict_proba(" in violations
 
 
 def test_validator_passes_when_all_required_present() -> None:
@@ -282,8 +273,7 @@ def test_validator_rejects_required_apis_only_present_in_comments() -> None:
     seguir saliendo FALTANTE: DummyClassifier."""
     cheating = "\n".join(_REQUIRED_SENTINELS) + "\n" + (
         "# DummyClassifier StratifiedKFold cross_val_score ColumnTransformer\n"
-        "# roc_curve( precision_recall_curve( train_test_split( confusion_matrix( predict_proba(\n"
-        "# GridSearchCV( RandomizedSearchCV( permutation_importance( PartialDependenceDisplay\n"
+        "# train_test_split( confusion_matrix( predict_proba( ConfusionMatrixDisplay\n"
         "x = 1\n"
     )
     violations = _validate_notebook_family_consistency("clasificacion", cheating)
@@ -291,8 +281,6 @@ def test_validator_rejects_required_apis_only_present_in_comments() -> None:
     # comentarios) NO deben pasar.
     assert "FALTANTE: DummyClassifier" in violations
     assert "FALTANTE: StratifiedKFold" in violations
-    assert "FALTANTE: roc_curve(" in violations
-    assert "FALTANTE: precision_recall_curve(" in violations
     assert "FALTANTE: train_test_split(" in violations
     assert "FALTANTE: confusion_matrix(" in violations
     assert "FALTANTE: predict_proba(" in violations

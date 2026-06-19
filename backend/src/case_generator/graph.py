@@ -4908,22 +4908,22 @@ _FAMILY_PROHIBITED_PATTERNS: dict[str, tuple[str, ...]] = {
 # bit-identical to pre-#236 behaviour (no FALTANTE entries can ever fire).
 _FAMILY_REQUIRED_SENTINELS: dict[str, tuple[str, ...]] = {
     "clasificacion": (
+        # #353 — NÚCLEO esencial (contrast). El recorte sacó de la superficie
+        # OBLIGATORIA las celdas frágiles/redundantes y NO evaluadas por M4/M5:
+        # roc_curves, pr_curves (Issue #240/curvas) y tuning/interpretabilidad
+        # avanzada (tuning_lr/tuning_rf/interp_lr/interp_rf de Issue #240). Las
+        # features top se re-sourcean barato dentro de pipeline_lr (coef_) y
+        # pipeline_rf (feature_importances_), así metrics_summary_json mantiene el
+        # ancla sin esas celdas. Reintroducir el deep-dive requiere ADR.
         "# === SECTION:dummy_baseline ===",
         "# === SECTION:pipeline_lr ===",
         "# === SECTION:pipeline_rf ===",
         "# === SECTION:cv_scores ===",
-        "# === SECTION:roc_curves ===",
-        "# === SECTION:pr_curves ===",
         "# === SECTION:comparison_table ===",
         # Issue #246 — ConfusionMatrixDisplay normalizada por fila (umbral 0.5).
         "# === SECTION:confusion_matrix ===",
         # Issue #238 — celda de threshold tuning con matriz de costos del negocio.
         "# === SECTION:cost_matrix ===",
-        # Issue #240 — tuning + interpretabilidad avanzada (clasificacion ml_ds).
-        "# === SECTION:tuning_lr ===",
-        "# === SECTION:tuning_rf ===",
-        "# === SECTION:interp_lr ===",
-        "# === SECTION:interp_rf ===",
         # Issue #239 — executor/parser contract. This sentinel must ship in
         # the same diff as the executor that parses the emitted marker.
         "# === SECTION:metrics_summary_json ===",
@@ -4932,12 +4932,14 @@ _FAMILY_REQUIRED_SENTINELS: dict[str, tuple[str, ...]] = {
 
 _FAMILY_REQUIRED_APIS: dict[str, tuple[str, ...]] = {
     "clasificacion": (
+        # #353 — APIs del NÚCLEO. Se eliminaron roc_curve(/precision_recall_curve(
+        # (curvas fuera del núcleo) y GridSearchCV(/RandomizedSearchCV(/
+        # permutation_importance(/PartialDependenceDisplay (tuning+interp de #240
+        # fuera del núcleo). Los 3 variants comparten este set de núcleo.
         "DummyClassifier",
         "ColumnTransformer",
         "StratifiedKFold",
         "cross_val_score",
-        "roc_curve(",
-        "precision_recall_curve(",
         "train_test_split(",
         # Issue #238 — la celda cost_matrix usa confusion_matrix() para barrer
         # thresholds y predict_proba() para obtener scores continuos. Ambos
@@ -4948,85 +4950,49 @@ _FAMILY_REQUIRED_APIS: dict[str, tuple[str, ...]] = {
         # render visual normalizado por fila. Debe aparecer como import/call en
         # código ejecutable, no solo en markdown.
         "ConfusionMatrixDisplay",
-        # Issue #240 — tuning + interpretabilidad avanzada para Harvard ml_ds.
-        # tuning_lr usa GridSearchCV; tuning_rf usa RandomizedSearchCV;
-        # interp_rf usa permutation_importance + PartialDependenceDisplay.
-        # Todos deben aparecer como call site / import en código ejecutable.
-        "GridSearchCV(",
-        "RandomizedSearchCV(",
-        "permutation_importance(",
-        "PartialDependenceDisplay",
     ),
 }
 
 _CLASSIFICATION_REQUIRED_SENTINELS_BY_VARIANT: dict[str, tuple[str, ...]] = {
+    # #353 — single-model NÚCLEO (7 sentinelas): dummy + un pipeline + cv +
+    # comparison + confusion + cost + metrics. Sin roc/pr/tuning/interp.
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY: (
         "# === SECTION:dummy_baseline ===",
         "# === SECTION:pipeline_lr ===",
         "# === SECTION:cv_scores ===",
-        "# === SECTION:roc_curves ===",
-        "# === SECTION:pr_curves ===",
         "# === SECTION:comparison_table ===",
         "# === SECTION:confusion_matrix ===",
         "# === SECTION:cost_matrix ===",
-        "# === SECTION:tuning_lr ===",
-        "# === SECTION:interp_lr ===",
         "# === SECTION:metrics_summary_json ===",
     ),
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: (
         "# === SECTION:dummy_baseline ===",
         "# === SECTION:pipeline_rf ===",
         "# === SECTION:cv_scores ===",
-        "# === SECTION:roc_curves ===",
-        "# === SECTION:pr_curves ===",
         "# === SECTION:comparison_table ===",
         "# === SECTION:confusion_matrix ===",
         "# === SECTION:cost_matrix ===",
-        "# === SECTION:tuning_rf ===",
-        "# === SECTION:interp_rf ===",
         "# === SECTION:metrics_summary_json ===",
     ),
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST: _FAMILY_REQUIRED_SENTINELS["clasificacion"],
 }
 
 _CLASSIFICATION_REQUIRED_APIS_BY_VARIANT: dict[str, tuple[str, ...]] = {
-    CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY: (
-        "DummyClassifier",
-        "ColumnTransformer",
-        "StratifiedKFold",
-        "cross_val_score",
-        "roc_curve(",
-        "precision_recall_curve(",
-        "train_test_split(",
-        "confusion_matrix(",
-        "predict_proba(",
-        "ConfusionMatrixDisplay",
-        "GridSearchCV(",
-    ),
-    CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: (
-        "DummyClassifier",
-        "ColumnTransformer",
-        "StratifiedKFold",
-        "cross_val_score",
-        "roc_curve(",
-        "precision_recall_curve(",
-        "train_test_split(",
-        "confusion_matrix(",
-        "predict_proba(",
-        "ConfusionMatrixDisplay",
-        "RandomizedSearchCV(",
-        "permutation_importance(",
-        "PartialDependenceDisplay",
-    ),
+    # #353 — tras el recorte los 3 variants comparten el MISMO set de APIs de
+    # núcleo (sin GridSearchCV/RandomizedSearchCV/permutation_importance/PDP/
+    # roc_curve/precision_recall_curve).
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY: _FAMILY_REQUIRED_APIS["clasificacion"],
+    CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: _FAMILY_REQUIRED_APIS["clasificacion"],
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST: _FAMILY_REQUIRED_APIS["clasificacion"],
 }
 
 _CLASSIFICATION_PROHIBITED_PATTERNS_BY_VARIANT: dict[str, tuple[str, ...]] = {
+    # #353 — se conservan SOLO las prohibiciones de modelo cruzado (anti-leak del
+    # modelo no seleccionado). Los tokens de tuning/interp (RandomizedSearchCV/
+    # permutation_importance/PartialDependenceDisplay/GridSearchCV) se quitaron de
+    # las prohibiciones porque esas secciones ya no existen en ninguna variante.
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY: (
         "RandomForestClassifier",
-        "RandomizedSearchCV(",
-        "permutation_importance(",
-        "PartialDependenceDisplay",
         "pipe_rf",
         "best_rf",
         "auc_rf",
@@ -5034,7 +5000,6 @@ _CLASSIFICATION_PROHIBITED_PATTERNS_BY_VARIANT: dict[str, tuple[str, ...]] = {
     ),
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: (
         "LogisticRegression",
-        "GridSearchCV(",
         "pipe_lr",
         "best_lr",
         "auc_lr",
@@ -5324,6 +5289,17 @@ def _prepare_m3_notebook_generation_context(
     contract_block = _format_dataset_contract_block(
         state.get("dataset_schema_required")
     )
+    # #348 — target CONTRACT-FIRST en la celda ejecutada `dummy_baseline`. Se
+    # resuelve el nombre literal del target del contrato (mismo patrón que
+    # `_format_dataset_contract_block`, dict access) y se inyecta como literal
+    # Python en el notebook. Vacío ("") → la celda cae al alias-first heredado;
+    # presente → el notebook entrena ese target o emite REQUISITO FALTANTE.
+    contract_target_name = ""
+    _schema_req = state.get("dataset_schema_required")
+    if isinstance(_schema_req, dict):
+        _contract_target_spec = _schema_req.get("target_column") or {}
+        if isinstance(_contract_target_spec, dict):
+            contract_target_name = (_contract_target_spec.get("name") or "").strip()
     gap_warnings = list(state.get("data_gap_warnings") or [])
     if legacy_warning:
         gap_warnings.append(legacy_warning)
@@ -5340,6 +5316,7 @@ def _prepare_m3_notebook_generation_context(
         output_language=context.get("output_language", "es"),
         dataset_contract_block=contract_block,
         data_gap_warnings_block=gaps_block,
+        contract_target_name=contract_target_name,
     )
     # Inject static TOC cell for classification variants — zero LLM overhead.
     # For non-classification families notebook_variant is None, so we use "".
