@@ -102,6 +102,7 @@ _DETAIL_PREVIEW_TEXT_FIELDS: Sequence[str] = (
     "notebookCode",
     "m3Content",
     "m3NotebookCode",
+    "m3NotebookDegraded",
     "m4Content",
     "m5Content",
 )

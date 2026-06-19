@@ -31,6 +31,7 @@ _ALLOWED_CONTENT_FIELDS = (
     "datasetRows",
     "doc7Dataset",
     "m3NotebookCode",
+    "m3NotebookDegraded",
     "m3Content",
     "m3Charts",
     "m4Content",

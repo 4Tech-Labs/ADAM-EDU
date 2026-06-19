@@ -5536,6 +5536,30 @@ def _generate_m3_notebook_code(
     return generation_context.base_template + "\n\n" + algo_section, generation_context.family
 
 
+# Graceful-degradation placeholder: a safe, non-executable Jupytext markdown cell
+# shown when the notebook could not be produced/validated. The executor noops on the
+# degraded flag, so this is never executed; the frontend renders a "regenerate" panel.
+M3_NOTEBOOK_DEGRADED_PLACEHOLDER = (
+    "# %% [markdown]\n"
+    "# ## Notebook no disponible\n"
+    "#\n"
+    "# El notebook de experimentación no pudo generarse automáticamente para este\n"
+    "# caso. El resto del caso está completo. Usa **Regenerar notebook** para\n"
+    "# reintentar la generación.\n"
+)
+
+
+def _degraded_notebook_update(*, node: str, reason: str) -> dict[str, Any]:
+    """State update that degrades the M3 notebook to a placeholder without failing
+    the case. The job still completes; the teacher can regenerate on demand."""
+    return {
+        "m3_notebook_code": M3_NOTEBOOK_DEGRADED_PLACEHOLDER,
+        "m3_notebook_degraded": True,
+        "m3_notebook_degraded_reason": reason,
+        "current_agent": node,
+    }
+
+
 def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """Genera el notebook del Experiment Engineer — ÚNICO notebook del sistema.
 
@@ -5575,17 +5599,33 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
         )
         print(f"[m3_notebook_generator] Notebook ensamblado: {len(final_notebook)} chars")
         return {"m3_notebook_code": final_notebook, "current_agent": "m3_notebook_generator"}
-    except RuntimeError:
-        # Issue #233 — family-consistency violation after reprompt. Re-raise so
-        # the worker can mark the job as failed; never ship a runtime-broken notebook.
-        raise
+    except M3NotebookValidationError as exc:
+        # Graceful degradation (never ship a runtime-broken notebook): after all
+        # retries the notebook could not satisfy the family/safety contract. Instead
+        # of killing the whole 6-module case, ship it with the other 5 modules + a
+        # placeholder and let the teacher regenerate the notebook on demand.
+        logger.warning(
+            "[m3_notebook_generator] Notebook degradado tras agotar reintentos: %s",
+            exc.violations,
+        )
+        return _degraded_notebook_update(
+            node="m3_notebook_generator", reason="validation_exhausted"
+        )
     except Exception as e:
         logger.error("[m3_notebook_generator] ERROR: %s", e, exc_info=True)
-        return {"m3_notebook_code": "# ⚠️ Error generando notebook M3. Revisa el Módulo 3."}
+        return _degraded_notebook_update(
+            node="m3_notebook_generator", reason="unexpected_error"
+        )
 
 
 def m3_notebook_executor(state: ADAMState, config: RunnableConfig) -> dict:
-    """Execute and validate the M3 classification notebook in a subprocess."""
+    """Execute and validate the M3 classification notebook in a subprocess.
+
+    Graceful degradation: a notebook that cannot be executed/validated (missing
+    dataset, crash after correction, blocking quality gate) degrades to a placeholder
+    instead of killing the whole case — a runtime-broken notebook is never shipped,
+    only a placeholder, and the teacher can regenerate on demand.
+    """
 
     output_depth = state.get("output_depth", "")
     if output_depth != "visual_plus_notebook":
@@ -5599,6 +5639,32 @@ def m3_notebook_executor(state: ADAMState, config: RunnableConfig) -> dict:
         return {}
 
     case_id = state.get("case_id") or "unknown"
+
+    # The generator already degraded the notebook — do NOT try to execute the
+    # placeholder; keep the degraded state and noop.
+    if state.get("m3_notebook_degraded"):
+        print("[m3_notebook_executor] Noop — notebook ya degradado por el generador")
+        return {}
+
+    try:
+        return _run_m3_notebook_execution(state, config, case_id=case_id, family=family)
+    except Exception as exc:
+        logger.warning(
+            "[m3_notebook_executor] Notebook degradado tras fallo de ejecución: %s",
+            exc,
+            extra={"case_id": case_id, "family": family},
+        )
+        return _degraded_notebook_update(node="m3_notebook_executor", reason="execution_failed")
+
+
+def _run_m3_notebook_execution(
+    state: ADAMState,
+    config: RunnableConfig,
+    *,
+    case_id: str,
+    family: str,
+) -> dict:
+    """Inner executor body. Raises on any failure; the caller degrades on raise."""
     dataset_rows = state.get("doc7_dataset") or []
     if not isinstance(dataset_rows, list) or not dataset_rows:
         logger.error(

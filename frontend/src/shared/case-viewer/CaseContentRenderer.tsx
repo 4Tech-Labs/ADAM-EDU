@@ -89,6 +89,9 @@ interface CaseContentRendererProps {
     showExpectedSolutions: boolean;
     headerSlot?: ReactNode;
     rightPanelSlot?: ReactNode;
+    /** Optional: regenerate the degraded M3 notebook (only the generation preview wires it). */
+    onRegenerateNotebook?: () => void;
+    isRegeneratingNotebook?: boolean;
 }
 
 interface MarkdownMap extends Record<string, string | null> {
@@ -291,6 +294,8 @@ export function CaseContentRenderer({
     showExpectedSolutions,
     headerSlot,
     rightPanelSlot,
+    onRegenerateNotebook,
+    isRegeneratingNotebook,
 }: CaseContentRendererProps) {
     const content = result.content;
     const isEDA = result.caseType === "harvard_with_eda";
@@ -469,7 +474,9 @@ export function CaseContentRenderer({
         isEDA,
         isMLDS,
         renderPreguntas,
-    }), [content, isEDA, isMLDS, md, renderPreguntas, result]);
+        onRegenerateNotebook,
+        isRegeneratingNotebook,
+    }), [content, isEDA, isMLDS, md, renderPreguntas, result, onRegenerateNotebook, isRegeneratingNotebook]);
 
     const renderedModule = useMemo(() => {
         switch (resolvedActiveModule) {

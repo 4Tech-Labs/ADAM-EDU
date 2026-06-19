@@ -7,4 +7,8 @@ export interface CaseModuleProps {
     isEDA: boolean;
     isMLDS: boolean;
     renderPreguntas: (moduleId: ModuleId, preguntas: (PreguntaMinimalista | EDASocraticQuestion)[]) => ReactNode;
+    /** Optional: when the M3 notebook degraded, this triggers a notebook-only regeneration.
+     *  Only wired in contexts that own the authoring job id (teacher generation preview). */
+    onRegenerateNotebook?: () => void;
+    isRegeneratingNotebook?: boolean;
 }

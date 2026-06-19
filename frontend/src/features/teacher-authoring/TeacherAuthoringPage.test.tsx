@@ -36,6 +36,9 @@ vi.mock("./useAuthoringJobProgress", () => ({
 vi.mock("@/features/case-preview/CasePreview", () => ({
     CasePreview: () => <div data-testid="case-preview">Preview</div>,
 }));
+vi.mock("@/shared/toast-context", () => ({
+    useToast: () => ({ showToast: vi.fn() }),
+}));
 
 import { useAuthoringJobProgress } from "./useAuthoringJobProgress";
 import { TeacherAuthoringPage } from "./TeacherAuthoringPage";
