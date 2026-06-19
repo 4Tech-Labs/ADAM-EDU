@@ -64,11 +64,9 @@ def _replace_api_stable_rule(prompt: str, variant: ClassificationNotebookVariant
     if variant == "lr_only":
         model_line = "   - sklearn.linear_model.LogisticRegression(max_iter=1000)"
         class_weight_line = "       - LogisticRegression -> `class_weight=\"balanced\"`."
-        vif_line = "   - sklearn.linear_model.LinearRegression()  # solo para VIF manual LR"
     elif variant == "rf_only":
         model_line = "   - sklearn.ensemble.RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1)"
         class_weight_line = "       - RandomForestClassifier -> `class_weight=\"balanced\"`."
-        vif_line = ""
     else:
         model_line = (
             "   - sklearn.linear_model.LogisticRegression(max_iter=1000)\n"
@@ -78,16 +76,14 @@ def _replace_api_stable_rule(prompt: str, variant: ClassificationNotebookVariant
             "       - LogisticRegression / RandomForestClassifier -> "
             "`class_weight=\"balanced\"`."
         )
-        vif_line = "   - sklearn.linear_model.LinearRegression()  # solo para VIF manual LR"
     api_rule = f"""# Reglas de API ESTABLE (anti-alucinación de librerías)
 A. Usa SOLO API documentada y estable de scikit-learn ≥ 1.0 para esta variante:
    - sklearn.preprocessing.StandardScaler()
    - sklearn.compose.ColumnTransformer(...)
    - sklearn.impute.SimpleImputer(...)
 {model_line}
-{vif_line}
    - sklearn.model_selection.train_test_split(..., test_size=0.2, random_state=42)
-   - sklearn.metrics: confusion_matrix, f1_score, roc_curve, precision_recall_curve
+   - sklearn.metrics: confusion_matrix, ConfusionMatrixDisplay, f1_score, recall_score
 """
     prompt = _replace_between(prompt, "# Reglas de API ESTABLE", "B. Para RMSE usa", api_rule)
     return prompt.replace(
@@ -100,45 +96,41 @@ A. Usa SOLO API documentada y estable de scikit-learn ≥ 1.0 para esta variante
 def _replace_rule_m(prompt: str, variant: ClassificationNotebookVariant) -> str:
     if variant == "lr_only":
         model_lines = (
-        "     - `SECTION:pipeline_lr`        → Pipeline(ColumnTransformer + LogisticRegression)\n"
-        "     - `SECTION:tuning_lr`          → GridSearchCV sobre C con cascada rápida\n"
-        "     - `SECTION:interp_lr`           → odds ratios + VIF manual"
+        "     - `SECTION:pipeline_lr`        → Pipeline(ColumnTransformer + LogisticRegression); "
+        "tras el fit deriva `or_df` (odds ratios desde coef_) para top_features"
         )
         wording = "Logistic Regression solamente"
     elif variant == "rf_only":
         model_lines = (
-        "     - `SECTION:pipeline_rf`        → Pipeline(ColumnTransformer + RandomForestClassifier)\n"
-        "     - `SECTION:tuning_rf`          → RandomizedSearchCV con cascada rápida\n"
-        "     - `SECTION:interp_rf`           → permutation importance tabular"
+        "     - `SECTION:pipeline_rf`        → Pipeline(ColumnTransformer + RandomForestClassifier); "
+        "tras el fit deriva `perm_df` (feature_importances_) para top_features"
         )
         wording = "Random Forest solamente"
     else:
         model_lines = (
-        "     - `SECTION:pipeline_lr`        → Pipeline(ColumnTransformer + LogisticRegression)\n"
-        "     - `SECTION:pipeline_rf`        → Pipeline(ColumnTransformer + RandomForestClassifier)\n"
-        "     - `SECTION:tuning_lr`          → GridSearchCV sobre C con cascada rápida\n"
-        "     - `SECTION:tuning_rf`          → RandomizedSearchCV con cascada rápida\n"
-        "     - `SECTION:interp_lr`           → odds ratios + VIF manual\n"
-        "     - `SECTION:interp_rf`           → permutation importance tabular"
+        "     - `SECTION:pipeline_lr`        → Pipeline(ColumnTransformer + LogisticRegression); "
+        "tras el fit deriva `or_df` (odds ratios desde coef_)\n"
+        "     - `SECTION:pipeline_rf`        → Pipeline(ColumnTransformer + RandomForestClassifier); "
+        "tras el fit deriva `perm_df` (feature_importances_) para top_features"
         )
         wording = "Logistic Regression baseline y Random Forest challenger"
-    replacement = f"""M. **PEDAGOGÍA HARVARD ml_ds — notebook enfocado por selección docente.**
+    replacement = f"""M. **PEDAGOGÍA HARVARD ml_ds — notebook NÚCLEO enfocado por selección docente (#353).**
    Esta variante aplica a: {wording}. Emite SOLO las celdas contractuales de
    ese alcance; no incluyas secciones, variables, métricas ni texto pedagógico
-   del modelo no seleccionado.
+   del modelo no seleccionado. NO emitas ROC/PR, tuning (GridSearchCV/
+   RandomizedSearchCV) ni interpretabilidad avanzada (VIF/permutation importance):
+   quedan FUERA del núcleo. Las features top se derivan barato dentro de la celda
+   del pipeline (coef_ para LR, feature_importances_ para RF).
    Sentinelas obligatorias para esta variante:
      - `SECTION:dummy_baseline`     → bootstrap (target_col, y, feature_cols, X_raw, is_binary) + DummyClassifier
 {model_lines}
      - `SECTION:cv_scores`          → StratifiedKFold + cross_val_score para el/los modelo(s) seleccionados
-     - `SECTION:roc_curves`         → única figura ROC de la variante
-     - `SECTION:pr_curves`          → cálculo AUC-PR sin plot adicional
-     - `SECTION:comparison_table`   → tabla final con Dummy + modelo(s) seleccionado(s)
-     - `SECTION:confusion_matrix`   → ConfusionMatrixDisplay (normalize="true"); plt.show() #2 del bloque
-     - `SECTION:cost_matrix`        → tercera y última figura: costo-vs-threshold
-     - `SECTION:metrics_summary_json` → marker JSON estable para grounding
+     - `SECTION:comparison_table`   → tabla final con Dummy + modelo(s) seleccionado(s) (AUC modelo vs baseline)
+     - `SECTION:confusion_matrix`   → ConfusionMatrixDisplay (normalize="true"); figura #1 del bloque
+     - `SECTION:cost_matrix`        → segunda y ÚLTIMA figura: costo-vs-threshold
+     - `SECTION:metrics_summary_json` → marker JSON estable para grounding (auc/f1/prevalence/top_features)
    Reglas:
-   * Nomenclatura heredada Rule L: Celda 2a (métricas), Celda 2b (visualización primaria), Celda 2c (importancia), Celda 2d (SHAP opcional).
-  * Máximo TRES celdas con llamada explícita de render en todo este bloque: ROC, matriz de confusión y matriz de costos.
+  * Máximo DOS celdas con llamada explícita de render en todo este bloque: matriz de confusión y matriz de costos.
    * Las sentinelas se emiten LITERALMENTE como primera línea de su celda `# %%`.
    * `dummy_baseline` fija `is_binary` y `can_model_binary`; cada celda posterior
      debe iniciar con `if not is_binary or not can_model_binary: ...`.
@@ -158,18 +150,21 @@ def _replace_rule_m(prompt: str, variant: ClassificationNotebookVariant) -> str:
 
 
 INTRO_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
-    "lr_only": """## Sección 3.0.5 — Deep dive Logistic Regression
-## Emite SOLO celdas LR. No generes código ni texto de modelos no seleccionados.
-## Las celdas con gráficos son: `roc_curves`, `confusion_matrix` y `cost_matrix`.
+    "lr_only": """## Sección 3.0.5 — Núcleo Logistic Regression
+## Emite SOLO celdas LR del núcleo. No generes código ni texto de modelos no seleccionados.
+## No emitas ROC/PR, tuning ni interpretabilidad avanzada (fuera del núcleo, #353).
+## Las celdas con gráficos son: `confusion_matrix` y `cost_matrix` (dos figuras).
 
 """,
-    "rf_only": """## Sección 3.0.5 — Deep dive Random Forest
-## Emite SOLO celdas RF. No generes código ni texto de modelos no seleccionados.
-## Las celdas con gráficos son: `roc_curves`, `confusion_matrix` y `cost_matrix`.
+    "rf_only": """## Sección 3.0.5 — Núcleo Random Forest
+## Emite SOLO celdas RF del núcleo. No generes código ni texto de modelos no seleccionados.
+## No emitas ROC/PR, tuning ni interpretabilidad avanzada (fuera del núcleo, #353).
+## Las celdas con gráficos son: `confusion_matrix` y `cost_matrix` (dos figuras).
 
 """,
-    "lr_rf_contrast": """## Sección 3.0.5 — Contraste Logistic Regression vs Random Forest
-## Emite celdas LR y RF, manteniendo tres gráficos totales: ROC, matriz de confusión y matriz de costos.
+    "lr_rf_contrast": """## Sección 3.0.5 — Núcleo Contraste Logistic Regression vs Random Forest
+## Emite celdas LR y RF del núcleo, con DOS gráficos totales: matriz de confusión y matriz de costos.
+## No emitas ROC/PR, tuning ni interpretabilidad avanzada (fuera del núcleo, #353).
 
 """,
 }
@@ -241,6 +236,13 @@ except Exception as e:
 }
 
 
+# ---------------------------------------------------------------------------
+# #353 — DEEP-DIVE RETENIDO PARA REVERSIBILIDAD (no se envía al LLM).
+# `ROC_SECTIONS`, `PR_SECTIONS` y `RF_INTERP_TABLE_ONLY_SECTION` quedaron fuera
+# del NÚCLEO obligatorio: `build_classification_notebook_prompt` ya NO los usa
+# (las celdas roc/pr/interp se eliminan del prompt). Se conservan aquí como
+# referencia y para reintroducir una capa deep-dive opcional sin reescribirlas.
+# ---------------------------------------------------------------------------
 ROC_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
@@ -1078,13 +1080,9 @@ TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
         "# | 3.0.5.1 | Baseline trivial — DummyClassifier + bootstrap de variables |\n"
         "# | 3.0.5.2 | Pipeline reproducible — Logistic Regression |\n"
         "# | 3.0.5.4 | Validación cruzada estratificada |\n"
-        "# | 3.0.5.5 | Curva ROC |\n"
-        "# | 3.0.5.6 | Curva Precision-Recall |\n"
         "# | 3.0.5.7 | Tabla final de métricas |\n"
         "# | 3.0.5.8 | Matriz de confusión normalizada |\n"
         "# | 3.0.6 | Matriz de costos del negocio + threshold tuning |\n"
-        "# | 3.0.7 | Tuning de hiperparámetros — Logistic Regression |\n"
-        "# | 3.0.9 | Interpretabilidad LR: odds ratios + CI bootstrap + VIF |\n"
         "# | 3.0.11 | Resumen ejecutable de métricas |"
     ),
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: (
@@ -1101,13 +1099,9 @@ TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
         "# | 3.0.5.1 | Baseline trivial — DummyClassifier + bootstrap de variables |\n"
         "# | 3.0.5.3 | Pipeline reproducible — Random Forest |\n"
         "# | 3.0.5.4 | Validación cruzada estratificada |\n"
-        "# | 3.0.5.5 | Curva ROC |\n"
-        "# | 3.0.5.6 | Curva Precision-Recall |\n"
         "# | 3.0.5.7 | Tabla final de métricas |\n"
         "# | 3.0.5.8 | Matriz de confusión normalizada |\n"
         "# | 3.0.6 | Matriz de costos del negocio + threshold tuning |\n"
-        "# | 3.0.8 | Tuning de hiperparámetros — Random Forest |\n"
-        "# | 3.0.10 | Interpretabilidad RF: permutation importance tabular |\n"
         "# | 3.0.11 | Resumen ejecutable de métricas |"
     ),
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST: (
@@ -1125,15 +1119,9 @@ TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
         "# | 3.0.5.2 | Pipeline reproducible — Logistic Regression |\n"
         "# | 3.0.5.3 | Pipeline reproducible — Random Forest |\n"
         "# | 3.0.5.4 | Validación cruzada estratificada — LR vs RF |\n"
-        "# | 3.0.5.5 | Curva ROC — LR vs RF |\n"
-        "# | 3.0.5.6 | Curva Precision-Recall — LR vs RF |\n"
         "# | 3.0.5.7 | Tabla comparativa final — LR vs RF |\n"
         "# | 3.0.5.8 | Matrices de confusión — LR y RF normalizadas |\n"
         "# | 3.0.6 | Matriz de costos del negocio + threshold tuning |\n"
-        "# | 3.0.7 | Tuning de hiperparámetros — Logistic Regression |\n"
-        "# | 3.0.8 | Tuning de hiperparámetros — Random Forest |\n"
-        "# | 3.0.9 | Interpretabilidad LR: odds ratios + CI bootstrap + VIF |\n"
-        "# | 3.0.10 | Interpretabilidad RF: permutation importance tabular |\n"
         "# | 3.0.11 | Resumen ejecutable de métricas |"
     ),
 }
@@ -1160,21 +1148,31 @@ def build_classification_notebook_prompt(
 
     if variant == "lr_only":
         prompt = _remove_section(prompt, "# === SECTION:pipeline_rf ===")
-        prompt = _remove_section(prompt, "# === SECTION:tuning_rf ===")
-        prompt = _remove_section(prompt, "# === SECTION:interp_rf ===")
     elif variant == "rf_only":
         prompt = _remove_section(prompt, "# === SECTION:pipeline_lr ===")
-        prompt = _remove_section(prompt, "# === SECTION:tuning_lr ===")
-        prompt = _remove_section(prompt, "# === SECTION:interp_lr ===")
+
+    # #353 — recorte al núcleo esencial: ROC/PR, tuning (GridSearchCV/
+    # RandomizedSearchCV) e interpretabilidad avanzada (VIF/odds-ratios bootstrap/
+    # permutation importance) salen de la superficie OBLIGATORIA en las 3
+    # variantes. Las features top se re-sourcean barato dentro de la celda del
+    # pipeline (coef_ → or_df para LR, feature_importances_ → perm_df para RF), así
+    # `metrics_summary_json` mantiene el ancla sin esas celdas. Las celdas siguen
+    # presentes en el legacy SOLO para reversibilidad; aquí se eliminan del prompt
+    # que se envía al LLM.
+    for _deep_dive_sentinel in (
+        "# === SECTION:roc_curves ===",
+        "# === SECTION:pr_curves ===",
+        "# === SECTION:tuning_lr ===",
+        "# === SECTION:tuning_rf ===",
+        "# === SECTION:interp_lr ===",
+        "# === SECTION:interp_rf ===",
+    ):
+        prompt = _remove_section(prompt, _deep_dive_sentinel)
 
     prompt = _replace_section(prompt, "# === SECTION:cv_scores ===", CV_SECTIONS[variant])
-    prompt = _replace_section(prompt, "# === SECTION:roc_curves ===", ROC_SECTIONS[variant])
-    prompt = _replace_section(prompt, "# === SECTION:pr_curves ===", PR_SECTIONS[variant])
     prompt = _replace_section(prompt, "# === SECTION:comparison_table ===", COMPARISON_SECTIONS[variant])
     prompt = _replace_section(prompt, "# === SECTION:confusion_matrix ===", CONFUSION_MATRIX_SECTIONS[variant])
     prompt = _replace_section(prompt, "# === SECTION:cost_matrix ===", COST_SECTIONS[variant])
-    if variant in {"rf_only", "lr_rf_contrast"}:
-        prompt = _replace_section(prompt, "# === SECTION:interp_rf ===", RF_INTERP_TABLE_ONLY_SECTION)
     prompt = _replace_section(
         prompt,
         "# === SECTION:metrics_summary_json ===",

@@ -249,13 +249,14 @@ def test_case_architect_prompt_lists_leakage_naming_patterns() -> None:
 
 
 def test_m3_notebook_prompt_contains_atomic_cell_rule_l() -> None:
-    """Regla L (Atomic Cell Charting) debe estar presente y mencionar el bug SHAP."""
+    """Regla L (Atomic Cell Charting) debe estar presente y mencionar el bug SHAP.
+
+    #353 — la nomenclatura per-algoritmo Celda 2a/2b/2c/2d ya no aplica al núcleo
+    recortado (el bloque per-familia se elimina vía `_remove_generic_tail` y la
+    Rule M de la variante ya no la nombra). La Regla L general sí sobrevive."""
     assert "Atomic Cell Charting" in M3_NOTEBOOK_ALGO_PROMPT
     assert "PROHIBIDO" in M3_NOTEBOOK_ALGO_PROMPT
     assert "plt.subplots(1, N)" in M3_NOTEBOOK_ALGO_PROMPT
-    # Sub-celdas 2a/2b/2c/2d deben aparecer.
-    for tag in ("Celda 2a", "Celda 2b", "Celda 2c", "Celda 2d"):
-        assert tag in M3_NOTEBOOK_ALGO_PROMPT, f"missing {tag}"
 
 
 def test_m3_notebook_prompt_documents_shap_show_false_pattern() -> None:
@@ -277,6 +278,7 @@ def test_m3_notebook_prompt_still_renders_with_existing_placeholders() -> None:
         output_language="es",
         dataset_contract_block="(sin contrato)",
         data_gap_warnings_block="(sin brechas)",
+        contract_target_name="",
     )
     assert "Caso de prueba" in rendered
     assert "Atomic Cell Charting" in rendered

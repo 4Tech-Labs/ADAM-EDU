@@ -11,6 +11,7 @@ import pytest
 
 from case_generator.graph import (
     _resolve_classification_notebook_variant,
+    _safe_contract_target_name,
     _validate_notebook_family_consistency,
 )
 from case_generator.m3_notebook_execution import scrub_notebook_for_safe_execution
@@ -35,6 +36,9 @@ SHARED_FORMAT_KEYS = {
     "output_language": "es",
     "dataset_contract_block": "(sin contrato)",
     "data_gap_warnings_block": "(sin brechas)",
+    # #348 — contract-first target injected into the dummy_baseline cell. Empty
+    # string keeps the alias-first heredado path (no contract target declared).
+    "contract_target_name": "",
 }
 
 
@@ -81,21 +85,30 @@ def test_default_classification_prompt_remains_contrast_alias() -> None:
         pytest.param(
             M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY,
             (
+                "# === SECTION:dummy_baseline ===",
                 "# === SECTION:pipeline_lr ===",
-                "# === SECTION:tuning_lr ===",
-                "# === SECTION:interp_lr ===",
-                "GridSearchCV(",
+                "# === SECTION:cv_scores ===",
+                "# === SECTION:comparison_table ===",
+                "# === SECTION:confusion_matrix ===",
+                "# === SECTION:cost_matrix ===",
+                "# === SECTION:metrics_summary_json ===",
                 "auc_lr",
             ),
             (
+                # #353 — deep-dive cut from the core for ALL variants.
                 "# === SECTION:pipeline_rf ===",
+                "# === SECTION:tuning_lr ===",
                 "# === SECTION:tuning_rf ===",
+                "# === SECTION:interp_lr ===",
                 "# === SECTION:interp_rf ===",
-                "RandomForest",
-                "Random Forest",
+                "# === SECTION:roc_curves ===",
+                "# === SECTION:pr_curves ===",
+                "GridSearchCV(",
                 "RandomizedSearchCV(",
                 "permutation_importance(",
                 "PartialDependenceDisplay",
+                "RandomForest",
+                "Random Forest",
                 "pipe_rf",
                 "auc_rf",
             ),
@@ -104,22 +117,31 @@ def test_default_classification_prompt_remains_contrast_alias() -> None:
         pytest.param(
             M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY,
             (
+                "# === SECTION:dummy_baseline ===",
                 "# === SECTION:pipeline_rf ===",
-                "# === SECTION:tuning_rf ===",
-                "# === SECTION:interp_rf ===",
-                "RandomizedSearchCV(",
-                "permutation_importance(",
-                "PartialDependenceDisplay",
+                "# === SECTION:cv_scores ===",
+                "# === SECTION:comparison_table ===",
+                "# === SECTION:confusion_matrix ===",
+                "# === SECTION:cost_matrix ===",
+                "# === SECTION:metrics_summary_json ===",
                 "auc_rf",
             ),
             (
+                # #353 — deep-dive cut from the core for ALL variants.
                 "# === SECTION:pipeline_lr ===",
                 "# === SECTION:tuning_lr ===",
+                "# === SECTION:tuning_rf ===",
                 "# === SECTION:interp_lr ===",
+                "# === SECTION:interp_rf ===",
+                "# === SECTION:roc_curves ===",
+                "# === SECTION:pr_curves ===",
+                "GridSearchCV(",
+                "RandomizedSearchCV(",
+                "permutation_importance(",
+                "PartialDependenceDisplay",
                 "LogisticRegression",
                 "Logistic Regression",
                 "LinearRegression",
-                "GridSearchCV(",
                 "pipe_lr",
                 "auc_lr",
             ),
@@ -149,8 +171,10 @@ def test_single_model_prompts_do_not_seed_unselected_model_text(
         ),
     ],
 )
-def test_variant_prompts_keep_three_chart_budget(prompt: str) -> None:
-    assert _executable_region(prompt).count("plt.show()") == 3
+def test_variant_prompts_keep_two_chart_budget(prompt: str) -> None:
+    # #353 — núcleo recortado: dos figuras (matriz de confusión + matriz de
+    # costos). ROC sale del núcleo; PR ya era sin gráfico.
+    assert _executable_region(prompt).count("plt.show()") == 2
 
 
 @pytest.mark.parametrize(
@@ -440,20 +464,22 @@ def test_variant_validator_rejects_unselected_lr_in_rf_only() -> None:
     [
         pytest.param(
             CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
-            ("3.0.5.2", "3.0.7", "3.0.9", "Logistic Regression"),
-            ("3.0.5.3", "3.0.8", "3.0.10"),
+            ("3.0.5.2", "Logistic Regression"),
+            # #353 — ROC(3.0.5.5)/PR(3.0.5.6)/tuning(3.0.7/3.0.8)/interp(3.0.9/3.0.10)
+            # salieron del núcleo; el RF pipeline (3.0.5.3) nunca estuvo en lr_only.
+            ("3.0.5.3", "3.0.5.5", "3.0.5.6", "3.0.7", "3.0.8", "3.0.9", "3.0.10"),
             id="lr_only",
         ),
         pytest.param(
             CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
-            ("3.0.5.3", "3.0.8", "3.0.10", "Random Forest"),
-            ("3.0.5.2", "3.0.7", "3.0.9"),
+            ("3.0.5.3", "Random Forest"),
+            ("3.0.5.2", "3.0.5.5", "3.0.5.6", "3.0.7", "3.0.8", "3.0.9", "3.0.10"),
             id="rf_only",
         ),
         pytest.param(
             CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
-            ("3.0.5.2", "3.0.5.3", "3.0.7", "3.0.8", "3.0.9", "3.0.10"),
-            (),
+            ("3.0.5.2", "3.0.5.3"),
+            ("3.0.5.5", "3.0.5.6", "3.0.7", "3.0.8", "3.0.9", "3.0.10"),
             id="lr_rf_contrast",
         ),
     ],
@@ -507,52 +533,16 @@ def test_base_template_toc_placeholder_is_replaced_for_non_classification_family
 
 
 # ---------------------------------------------------------------------------
-# Issue #335 — TOC<->section coherence for RF interpretability (table-only)
+# #353 — deep-dive (ROC/PR, tuning, interpretabilidad) fuera del núcleo.
+# Tras el recorte, las celdas roc/pr/tuning/interp ya NO se emiten en ninguna
+# variante. Estas pruebas reemplazan a las de Issue #335 (coherencia TOC<->
+# sección de la tabla RF-interp), que dejaron de aplicar al eliminarse la celda.
+# El ancla de features se re-sourcea barato en la celda del pipeline.
 # ---------------------------------------------------------------------------
-#
-# The rf_only / lr_rf_contrast variants degrade RF interpretability to a
-# permutation-importance TABLE (RF_INTERP_TABLE_ONLY_SECTION, zero figures) so
-# the notebook stays within its hard 3-figure budget (ROC + confusion matrix +
-# cost matrix). Two artifacts had drifted out of sync: the TOC row still
-# promised "+ PDP top-2" and the section dragged a dead PartialDependenceDisplay
-# import. No existing test compared the TOC *descriptive text* against what the
-# section actually emits, so that incoherence shipped green. These tests close
-# that gap.
-#
-# The TOC and the algorithm body are assembled in SEPARATE layers (the TOC dict
-# is injected via {toc_cell}; the body is .format()-ed independently), so each
-# half asserts against its own object: Half A against TOC_MARKDOWN_CELL_BY_VARIANT,
-# Half B against the assembled body prompt.
-
-
-@pytest.mark.parametrize(
-    "variant",
-    [
-        pytest.param(CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY, id="rf_only"),
-        pytest.param(
-            CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST, id="lr_rf_contrast"
-        ),
-    ],
-)
-def test_rf_interp_toc_row_is_table_only_truthful(variant: str) -> None:
-    """Half A (the real bug guard): the RF-interp TOC row must not promise a PDP
-    and must describe the table-only reality, matching the section header. Fails
-    against the pre-fix '... permutation importance + PDP top-2' string and
-    passes after the fix."""
-    toc = TOC_MARKDOWN_CELL_BY_VARIANT[variant]
-    assert "PDP" not in toc, (
-        f"{variant} TOC must not promise a PDP — the RF interpretability section "
-        "is table-only (zero figures) to respect the 3-figure budget"
-    )
-    assert "permutation importance tabular" in toc, (
-        f"{variant} TOC must describe the table-only RF interpretability, "
-        "matching the section header"
-    )
 
 
 def test_lr_only_toc_has_no_rf_interp_or_pdp() -> None:
-    """Half A (lr_only stays clean): the single-LR deep dive must not leak the RF
-    interpretability section (3.0.10) or any PDP mention."""
+    """The single-LR deep dive must not leak the RF interpretability row or PDP."""
     toc = TOC_MARKDOWN_CELL_BY_VARIANT[CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY]
     assert "PDP" not in toc
     assert "3.0.10" not in toc
@@ -561,6 +551,7 @@ def test_lr_only_toc_has_no_rf_interp_or_pdp() -> None:
 @pytest.mark.parametrize(
     "prompt",
     [
+        pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY, id="lr_only"),
         pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY, id="rf_only"),
         pytest.param(
             M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST,
@@ -568,26 +559,78 @@ def test_lr_only_toc_has_no_rf_interp_or_pdp() -> None:
         ),
     ],
 )
-def test_rf_interp_section_is_table_only_no_pdp_render(prompt: str) -> None:
-    """Half B (positive table-only invariants on the assembled body): the RF
-    interpretability section prints the permutation-importance table, adds no
-    figure, and keeps the PartialDependenceDisplay token alive ONLY inside the
-    explanatory print() note. That surviving token is load-bearing for the
-    runtime validator (_validate_notebook_family_consistency) and for
-    test_single_model_prompts_do_not_seed_unselected_model_text."""
-    assert "permutation importance tabular" in prompt
-    assert "Top 10 permutation importance (RF):" in prompt
-    # The RF-interp section adds zero figures — the budget stays at exactly 3
-    # (ROC + confusion matrix + cost matrix).
-    assert _executable_region(prompt).count("plt.show()") == 3
-    # The validator token survives via the print() note, not via an import or a
-    # render call.
-    assert "PartialDependenceDisplay" in prompt
-    # Belt-and-suspenders, VACUOUS BY CONSTRUCTION: the render call
-    # `PartialDependenceDisplay.from_estimator` never appears in _shared.py in any
-    # state (it lives only in the legacy monolith notebook.py), so this assertion
-    # is trivially true for every variant and does NOT distinguish a correct
-    # prompt from a broken one. It is kept only as a tripwire against a future
-    # PDP-render reintroduction; the real guards of this half are the positive
-    # assertions above.
-    assert "PartialDependenceDisplay.from_estimator" not in prompt
+def test_deep_dive_sections_removed_from_core(prompt: str) -> None:
+    """#353 — ROC/PR, tuning (GridSearchCV/RandomizedSearchCV) e interpretabilidad
+    avanzada (VIF/permutation importance/PDP) NO se emiten en el núcleo de ninguna
+    variante: ni sentinela ni APIs frágiles."""
+    for token in (
+        "# === SECTION:roc_curves ===",
+        "# === SECTION:pr_curves ===",
+        "# === SECTION:tuning_lr ===",
+        "# === SECTION:tuning_rf ===",
+        "# === SECTION:interp_lr ===",
+        "# === SECTION:interp_rf ===",
+        "GridSearchCV(",
+        "RandomizedSearchCV(",
+        "permutation_importance(",
+        "PartialDependenceDisplay",
+    ):
+        assert token not in prompt, f"{token!r} debería estar fuera del núcleo"
+
+
+@pytest.mark.parametrize(
+    ("prompt", "df_var", "source_attr"),
+    [
+        pytest.param(
+            M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY, "or_df", "coef_", id="lr_only"
+        ),
+        pytest.param(
+            M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY,
+            "perm_df",
+            "feature_importances_",
+            id="rf_only",
+        ),
+    ],
+)
+def test_top_features_resourced_in_pipeline_cell(
+    prompt: str, df_var: str, source_attr: str
+) -> None:
+    """#353 — top_features se re-sourcea barato dentro de la celda del pipeline
+    (or_df desde coef_ para LR, perm_df desde feature_importances_ para RF), así
+    metrics_summary_json mantiene el ancla sin las celdas interp."""
+    assert f"{df_var} = pd.DataFrame" in prompt
+    assert source_attr in prompt
+
+
+def test_dummy_baseline_resolves_contract_target_first() -> None:
+    """#348 — la celda ejecutada dummy_baseline resuelve el target del contrato
+    ANTES que los alias. El nombre del contrato se inyecta como literal; si el
+    target está ausente del dataset emite REQUISITO FALTANTE en vez de entrenar
+    otra columna en silencio."""
+    keys = dict(SHARED_FORMAT_KEYS, contract_target_name="fraud_flag")
+    rendered = M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY.format(**keys)
+    region = _executable_region(rendered)
+    assert '_contract_target = "fraud_flag".strip()' in region
+    contract_idx = region.index('_contract_target = "fraud_flag"')
+    alias_idx = region.index("find_first_matching_column(df.columns, label_aliases)")
+    assert contract_idx < alias_idx, "el target del contrato debe consultarse antes que los alias"
+    assert "REQUISITO FALTANTE: target" in region
+
+
+def test_contract_target_name_only_allows_valid_identifier() -> None:
+    """#348 hardening — el nombre del contrato se inyecta como literal Python en
+    la celda ejecutada, así que solo un identificador válido pasa; cualquier
+    vector de inyección (comillas/espacios/operadores/salto de línea) cae a ""
+    (alias-first). Cierra el límite LLM→código."""
+    # Identificadores snake_case válidos pasan tal cual.
+    assert _safe_contract_target_name({"target_column": {"name": "fraud_flag"}}) == "fraud_flag"
+    assert _safe_contract_target_name({"target_column": {"name": "  default_60d  "}}) == "default_60d"
+    # Vectores de inyección → "" (no se inyecta código).
+    assert _safe_contract_target_name({"target_column": {"name": 'x"; import os; os.system("rm -rf /")'}}) == ""
+    assert _safe_contract_target_name({"target_column": {"name": "has space"}}) == ""
+    assert _safe_contract_target_name({"target_column": {"name": "a\nb"}}) == ""
+    assert _safe_contract_target_name({"target_column": {"name": ""}}) == ""
+    # Formas degeneradas del schema → "".
+    assert _safe_contract_target_name({"target_column": None}) == ""
+    assert _safe_contract_target_name({}) == ""
+    assert _safe_contract_target_name(None) == ""

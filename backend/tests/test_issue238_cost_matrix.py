@@ -303,9 +303,10 @@ def test_validator_safe_subset_does_not_leak_extra_keys(graph_logs) -> None:
 def test_required_sentinels_include_cost_matrix() -> None:
     sentinels = _FAMILY_REQUIRED_SENTINELS["clasificacion"]
     assert "# === SECTION:cost_matrix ===" in sentinels
-    # Issue #239 amplía a 13 con metrics_summary_json, en el mismo diff que el executor.
-    # Issue #246 amplía a 14 con confusion_matrix (ConfusionMatrixDisplay normalizada).
-    assert len(sentinels) == 14
+    # Issue #353 — recorte al núcleo: 8 sentinelas (dummy, pipeline_lr, pipeline_rf,
+    # cv_scores, comparison_table, confusion_matrix, cost_matrix, metrics_summary_json).
+    # roc/pr/tuning/interp salieron de la superficie obligatoria.
+    assert len(sentinels) == 8
 
 
 def test_required_apis_include_confusion_matrix_and_predict_proba() -> None:

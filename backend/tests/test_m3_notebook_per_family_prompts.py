@@ -48,6 +48,9 @@ SHARED_FORMAT_KEYS = {
     "output_language": "es",
     "dataset_contract_block": "(sin contrato)",
     "data_gap_warnings_block": "(sin brechas)",
+    # #348 — classification dummy_baseline cell takes a contract-first target.
+    # Non-classification prompts ignore the extra kwarg.
+    "contract_target_name": "",
 }
 
 
