@@ -61,6 +61,25 @@ describe("AuthoringProgressTimeline", () => {
         expect(screen.getByText("100%")).toBeTruthy();
     });
 
+    it("renders a slim bar with only the active step in compact mode", () => {
+        render(
+            <AuthoringProgressTimeline
+                activeAgent="m4_content_generator"
+                scope="technical"
+                jobStatus="processing"
+                compact
+            />,
+        );
+
+        // Percentage logic is shared with the full card.
+        expect(screen.getByText("71%")).toBeTruthy();
+        // Only the active step label is shown...
+        expect(screen.getByText("Calculando impacto financiero")).toBeTruthy();
+        // ...not the other steps, and not the full-card description block.
+        expect(screen.queryByText("Auditando evidencia")).toBeNull();
+        expect(screen.queryByText(/Los agentes de ADAM/)).toBeNull();
+    });
+
     it("keeps the last known step when the active agent temporarily disappears", () => {
         const { rerender } = render(
             <AuthoringProgressTimeline

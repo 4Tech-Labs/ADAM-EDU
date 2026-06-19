@@ -6,7 +6,14 @@ vi.mock("./AuthoringForm", () => ({
     AuthoringForm: () => <div data-testid="authoring-form">Authoring form</div>,
 }));
 vi.mock("./AuthoringProgressTimeline", () => ({
-    AuthoringProgressTimeline: () => <div data-testid="authoring-progress">Progress</div>,
+    AuthoringProgressTimeline: (props: { compact?: boolean }) => (
+        <div data-testid="authoring-progress" data-compact={props.compact ? "true" : "false"}>
+            Progress
+        </div>
+    ),
+}));
+vi.mock("@/features/case-preview/LiveCasePreview", () => ({
+    LiveCasePreview: () => <div data-testid="live-case-preview">Live preview</div>,
 }));
 vi.mock("./AuthoringErrorState", () => ({
     AuthoringErrorState: (props: { message: string; onRetry?: () => void; onBack: () => void }) => (
@@ -90,6 +97,50 @@ describe("TeacherAuthoringPage", () => {
         expect(screen.getByText(/cargando vista previa/i)).toBeTruthy();
         expect(await screen.findByTestId("case-preview")).toBeTruthy();
         expect(screen.queryByTestId("authoring-form")).toBeNull();
+    });
+
+    it("shows the full-bleed loader and no live preview while generating without a partial yet", () => {
+        vi.mocked(useAuthoringJobProgress).mockReturnValue({
+            jobId: "job-gen",
+            status: "processing",
+            errorTrace: null,
+            result: null,
+            activeAgent: "case_architect",
+            submitJob: vi.fn(),
+            retryJob: vi.fn(),
+            reset: vi.fn(),
+            isStreaming: true,
+            progressScope: "technical",
+            bootstrapState: undefined,
+        });
+
+        render(<TeacherAuthoringPage />);
+
+        const progress = screen.getByTestId("authoring-progress");
+        expect(progress.getAttribute("data-compact")).toBe("false");
+        expect(screen.queryByTestId("live-case-preview")).toBeNull();
+    });
+
+    it("collapses the loader to compact and shows the live preview once a partial lands", async () => {
+        vi.mocked(useAuthoringJobProgress).mockReturnValue({
+            jobId: "job-gen",
+            status: "processing",
+            errorTrace: null,
+            result: { content: { narrative: "M1" } } as never,
+            activeAgent: "m4_content_generator",
+            submitJob: vi.fn(),
+            retryJob: vi.fn(),
+            reset: vi.fn(),
+            isStreaming: true,
+            progressScope: "technical",
+            bootstrapState: undefined,
+        });
+
+        render(<TeacherAuthoringPage />);
+
+        const progress = screen.getByTestId("authoring-progress");
+        expect(progress.getAttribute("data-compact")).toBe("true");
+        expect(await screen.findByTestId("live-case-preview")).toBeTruthy();
     });
 
     it("shows resumable error state and retries without resetting context", async () => {
