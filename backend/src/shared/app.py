@@ -931,6 +931,14 @@ class JobProgressResponse(BaseModel):
     error_trace: str | None = None
 
 
+class JobPreviewResponse(BaseModel):
+    job_id: str
+    status: str
+    # Partial canonical output accumulated so far (heavy fields like datasetRows are
+    # deferred to /result). None while there is nothing renderable yet.
+    canonical_output: dict[str, Any] | None = None
+
+
 @app.get("/api/authoring/jobs/{job_id}", response_model=JobStatusResponse)
 def get_job_status(
     job_id: str,
@@ -979,6 +987,41 @@ def get_job_result(
         job_id=job.id,
         assignment_id=assignment.id,
         blueprint=assignment.blueprint,
+        canonical_output=canonical,
+    )
+
+
+@app.get("/api/authoring/jobs/{job_id}/preview", response_model=JobPreviewResponse)
+def get_job_preview(
+    job_id: str,
+    actor: CurrentActor = Depends(require_teacher_actor),
+    db: Session = Depends(get_db),
+) -> JobPreviewResponse:
+    """Live, partial canonical output while a job is still generating.
+
+    Companion to /result: serves the module-by-module preview written per-node during
+    generation. Owner-gated like every other authoring read. Only meaningful while
+    processing or after a mid-run failure — completed jobs use /result (full output
+    incl. dataset), pending jobs have nothing yet. None canonical_output => render the
+    step loader / placeholders.
+    """
+    job = get_owned_job_or_404(db, job_id, actor)
+    if job.status not in {
+        AUTHORING_JOB_STATUS_PROCESSING,
+        AUTHORING_JOB_STATUS_FAILED,
+        AUTHORING_JOB_STATUS_FAILED_RESUMABLE,
+    }:
+        return JobPreviewResponse(job_id=job.id, status=job.status, canonical_output=None)
+
+    assignment = db.scalar(select(Assignment).where(Assignment.id == job.assignment_id))
+    canonical: dict[str, Any] | None = None
+    if assignment and assignment.canonical_output:
+        canonical = dict(assignment.canonical_output)
+        canonical["caseId"] = str(assignment.id)
+
+    return JobPreviewResponse(
+        job_id=job.id,
+        status=job.status,
         canonical_output=canonical,
     )
 

@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     db_retry_after_seconds: int = 3
     db_critical_endpoint_budget: int = 64
     authoring_bootstrap_timeout_seconds: int | None = None
+    # Live module-by-module preview during authoring generation (Issue: progressive
+    # preview). Kill-switch: set AUTHORING_LIVE_PREVIEW=false to disable the per-node
+    # partial-canonical write + /preview endpoint and degrade cleanly to the step loader.
+    authoring_live_preview: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

@@ -140,3 +140,28 @@ def adapter_legacy_to_canonical_output(state: dict) -> dict:
     }
 
     return {"canonical_output": canonical_output}
+
+
+# Heavy, non-reading content fields excluded from the live preview payload.
+# The raw synthetic dataset is download material, not module reading content.
+_PREVIEW_HEAVY_CONTENT_KEYS = frozenset({"datasetRows", "doc7Dataset"})
+
+
+def strip_preview_heavy_fields(canonical_output: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of a canonical output without heavy, non-reading fields.
+
+    The live module-by-module preview is served over HTTP on each progress step
+    advance. The raw synthetic dataset (``content.datasetRows``) can be hundreds
+    of rows and is download material, not reading content, so it is deferred to
+    the final ``/result`` payload to keep every preview fetch light at scale.
+    Markdown, charts and questions are preserved. Pure — does not mutate input.
+    """
+    result = dict(canonical_output)
+    content = result.get("content")
+    if isinstance(content, dict):
+        result["content"] = {
+            key: value
+            for key, value in content.items()
+            if key not in _PREVIEW_HEAVY_CONTENT_KEYS
+        }
+    return result

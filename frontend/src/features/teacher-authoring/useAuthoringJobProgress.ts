@@ -160,14 +160,59 @@ export function useAuthoringJobProgress() {
     const [bootstrapState, setBootstrapState] = useState<AuthoringBootstrapState | undefined>(undefined);
 
     const streamAbortRef = useRef<AbortController | null>(null);
+    // Live preview: abort controller for the in-flight /preview fetch + the canonical
+    // step index of the last applied partial (monotonic stale-guard). Reused across the
+    // realtime and polling transports — both advance `activeAgent`, which drives the fetch.
+    const previewAbortRef = useRef<AbortController | null>(null);
+    const appliedPreviewStepRef = useRef<number>(-1);
     const bootstrapResumedJobRef = useRef<
         ((id: string, scope: ProgressScope, opts: { persist?: boolean; recoveryAttempt?: number }) => Promise<void>)
         | null
     >(null);
 
+    // Once the final result lands, lock out any late-arriving partial preview so a stale
+    // fetch can never clobber the full canonical output (which includes datasetRows).
+    const lockPreviewAtTerminal = useCallback(() => {
+        previewAbortRef.current?.abort();
+        previewAbortRef.current = null;
+        appliedPreviewStepRef.current = Number.MAX_SAFE_INTEGER;
+    }, []);
+
+    // Fetch the partial canonical output for the just-advanced step and apply it, unless a
+    // newer step has already been applied. Best-effort: a failed/aborted fetch is swallowed
+    // so the live preview can never disrupt progress streaming.
+    const fetchAndApplyPreview = useCallback(async (id: string, stepIndex: number) => {
+        if (stepIndex <= appliedPreviewStepRef.current) {
+            return;
+        }
+        previewAbortRef.current?.abort();
+        const controller = new AbortController();
+        previewAbortRef.current = controller;
+
+        try {
+            const snapshot = await api.authoring.getPreview(id, controller.signal);
+            if (controller.signal.aborted || stepIndex <= appliedPreviewStepRef.current) {
+                return;
+            }
+            if (snapshot.canonical_output) {
+                appliedPreviewStepRef.current = stepIndex;
+                setResult(snapshot.canonical_output as CanonicalCaseOutput);
+            }
+        } catch {
+            // Best-effort — a missed preview frame self-heals on the next step advance.
+        } finally {
+            if (previewAbortRef.current === controller) {
+                previewAbortRef.current = null;
+            }
+        }
+    }, []);
+
     const reset = useCallback(() => {
         streamAbortRef.current?.abort();
         streamAbortRef.current = null;
+        previewAbortRef.current?.abort();
+        previewAbortRef.current = null;
+        appliedPreviewStepRef.current = -1;
         setJobId(null);
         setStatus(null);
         setActiveAgent(undefined);
@@ -190,6 +235,10 @@ export function useAuthoringJobProgress() {
         },
     ) => {
         streamAbortRef.current?.abort();
+        // A fresh run (or resumed run) restarts the preview stale-guard so partials reapply.
+        previewAbortRef.current?.abort();
+        previewAbortRef.current = null;
+        appliedPreviewStepRef.current = -1;
 
         const controller = new AbortController();
         streamAbortRef.current = controller;
@@ -241,6 +290,7 @@ export function useAuthoringJobProgress() {
                         }
 
                         if (event === "result") {
+                            lockPreviewAtTerminal();
                             if (payload.canonical_output && typeof payload.canonical_output === "object") {
                                 setResult(payload.canonical_output as CanonicalCaseOutput);
                             } else if (payload.result && typeof payload.result === "object") {
@@ -310,7 +360,7 @@ export function useAuthoringJobProgress() {
                     streamAbortRef.current = null;
                 }
             });
-    }, []);
+    }, [lockPreviewAtTerminal]);
 
     const bootstrapResumedJob = useCallback(
         async (
@@ -333,6 +383,7 @@ export function useAuthoringJobProgress() {
                     : undefined;
 
                 if (snapshot.status === "completed") {
+                    lockPreviewAtTerminal();
                     const resultResponse = await api.authoring.getResult(id);
                     setResult(toCanonicalCaseOutput(resultResponse));
                     setStatus("completed");
@@ -384,10 +435,24 @@ export function useAuthoringJobProgress() {
                 setBootstrapState(undefined);
             }
         },
-        [startStreaming],
+        [startStreaming, lockPreviewAtTerminal],
     );
 
     bootstrapResumedJobRef.current = bootstrapResumedJob;
+
+    // Live preview trigger: whenever a new canonical step becomes active during streaming
+    // (advanced by EITHER the realtime channel or the polling fallback), fetch and apply the
+    // partial preview for that step. The fetch self-guards against stale/out-of-order responses.
+    useEffect(() => {
+        if (!isStreaming || !jobId || activeAgent === undefined) {
+            return;
+        }
+        const stepIndex = AUTHORING_PROGRESS_STEP_IDS.indexOf(activeAgent);
+        if (stepIndex < 0) {
+            return;
+        }
+        void fetchAndApplyPreview(jobId, stepIndex);
+    }, [activeAgent, isStreaming, jobId, fetchAndApplyPreview]);
 
     useEffect(() => {
         const persisted = readPersistedActiveAuthoringJob();

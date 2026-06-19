@@ -22,7 +22,10 @@ from case_generator.graph import (
     m3_notebook_executor,
     m3_notebook_generator,
 )
-from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
+from case_generator.orchestration.frontend_output_adapter import (
+    adapter_legacy_to_canonical_output,
+    strip_preview_heavy_fields,
+)
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy import select, update
 from sqlalchemy.exc import DBAPIError, OperationalError
@@ -560,6 +563,49 @@ async def _persist_intermediate_progress_step(
     return False
 
 
+def _persist_partial_preview(*, assignment_id: str | None, graph_state: Mapping[str, Any]) -> None:
+    """Best-effort: persist the partial canonical output mid-run for the live preview.
+
+    Pipeline (per canonical step advance):
+
+        graph_state (accumulated) ──► adapter_legacy_to_canonical_output (partial-tolerant)
+                                  ──► strip_preview_heavy_fields (drop raw dataset)
+                                  ──► UPDATE assignments.canonical_output  (own short session)
+
+    NEVER raises: a preview write must not be able to fail a 15-20 min job (mirrors the
+    CostCallbackHandler best-effort contract). Each call writes the FULL accumulated
+    canonical, so a dropped frame self-heals on the next node. Gated by the
+    AUTHORING_LIVE_PREVIEW kill-switch. The authoritative write stays in MICRO-SESSION 2,
+    which runs after the graph completes — so it always supersedes these partials and
+    there is no concurrent writer on the same row.
+    """
+    if not settings.authoring_live_preview or not assignment_id:
+        return
+
+    db_preview = SessionLocal()
+    try:
+        partial = adapter_legacy_to_canonical_output(dict(graph_state))
+        canonical = strip_preview_heavy_fields(dict(partial.get("canonical_output", {})))
+        if not canonical.get("content"):
+            return  # Nothing renderable yet — skip the write.
+        canonical["caseId"] = assignment_id
+        db_preview.execute(
+            update(Assignment)
+            .where(Assignment.id == assignment_id)
+            .values(canonical_output=canonical)
+        )
+        db_preview.commit()
+    except Exception as exc:  # noqa: BLE001 — best-effort; preview must never fail the job
+        logger.warning(
+            "AuthoringService: live-preview partial write skipped for assignment %s: %s",
+            assignment_id,
+            exc,
+        )
+        db_preview.rollback()
+    finally:
+        db_preview.close()
+
+
 def _next_progress_payload(
     existing_payload: Mapping[str, Any] | None,
     *,
@@ -1060,12 +1106,20 @@ class AuthoringService:
                         )
 
                         if canonical_step and canonical_step != last_reported_step:
+                            # ORDER MATTERS: critical progress write first (drives the
+                            # loader, has its own retry/degradation), then the best-effort
+                            # live-preview partial in a SEPARATE session so a preview
+                            # failure can never perturb progress or the job.
                             persisted = await _persist_intermediate_progress_step(
                                 job_id=job_id,
                                 canonical_step=canonical_step,
                             )
                             if persisted:
                                 last_reported_step = canonical_step
+                            _persist_partial_preview(
+                                assignment_id=assignment_id,
+                                graph_state=final_state,
+                            )
 
                     return final_state
 

@@ -21,6 +21,12 @@ const CasePreview = lazy(() =>
   })),
 );
 
+const LiveCasePreview = lazy(() =>
+  import("@/features/case-preview/LiveCasePreview").then((module) => ({
+    default: module.LiveCasePreview,
+  })),
+);
+
 function CasePreviewFallback() {
   return (
     <div className="flex items-center justify-center py-24">
@@ -162,12 +168,19 @@ export function TeacherAuthoringPage() {
       )}
 
       {appState === "generating" && (
-        <AuthoringProgressTimeline
-          activeAgent={activeAgent}
-          bootstrapState={bootstrapState}
-          jobStatus={jobStatus || undefined}
-          scope={progressScope || (formData.caseType === "harvard_only" ? "narrative" : "technical")}
-        />
+        <div className="flex flex-col gap-6">
+          <AuthoringProgressTimeline
+            activeAgent={activeAgent}
+            bootstrapState={bootstrapState}
+            jobStatus={jobStatus || undefined}
+            scope={progressScope || (formData.caseType === "harvard_only" ? "narrative" : "technical")}
+          />
+          {jobResult && (
+            <Suspense fallback={<CasePreviewFallback />}>
+              <LiveCasePreview caseData={jobResult} isStreaming={true} />
+            </Suspense>
+          )}
+        </div>
       )}
 
       {(appState === "success" || appState === "paused") && caseResult && (
@@ -184,11 +197,24 @@ export function TeacherAuthoringPage() {
       )}
 
       {appState === "error" && (
-        <AuthoringErrorState
-          message={errorMessage}
-          onRetry={jobStatus === "failed_resumable" ? handleRetry : undefined}
-          onBack={() => setAppState("idle")}
-        />
+        <div className="flex flex-col gap-6">
+          <AuthoringErrorState
+            message={errorMessage}
+            onRetry={jobStatus === "failed_resumable" ? handleRetry : undefined}
+            onBack={() => setAppState("idle")}
+          />
+          {jobResult && (
+            <>
+              <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <strong className="font-semibold">Borrador no guardado.</strong>{" "}
+                La generación se interrumpió; los módulos de abajo son un borrador parcial y no se guardaron.
+              </div>
+              <Suspense fallback={<CasePreviewFallback />}>
+                <LiveCasePreview caseData={jobResult} isStreaming={false} />
+              </Suspense>
+            </>
+          )}
+        </div>
       )}
     </TeacherLayout>
   );
