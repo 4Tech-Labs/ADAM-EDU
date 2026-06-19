@@ -835,7 +835,7 @@ try:
   from sklearn.compose import ColumnTransformer
   from sklearn.ensemble import RandomForestClassifier
   from sklearn.impute import SimpleImputer
-  from sklearn.inspection import permutation_importance, PartialDependenceDisplay
+  from sklearn.inspection import permutation_importance
   from sklearn.model_selection import train_test_split
   from sklearn.pipeline import Pipeline
   from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -1103,7 +1103,7 @@ TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
         "# | 3.0.5.8 | Matriz de confusión normalizada |\n"
         "# | 3.0.6 | Matriz de costos del negocio + threshold tuning |\n"
         "# | 3.0.8 | Tuning de hiperparámetros — Random Forest |\n"
-        "# | 3.0.10 | Interpretabilidad RF: permutation importance + PDP top-2 |\n"
+        "# | 3.0.10 | Interpretabilidad RF: permutation importance tabular |\n"
         "# | 3.0.11 | Resumen ejecutable de métricas |"
     ),
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST: (
@@ -1129,7 +1129,7 @@ TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
         "# | 3.0.7 | Tuning de hiperparámetros — Logistic Regression |\n"
         "# | 3.0.8 | Tuning de hiperparámetros — Random Forest |\n"
         "# | 3.0.9 | Interpretabilidad LR: odds ratios + CI bootstrap + VIF |\n"
-        "# | 3.0.10 | Interpretabilidad RF: permutation importance + PDP top-2 |\n"
+        "# | 3.0.10 | Interpretabilidad RF: permutation importance tabular |\n"
         "# | 3.0.11 | Resumen ejecutable de métricas |"
     ),
 }
