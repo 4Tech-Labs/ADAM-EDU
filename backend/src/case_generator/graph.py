@@ -4273,6 +4273,13 @@ def _invoke_case_architect_with_contract(
     return result, profile, family, pregunta_eje
 
 
+# Narrative grounding provenance (Issue #336):
+#   m3_content (pre-executor): m3_metrics_summary is ALWAYS None here because the
+#       executor runs AFTER m3_content_generator → reason="missing" → log.info, and
+#       NO state warning is persisted (A2). This is benign/expected design narrative,
+#       not a failure. The "anchorless" branch is unreachable for M3.
+#   m4/m5 (post-executor): metrics may be legitimately missing/anchorless → log.warning
+#       + persist NARRATIVE_GROUNDING_WARNING (the genuine, actionable failure signal).
 def _prepare_classification_narrative_grounding(
     state: ADAMState,
     family: str | None,
@@ -4284,13 +4291,31 @@ def _prepare_classification_narrative_grounding(
     metrics_summary = state.get("m3_metrics_summary")
     metrics_block = build_computed_metrics_block(metrics_summary)
     if metrics_summary is None or not has_metric_anchors(metrics_block):
+        reason = "missing" if metrics_summary is None else "anchorless"
+        if node_name == "m3_content_generator":
+            # Pre-execution by graph order (Issue #336): m3_metrics_summary is
+            # structurally None at M3-content time. Expected by design, not a failure
+            # → INFO, and DO NOT persist the state warning. The non-empty
+            # narrative_grounding_warning is reserved for the genuine M4/M5 failure
+            # signal below so the two origins stay distinguishable in state and log.
+            logger.info(
+                "[narrative_grounding] m3_content pre-ejecucion: m3_metrics_summary "
+                "ausente por diseno (grounding deshabilitado, sin warning de estado)",
+                extra={
+                    "case_id": state.get("case_id"),
+                    "node": node_name,
+                    "family": family,
+                    "reason": reason,
+                },
+            )
+            return metrics_block, False, {}
         logger.warning(
             "[narrative_grounding] m3_metrics_summary ausente o sin anclas numericas",
             extra={
                 "case_id": state.get("case_id"),
                 "node": node_name,
                 "family": family,
-                "reason": "missing" if metrics_summary is None else "anchorless",
+                "reason": reason,
             },
         )
         return metrics_block, False, {

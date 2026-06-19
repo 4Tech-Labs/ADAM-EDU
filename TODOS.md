@@ -1852,3 +1852,30 @@ así que el ADR debe definir la señal (p. ej. `target_column.description`/`is_l
 contrato, o un detector de tema bilingüe) antes de implementar.
 
 **Depends on / blocked by:** ADR aprobado; PR de #326 mergeado primero.
+
+---
+
+## TODO-336-A: Detección durable de fallos reales de grounding M4/M5 (log-based alerting)
+
+**What:** Si se necesita detección durable de fallos reales de grounding post-executor
+(M4/M5 con `m3_metrics_summary` ausente/anchorless), wirear alerting basado en el
+`logger.warning` estructurado de `_prepare_classification_narrative_grounding` en `graph.py`
+(`extra={node, reason}`) hacia Cloud Logging metrics/alertas — NO persistir
+`narrative_grounding_warning` en `task_payload`.
+
+**Why:** Issue #336 hace distinguible el origen M3-content (benigno, esperado por diseño) del
+origen M4/M5 (fallo real) en el valor in-state y en el log, pero `narrative_grounding_warning`
+sigue siendo in-memory-only sin consumidor durable.
+
+**Pros:** Señal operativa accionable sin nueva tabla/columna/bus/SSE; respeta los Supabase
+Infrastructure Guardrails.
+
+**Cons:** Requiere pipeline de log-based metrics + umbral de alerta; YAGNI hasta que exista
+demanda operativa real.
+
+**Context:** Verificado en #336 que `narrative_grounding_warning` NO se persiste (el completion
+path en `core/authoring.py` solo escribe `cost_breakdown`+progress en `task_payload`). El
+mecanismo correcto para durabilidad es log-based alerting, no `task_payload`. Relacionado con
+TODO-010 (salud del stream de authoring) y TODO-239-A (two-pass M3, rechazado).
+
+**Depends on / blocked by:** Demanda operativa real + estrategia de observabilidad de plataforma.

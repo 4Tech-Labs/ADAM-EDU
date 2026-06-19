@@ -903,6 +903,30 @@ def test_grounding_disabled_when_summary_has_no_numeric_anchors(
     assert len(fake_llm.prompts) == 1
 
 
+def test_m3_content_suppresses_state_warning_while_m4_still_emits_it() -> None:
+    """Issue #336 — the two origins of an absent m3_metrics_summary are distinguishable.
+
+    m3_content runs BEFORE the notebook executor, so its metrics are structurally None
+    by design (not a failure): it must NOT persist narrative_grounding_warning in state.
+    m4 runs AFTER the executor, so an absent summary there IS a real failure and MUST
+    keep emitting NARRATIVE_GROUNDING_WARNING. This asserts the helper directly so it
+    exercises exactly the node_name branch with no LLM construction/invocation.
+    """
+    # M3-content origin (pre-executor, metrics None): NO state warning (A2).
+    block, enabled, m3_update = graph_module._prepare_classification_narrative_grounding(
+        {"case_id": "case_336"}, "clasificacion", "m3_content_generator"
+    )
+    assert "narrative_grounding_warning" not in m3_update
+    assert enabled is False  # validation still disabled for M3
+    assert "M3_METRICS_SUMMARY_AUSENTE" in block  # anti-hallucination fallback intact
+
+    # M4 origin (post-executor, metrics genuinely absent): warning PRESERVED.
+    _block, _enabled, m4_update = graph_module._prepare_classification_narrative_grounding(
+        {"case_id": "case_336"}, "clasificacion", "m4_content_generator"
+    )
+    assert m4_update["narrative_grounding_warning"] == NARRATIVE_GROUNDING_WARNING
+
+
 def test_m4_allows_zero_metric_placeholders_when_m3_modeling_was_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
