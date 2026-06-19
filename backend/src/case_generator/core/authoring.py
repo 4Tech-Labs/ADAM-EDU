@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import logging
+import os
 from psycopg import Error as PsycopgError
 from psycopg_pool import PoolClosed, PoolTimeout
 import time
@@ -13,7 +14,12 @@ from typing import Any, Literal, Mapping, cast
 from case_generator.core.artifact_manager import ArtifactManager
 from case_generator.core.storage import get_storage_provider
 from case_generator.cost_metrics import CostCallbackHandler
-from case_generator.graph import DurableCheckpointUnavailableError, RESUME_CACHE_STATE_KEY, get_graph
+from case_generator.graph import (
+    DurableCheckpointUnavailableError,
+    M3NotebookValidationError,
+    RESUME_CACHE_STATE_KEY,
+    get_graph,
+)
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy import select, update
@@ -891,6 +897,9 @@ class AuthoringService:
         cost_handler: CostCallbackHandler | None = None
         error_msg: str | None = None
         clean_room_reason: str | None = None
+        # Captured inside the except block (where `exc` is still in scope) so the
+        # operator-only notebook diagnostics survive into the persistence block.
+        notebook_debug_payload: dict[str, Any] | None = None
         try:
             level_map = {
                 "pregrado": "undergrad",
@@ -1116,6 +1125,14 @@ class AuthoringService:
                     logger.error("AuthoringService: LangGraph raised exception for Job %s", job_id, exc_info=True)
                     error_trace = traceback.format_exc()
                     error_str = error_trace.lower()
+                    if isinstance(exc, M3NotebookValidationError):
+                        # Operator-only diagnostics: WHAT the model produced. Bounded
+                        # + secret-redacted at the exception boundary; only persisted
+                        # when ADAM_DEBUG_NOTEBOOK_DUMP is set. Never teacher-facing.
+                        notebook_debug_payload = {
+                            "violations": exc.violations[:20],
+                            "output": exc.last_output,
+                        }
                     if _is_generated_notebook_unsafe_error(error_str):
                         error_code = _UNSAFE_NOTEBOOK_ERROR_CODE
                         error_msg = error_trace
@@ -1174,6 +1191,9 @@ class AuthoringService:
                 # Capture cost on failure too — a job that failed after Pro reprompts
                 # (e.g. a grounding RuntimeError) is exactly the spend worth measuring.
                 _attach_cost_breakdown(current_payload, cost_handler, job_id)
+                if notebook_debug_payload is not None and os.getenv("ADAM_DEBUG_NOTEBOOK_DUMP"):
+                    current_payload["debug_m3_notebook_violations"] = notebook_debug_payload["violations"]
+                    current_payload["debug_m3_notebook_output"] = notebook_debug_payload["output"]
                 job.task_payload = current_payload
 
                 if failure_status == AUTHORING_JOB_STATUS_FAILED:

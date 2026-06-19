@@ -215,6 +215,32 @@ def test_rendered_variants_pass_executor_scrubber(prompt: str) -> None:
     scrub_notebook_for_safe_execution(executable)
 
 
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY, id="lr_only"),
+        pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY, id="rf_only"),
+        pytest.param(
+            M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST,
+            id="lr_rf_contrast",
+        ),
+    ],
+)
+def test_self_bootstrap_rule_forbids_locals_inline(prompt: str) -> None:
+    """The self-bootstrap rule (Rule M) co-locates the explicit ban on dynamic
+    namespace introspection right where the model is told to recreate splits —
+    not only in the distant Rule 8. The ban lives in the preamble; the literal
+    must NOT leak into the executable code region (which would trip the scrubber's
+    denylist on a real cell)."""
+    rendered = prompt.format(**SHARED_FORMAT_KEYS)
+    assert "NUNCA uses" in rendered
+    assert "locals()" in rendered  # the explicit ban is present (preamble)
+    # ...but it never appears as executable code.
+    executable = _executable_region(rendered)
+    assert "locals()" not in executable
+    assert "vars()" not in executable
+
+
 def test_resolver_uses_algorithm_mode_when_present() -> None:
     assert _resolve_classification_notebook_variant(
         algorithm_mode="single",
