@@ -108,6 +108,7 @@ from case_generator.prompts import (
     EDA_QUESTIONS_PROMPT_BY_FAMILY,
     EDA_TEXT_ANALYST_PROMPT,
     EDA_TEXT_ANALYST_PROMPT_BY_FAMILY,
+    build_cost_matrix_block,
     select_eda_text_blocks,
     CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT,
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
@@ -1059,6 +1060,23 @@ def _build_m1_exhibit_anexos(state: ADAMState) -> dict[str, str]:
     }
 
 
+def _extract_business_cost_matrix(state: ADAMState) -> dict | None:
+    """Return the normalized ``business_cost_matrix`` sub-dict, or ``None`` (Issue #361).
+
+    Reads ``state["dataset_schema_required"]["business_cost_matrix"]`` — the dict already
+    validated + normalized by ``_validate_business_cost_matrix`` inside ``case_architect``
+    (which runs before the ``case_writer ∥ case_questions`` fan-out). The same source M3
+    consumes via the contract block. ``None`` whenever the contract or the matrix is absent
+    (business profile, or ml_ds+clasificación with an absent/invalid matrix the validator
+    nulified) — the P3 block degrades to a qualitative trade-off in that case.
+    """
+    contract = state.get("dataset_schema_required")
+    if not isinstance(contract, dict):
+        return None
+    matrix = contract.get("business_cost_matrix")
+    return matrix if isinstance(matrix, dict) else None
+
+
 def _invoke_m1_writer_with_exhibit_coherence(
     *, llm: Any, prompt: str, state: ADAMState, narrativa_raw: str
 ) -> str:
@@ -1250,6 +1268,13 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
             "asignatura": state.get("asignatura", ""),
             "nivel": state.get("nivel", "pregrado"),
         }, per_field_limit=2000, total_limit=8000),
+        # Issue #361 — ground P3's asymmetric-cost trade-off in the SAME shared source M3
+        # uses (business_cost_matrix), curated into business language. Always present (gate
+        # is `is None` inside the builder, not by profile), so the classification prompt's
+        # `{cost_matrix_block}` never KeyErrors and non-clf prompts simply ignore the key.
+        "cost_matrix_block": build_cost_matrix_block(
+            _extract_business_cost_matrix(state)
+        ),
     })
 
     prompt = CASE_QUESTIONS_PROMPT_BY_FAMILY.get(
