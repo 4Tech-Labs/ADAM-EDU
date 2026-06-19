@@ -955,6 +955,12 @@ export const api = {
                 method: "POST",
             });
         },
+        async regenerateNotebook(jobId: string): Promise<AuthoringJobRetryResponse> {
+            return parseJsonResponse<AuthoringJobRetryResponse>(
+                `/authoring/jobs/${jobId}/regenerate-notebook`,
+                { method: "POST" },
+            );
+        },
         async getProgress(jobId: string): Promise<AuthoringJobProgressSnapshotResponse> {
             return parseJsonResponse<AuthoringJobProgressSnapshotResponse>(`/authoring/jobs/${jobId}/progress`);
         },

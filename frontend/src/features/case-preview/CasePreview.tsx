@@ -19,6 +19,9 @@ interface Props {
     isPausedWaitingForApproval?: boolean;
     onResumeEDA?: () => void;
     isAlreadyPublished?: boolean;
+    /** Regenerate the degraded M3 notebook. Only wired by the generation preview (owns the job id). */
+    onRegenerateNotebook?: () => void;
+    isRegeneratingNotebook?: boolean;
 }
 
 function sanitizeExportTitle(title: string): string {
@@ -31,6 +34,8 @@ export function CasePreview({
     isPausedWaitingForApproval,
     onResumeEDA,
     isAlreadyPublished,
+    onRegenerateNotebook,
+    isRegeneratingNotebook,
 }: Props) {
     const result = caseData;
     const isEDA = result.caseType === "harvard_with_eda";
@@ -389,6 +394,8 @@ export function CasePreview({
                         onAnswersChange={handleIgnoredAnswersChange}
                         readOnly={true}
                         showExpectedSolutions={true}
+                        onRegenerateNotebook={onRegenerateNotebook}
+                        isRegeneratingNotebook={isRegeneratingNotebook}
                     />
                 </main>
             </div>

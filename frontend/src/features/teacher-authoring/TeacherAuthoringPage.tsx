@@ -3,6 +3,8 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import type { CaseFormData, CanonicalCaseOutput } from "@/shared/adam-types";
 import { EMPTY_FORM } from "@/shared/adam-types";
+import { api } from "@/shared/api";
+import { useToast } from "@/shared/toast-context";
 import { TeacherLayout } from "@/features/teacher-layout/TeacherLayout";
 
 import { AuthoringErrorState } from "./AuthoringErrorState";
@@ -42,7 +44,11 @@ export function TeacherAuthoringPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const retryInFlightRef = useRef(false);
 
+  const { showToast } = useToast();
+  const [isRegeneratingNotebook, setIsRegeneratingNotebook] = useState(false);
+
   const {
+    jobId,
     status: jobStatus,
     errorTrace,
     result: jobResult,
@@ -93,6 +99,33 @@ export function TeacherAuthoringPage() {
   const handleResumeEDA = useCallback(() => {
     // Placeholder para un futuro flujo HITL.
   }, []);
+
+  const handleRegenerateNotebook = useCallback(async () => {
+    if (!jobId || isRegeneratingNotebook) {
+      return;
+    }
+    setIsRegeneratingNotebook(true);
+    try {
+      await api.authoring.regenerateNotebook(jobId);
+      // The regeneration runs in the background and patches the canonical output.
+      // Poll the result until the notebook is no longer degraded (bounded).
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const res = await api.authoring.getResult(jobId);
+        const updated = res.canonical_output as CanonicalCaseOutput | undefined;
+        if (updated && !updated.content?.m3NotebookDegraded) {
+          setCaseResult(updated);
+          showToast("Notebook regenerado correctamente.", "success");
+          return;
+        }
+      }
+      showToast("La regeneración está tardando más de lo previsto. Intenta de nuevo en un momento.", "error");
+    } catch {
+      showToast("No se pudo regenerar el notebook. Intenta de nuevo.", "error");
+    } finally {
+      setIsRegeneratingNotebook(false);
+    }
+  }, [jobId, isRegeneratingNotebook, showToast]);
 
   const handleRetry = useCallback(async () => {
     if (jobStatus === "failed_resumable") {
@@ -157,6 +190,8 @@ export function TeacherAuthoringPage() {
             onEditParams={() => setAppState("editing")}
             isPausedWaitingForApproval={appState === "paused"}
             onResumeEDA={handleResumeEDA}
+            onRegenerateNotebook={handleRegenerateNotebook}
+            isRegeneratingNotebook={isRegeneratingNotebook}
           />
         </Suspense>
       )}

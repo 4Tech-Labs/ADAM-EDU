@@ -858,6 +858,41 @@ def retry_authoring_job(
     )
 
 
+@app.post(
+    "/api/authoring/jobs/{job_id}/regenerate-notebook",
+    response_model=RetryJobResponse,
+    status_code=202,
+)
+def regenerate_authoring_notebook(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    actor: CurrentActor = Depends(require_teacher_actor_authoring_intake),
+    db: Session = Depends(get_db),
+) -> RetryJobResponse:
+    """Regenerate ONLY the degraded M3 notebook for an already-completed case.
+
+    Graceful-degradation companion: when the notebook could not be produced, the
+    case still ships and `m3_notebook_degraded` is set. This re-runs just the
+    notebook (not the whole case) and patches the canonical output on success.
+    """
+    job = get_owned_job_or_404(db, job_id, actor)
+    payload = job.task_payload or {}
+    if not payload.get("m3_notebook_degraded"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El notebook de este caso no está degradado; no hay nada que regenerar.",
+            headers={"X-Job-Status": job.status},
+        )
+
+    logger.info("Authoring notebook regeneration accepted for job %s", job.id)
+    background_tasks.add_task(AuthoringService.regenerate_notebook, job.id)
+    return RetryJobResponse(
+        job_id=job.id,
+        status="accepted",
+        message="Regeneración del notebook iniciada.",
+    )
+
+
 # Cloud Tasks internal endpoint — handler lives in shared.internal_tasks
 # to avoid import side effects when worker_app.py mounts the same route.
 app.add_api_route(

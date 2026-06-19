@@ -15,6 +15,7 @@ import pytest
 import case_generator.graph as g
 from case_generator.configuration import (
     NODE_M3_NOTEBOOK,
+    NODE_M3_NOTEBOOK_ESCALATION,
     NODE_SCHEMA_DESIGNER,
     Configuration,
     resolve_node_model,
@@ -150,3 +151,32 @@ def test_m3_notebook_reversible_via_override() -> None:
     )
     primary, _ = _primary_and_fallbacks(g._get_m3_notebook_llm(cfg))
     assert primary.model == "pro-x"  # ops can canary back to Pro without redeploy
+
+
+# ── m3_notebook reliability escalation tier ──────────────
+
+
+def test_m3_notebook_escalation_is_pro_high_with_two_fallbacks() -> None:
+    cfg = Configuration(architect_model="pro-x", writer_model="flash-x")
+    primary, fallbacks = _primary_and_fallbacks(g._get_m3_notebook_escalation_llm(cfg))
+    assert primary.model == "pro-x"  # escalation defaults to the Pro/architect tier
+    assert primary.thinking_level == "high"
+    assert primary.max_output_tokens == 24576
+    # No code_execution tools — wrong for emitting long Jupytext (unlike architect).
+    assert primary.model_kwargs.get("tools") is None
+    # Pro-medium then a stable Flash net; the resilience chain stays intact.
+    assert len(fallbacks) == 2
+    assert fallbacks[0].model == "pro-x"
+    assert fallbacks[0].thinking_level == "medium"
+    assert fallbacks[1].model == "gemini-2.5-flash"
+
+
+def test_m3_notebook_escalation_reversible_via_override() -> None:
+    cfg = Configuration(
+        architect_model="pro-x",
+        writer_model="flash-x",
+        node_model_overrides={NODE_M3_NOTEBOOK_ESCALATION: "flash-x"},
+    )
+    primary, _ = _primary_and_fallbacks(g._get_m3_notebook_escalation_llm(cfg))
+    # Ops can disable escalation by pointing it back at a Flash model.
+    assert primary.model == "flash-x"
