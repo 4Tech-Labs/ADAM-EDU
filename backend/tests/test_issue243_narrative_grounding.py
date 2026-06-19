@@ -903,28 +903,46 @@ def test_grounding_disabled_when_summary_has_no_numeric_anchors(
     assert len(fake_llm.prompts) == 1
 
 
-def test_m3_content_suppresses_state_warning_while_m4_still_emits_it() -> None:
+def test_m3_content_suppresses_state_warning_while_m4_still_emits_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Issue #336 — the two origins of an absent m3_metrics_summary are distinguishable.
 
     m3_content runs BEFORE the notebook executor, so its metrics are structurally None
-    by design (not a failure): it must NOT persist narrative_grounding_warning in state.
-    m4 runs AFTER the executor, so an absent summary there IS a real failure and MUST
-    keep emitting NARRATIVE_GROUNDING_WARNING. This asserts the helper directly so it
-    exercises exactly the node_name branch with no LLM construction/invocation.
+    by design (not a failure): it must NOT persist narrative_grounding_warning in state
+    and must log at INFO. m4 runs AFTER the executor, so an absent summary there IS a
+    real failure and MUST keep emitting NARRATIVE_GROUNDING_WARNING at WARNING level.
+    This asserts the helper directly so it exercises exactly the node_name branch with
+    no LLM construction/invocation, and checks both halves of the acceptance criterion:
+    the in-state value AND the log level. The module logger is mocked (rather than using
+    caplog) so the assertion is immune to global logging config set by other tests.
     """
-    # M3-content origin (pre-executor, metrics None): NO state warning (A2).
+    fake_logger = MagicMock()
+    monkeypatch.setattr(graph_module, "logger", fake_logger)
+
+    # M3-content origin (pre-executor, metrics None): NO state warning (A2), INFO log.
     block, enabled, m3_update = graph_module._prepare_classification_narrative_grounding(
         {"case_id": "case_336"}, "clasificacion", "m3_content_generator"
     )
     assert "narrative_grounding_warning" not in m3_update
     assert enabled is False  # validation still disabled for M3
     assert "M3_METRICS_SUMMARY_AUSENTE" in block  # anti-hallucination fallback intact
+    fake_logger.info.assert_called_once()  # benign/expected → INFO, not WARNING
+    fake_logger.warning.assert_not_called()
+    m3_extra = fake_logger.info.call_args.kwargs["extra"]
+    assert m3_extra["node"] == "m3_content_generator"
+    assert m3_extra["reason"] == "missing"
 
-    # M4 origin (post-executor, metrics genuinely absent): warning PRESERVED.
+    fake_logger.reset_mock()
+
+    # M4 origin (post-executor, metrics genuinely absent): warning PRESERVED, WARNING log.
     _block, _enabled, m4_update = graph_module._prepare_classification_narrative_grounding(
         {"case_id": "case_336"}, "clasificacion", "m4_content_generator"
     )
     assert m4_update["narrative_grounding_warning"] == NARRATIVE_GROUNDING_WARNING
+    fake_logger.warning.assert_called_once()  # genuine failure → actionable WARNING
+    fake_logger.info.assert_not_called()
+    assert fake_logger.warning.call_args.kwargs["extra"]["node"] == "m4_content_generator"
 
 
 def test_m4_allows_zero_metric_placeholders_when_m3_modeling_was_skipped(

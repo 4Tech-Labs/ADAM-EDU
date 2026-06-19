@@ -97,10 +97,13 @@ def build_computed_metrics_block(metrics_summary: dict | None) -> str:
     tokens so future notebook-derived column names can cross the LLM boundary
     without turning into arbitrary narrative instructions.
 
-    When ``metrics_summary`` is missing, the executor did not produce usable
-    notebook metrics. The returned placeholder is pedagogically explicit and
-    contains no fake numbers; callers should disable validation for that run and
-    persist ``NARRATIVE_GROUNDING_WARNING``.
+    When ``metrics_summary`` is missing, no usable notebook metrics are available
+    yet. The returned placeholder is pedagogically explicit and contains no fake
+    numbers; callers disable validation for that run. Post-executor callers
+    (``m4_content_generator`` / ``m5_content_generator``) then persist
+    ``NARRATIVE_GROUNDING_WARNING`` as a genuine failure signal, whereas
+    ``m3_content_generator`` — which runs pre-executor so this state is expected by
+    design — suppresses the state warning and logs at INFO instead (Issue #336).
     """
     if metrics_summary is None:
         return (
