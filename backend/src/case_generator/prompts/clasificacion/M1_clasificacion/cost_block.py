@@ -19,9 +19,10 @@ Presentation rules (this is **student-facing** — unlike M3's teacher/notebook 
     instructs P3 to set ``exhibit_ref="Ninguno"``. That keeps the #360 Exhibit-coherence
     validator (``m1_grounding.validate_questions_exhibit_coherence``) from flagging the
     cost figure against an Exhibit table it can never appear in.
-  * **Placeholder-safe.** The rendered string contains no ``{``/``}`` (numbers are floats,
-    currency is an uppercase ISO code), so the node's single ``.format(**context)`` cannot
-    re-trigger the parser.
+  * **Placeholder-safe.** The rendered string contains no ``{``/``}`` (numbers are floats;
+    the currency token is gated on ``.isalpha()`` so a brace/symbol/whitespace value degrades
+    to the qualitative block), so the node's single ``.format(**context)`` cannot re-trigger
+    the parser — unconditionally, not just for validated input.
 
 When the matrix is absent/``None``/malformed, the block degrades to a QUALITATIVE trade-off
 (whom to prioritize under uncertainty) and never demands or invents a figure.
@@ -59,7 +60,10 @@ def build_cost_matrix_block(business_cost_matrix: dict | None) -> str:
             and isinstance(fn, (int, float))
             and not isinstance(fn, bool)
             and isinstance(currency, str)
-            and currency.strip()
+            # ISO 4217 codes are pure letters; `.isalpha()` is the defensive guarantee that
+            # the currency token contributes no brace/symbol/whitespace to the rendered block,
+            # so the placeholder-safety invariant holds for ANY input, not just validated ones.
+            and currency.strip().isalpha()
         ):
             fp_str = _format_cost_amount(float(fp))
             fn_str = _format_cost_amount(float(fn))

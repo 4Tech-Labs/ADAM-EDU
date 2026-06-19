@@ -86,6 +86,9 @@ def test_builder_is_placeholder_safe() -> None:
         {"fp_cost": 500.0, "fn_cost": 4000.0},  # missing currency
         {"fp_cost": "nope", "fn_cost": 4000.0, "currency": "USD"},  # non-numeric
         {"fp_cost": True, "fn_cost": 4000.0, "currency": "USD"},  # bool is not a cost
+        {"fp_cost": 500.0, "fn_cost": 4000.0, "currency": "US{D}"},  # brace-bearing currency
+        {"fp_cost": 500.0, "fn_cost": 4000.0, "currency": "US$"},  # non-alpha currency
+        {"fp_cost": 500.0, "fn_cost": 4000.0, "currency": ""},  # empty currency
     ],
 )
 def test_builder_none_or_malformed_is_qualitative_no_figure(matrix: object) -> None:
@@ -94,6 +97,9 @@ def test_builder_none_or_malformed_is_qualitative_no_figure(matrix: object) -> N
     assert "CUALITATIVA" in block
     assert "[cifra]" not in block
     assert "500" not in block  # never echoes a partial/malformed figure
+    # Placeholder-safety holds unconditionally — even a brace-bearing currency cannot leak {/}.
+    assert "{" not in block
+    assert "}" not in block
 
 
 # ── Assembled prompt: present matrix ──────────────────────────────────────────
