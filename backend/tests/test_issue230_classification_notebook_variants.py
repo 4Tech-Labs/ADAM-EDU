@@ -464,32 +464,34 @@ def test_variant_validator_rejects_unselected_lr_in_rf_only() -> None:
     [
         pytest.param(
             CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
-            ("3.0.5.2", "Logistic Regression"),
-            # #353 — ROC(3.0.5.5)/PR(3.0.5.6)/tuning(3.0.7/3.0.8)/interp(3.0.9/3.0.10)
-            # salieron del núcleo; el RF pipeline (3.0.5.3) nunca estuvo en lr_only.
-            ("3.0.5.3", "3.0.5.5", "3.0.5.6", "3.0.7", "3.0.8", "3.0.9", "3.0.10"),
+            ("Logistic Regression",),
+            ("Random Forest",),
             id="lr_only",
         ),
         pytest.param(
             CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
-            ("3.0.5.3", "Random Forest"),
-            ("3.0.5.2", "3.0.5.5", "3.0.5.6", "3.0.7", "3.0.8", "3.0.9", "3.0.10"),
+            ("Random Forest",),
+            ("Logistic Regression",),
             id="rf_only",
         ),
         pytest.param(
             CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
-            ("3.0.5.2", "3.0.5.3"),
-            ("3.0.5.5", "3.0.5.6", "3.0.7", "3.0.8", "3.0.9", "3.0.10"),
+            ("Logistic Regression", "Random Forest"),
+            (),
             id="lr_rf_contrast",
         ),
     ],
 )
-def test_toc_cell_contains_correct_sections_per_variant(
+def test_toc_cell_contains_correct_model_per_variant(
     variant: str,
     must_contain: tuple[str, ...],
     must_not_contain: tuple[str, ...],
 ) -> None:
-    """Each variant's TOC lists exactly its own sections and none of the absent ones."""
+    """Each variant's TOC names only its own model(s). #353 — asserted by MODEL,
+    not by section number: the renumber reuses the same number for different
+    sections across variants (e.g. 3.0.5.2 is the LR pipeline in lr_only but the
+    RF pipeline in rf_only). Number consecutiveness + TOC<->headers parity are
+    covered by test_toc_numbering_is_consecutive_and_matches_headers."""
     toc = TOC_MARKDOWN_CELL_BY_VARIANT[variant]
     assert "# %% [markdown]" in toc, "TOC must be a Jupytext markdown cell"
     assert "📋 Tabla de Contenido" in toc, "TOC must have the standard heading"
@@ -500,11 +502,47 @@ def test_toc_cell_contains_correct_sections_per_variant(
 
 
 def test_toc_cell_all_three_variants_share_base_sections() -> None:
-    """Sections 1, 2, 2.1, 3, 3.0, and 3.0.11 must appear in every variant TOC."""
-    base_sections = ("| 1 |", "| 2 |", "| 2.1 |", "| 3 |", "| 3.0 |", "| 3.0.11 |")
+    """Structural base rows 1, 2, 2.1, 3, 3.0 appear in every variant TOC. #353 —
+    the final modeling row is no longer 3.0.11; it is now the last consecutive
+    3.0.5.N (variant-specific), so it is not asserted as a shared base row."""
+    base_sections = ("| 1 |", "| 2 |", "| 2.1 |", "| 3 |", "| 3.0 |")
     for variant, toc in TOC_MARKDOWN_CELL_BY_VARIANT.items():
         for section in base_sections:
             assert section in toc, f"Section {section!r} missing from {variant} TOC"
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        pytest.param(CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY, id="lr_only"),
+        pytest.param(CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY, id="rf_only"),
+        pytest.param(CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST, id="lr_rf_contrast"),
+    ],
+)
+def test_toc_numbering_is_consecutive_and_matches_headers(variant: str) -> None:
+    """#353 polish — the modeling section numbers must be CONSECUTIVE (no gaps,
+    the original bug) and the TOC must list exactly the section headers the cells
+    actually emit, in the same order (no desync). Guards against the vestigial
+    numbering (3.0.5.1 → .2 → .4 → .7 → .8 → 3.0.6 → 3.0.11) the trim left behind."""
+    import re as _re
+
+    rendered = CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT[variant].format(**SHARED_FORMAT_KEYS)
+    header_numbers = _re.findall(r"# #### (3\.0\.5\.\d+) ", rendered)
+    toc_numbers = _re.findall(r"\| (3\.0\.5\.\d+) \|", TOC_MARKDOWN_CELL_BY_VARIANT[variant])
+
+    # 1) Emitted headers are consecutive 3.0.5.1 .. 3.0.5.N (no gaps).
+    suffixes = [int(n.rsplit(".", 1)[1]) for n in header_numbers]
+    assert suffixes == list(range(1, len(suffixes) + 1)), (
+        f"{variant} headers not consecutive: {header_numbers}"
+    )
+    # 2) TOC lists exactly those numbers, in the same order (índice == headers).
+    assert toc_numbers == header_numbers, (
+        f"{variant} TOC<->headers mismatch: toc={toc_numbers} headers={header_numbers}"
+    )
+    # 3) No vestigial pre-trim section number leaks anywhere in the rendered prompt.
+    assert not _re.search(r"3\.0\.(?:6|7|8|9|10|11)\b", rendered), (
+        f"{variant} still emits a pre-trim section number (3.0.6/.7/.8/.9/.10/.11)"
+    )
 
 
 def test_toc_cell_starts_with_newline_for_clean_cell_boundary() -> None:

@@ -173,7 +173,7 @@ INTRO_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
 CV_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
-# #### 3.0.5.4 Validación cruzada estratificada — Logistic Regression
+# #### 3.0.5.3 Validación cruzada estratificada — Logistic Regression
 
 # %%
 # === SECTION:cv_scores ===
@@ -193,7 +193,7 @@ except Exception as e:
 """,
     "rf_only": """
 # %% [markdown]
-# #### 3.0.5.4 Validación cruzada estratificada — Random Forest
+# #### 3.0.5.3 Validación cruzada estratificada — Random Forest
 
 # %%
 # === SECTION:cv_scores ===
@@ -407,7 +407,7 @@ except Exception as e:
 COMPARISON_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
-# #### 3.0.5.7 Tabla final — Logistic Regression
+# #### 3.0.5.4 Tabla final — Logistic Regression
 
 # %%
 # === SECTION:comparison_table ===
@@ -433,7 +433,7 @@ except Exception as e:
 """,
     "rf_only": """
 # %% [markdown]
-# #### 3.0.5.7 Tabla final — Random Forest
+# #### 3.0.5.4 Tabla final — Random Forest
 
 # %%
 # === SECTION:comparison_table ===
@@ -459,7 +459,7 @@ except Exception as e:
 """,
     "lr_rf_contrast": """
 # %% [markdown]
-# #### 3.0.5.7 Tabla comparativa final — LR vs RF
+# #### 3.0.5.5 Tabla comparativa final — LR vs RF
 
 # %%
 # === SECTION:comparison_table ===
@@ -492,7 +492,7 @@ except Exception as e:
 COST_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
-# ### 3.0.6 — Matriz de costos del negocio + threshold tuning
+# #### 3.0.5.6 — Matriz de costos del negocio + threshold tuning
 # El threshold default 0.5 SOLO es óptimo si FP y FN cuestan igual. En la
 # mayoría de los problemas de negocio (churn, fraude, mantenimiento) los
 # costos son asimétricos. Esta celda lee la matriz de costos del contrato
@@ -572,7 +572,7 @@ except Exception as e:
 """,
     "rf_only": """
 # %% [markdown]
-# ### 3.0.6 — Matriz de costos del negocio + threshold tuning
+# #### 3.0.5.6 — Matriz de costos del negocio + threshold tuning
 # El threshold default 0.5 SOLO es óptimo si FP y FN cuestan igual. En la
 # mayoría de los problemas de negocio (churn, fraude, mantenimiento) los
 # costos son asimétricos. Esta celda lee la matriz de costos del contrato
@@ -652,7 +652,7 @@ except Exception as e:
 """,
     "lr_rf_contrast": """
 # %% [markdown]
-# ### 3.0.6 — Matriz de costos del negocio + threshold tuning
+# #### 3.0.5.7 — Matriz de costos del negocio + threshold tuning
 # En contraste usamos LR como soporte de threshold por interpretabilidad.
 # El threshold default 0.5 SOLO es óptimo si FP y FN cuestan igual. En la
 # mayoría de los problemas de negocio (churn, fraude, mantenimiento) los
@@ -737,7 +737,7 @@ except Exception as e:
 CONFUSION_MATRIX_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
-# #### 3.0.5.8 Matriz de confusión — Logistic Regression (normalizada por fila)
+# #### 3.0.5.5 Matriz de confusión — Logistic Regression (normalizada por fila)
 # Muestra la tasa de acierto por clase real a umbral fijo 0.5.
 # Normalizado por fila para que sea informativo en datasets desbalanceados.
 
@@ -765,7 +765,7 @@ except Exception as e:
 """,
     "rf_only": """
 # %% [markdown]
-# #### 3.0.5.8 Matriz de confusión — Random Forest (normalizada por fila)
+# #### 3.0.5.5 Matriz de confusión — Random Forest (normalizada por fila)
 # Muestra la tasa de acierto por clase real a umbral fijo 0.5.
 # Normalizado por fila para que sea informativo en datasets desbalanceados.
 
@@ -793,7 +793,7 @@ except Exception as e:
 """,
     "lr_rf_contrast": """
 # %% [markdown]
-# #### 3.0.5.8 Matrices de confusión — LR y RF (normalizadas por fila)
+# #### 3.0.5.6 Matrices de confusión — LR y RF (normalizadas por fila)
 # Ambos modelos en una sola figura para comparación directa (Regla L atomic charting).
 # Normalizado por fila para que sea informativo en datasets desbalanceados.
 
@@ -880,7 +880,7 @@ except Exception as e:
 METRICS_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
-# ### 3.0.11 — Resumen ejecutable de métricas para grounding narrativo
+# #### 3.0.5.7 — Resumen ejecutable de métricas para grounding narrativo
 
 # %%
 # === SECTION:metrics_summary_json ===
@@ -939,7 +939,7 @@ print("ADAM_M3_METRICS_SUMMARY_JSON=" + _json_m3_metrics.dumps(_metrics_summary,
 """,
     "rf_only": """
 # %% [markdown]
-# ### 3.0.11 — Resumen ejecutable de métricas para grounding narrativo
+# #### 3.0.5.7 — Resumen ejecutable de métricas para grounding narrativo
 
 # %%
 # === SECTION:metrics_summary_json ===
@@ -998,7 +998,7 @@ print("ADAM_M3_METRICS_SUMMARY_JSON=" + _json_m3_metrics.dumps(_metrics_summary,
 """,
     "lr_rf_contrast": """
 # %% [markdown]
-# ### 3.0.11 — Resumen ejecutable de métricas para grounding narrativo
+# #### 3.0.5.8 — Resumen ejecutable de métricas para grounding narrativo
 
 # %%
 # === SECTION:metrics_summary_json ===
@@ -1079,11 +1079,11 @@ TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
         "# | 3.0 | EDA Express |\n"
         "# | 3.0.5.1 | Baseline trivial — DummyClassifier + bootstrap de variables |\n"
         "# | 3.0.5.2 | Pipeline reproducible — Logistic Regression |\n"
-        "# | 3.0.5.4 | Validación cruzada estratificada |\n"
-        "# | 3.0.5.7 | Tabla final de métricas |\n"
-        "# | 3.0.5.8 | Matriz de confusión normalizada |\n"
-        "# | 3.0.6 | Matriz de costos del negocio + threshold tuning |\n"
-        "# | 3.0.11 | Resumen ejecutable de métricas |"
+        "# | 3.0.5.3 | Validación cruzada estratificada |\n"
+        "# | 3.0.5.4 | Tabla final de métricas |\n"
+        "# | 3.0.5.5 | Matriz de confusión normalizada |\n"
+        "# | 3.0.5.6 | Matriz de costos del negocio + threshold tuning |\n"
+        "# | 3.0.5.7 | Resumen ejecutable de métricas |"
     ),
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: (
         "\n# %% [markdown]\n"
@@ -1097,12 +1097,12 @@ TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
         "# | 3 | Módulos Experimentales |\n"
         "# | 3.0 | EDA Express |\n"
         "# | 3.0.5.1 | Baseline trivial — DummyClassifier + bootstrap de variables |\n"
-        "# | 3.0.5.3 | Pipeline reproducible — Random Forest |\n"
-        "# | 3.0.5.4 | Validación cruzada estratificada |\n"
-        "# | 3.0.5.7 | Tabla final de métricas |\n"
-        "# | 3.0.5.8 | Matriz de confusión normalizada |\n"
-        "# | 3.0.6 | Matriz de costos del negocio + threshold tuning |\n"
-        "# | 3.0.11 | Resumen ejecutable de métricas |"
+        "# | 3.0.5.2 | Pipeline reproducible — Random Forest |\n"
+        "# | 3.0.5.3 | Validación cruzada estratificada |\n"
+        "# | 3.0.5.4 | Tabla final de métricas |\n"
+        "# | 3.0.5.5 | Matriz de confusión normalizada |\n"
+        "# | 3.0.5.6 | Matriz de costos del negocio + threshold tuning |\n"
+        "# | 3.0.5.7 | Resumen ejecutable de métricas |"
     ),
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST: (
         "\n# %% [markdown]\n"
@@ -1119,10 +1119,10 @@ TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
         "# | 3.0.5.2 | Pipeline reproducible — Logistic Regression |\n"
         "# | 3.0.5.3 | Pipeline reproducible — Random Forest |\n"
         "# | 3.0.5.4 | Validación cruzada estratificada — LR vs RF |\n"
-        "# | 3.0.5.7 | Tabla comparativa final — LR vs RF |\n"
-        "# | 3.0.5.8 | Matrices de confusión — LR y RF normalizadas |\n"
-        "# | 3.0.6 | Matriz de costos del negocio + threshold tuning |\n"
-        "# | 3.0.11 | Resumen ejecutable de métricas |"
+        "# | 3.0.5.5 | Tabla comparativa final — LR vs RF |\n"
+        "# | 3.0.5.6 | Matrices de confusión — LR y RF normalizadas |\n"
+        "# | 3.0.5.7 | Matriz de costos del negocio + threshold tuning |\n"
+        "# | 3.0.5.8 | Resumen ejecutable de métricas |"
     ),
 }
 
@@ -1150,6 +1150,16 @@ def build_classification_notebook_prompt(
         prompt = _remove_section(prompt, "# === SECTION:pipeline_rf ===")
     elif variant == "rf_only":
         prompt = _remove_section(prompt, "# === SECTION:pipeline_lr ===")
+        # #353 TOC — con pipeline_lr (3.0.5.2) eliminado, el pipeline RF asciende
+        # a la sección .2 para que la numeración quede consecutiva sin hueco. El
+        # header del pipeline RF vive en el legacy (compartido con contraste, donde
+        # SÍ es .3), así que el renumber es exclusivo de esta variante. Solo cambia
+        # el número de display; el sentinel `# === SECTION:pipeline_rf ===` queda
+        # byte-idéntico.
+        prompt = prompt.replace(
+            "# #### 3.0.5.3 Pipeline reproducible — Random Forest",
+            "# #### 3.0.5.2 Pipeline reproducible — Random Forest",
+        )
 
     # #353 — recorte al núcleo esencial: ROC/PR, tuning (GridSearchCV/
     # RandomizedSearchCV) e interpretabilidad avanzada (VIF/odds-ratios bootstrap/
