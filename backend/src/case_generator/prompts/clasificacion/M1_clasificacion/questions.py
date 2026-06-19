@@ -6,7 +6,12 @@ Addition: ``_M1_CLASSIFICATION_ANCHOR_QUESTIONS`` appended at the end.
 The anchor block uses ONLY variables confirmed to be present in ``_build_base_context()``:
   {student_profile}, {primary_family}, {output_language}, {case_id}, {pregunta_eje}
 and the context injected by ``case_questions`` itself:
-  {architect_output}
+  {architect_output}, {cost_matrix_block}   # cost_matrix_block added by Issue #361
+
+``{cost_matrix_block}`` is built by ``build_cost_matrix_block`` from the normalized
+``business_cost_matrix`` (Issue #361) so P3 grounds its asymmetric-cost trade-off in the
+same source M3 uses, instead of fabricating a figure "según Exhibit 1". The block is
+placeholder-free (no stray ``{``/``}``) so the node's single ``.format`` is safe.
 
 Maintenance rule: when the generic ``CASE_QUESTIONS_PROMPT`` changes, mirror those
 changes here and review the anchor for consistency.
@@ -16,8 +21,8 @@ changes here and review the anchor for consistency.
 # Appended after the generic case questions instructions.
 # Steers P2 and P3 toward classification-problem framing without exposing ML
 # terminology to the student.
-# Zero new format variables: all keys here exist in _build_base_context() or
-# are injected by case_questions via context.update().
+# All keys here exist in _build_base_context() or are injected by case_questions via
+# context.update(): {architect_output} and {cost_matrix_block} (Issue #361).
 _M1_CLASSIFICATION_ANCHOR_QUESTIONS = """
 
 # ── Instrucción de familia: Clasificación ─────────────────────────────────────
@@ -42,12 +47,20 @@ P2 debe pedir al estudiante que realice las dos siguientes operaciones analític
 **P3 (evaluation/synthesis):**
 La decisión A/B/C debe implicar elegir a qué grupo priorizar bajo incertidumbre
 de clasificación. El enunciado DEBE incluir el trade-off entre los dos tipos de
-error de decisión en lenguaje de negocio:
-  - Costo de acción innecesaria: "Si la empresa interviene con X unidades/clientes
-    que no presentarían el evento, el costo estimado según Exhibit 1 sería de [cifra]."
-  - Costo de omisión: "Si omite Y unidades/clientes que sí presentarían el evento,
-    el impacto financiero sería de [cifra]."
-  Las cifras deben provenir de los Exhibits del caso, no ser inventadas.
+error de decisión en lenguaje de negocio (sin jerga técnica), tomando las cifras
+de costo EXCLUSIVAMENTE de la matriz de costos del caso provista a continuación:
+
+{cost_matrix_block}
+
+  - Costo de acción innecesaria: enmarca cuánto pierde la empresa si interviene con
+    clientes/unidades que NO presentarían el evento (usa la cifra de "acción innecesaria"
+    del bloque de arriba).
+  - Costo de omisión: enmarca cuánto pierde si NO actúa con quienes SÍ presentarían el
+    evento (usa la cifra de "omisión" del bloque de arriba).
+  Estas cifras son PREMISAS del enunciado y NO provienen de un Exhibit: fija el campo
+  `exhibit_ref` de P3 en "Ninguno" y NO atribuyas el costo a "Exhibit 1" ni a otro anexo.
+  Si el bloque indica que no hay matriz de costos, plantea el trade-off de forma
+  CUALITATIVA (a quién priorizar bajo incertidumbre), SIN exigir ni inventar cifras.
   (La instrucción de hipótesis inicial ya está en el bloque base — no duplicar.)
 
 Referencia para contextualizar las preguntas — pregunta eje del caso:

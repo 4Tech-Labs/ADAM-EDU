@@ -64,6 +64,7 @@ from case_generator.prompts.clasificacion import (
     SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
     TOC_MARKDOWN_CELL_BY_VARIANT,
     ClassificationNotebookVariant,
+    build_cost_matrix_block,
     select_eda_text_blocks,
 )
 
@@ -2333,6 +2334,7 @@ __all__ = [
   "CASE_QUESTIONS_PROMPT",
   "CASE_QUESTIONS_PROMPT_BY_FAMILY",
   "CASE_QUESTIONS_PROMPT_CLASSIFICATION",
+  "build_cost_matrix_block",
   "CASE_WRITER_PROMPT",
   "CASE_WRITER_PROMPT_BY_FAMILY",
   "CASE_WRITER_PROMPT_CLASSIFICATION",

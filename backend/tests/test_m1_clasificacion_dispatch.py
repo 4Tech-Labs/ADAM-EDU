@@ -64,6 +64,8 @@ _BASE_CONTEXT: dict[str, object] = {
     "teacher_input": "test teacher input",
     "architect_output": "test architect output",
     "pregunta_eje": "¿Debe la empresa priorizar retención selectiva?",
+    # Issue #361 — case_questions injects a curated cost block consumed by the P3 anchor.
+    "cost_matrix_block": "MATRIZ DE COSTOS DEL CASO: no disponible.",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
