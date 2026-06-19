@@ -163,6 +163,10 @@ from case_generator.narrative_grounding import (
     has_metric_anchors,
     validate_narrative_grounding,
 )
+from case_generator.m1_grounding import (
+    validate_narrative_exhibit_coherence,
+    validate_questions_exhibit_coherence,
+)
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
     _bounded_diagnostic,
@@ -1021,6 +1025,143 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
 
 
 # ─────────────────────────────────────────────────────────
+# Issue #360 — M1 Exhibit coherence (ml_ds + clasificacion)
+# Reprompt-once-then-DEGRADE; best-effort; never raises. Opposite of M4/M5,
+# which hard-fail: M1 MUST complete the job. No new canonical/state key.
+# ─────────────────────────────────────────────────────────
+_M1_WRITER_EXHIBIT_REPROMPT_HEADER = (
+    "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA CON EXHIBITS\n"
+    "Tu salida anterior citó cifras de negocio marcadas con (Exhibit N) que NO "
+    "coinciden con la tabla de ese anexo. Reescribe la narrativa COMPLETA usando "
+    "ÚNICAMENTE cifras que aparezcan textualmente en los Exhibits citados; NUNCA "
+    "aproximes ni redondees. Incoherencias detectadas:\n"
+)
+_M1_QUESTIONS_EXHIBIT_REPROMPT_HEADER = (
+    "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA CON EXHIBITS\n"
+    "Algunas preguntas citan cifras (campo exhibit_ref) que NO coinciden con la tabla "
+    "de ese anexo. Regenera EXACTAMENTE 3 preguntas con el mismo schema, usando sólo "
+    "cifras que aparezcan textualmente en el Exhibit referido; NUNCA aproximes ni "
+    "redondees. Incoherencias detectadas:\n"
+)
+
+
+def _build_m1_exhibit_anexos(state: ADAMState) -> dict[str, str]:
+    """Raw (untruncated) Exhibit tables from state for M1 coherence checks (#360).
+
+    Reads ``doc1_anexo_*`` directly — NOT the ``sanitize_untrusted_payload`` copy the
+    prompt receives, whose per-field truncation could cut table rows and cause a false
+    negative.
+    """
+    return {
+        "financiero": str(state.get("doc1_anexo_financiero") or ""),
+        "operativo": str(state.get("doc1_anexo_operativo") or ""),
+        "stakeholders": str(state.get("doc1_anexo_stakeholders") or ""),
+    }
+
+
+def _invoke_m1_writer_with_exhibit_coherence(
+    *, llm: Any, prompt: str, state: ADAMState, narrativa_raw: str
+) -> str:
+    """Validate + reprompt-once-then-DEGRADE the M1 narrative (Issue #360).
+
+    Gated to ml_ds + clasificacion (byte-identical no-op otherwise). Best-effort: any
+    internal error keeps the best narrative and the job continues. Never raises.
+    """
+    if not _is_ml_ds_classification(state):
+        return narrativa_raw
+    try:
+        anexos = _build_m1_exhibit_anexos(state)
+        violations = validate_narrative_exhibit_coherence(narrativa_raw, anexos)
+        if not violations:
+            return narrativa_raw
+        bullet_list = "\n".join(f"- {violation}" for violation in violations)
+        print(
+            f"[case_writer] Incoherencias Exhibit M1 detectadas: {violations}. "
+            "Reprompt explícito (1/1)."
+        )
+        reprompt = prompt + _M1_WRITER_EXHIBIT_REPROMPT_HEADER + bullet_list
+        corrected = sanitize_markdown(_extract_text(llm.invoke(reprompt)))
+        violations_2 = validate_narrative_exhibit_coherence(corrected, anexos)
+        if not violations_2:
+            print("[case_writer] Reprompt coherencia Exhibit M1 OK")
+            return corrected
+        logger.warning(
+            "[case_writer] coherencia Exhibit M1 degradada tras reprompt",
+            extra={
+                "node": "case_writer",
+                "violations": violations_2,
+                "case_id": state.get("case_id"),
+            },
+        )
+        # DEGRADE: keep whichever pass violates least.
+        return corrected if len(violations_2) < len(violations) else narrativa_raw
+    except Exception as exc:  # best-effort — a validator bug must never fail M1
+        logger.warning(
+            "[case_writer] validador coherencia Exhibit M1 falló (best-effort): %s",
+            exc,
+            extra={"node": "case_writer", "case_id": state.get("case_id")},
+        )
+        return narrativa_raw
+
+
+def _apply_m1_questions_exhibit_coherence(
+    *, llm: Any, prompt: str, state: ADAMState, preguntas_dict: list[dict]
+) -> list[dict]:
+    """Validate + reprompt-once-then-DEGRADE the M1 questions (Issue #360).
+
+    Gated to ml_ds + clasificacion. The reprompt re-invokes structured output, which may
+    raise ``ValidationError`` / ``OutputParserException`` / ``ValueError``; any failure or
+    a second violation degrades to the pass-1 questions. Never raises (in particular never
+    propagates ``RuntimeError``), so the job always completes.
+    """
+    if not _is_ml_ds_classification(state):
+        return preguntas_dict
+    try:
+        anexos = _build_m1_exhibit_anexos(state)
+        violations = validate_questions_exhibit_coherence(preguntas_dict, anexos)
+        if not violations:
+            return preguntas_dict
+        bullet_list = "\n".join(f"- {violation}" for violation in violations)
+        print(
+            f"[case_questions] Incoherencias Exhibit M1 detectadas: {violations}. "
+            "Reprompt explícito (1/1)."
+        )
+        reprompt = prompt + _M1_QUESTIONS_EXHIBIT_REPROMPT_HEADER + bullet_list
+        try:
+            resultado: GeneradorPreguntasM1Output = llm.with_structured_output(
+                GeneradorPreguntasM1Output
+            ).invoke(reprompt)
+            corrected = [p.model_dump() for p in resultado.preguntas]
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[case_questions] reprompt coherencia Exhibit M1 inválido — degrada a pass-1: %s",
+                exc,
+                extra={"node": "case_questions", "case_id": state.get("case_id")},
+            )
+            return preguntas_dict
+        violations_2 = validate_questions_exhibit_coherence(corrected, anexos)
+        if not violations_2:
+            print("[case_questions] Reprompt coherencia Exhibit M1 OK")
+            return corrected
+        logger.warning(
+            "[case_questions] coherencia Exhibit M1 degradada tras reprompt",
+            extra={
+                "node": "case_questions",
+                "violations": violations_2,
+                "case_id": state.get("case_id"),
+            },
+        )
+        return preguntas_dict
+    except Exception as exc:  # best-effort — never fail M1
+        logger.warning(
+            "[case_questions] validador coherencia Exhibit M1 falló (best-effort): %s",
+            exc,
+            extra={"node": "case_questions", "case_id": state.get("case_id")},
+        )
+        return preguntas_dict
+
+
+# ─────────────────────────────────────────────────────────
 # NODO 2a — CASE WRITER (Flash, paralelo con 2b)
 # ─────────────────────────────────────────────────────────
 def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
@@ -1076,6 +1217,9 @@ def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
         # Esto permite que el modelo use todos sus tokens para escribir Markdown libremente
         response = llm.invoke(prompt)
         narrativa_raw = sanitize_markdown(_extract_text(response))
+        narrativa_raw = _invoke_m1_writer_with_exhibit_coherence(
+            llm=llm, prompt=prompt, state=state, narrativa_raw=narrativa_raw
+        )
         print(f"[case_writer] narrativa={len(narrativa_raw)} chars")
         # No escribe current_agent — nodo paralelo (evita race condition)
         return {"doc1_narrativa": narrativa_raw}
@@ -1128,6 +1272,11 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
         logger.error("[case_questions] ERROR tras reintentos: %s", e, exc_info=True)
         return {"doc1_preguntas": []}  # Degradación graceful — pipeline continúa sin preguntas M1
 
+    # Issue #360 — best-effort Exhibit coherence (outside the try above so the existing
+    # `except RuntimeError: raise` is untouched; this helper never raises).
+    preguntas_dict = _apply_m1_questions_exhibit_coherence(
+        llm=llm, prompt=prompt, state=state, preguntas_dict=preguntas_dict
+    )
     # No escribe current_agent — nodo paralelo (evita race condition)
     return {
         "doc1_preguntas": preguntas_dict,
