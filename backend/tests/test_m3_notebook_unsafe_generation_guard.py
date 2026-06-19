@@ -25,6 +25,7 @@ import pytest
 
 import case_generator.graph as graph_module
 from case_generator.graph import (
+    M3NotebookValidationError,
     _build_m3_notebook_validation_correction,
     _detect_unsafe_constructs,
     _invoke_m3_notebook_algo_section,
@@ -101,6 +102,15 @@ _MISSING_PR_CLASSIFICATION_ALGO = _COMPLETE_CLASSIFICATION_ALGO.replace(
     "    prec, rec = (0.0, 0.0)\n",
 )
 
+# Family-complete (precision_recall_curve present) but carries an unsafe construct
+# the deterministic locals()-repair CANNOT rewrite (``eval`` is not an existence
+# guard). Used to drive the reprompt/escalation/fail-closed paths deterministically
+# regardless of the repair, which would otherwise fix a plain ``locals()`` in one
+# pass with zero reprompts.
+_UNREPAIRABLE_UNSAFE_CLASSIFICATION_ALGO = (
+    _COMPLETE_CLASSIFICATION_ALGO + '\nx = eval("1 + 1")\n'
+)
+
 
 class _StubResponse:
     def __init__(self, content: str) -> None:
@@ -165,11 +175,12 @@ def test_correction_block_unsafe_emits_safe_pattern_not_crossfamily() -> None:
 # _invoke_m3_notebook_algo_section — the unified loop (core regression)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_locals_caught_at_generation_then_reprompt_recovers() -> None:
-    """Headline regression: family-complete code that ALSO has locals() is now
-    caught at generation time; a clean reprompt recovers instead of escalating
-    to the executor's brittle full-regeneration that killed the job."""
-    llm = _SequenceLLM([_UNSAFE_CLASSIFICATION_ALGO, _COMPLETE_CLASSIFICATION_ALGO])
+def test_two_violation_whackamole_recovers_via_repair() -> None:
+    """Headline regression (the reported bug): family-complete code that ALSO emits
+    a `locals()` existence-guard is now DETERMINISTICALLY repaired before validation,
+    so it passes in ONE pass with ZERO reprompts — the locals()/precision_recall_curve
+    whack-a-mole that killed the job can no longer happen."""
+    llm = _SequenceLLM([_UNSAFE_CLASSIFICATION_ALGO])
 
     result = _invoke_m3_notebook_algo_section(
         llm=llm,
@@ -179,44 +190,131 @@ def test_locals_caught_at_generation_then_reprompt_recovers() -> None:
         node_name="test",
     )
 
-    assert len(llm.prompts) == 2  # original + exactly one reprompt
-    assert "try/except NameError" in llm.prompts[1]  # concrete safe pattern given
+    assert len(llm.prompts) == 1  # repaired in-place, no reprompt needed
     assert "precision_recall_curve(" in result
     assert "locals(" not in result
 
 
-def test_persistent_locals_fails_closed() -> None:
-    """If the model keeps emitting locals() on the reprompt, the job fails closed
-    (never ships unsafe code) with a security-aware message."""
-    llm = _SequenceLLM([_UNSAFE_CLASSIFICATION_ALGO, _UNSAFE_CLASSIFICATION_ALGO])
+def test_whackamole_when_repair_disabled_recovers_via_escalation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Independent net: with the deterministic repair disabled, a first-pass
+    locals() still recovers because the reprompt ESCALATES to the Pro tier, which
+    returns a complete, safe notebook. Flash runs once; Pro runs once."""
+    flash = _SequenceLLM([_UNSAFE_CLASSIFICATION_ALGO])
+    pro = _SequenceLLM([_COMPLETE_CLASSIFICATION_ALGO])
 
-    with pytest.raises(RuntimeError, match="seguridad"):
+    # Disable the deterministic repair so the locals() survives to validation.
+    monkeypatch.setattr(graph_module, "repair_locals_existence_guards", lambda code: code)
+    result = _invoke_m3_notebook_algo_section(
+        llm=flash,
+        escalation_llm=pro,
+        prompt="PROMPT",
+        family="clasificacion",
+        notebook_variant=None,
+        node_name="test",
+    )
+
+    assert len(flash.prompts) == 1  # first attempt only
+    assert len(pro.prompts) == 1  # reprompt escalated to Pro
+    assert "try/except NameError" in pro.prompts[0]  # safe pattern handed to Pro
+    assert "precision_recall_curve(" in result
+    assert "locals(" not in result
+
+
+def test_escalation_used_on_reprompt_not_first_attempt() -> None:
+    """The first attempt always runs the cheap Flash tier; only reprompts escalate."""
+    flash = _SequenceLLM([_UNREPAIRABLE_UNSAFE_CLASSIFICATION_ALGO])
+    pro = _SequenceLLM([_COMPLETE_CLASSIFICATION_ALGO])
+
+    result = _invoke_m3_notebook_algo_section(
+        llm=flash,
+        escalation_llm=pro,
+        prompt="PROMPT",
+        family="clasificacion",
+        notebook_variant=None,
+        node_name="test",
+    )
+
+    assert len(flash.prompts) == 1
+    assert len(pro.prompts) == 1
+    assert "eval(" not in result
+
+
+def test_persistent_unsafe_fails_closed_after_all_attempts() -> None:
+    """If every attempt keeps emitting an unrepairable unsafe construct, the job
+    fails closed with the typed M3NotebookValidationError (never ships unsafe code)."""
+    seq = [_UNREPAIRABLE_UNSAFE_CLASSIFICATION_ALGO] * 3
+    llm = _SequenceLLM(seq)
+
+    with pytest.raises(M3NotebookValidationError, match="seguridad") as excinfo:
         _invoke_m3_notebook_algo_section(
             llm=llm,
+            escalation_llm=_SequenceLLM(list(seq)),
             prompt="PROMPT",
             family="clasificacion",
             notebook_variant=None,
             node_name="test",
         )
+    # The typed error carries the structured violations for operator diagnostics.
+    assert any("INSEGURO" in v for v in excinfo.value.violations)
 
 
-def test_fixing_locals_but_dropping_required_api_is_caught_in_one_pass() -> None:
-    """Both axes are enforced in the SAME validation pass: a reprompt that strips
-    locals() but drops precision_recall_curve( is caught deterministically, not
-    silently shipped. This is exactly the original two-stage failure, now unified."""
-    llm = _SequenceLLM(
-        [_UNSAFE_CLASSIFICATION_ALGO, _MISSING_PR_CLASSIFICATION_ALGO]
-    )
+def test_persistent_missing_api_fails_closed_with_faltante() -> None:
+    """A response that drops precision_recall_curve( on every attempt fails closed
+    with the FALTANTE axis (this is the bug's other reported violation)."""
+    seq = [_MISSING_PR_CLASSIFICATION_ALGO] * 3
+    llm = _SequenceLLM(seq)
 
-    with pytest.raises(RuntimeError, match="precision_recall_curve") as excinfo:
+    with pytest.raises(M3NotebookValidationError, match="precision_recall_curve") as excinfo:
         _invoke_m3_notebook_algo_section(
             llm=llm,
+            escalation_llm=_SequenceLLM(list(seq)),
             prompt="PROMPT",
             family="clasificacion",
             notebook_variant=None,
             node_name="test",
         )
     assert "FALTANTE: precision_recall_curve(" in str(excinfo.value)
+
+
+def test_validation_error_redacts_secrets() -> None:
+    """The typed error captures WHAT the model produced for operator diagnostics,
+    with secrets redacted — never raw."""
+    err = M3NotebookValidationError(
+        "boom",
+        violations=["INSEGURO: Denied call in generated notebook: locals"],
+        last_output="token=supersecretvalue123\nx = 1\n",
+    )
+    assert "supersecretvalue123" not in err.last_output
+    assert "<redacted>" in err.last_output
+    assert err.violations == ["INSEGURO: Denied call in generated notebook: locals"]
+
+
+def test_validation_error_bounds_output_length() -> None:
+    """A huge model output is bounded so the failure payload never bloats."""
+    err = M3NotebookValidationError(
+        "boom",
+        violations=["FALTANTE: precision_recall_curve("],
+        last_output="x = 1\n" * 5000,
+    )
+    assert len(err.last_output) <= 4000
+
+
+def test_single_llm_back_compat_no_escalation() -> None:
+    """Back-compat: callers that pass only `llm` (no escalation_llm) still work; the
+    reprompt falls back to the same llm."""
+    llm = _SequenceLLM([_UNREPAIRABLE_UNSAFE_CLASSIFICATION_ALGO, _COMPLETE_CLASSIFICATION_ALGO])
+
+    result = _invoke_m3_notebook_algo_section(
+        llm=llm,
+        prompt="PROMPT",
+        family="clasificacion",
+        notebook_variant=None,
+        node_name="test",
+    )
+    assert len(llm.prompts) == 2
+    assert "eval(" not in result
 
 
 # ──────────────────────────────────────────────────────────────────────────────

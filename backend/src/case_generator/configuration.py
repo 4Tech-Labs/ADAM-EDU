@@ -22,9 +22,19 @@ NODE_CASE_ARCHITECT = "case_architect"
 NODE_SCHEMA_DESIGNER = "schema_designer"
 NODE_M3_CONTENT = "m3_content_generator"
 NODE_M3_NOTEBOOK = "m3_notebook_generator"
+# Reliability escalation tier for the M3 notebook reprompt(s). Resolved
+# separately from NODE_M3_NOTEBOOK so ops can override/disable the Pro escalation
+# (e.g. force it back to Flash, or point it at a different Pro model) by % of jobs
+# without redeploy. See _get_m3_notebook_escalation_llm in graph.py.
+NODE_M3_NOTEBOOK_ESCALATION = "m3_notebook_generator_escalation"
 NODE_M4_CONTENT = "m4_content_generator"
 NODE_M5_CONTENT = "m5_content_generator"
 NODE_M5_QUESTIONS = "m5_questions_generator"
+
+# M3 notebook generation attempt budget: 1 initial pass (Flash, happy path) plus
+# up to (M3_NOTEBOOK_MAX_ATTEMPTS - 1) escalated reprompts on the Pro tier before
+# the generator gives up. Keep ≥ 2 so there is always at least one reprompt.
+M3_NOTEBOOK_MAX_ATTEMPTS = 3
 
 
 class Configuration(BaseModel):

@@ -148,6 +148,10 @@ def _replace_rule_m(prompt: str, variant: ClassificationNotebookVariant) -> str:
    * Cada celda reconstruye su hold-out si lo necesita; no dependas de variables
      locales de celdas previas salvo `target_col`, `y`, `feature_cols`, `X_raw`,
      `is_binary`, `can_model_binary` y `modeling_skip_reason`.
+   * Para reconstruir, comprobar la existencia de una variable SOLO con
+     `try: <var>` / `except NameError:` (como en las celdas de ejemplo). NUNCA uses
+     `locals()`, `globals()` ni `vars()` para ese chequeo: el kernel de ejecución
+     los rechaza (Regla 8) y la celda — y el caso entero — falla.
 
 """
     return _replace_between(prompt, "M. **PEDAGOGÍA HARVARD", "# Estructura OBLIGATORIA", replacement)

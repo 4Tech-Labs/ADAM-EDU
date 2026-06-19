@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -399,6 +399,67 @@ def test_retry_authoring_job_rejects_non_retryable_status(
     assert response.status_code == 400
     assert response.json()["detail"] == "Job not retryable"
     assert response.headers["X-Job-Status"] == "completed"
+
+
+def test_regenerate_notebook_accepts_degraded_job(
+    client,
+    db,
+    auth_headers_factory,
+    seed_identity,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-regen-ok@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    headers = auth_headers_factory(sub=teacher_id, email=teacher_email)
+
+    assignment = Assignment(teacher_id=teacher_id, title="Degraded Notebook", status="published")
+    db.add(assignment)
+    db.flush()
+    job = AuthoringJob(
+        assignment_id=assignment.id,
+        idempotency_key=f"job-{uuid.uuid4()}",
+        status="completed",
+        task_payload={"current_step": "completed", "m3_notebook_degraded": True},
+    )
+    db.add(job)
+    db.commit()
+
+    with patch("shared.app.AuthoringService.regenerate_notebook", new=Mock()) as regen_mock:
+        response = client.post(f"/api/authoring/jobs/{job.id}/regenerate-notebook", headers=headers)
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["job_id"] == job.id
+    assert payload["status"] == "accepted"
+    regen_mock.assert_called_once_with(job.id)
+
+
+def test_regenerate_notebook_rejects_non_degraded_job(
+    client,
+    db,
+    auth_headers_factory,
+    seed_identity,
+) -> None:
+    teacher_id = str(uuid.uuid4())
+    teacher_email = "teacher-regen-reject@example.edu"
+    seed_identity(user_id=teacher_id, email=teacher_email, role="teacher")
+    headers = auth_headers_factory(sub=teacher_id, email=teacher_email)
+
+    assignment = Assignment(teacher_id=teacher_id, title="Healthy Notebook", status="published")
+    db.add(assignment)
+    db.flush()
+    job = AuthoringJob(
+        assignment_id=assignment.id,
+        idempotency_key=f"job-{uuid.uuid4()}",
+        status="completed",
+        task_payload={"current_step": "completed"},
+    )
+    db.add(job)
+    db.commit()
+
+    response = client.post(f"/api/authoring/jobs/{job.id}/regenerate-notebook", headers=headers)
+
+    assert response.status_code == 400
 
 
 def test_caseid_persisted_in_canonical_output(client, db, auth_headers_factory, seed_identity) -> None:

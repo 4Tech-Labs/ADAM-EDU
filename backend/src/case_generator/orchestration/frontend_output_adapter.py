@@ -67,6 +67,10 @@ def adapter_legacy_to_canonical_output(state: dict) -> dict:
     # M3 notebook — Experiment Engineer, exclusivo de ml_ds + visual_plus_notebook
     if state.get("m3_notebook_code"):
         content["m3NotebookCode"] = state["m3_notebook_code"]
+    # Graceful degradation flag — the notebook could not be produced/executed, so the
+    # frontend shows a "regenerate" panel instead of rendering the placeholder code.
+    if state.get("m3_notebook_degraded"):
+        content["m3NotebookDegraded"] = True
 
     # Module 4 questions used by the current teacher preview.
     m4_questions = state.get("m4_questions")

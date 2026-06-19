@@ -9,7 +9,7 @@ const NotebookViewer = lazy(() =>
     })),
 );
 
-export function M3AuditSection({ result, content, md, isMLDS, renderPreguntas }: CaseModuleProps) {
+export function M3AuditSection({ result, content, md, isMLDS, renderPreguntas, onRegenerateNotebook, isRegeneratingNotebook }: CaseModuleProps) {
     return (
         <>
             <div className="mb-8">
@@ -41,8 +41,53 @@ export function M3AuditSection({ result, content, md, isMLDS, renderPreguntas }:
                 </div>
             )}
 
+            {/* Degraded notebook — graceful degradation: the case shipped without a
+                runnable notebook. Show a "regenerate" panel instead of the placeholder. */}
+            {isMLDS && content.m3NotebookDegraded && (
+                <div className="mt-8 rounded-lg border border-amber-200 bg-amber-50 px-5 py-6">
+                    <div className="flex items-start gap-3">
+                        <svg className="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <div className="min-w-0">
+                            <h3 className="text-sm font-bold text-amber-900 mb-1">Notebook no disponible</h3>
+                            <p className="text-sm text-amber-800 leading-relaxed">
+                                El notebook de experimentación no pudo generarse automáticamente. El resto del
+                                caso está completo y listo para usar.
+                                {onRegenerateNotebook ? " Puedes regenerar solo el notebook sin rehacer el caso." : ""}
+                            </p>
+                            {onRegenerateNotebook && (
+                                <button
+                                    type="button"
+                                    onClick={onRegenerateNotebook}
+                                    disabled={isRegeneratingNotebook}
+                                    className="mt-4 inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isRegeneratingNotebook ? (
+                                        <>
+                                            <svg className="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24">
+                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                            </svg>
+                                            Regenerando...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                            </svg>
+                                            Regenerar notebook
+                                        </>
+                                    )}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Notebook Python — Experiment Engineer (solo ml_ds + visual_plus_notebook) */}
-            {isMLDS && content.m3NotebookCode && (
+            {isMLDS && !content.m3NotebookDegraded && content.m3NotebookCode && (
                 <div className="mt-8">
                     <Suspense
                         fallback={

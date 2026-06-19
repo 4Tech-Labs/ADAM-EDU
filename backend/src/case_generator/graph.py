@@ -87,9 +87,11 @@ from case_generator.configuration import (
     NODE_SCHEMA_DESIGNER,
     NODE_M3_CONTENT,
     NODE_M3_NOTEBOOK,
+    NODE_M3_NOTEBOOK_ESCALATION,
     NODE_M4_CONTENT,
     NODE_M5_CONTENT,
     NODE_M5_QUESTIONS,
+    M3_NOTEBOOK_MAX_ATTEMPTS,
 )
 from case_generator.prompts import (
     CASE_ARCHITECT_PROMPT,
@@ -163,11 +165,13 @@ from case_generator.narrative_grounding import (
 )
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
+    _bounded_diagnostic,
     execute_m3_notebook,
     format_execution_failure_for_prompt,
     is_m3_quality_warning_blocking,
     scrub_notebook_for_safe_execution,
 )
+from case_generator.m3_notebook_repair import repair_locals_existence_guards
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
     EDAAnnotateOnlyOutput,
@@ -5198,9 +5202,33 @@ def _detect_unsafe_constructs(code: str) -> list[str]:
     return []
 
 
+class M3NotebookValidationError(RuntimeError):
+    """Raised when the M3 notebook fails family/safety validation after all retries.
+
+    Subclasses ``RuntimeError`` so existing ``except RuntimeError`` handlers (and the
+    authoring worker's failure classification) keep working unchanged. Carries the
+    structured ``violations`` and a bounded, secret-redacted snapshot of the last
+    model output so operators can diagnose WHAT the model produced — without ever
+    leaking it into the teacher-facing error message.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        violations: list[str],
+        last_output: str,
+    ) -> None:
+        super().__init__(message)
+        self.violations = list(violations)
+        # Bounded + redacted at construction so callers can persist it verbatim.
+        self.last_output = _bounded_diagnostic(last_output, limit=4000)
+
+
 @dataclass(frozen=True)
 class _M3NotebookGenerationContext:
     llm: Any
+    escalation_llm: Any
     family: str
     notebook_variant: ClassificationNotebookVariant | None
     base_template: str
@@ -5220,12 +5248,30 @@ def _get_m3_notebook_llm(cfg: Configuration) -> Any:
     return nb_primary.with_fallbacks([nb_stable_flash])
 
 
+def _get_m3_notebook_escalation_llm(cfg: Configuration) -> Any:
+    # Reliability escalation tier: the happy path runs Flash (``_get_m3_notebook_llm``);
+    # if Flash strays on the strict clasificación contract (missing required API or
+    # an unsafe construct), the reprompt(s) escalate to Pro. Pro is far more likely
+    # to satisfy the 27-token contract and obey Rule 8 in one pass. Only the rare
+    # failing job pays for Pro, so the Fase-1 Flash happy-path cost win is preserved.
+    # NOT a reuse of ``_get_architect_llm`` — that attaches code_execution tools,
+    # wrong for emitting long Jupytext. Same 24576/temp-0.3 contract as the Flash
+    # tier; never collapse the .with_fallbacks net. Reversible per-node via
+    # NODE_M3_NOTEBOOK_ESCALATION (override to a Flash model to disable escalation).
+    model = resolve_node_model(cfg, NODE_M3_NOTEBOOK_ESCALATION, cfg.architect_model)
+    pro_high = _build_gemini(model, temperature=0.3, thinking_level="high", max_output_tokens=24576)
+    pro_medium = _build_gemini(model, temperature=0.3, thinking_level="medium", max_output_tokens=24576)
+    stable_flash = _build_gemini("gemini-2.5-flash", temperature=0.3, max_output_tokens=24576)
+    return pro_high.with_fallbacks([pro_medium, stable_flash])
+
+
 def _prepare_m3_notebook_generation_context(
     state: ADAMState,
     config: RunnableConfig,
 ) -> _M3NotebookGenerationContext:
     cfg = Configuration.from_runnable_config(config)
     llm = _get_m3_notebook_llm(cfg)
+    escalation_llm = _get_m3_notebook_escalation_llm(cfg)
 
     context = _build_base_context(state)
     case_title = state.get("titulo", "Caso de Estudio") or "Caso de Estudio"
@@ -5303,6 +5349,7 @@ def _prepare_m3_notebook_generation_context(
     base_template = base_template.replace("{toc_cell}", toc_cell)
     return _M3NotebookGenerationContext(
         llm=llm,
+        escalation_llm=escalation_llm,
         family=family,
         notebook_variant=notebook_variant,
         base_template=base_template,
@@ -5366,6 +5413,26 @@ def _build_m3_notebook_validation_correction(
     return "\n".join(corrective_blocks)
 
 
+def _validate_m3_notebook_algo_section(
+    family: str,
+    algo_section: str,
+    notebook_variant: str | None,
+) -> list[str]:
+    """Family-consistency + (clasificacion-only) safety violations as one flat list.
+
+    Safety scrub is scoped to clasificacion — the ONLY family the executor runs and
+    scrubs (m3_notebook_executor gate), the only family the bug occurred in, and the
+    only one with a required-API contract. The other 3 families' notebooks are never
+    executed server-side, so applying the denylist there would be new policy with
+    false-positive risk (e.g. dir()/getattr() in pedagogical code), not a bug fix.
+    Keep blast radius == executor scope.
+    """
+    violations = _validate_notebook_family_consistency(family, algo_section, notebook_variant)
+    if family == "clasificacion":
+        violations += _detect_unsafe_constructs(algo_section)
+    return violations
+
+
 def _invoke_m3_notebook_algo_section(
     *,
     llm: Any,
@@ -5374,59 +5441,79 @@ def _invoke_m3_notebook_algo_section(
     notebook_variant: str | None,
     node_name: str,
     execution_correction: str | None = None,
+    escalation_llm: Any | None = None,
+    max_attempts: int = M3_NOTEBOOK_MAX_ATTEMPTS,
 ) -> str:
+    """Generate the algo section, validating family + safety, escalating on retry.
+
+    Attempt 1 runs ``llm`` (Flash, the cheap happy path). If the output violates the
+    family/safety contract, every subsequent attempt runs on ``escalation_llm``
+    (Pro) — far more likely to satisfy the strict clasificación contract and obey
+    Rule 8 in one pass. For clasificacion, a deterministic ``locals()`` existence-
+    guard repair runs BEFORE validation on every attempt, so the most common unsafe
+    idiom never even needs a reprompt. After ``max_attempts`` the job fails closed
+    with ``M3NotebookValidationError`` (never ship a runtime-broken notebook).
+    """
     prompt_with_context = prompt if not execution_correction else prompt + "\n\n" + execution_correction
-    response = llm.invoke(prompt_with_context)
-    algo_section = sanitize_markdown(_extract_text(response))
-    print(f"[{node_name}] Sección módulos LLM (1ª pasada): {len(algo_section)} chars")
+    retry_llm = escalation_llm or llm
+    max_attempts = max(2, max_attempts)
 
-    violations = _validate_notebook_family_consistency(family, algo_section, notebook_variant)
-    # Safety scrub is scoped to clasificacion — the ONLY family the executor runs
-    # and scrubs (graph.py m3_notebook_executor gate), the only family the bug
-    # occurred in, and the only one with a required-API contract. The other 3
-    # families' notebooks are never executed server-side, so applying the denylist
-    # there would be new policy with false-positive risk (e.g. dir()/getattr() in
-    # pedagogical code), not a bug fix. Keep blast radius == executor scope.
-    if family == "clasificacion":
-        violations += _detect_unsafe_constructs(algo_section)
-    if not violations:
-        return algo_section
+    current_prompt = prompt_with_context
+    algo_section = ""
+    violations: list[str] = []
+    for attempt in range(1, max_attempts + 1):
+        active_llm = llm if attempt == 1 else retry_llm
+        tier = "flash" if active_llm is llm else "escalated"
+        response = active_llm.invoke(current_prompt)
+        algo_section = sanitize_markdown(_extract_text(response))
+        # Deterministic repair of the sanctioned existence-guard idiom (clasificacion
+        # only) — kills the most common INSEGURO cause without burning a reprompt.
+        if family == "clasificacion":
+            algo_section = repair_locals_existence_guards(algo_section)
+        print(
+            f"[{node_name}] Sección módulos LLM (intento {attempt}/{max_attempts}, "
+            f"tier={tier}): {len(algo_section)} chars"
+        )
 
-    missing = [v.removeprefix("FALTANTE: ") for v in violations if v.startswith("FALTANTE: ")]
-    unsafe_hits = [v.removeprefix("INSEGURO: ") for v in violations if v.startswith("INSEGURO: ")]
-    prohibited_hits = [
-        v
-        for v in violations
-        if not v.startswith("FALTANTE: ") and not v.startswith("INSEGURO: ")
-    ]
-    print(
-        f"[{node_name}] Violación detectada (familia={family}, "
-        f"prohibited={prohibited_hits}, faltantes={missing}, inseguros={unsafe_hits}). "
-        "Reprompt explícito (1/1)."
-    )
-    reprompt = prompt_with_context + _build_m3_notebook_validation_correction(
-        family,
-        violations,
-        notebook_variant,
-    )
-    response2 = llm.invoke(reprompt)
-    algo_section = sanitize_markdown(_extract_text(response2))
-    violations2 = _validate_notebook_family_consistency(family, algo_section, notebook_variant)
-    if family == "clasificacion":
-        violations2 += _detect_unsafe_constructs(algo_section)
-    if violations2:
-        logger.error(
-            "[%s] Reprompt falló — familia=%s violations=%s",
-            node_name, family, violations2,
+        violations = _validate_m3_notebook_algo_section(family, algo_section, notebook_variant)
+        if not violations:
+            if attempt > 1:
+                print(f"[{node_name}] Reprompt OK (intento {attempt}) — familia={family}, chars={len(algo_section)}")
+            return algo_section
+
+        if attempt >= max_attempts:
+            break
+
+        missing = [v.removeprefix("FALTANTE: ") for v in violations if v.startswith("FALTANTE: ")]
+        unsafe_hits = [v.removeprefix("INSEGURO: ") for v in violations if v.startswith("INSEGURO: ")]
+        prohibited_hits = [
+            v
+            for v in violations
+            if not v.startswith("FALTANTE: ") and not v.startswith("INSEGURO: ")
+        ]
+        print(
+            f"[{node_name}] Violación detectada (familia={family}, "
+            f"prohibited={prohibited_hits}, faltantes={missing}, inseguros={unsafe_hits}). "
+            f"Reprompt {attempt}/{max_attempts - 1} (tier siguiente={'escalated' if retry_llm is not llm else 'flash'})."
         )
-        raise RuntimeError(
-            f"M3 notebook generator no satisfizo las validaciones de notebook "
-            f"(familia/seguridad) para '{family}' incluso tras un reprompt: "
-            f"{violations2}. "
-            f"Job marcado como fallido para evitar shipping de notebook roto."
+        current_prompt = prompt_with_context + _build_m3_notebook_validation_correction(
+            family,
+            violations,
+            notebook_variant,
         )
-    print(f"[{node_name}] Reprompt OK — familia={family}, chars={len(algo_section)}")
-    return algo_section
+
+    logger.error(
+        "[%s] Reprompt agotado (%d intentos) — familia=%s violations=%s",
+        node_name, max_attempts, family, violations,
+    )
+    raise M3NotebookValidationError(
+        f"M3 notebook generator no satisfizo las validaciones de notebook "
+        f"(familia/seguridad) para '{family}' incluso tras {max_attempts - 1} reprompts: "
+        f"{violations}. "
+        f"Job marcado como fallido para evitar shipping de notebook roto.",
+        violations=violations,
+        last_output=algo_section,
+    )
 
 
 def _generate_m3_notebook_code(
@@ -5439,6 +5526,7 @@ def _generate_m3_notebook_code(
     generation_context = _prepare_m3_notebook_generation_context(state, config)
     algo_section = _invoke_m3_notebook_algo_section(
         llm=generation_context.llm,
+        escalation_llm=generation_context.escalation_llm,
         prompt=generation_context.prompt,
         family=generation_context.family,
         notebook_variant=generation_context.notebook_variant,
@@ -5446,6 +5534,30 @@ def _generate_m3_notebook_code(
         execution_correction=execution_correction,
     )
     return generation_context.base_template + "\n\n" + algo_section, generation_context.family
+
+
+# Graceful-degradation placeholder: a safe, non-executable Jupytext markdown cell
+# shown when the notebook could not be produced/validated. The executor noops on the
+# degraded flag, so this is never executed; the frontend renders a "regenerate" panel.
+M3_NOTEBOOK_DEGRADED_PLACEHOLDER = (
+    "# %% [markdown]\n"
+    "# ## Notebook no disponible\n"
+    "#\n"
+    "# El notebook de experimentación no pudo generarse automáticamente para este\n"
+    "# caso. El resto del caso está completo. Usa **Regenerar notebook** para\n"
+    "# reintentar la generación.\n"
+)
+
+
+def _degraded_notebook_update(*, node: str, reason: str) -> dict[str, Any]:
+    """State update that degrades the M3 notebook to a placeholder without failing
+    the case. The job still completes; the teacher can regenerate on demand."""
+    return {
+        "m3_notebook_code": M3_NOTEBOOK_DEGRADED_PLACEHOLDER,
+        "m3_notebook_degraded": True,
+        "m3_notebook_degraded_reason": reason,
+        "current_agent": node,
+    }
 
 
 def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
@@ -5487,17 +5599,33 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
         )
         print(f"[m3_notebook_generator] Notebook ensamblado: {len(final_notebook)} chars")
         return {"m3_notebook_code": final_notebook, "current_agent": "m3_notebook_generator"}
-    except RuntimeError:
-        # Issue #233 — family-consistency violation after reprompt. Re-raise so
-        # the worker can mark the job as failed; never ship a runtime-broken notebook.
-        raise
+    except M3NotebookValidationError as exc:
+        # Graceful degradation (never ship a runtime-broken notebook): after all
+        # retries the notebook could not satisfy the family/safety contract. Instead
+        # of killing the whole 6-module case, ship it with the other 5 modules + a
+        # placeholder and let the teacher regenerate the notebook on demand.
+        logger.warning(
+            "[m3_notebook_generator] Notebook degradado tras agotar reintentos: %s",
+            exc.violations,
+        )
+        return _degraded_notebook_update(
+            node="m3_notebook_generator", reason="validation_exhausted"
+        )
     except Exception as e:
         logger.error("[m3_notebook_generator] ERROR: %s", e, exc_info=True)
-        return {"m3_notebook_code": "# ⚠️ Error generando notebook M3. Revisa el Módulo 3."}
+        return _degraded_notebook_update(
+            node="m3_notebook_generator", reason="unexpected_error"
+        )
 
 
 def m3_notebook_executor(state: ADAMState, config: RunnableConfig) -> dict:
-    """Execute and validate the M3 classification notebook in a subprocess."""
+    """Execute and validate the M3 classification notebook in a subprocess.
+
+    Graceful degradation: a notebook that cannot be executed/validated (missing
+    dataset, crash after correction, blocking quality gate) degrades to a placeholder
+    instead of killing the whole case — a runtime-broken notebook is never shipped,
+    only a placeholder, and the teacher can regenerate on demand.
+    """
 
     output_depth = state.get("output_depth", "")
     if output_depth != "visual_plus_notebook":
@@ -5511,6 +5639,32 @@ def m3_notebook_executor(state: ADAMState, config: RunnableConfig) -> dict:
         return {}
 
     case_id = state.get("case_id") or "unknown"
+
+    # The generator already degraded the notebook — do NOT try to execute the
+    # placeholder; keep the degraded state and noop.
+    if state.get("m3_notebook_degraded"):
+        print("[m3_notebook_executor] Noop — notebook ya degradado por el generador")
+        return {}
+
+    try:
+        return _run_m3_notebook_execution(state, config, case_id=case_id, family=family)
+    except Exception as exc:
+        logger.warning(
+            "[m3_notebook_executor] Notebook degradado tras fallo de ejecución: %s",
+            exc,
+            extra={"case_id": case_id, "family": family},
+        )
+        return _degraded_notebook_update(node="m3_notebook_executor", reason="execution_failed")
+
+
+def _run_m3_notebook_execution(
+    state: ADAMState,
+    config: RunnableConfig,
+    *,
+    case_id: str,
+    family: str,
+) -> dict:
+    """Inner executor body. Raises on any failure; the caller degrades on raise."""
     dataset_rows = state.get("doc7_dataset") or []
     if not isinstance(dataset_rows, list) or not dataset_rows:
         logger.error(

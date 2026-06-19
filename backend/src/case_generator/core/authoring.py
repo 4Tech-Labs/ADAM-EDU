@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import logging
+import os
 from psycopg import Error as PsycopgError
 from psycopg_pool import PoolClosed, PoolTimeout
 import time
@@ -13,7 +14,14 @@ from typing import Any, Literal, Mapping, cast
 from case_generator.core.artifact_manager import ArtifactManager
 from case_generator.core.storage import get_storage_provider
 from case_generator.cost_metrics import CostCallbackHandler
-from case_generator.graph import DurableCheckpointUnavailableError, RESUME_CACHE_STATE_KEY, get_graph
+from case_generator.graph import (
+    DurableCheckpointUnavailableError,
+    M3NotebookValidationError,
+    RESUME_CACHE_STATE_KEY,
+    get_graph,
+    m3_notebook_executor,
+    m3_notebook_generator,
+)
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy import select, update
@@ -204,6 +212,27 @@ def _classify_failure_status(error_code: str | None) -> str:
 
 def _is_generated_notebook_unsafe_error(error_text: str) -> bool:
     return any(marker in error_text for marker in _UNSAFE_NOTEBOOK_ERROR_MARKERS)
+
+
+def _build_notebook_regen_inputs(graph_output: Mapping[str, Any]) -> dict[str, Any]:
+    """Minimal snapshot to re-run M3 notebook generation on demand (degraded case).
+
+    Captured from the final graph state so the regenerate endpoint does not have to
+    walk the durable checkpoint. ``algoritmos``/``algorithm_mode`` also live in
+    ``task_payload`` (intake), so the regen path has a second source of truth.
+    """
+    return {
+        "studentProfile": graph_output.get("studentProfile", "ml_ds"),
+        "output_depth": graph_output.get("output_depth", "visual_plus_notebook"),
+        "output_language": graph_output.get("output_language", "es"),
+        "titulo": graph_output.get("titulo", ""),
+        "case_id": graph_output.get("case_id", ""),
+        "m3_content": (graph_output.get("m3_content") or "")[:8000],
+        "algoritmos": list(graph_output.get("algoritmos") or []),
+        "algorithm_mode": graph_output.get("algorithm_mode"),
+        "dataset_schema_required": graph_output.get("dataset_schema_required"),
+        "data_gap_warnings": list(graph_output.get("data_gap_warnings") or []),
+    }
 
 
 def _resolve_job_grounding_snapshot(
@@ -891,6 +920,9 @@ class AuthoringService:
         cost_handler: CostCallbackHandler | None = None
         error_msg: str | None = None
         clean_room_reason: str | None = None
+        # Captured inside the except block (where `exc` is still in scope) so the
+        # operator-only notebook diagnostics survive into the persistence block.
+        notebook_debug_payload: dict[str, Any] | None = None
         try:
             level_map = {
                 "pregrado": "undergrad",
@@ -1116,6 +1148,14 @@ class AuthoringService:
                     logger.error("AuthoringService: LangGraph raised exception for Job %s", job_id, exc_info=True)
                     error_trace = traceback.format_exc()
                     error_str = error_trace.lower()
+                    if isinstance(exc, M3NotebookValidationError):
+                        # Operator-only diagnostics: WHAT the model produced. Bounded
+                        # + secret-redacted at the exception boundary; only persisted
+                        # when ADAM_DEBUG_NOTEBOOK_DUMP is set. Never teacher-facing.
+                        notebook_debug_payload = {
+                            "violations": exc.violations[:20],
+                            "output": exc.last_output,
+                        }
                     if _is_generated_notebook_unsafe_error(error_str):
                         error_code = _UNSAFE_NOTEBOOK_ERROR_CODE
                         error_msg = error_trace
@@ -1174,6 +1214,9 @@ class AuthoringService:
                 # Capture cost on failure too — a job that failed after Pro reprompts
                 # (e.g. a grounding RuntimeError) is exactly the spend worth measuring.
                 _attach_cost_breakdown(current_payload, cost_handler, job_id)
+                if notebook_debug_payload is not None and os.getenv("ADAM_DEBUG_NOTEBOOK_DUMP"):
+                    current_payload["debug_m3_notebook_violations"] = notebook_debug_payload["violations"]
+                    current_payload["debug_m3_notebook_output"] = notebook_debug_payload["output"]
                 job.task_payload = current_payload
 
                 if failure_status == AUTHORING_JOB_STATUS_FAILED:
@@ -1248,6 +1291,12 @@ class AuthoringService:
             # Fase 0: persist per-node token/USD breakdown alongside progress in
             # task_payload (Supabase-native write path — no new bus/SSE/table).
             _attach_cost_breakdown(completed_payload, cost_handler, job_id)
+            # Graceful degradation: the case completed but the notebook is a
+            # placeholder. Stash the minimal inputs so the teacher can regenerate
+            # just the notebook without re-running the whole 6-module case.
+            if graph_output.get("m3_notebook_degraded"):
+                completed_payload["m3_notebook_degraded"] = True
+                completed_payload["m3_notebook_regen_inputs"] = _build_notebook_regen_inputs(graph_output)
             job.task_payload = completed_payload
 
             ArtifactManager.publish_job_artifacts(db, job_id)
@@ -1285,5 +1334,96 @@ class AuthoringService:
             finally:
                 db.close()
             return
+        finally:
+            db.close()
+
+    @classmethod
+    def regenerate_notebook(cls, job_id: str) -> None:
+        """Regenerate ONLY the M3 notebook for a completed-but-degraded case.
+
+        Reuses the production generator + executor nodes (which self-degrade), so a
+        second failure simply leaves the case degraded; success patches the canonical
+        output and clears the flag. Runs as a FastAPI background task (sync). Does NOT
+        re-run the other 5 modules — those are already correct.
+        """
+        db = SessionLocal()
+        try:
+            job = db.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
+            if job is None:
+                logger.error("AuthoringService.regenerate_notebook: job %s not found", job_id)
+                return
+            assignment = (
+                db.query(Assignment).filter(Assignment.id == job.assignment_id).first()
+            )
+            if assignment is None or not assignment.canonical_output:
+                logger.error(
+                    "AuthoringService.regenerate_notebook: assignment/canonical missing for job %s",
+                    job_id,
+                )
+                return
+
+            payload = dict(job.task_payload or {})
+            # Idempotency guard: a prior regeneration may have already succeeded and
+            # cleared the flag (e.g. a duplicate/stale trigger). Re-running now would
+            # rehydrate from emptied regen_inputs and overwrite a good notebook with a
+            # worse one — so skip if the notebook is no longer degraded.
+            if not payload.get("m3_notebook_degraded"):
+                logger.info(
+                    "AuthoringService.regenerate_notebook: job %s no longer degraded — skipping",
+                    job_id,
+                )
+                return
+            regen_inputs = dict(payload.get("m3_notebook_regen_inputs") or {})
+            canonical = dict(assignment.canonical_output or {})
+            content = dict(canonical.get("content") or {})
+
+            # Rehydrate the minimal state the production nodes need. ``task_payload``
+            # is the second source of truth for the algorithm picks; the dataset for
+            # the executor comes straight from the already-published canonical output.
+            state: dict[str, Any] = {
+                "studentProfile": regen_inputs.get("studentProfile", "ml_ds"),
+                "output_depth": regen_inputs.get("output_depth", "visual_plus_notebook"),
+                "output_language": regen_inputs.get("output_language", "es"),
+                "titulo": regen_inputs.get("titulo", ""),
+                "case_id": regen_inputs.get("case_id") or job_id,
+                "m3_content": regen_inputs.get("m3_content") or content.get("m3Content", ""),
+                "algoritmos": regen_inputs.get("algoritmos") or [],
+                "algorithm_mode": regen_inputs.get("algorithm_mode"),
+                "dataset_schema_required": regen_inputs.get("dataset_schema_required"),
+                "data_gap_warnings": regen_inputs.get("data_gap_warnings") or [],
+                "task_payload": payload,
+                "doc7_dataset": content.get("datasetRows") or content.get("doc7Dataset") or [],
+            }
+
+            config: dict[str, Any] = {}
+            state.update(m3_notebook_generator(cast(Any, state), cast(Any, config)))
+            state.update(m3_notebook_executor(cast(Any, state), cast(Any, config)))
+
+            if state.get("m3_notebook_degraded"):
+                logger.warning(
+                    "AuthoringService.regenerate_notebook: job %s still degraded after regen "
+                    "(reason=%s) — leaving degraded for retry.",
+                    job_id,
+                    state.get("m3_notebook_degraded_reason"),
+                )
+                return
+
+            # Success — patch the canonical output and clear the degraded markers.
+            content["m3NotebookCode"] = state.get("m3_notebook_code", "")
+            content.pop("m3NotebookDegraded", None)
+            canonical["content"] = content
+            assignment.canonical_output = canonical
+            payload.pop("m3_notebook_degraded", None)
+            payload.pop("m3_notebook_regen_inputs", None)
+            job.task_payload = payload
+            db.commit()
+            logger.info("AuthoringService.regenerate_notebook: job %s notebook regenerated", job_id)
+        except Exception:
+            logger.error(
+                "AuthoringService.regenerate_notebook: job %s failed: %s",
+                job_id,
+                traceback.format_exc(),
+            )
+            db.rollback()
         finally:
             db.close()

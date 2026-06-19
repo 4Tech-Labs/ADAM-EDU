@@ -128,6 +128,7 @@ export interface CaseContent {
     m3Charts?: EDAChartSpec[];
     m3Questions?: PreguntaMinimalista[];
     m3NotebookCode?: string;                     // Jupytext Percent — Experiment Engineer (ml_ds + visual_plus_notebook)
+    m3NotebookDegraded?: boolean;                // Graceful degradation: notebook could not be produced; show "regenerate" panel
     m4Content?: string;
     m4Charts?: EDAChartSpec[];
     m5Content?: string;

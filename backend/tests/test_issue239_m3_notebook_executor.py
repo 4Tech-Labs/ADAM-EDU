@@ -386,9 +386,29 @@ def test_graph_executor_skips_non_classification_family(monkeypatch: pytest.Monk
     assert called is False
 
 
-def test_graph_executor_fails_closed_without_dataset() -> None:
-    with pytest.raises(RuntimeError, match="doc7_dataset"):
-        graph_module.m3_notebook_executor(_executor_state(doc7_dataset=[]), {})
+def test_graph_executor_degrades_without_dataset() -> None:
+    # Graceful degradation: a missing dataset can't kill the whole case. The
+    # notebook degrades to a placeholder (no invented metrics) and the case ships.
+    result = graph_module.m3_notebook_executor(_executor_state(doc7_dataset=[]), {})
+    assert result["m3_notebook_degraded"] is True
+    assert result["current_agent"] == "m3_notebook_executor"
+    assert "m3_metrics_summary" not in result  # never fabricated
+
+
+def test_graph_executor_noops_when_already_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = {"execute": False}
+
+    def fake_execute(**_kwargs: Any) -> M3NotebookExecutionResult:
+        called["execute"] = True
+        return M3NotebookExecutionResult(_GOOD_METRICS, None)
+
+    monkeypatch.setattr(graph_module, "execute_m3_notebook", fake_execute)
+    # The generator already degraded — executor must not try to run the placeholder.
+    result = graph_module.m3_notebook_executor(
+        _executor_state(m3_notebook_degraded=True), {}
+    )
+    assert result == {}
+    assert called["execute"] is False
 
 
 def test_resume_skip_requires_metrics_summary_not_quality_warning_only() -> None:
@@ -510,7 +530,9 @@ def test_graph_executor_unsafe_globals_reprompt_names_safe_replacement(
     assert result["m3_metrics_summary"] == _GOOD_METRICS
 
 
-def test_graph_executor_second_crash_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_graph_executor_second_crash_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A notebook that still crashes after the correction pass degrades to a
+    placeholder (never ships a runtime-broken notebook) instead of killing the case."""
     def fake_execute(**_kwargs: Any) -> M3NotebookExecutionResult:
         raise M3NotebookExecutionError("boom", diagnostics="Traceback", kind="crash")
 
@@ -520,8 +542,10 @@ def test_graph_executor_second_crash_fails_closed(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(graph_module, "execute_m3_notebook", fake_execute)
     monkeypatch.setattr(graph_module, "_generate_m3_notebook_code", fake_generate)
 
-    with pytest.raises(RuntimeError, match="falló incluso tras un reprompt"):
-        graph_module.m3_notebook_executor(_executor_state(), {})
+    result = graph_module.m3_notebook_executor(_executor_state(), {})
+    assert result["m3_notebook_degraded"] is True
+    assert result["m3_notebook_code"] == graph_module.M3_NOTEBOOK_DEGRADED_PLACEHOLDER
+    assert result.get("m3_metrics_summary") is None
 
 
 def test_graph_topology_places_executor_after_generator_without_standard_retry() -> None:
