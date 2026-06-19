@@ -536,7 +536,7 @@ def test_m4_lr_block_gate_business_classification() -> None:
 
     captured: dict[str, str] = {}
 
-    def _capture(*, node_name, llm, prompt, metrics_block, grounding_enabled):
+    def _capture(*, node_name, llm, prompt, metrics_block, grounding_enabled, variant=None):
         captured["prompt"] = prompt
         return "m4 content"
 
@@ -577,7 +577,7 @@ def test_m5_lr_block_gate_business_classification() -> None:
 
     captured: dict[str, str] = {}
 
-    def _capture(*, node_name, llm, prompt, metrics_block, grounding_enabled):
+    def _capture(*, node_name, llm, prompt, metrics_block, grounding_enabled, variant=None):
         captured["prompt"] = prompt
         return "m5 content"
 

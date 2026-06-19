@@ -15,6 +15,11 @@ from collections.abc import Mapping, Sequence
 from numbers import Real
 from typing import Any
 
+from case_generator.prompts import (
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
+    CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
+)
+
 NARRATIVE_GROUNDING_WARNING = (
     "m3_metrics_summary ausente — grounding deshabilitado para este job"
 )
@@ -261,6 +266,55 @@ def has_metric_anchors(metrics_block: str) -> bool:
     if _FALLBACK_MARKER in metrics_block:
         return False
     return bool(_extract_anchor_numbers(metrics_block))
+
+
+# Issue #337 — prose-safe model-name leak guard for single-model narratives.
+# Asymmetric by design: only the UNSELECTED model is forbidden. The selected
+# model is named strongly and legitimately in single-model prose. Word-boundary
+# regex only (never ``substring in``) so ``surf``/``perfil``/``performance`` etc.
+# never false-positive. The bare acronyms ``RF``/``LR`` are intentionally NOT
+# matched: full names carry ~zero false-positive risk and prompts always
+# introduce the model by its full name at least once.
+_UNSELECTED_RF_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bRandom\s+Forest\b", re.IGNORECASE),
+    re.compile(r"\bRandomForest\w*", re.IGNORECASE),
+    re.compile(r"\bbosques?\s+aleatorios?\b", re.IGNORECASE),
+)
+_UNSELECTED_LR_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bLogistic\s+Regression\b", re.IGNORECASE),
+    re.compile(r"\bLogisticRegression\w*", re.IGNORECASE),
+    re.compile(r"\bregresi[oó]n\s+log[ií]stica\b", re.IGNORECASE),
+)
+
+
+def detect_unselected_model_mentions(prose: str, variant: str | None) -> list[str]:
+    """Return ``MODELO_NO_SELECCIONADO: <match>`` violations for single-model variants.
+
+    Defense-in-depth guard (Issue #337) mirroring the notebook family-consistency
+    check, but over human prose instead of code tokens. For ``lr_only`` the
+    unselected model is Random Forest; for ``rf_only`` it is Logistic Regression.
+    ``lr_rf_contrast`` / ``None`` / any other value is a no-op (returns ``[]``):
+    the contrast variant legitimately names both models, so this short-circuit is
+    load-bearing. Prefix mirrors the ``CITA:`` / ``UNANCHORED:`` style of
+    ``validate_narrative_grounding``; matches are deduplicated.
+    """
+    if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY:
+        patterns = _UNSELECTED_RF_PATTERNS
+    elif variant == CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY:
+        patterns = _UNSELECTED_LR_PATTERNS
+    else:
+        return []
+
+    seen: set[str] = set()
+    violations: list[str] = []
+    for pattern in patterns:
+        for match in pattern.finditer(prose):
+            text = match.group(0)
+            if text in seen:
+                continue
+            seen.add(text)
+            violations.append(f"MODELO_NO_SELECCIONADO: {text}")
+    return violations
 
 
 def _metrics_block_declares_modeling_skipped(metrics_block: str) -> bool:
