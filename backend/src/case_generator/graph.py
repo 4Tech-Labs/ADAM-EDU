@@ -157,6 +157,7 @@ from case_generator.narrative_grounding import (
     NARRATIVE_GROUNDING_WARNING,
     build_computed_metrics_block,
     contextualize_grounding_violations,
+    detect_unselected_model_mentions,
     has_metric_anchors,
     validate_narrative_grounding,
 )
@@ -4396,17 +4397,26 @@ def _invoke_narrative_with_grounding(
     prompt: str,
     metrics_block: str,
     grounding_enabled: bool,
+    variant: str | None = None,
 ) -> str:
     response = llm.invoke(prompt)
     prose = sanitize_markdown(_extract_text(response))
-    if not grounding_enabled:
-        return prose
-
-    violations = validate_narrative_grounding(prose, metrics_block)
+    # Issue #337 — the model-leak guard runs BEFORE the grounding gate: with
+    # grounding disabled (missing/anchorless m3_metrics_summary) the prompt is the
+    # only defense, so gating the leak check behind grounding would make it dead
+    # code exactly when it is needed. ``detect_unselected_model_mentions`` is a
+    # no-op ([]) for contrast / None / non-classification → byte-identical there.
+    leak_violations = detect_unselected_model_mentions(prose, variant)
+    grounding_violations = (
+        validate_narrative_grounding(prose, metrics_block) if grounding_enabled else []
+    )
+    violations = grounding_violations + leak_violations
     if not violations:
         return prose
 
-    contextualized_violations = contextualize_grounding_violations(prose, violations)
+    contextualized_violations = (
+        contextualize_grounding_violations(prose, grounding_violations) + leak_violations
+    )
     bullet_list = "\n".join(f"- {violation}" for violation in contextualized_violations)
     print(
         f"[{node_name}] Violaciones narrative grounding detectadas: "
@@ -4421,11 +4431,24 @@ def _invoke_narrative_with_grounding(
         + "bloque de métricas incluido arriba. Violaciones detectadas:\n"
         + bullet_list
     )
+    if leak_violations:
+        reprompt += (
+            "\n\n# RECORDATORIO — MODELO NO SELECCIONADO\n"
+            "Esta narrativa es de un solo modelo: NO nombres el modelo no "
+            "seleccionado (ver violaciones 'MODELO_NO_SELECCIONADO' arriba)."
+        )
     response2 = llm.invoke(reprompt)
     prose = sanitize_markdown(_extract_text(response2))
-    violations2 = validate_narrative_grounding(prose, metrics_block)
+    leak_violations2 = detect_unselected_model_mentions(prose, variant)
+    grounding_violations2 = (
+        validate_narrative_grounding(prose, metrics_block) if grounding_enabled else []
+    )
+    violations2 = grounding_violations2 + leak_violations2
     if violations2:
-        contextualized_violations2 = contextualize_grounding_violations(prose, violations2)
+        contextualized_violations2 = (
+            contextualize_grounding_violations(prose, grounding_violations2)
+            + leak_violations2
+        )
         logger.error(
             "[%s] Reprompt narrative grounding falló — violations=%s",
             node_name,
@@ -4539,6 +4562,7 @@ def _invoke_m5_content_with_contract(
     metrics_block: str,
     grounding_enabled: bool,
     require_decision_matrix: bool,
+    variant: str | None = None,
 ) -> str:
     prose = _invoke_narrative_with_grounding(
         node_name="m5_content_generator",
@@ -4546,6 +4570,7 @@ def _invoke_m5_content_with_contract(
         prompt=prompt,
         metrics_block=metrics_block,
         grounding_enabled=grounding_enabled,
+        variant=variant,
     )
     if not require_decision_matrix:
         return prose
@@ -4576,11 +4601,17 @@ def _invoke_m5_content_with_contract(
         else []
     )
     corrected_matrix_violations = _validate_m5_decision_matrix(corrected)
-    if grounding_violations or corrected_matrix_violations:
+    # Issue #337 — the matrix reprompt can reintroduce a leak in the "modelo
+    # soporte" cell, so re-check the unselected model UNCONDITIONALLY (never gated
+    # by grounding_enabled). Scan ``corrected`` (raw prose, matrix included), never
+    # a KPI-stripped variant. No-op ([]) for contrast / None.
+    leak_violations_2 = detect_unselected_model_mentions(corrected, variant)
+    if grounding_violations or corrected_matrix_violations or leak_violations_2:
         logger.error(
-            "[m5_content_generator] Reprompt M5 falló — grounding=%s matrix=%s",
+            "[m5_content_generator] Reprompt M5 falló — grounding=%s matrix=%s fuga=%s",
             grounding_violations,
             corrected_matrix_violations,
+            leak_violations_2,
         )
         raise RuntimeError(
             "m5_content_generator falló validación de matriz de decisión o "
@@ -5592,11 +5623,13 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         _algoritmos_raw = _extract_state_algoritmos(state)
         _algorithm_mode = _extract_state_algorithm_mode(state)
         _profile, _primary_family = _resolve_generation_focus(state)
+        variant: str | None = None
         if _profile == "ml_ds" and _primary_family == "clasificacion":
             _variant, _variant_warning = _resolve_classification_notebook_variant(
                 algorithm_mode=_algorithm_mode,
                 algoritmos=_algoritmos_raw,
             )
+            variant = _variant
             if _variant_warning:
                 logger.warning(
                     "[m4_content_generator] narrative variant fallback — "
@@ -5630,6 +5663,7 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             prompt=prompt_template.format(**context),
             metrics_block=metrics_block,
             grounding_enabled=grounding_enabled,
+            variant=variant,
         )
         print(f"[m4_content_generator] {len(m4)} chars")
         return {
@@ -5794,11 +5828,13 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         _algoritmos_raw = _extract_state_algoritmos(state)
         _algorithm_mode = _extract_state_algorithm_mode(state)
         _profile, _primary_family = _resolve_generation_focus(state)
+        variant: str | None = None
         if _profile == "ml_ds" and _primary_family == "clasificacion":
             _variant, _variant_warning = _resolve_classification_notebook_variant(
                 algorithm_mode=_algorithm_mode,
                 algoritmos=_algoritmos_raw,
             )
+            variant = _variant
             if _variant_warning:
                 logger.warning(
                     "[m5_content_generator] narrative variant fallback — "
@@ -5835,6 +5871,7 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 state,
                 default_unresolved_ml_ds_to_classification=True,
             ),
+            variant=variant,
         )
         print(f"[m5_content_generator] {len(m5)} chars")
         return {
