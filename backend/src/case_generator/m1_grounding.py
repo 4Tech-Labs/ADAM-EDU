@@ -94,6 +94,23 @@ _EXHIBIT_TO_ANEXO_KEY = {1: "financiero", 2: "operativo", 3: "stakeholders"}
 
 _FLOAT_EPSILON = 1e-9
 
+# ── Exhibit 2 mandatory-row checks (Issue #372) ───────────────────────────────
+# Tolerance for the F1 coupling (rate row ⇔ ``target_event_rate``), in percentage
+# points. The deterministic dataset generator calibrates the target prevalence EXACTLY
+# to ``target_event_rate`` (graph.py top-k argsort), so the only legitimate display
+# variance between the printed Exhibit-2 rate and the contract is rounding to ~1 decimal.
+# ±0.5pp absorbs that while still catching a missing row or a grossly wrong number. This is
+# deliberately NOT ``narrative_grounding._within_tolerance`` (its ±2pp/±2% is for fuzzy
+# model metrics and would mask a 1-2pp authoring drift in a calibrated number).
+_RATE_PCT_TOLERANCE = 0.5
+
+# Conservative keyword set for the SECONDARY completeness-row heuristic. A row counts as a
+# completeness data-quality row when it carries one of these tokens AND a ``%`` figure.
+_COMPLETENESS_KEYWORD_RE = re.compile(
+    r"completitud|incompletos?|sin\s+dato|faltantes?|nulos?|missing",
+    re.IGNORECASE,
+)
+
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
@@ -187,7 +204,111 @@ def validate_questions_exhibit_coherence(
     return violations
 
 
+def validate_exhibit2_event_rate(
+    anexo_operativo: str, target_event_rate: float | None
+) -> list[str]:
+    """Return a violation if Exhibit 2 does not print the F1 occurrence rate (Issue #372).
+
+    PRIMARY, deterministic, zero-FP-by-construction. When ``target_event_rate`` is present
+    (the ml_ds + clasificación binary gate), some ``%`` figure in the Exhibit-2 table must
+    fall within ``_RATE_PCT_TOLERANCE`` of ``target_event_rate * 100`` — or some bare figure
+    must equal the fraction itself. A miss means the mandatory rate row is absent,
+    mislabeled-without-the-number, or prints the wrong number; all three are the SAME defect
+    (the dataset prevalence is untraceable to the anexo). ``None`` rate → ``[]`` (that case
+    is already surfaced by ``_validate_target_event_rate``'s ``target_event_rate_missing``).
+
+    Zero false positives: extra ``%`` only add match chances, never create a violation, and
+    BOTH display forms (``8.3 %`` and the bare fraction ``0.083``) are accepted. The accepted
+    cost is a false NEGATIVE: an unrelated cell that happens to sit within ±0.5pp of the rate
+    suppresses the violation. That errs SAFE — it can only fail to flag a defect, never degrade
+    a good case — which is the deliberate priority for this validator (zero FP over zero FN).
+    """
+    if not isinstance(target_event_rate, (int, float)) or isinstance(
+        target_event_rate, bool
+    ):
+        return []
+    rate = float(target_event_rate)
+    rate_pct = rate * 100.0
+    for pct in _iter_table_percentages(anexo_operativo):
+        if abs(pct - rate_pct) <= _RATE_PCT_TOLERANCE:
+            return []
+    # Fallback — the anexo may print the bare fraction (0.083) instead of "8.3 %".
+    for value in _iter_table_numbers(anexo_operativo):
+        if abs(value - rate) <= _FLOAT_EPSILON * max(1.0, abs(value), abs(rate)):
+            return []
+    return [
+        f"EXHIBIT2_RATE_MISMATCH: la tasa de ocurrencia del evento "
+        f"({rate_pct:.1f} %) no aparece impresa en Exhibit 2"
+    ]
+
+
+def detect_exhibit2_completeness_row(anexo_operativo: str) -> list[str]:
+    """Return a heuristic warning if no completeness data-quality row is recognizable (#372).
+
+    SECONDARY and heuristic — the completeness row has no contract anchor, so it can only be
+    matched by keyword + a ``%`` figure on the same table row. The caller treats this as
+    WARNING-ONLY (never a reprompt/degrade), so a missed synonym only adds a log line and
+    never degrades a good case. Conservative: a row counts only when it carries BOTH a
+    completeness keyword and a ``%`` figure; the violation fires only when no such row exists.
+    """
+    for line in anexo_operativo.splitlines():
+        cells = _split_markdown_table_row(line)
+        if not cells or _is_markdown_separator_row(cells):
+            continue
+        row_text = " ".join(cells)
+        if _COMPLETENESS_KEYWORD_RE.search(row_text) and _row_has_percentage(row_text):
+            return []
+    return [
+        "EXHIBIT2_COMPLETENESS_MISSING: no se reconoce una fila de completitud de "
+        "campos críticos (keyword + %) en Exhibit 2"
+    ]
+
+
 # ── Internals ─────────────────────────────────────────────────────────────────
+
+def _iter_table_cells(text: str) -> list[str]:
+    """Yield the cell strings of every markdown-table data row in ``text`` (skips
+    separators / non-table lines). Shared by the Exhibit-2 row checks (#372)."""
+    out: list[str] = []
+    for line in text.splitlines():
+        cells = _split_markdown_table_row(line)
+        if not cells or _is_markdown_separator_row(cells):
+            continue
+        out.extend(cells)
+    return out
+
+
+def _iter_table_percentages(text: str) -> list[float]:
+    """Every ``%``-shaped figure in the markdown-table cells of ``text`` (#372)."""
+    values: list[float] = []
+    for cell in _iter_table_cells(text):
+        for match in _NUMBER_TOKEN_RE.finditer(cell):
+            if not match.group("pct"):
+                continue
+            mantissa = _normalize_core(match.group("core"))
+            if mantissa is None:
+                continue
+            if match.group("sign") == "-":
+                mantissa = -mantissa
+            values.append(mantissa)
+    return values
+
+
+def _iter_table_numbers(text: str) -> list[float]:
+    """Every numeric magnitude candidate in the markdown-table cells of ``text`` (#372).
+
+    Reuses ``_iter_numbers`` so a suffixed cell yields both its literal and scaled value.
+    """
+    values: list[float] = []
+    for cell in _iter_table_cells(text):
+        for _raw, candidates, _is_figure in _iter_numbers(cell):
+            values.extend(candidates)
+    return values
+
+
+def _row_has_percentage(row_text: str) -> bool:
+    return any(match.group("pct") for match in _NUMBER_TOKEN_RE.finditer(row_text))
+
 
 def _anchors_by_exhibit(anexos: Mapping[str, str]) -> dict[int, list[float]]:
     return {
