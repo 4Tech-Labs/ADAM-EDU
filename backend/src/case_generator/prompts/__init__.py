@@ -535,7 +535,7 @@ sesgo de confirmación y confusión entre correlación y causalidad.
     "numero": 1,
     "titulo": "string corto (≤8 palabras)",
     "enunciado": "string (pregunta completa referenciando datos reales del M2)",
-    "solucion_esperada": "string (respuesta modelo en un párrafo fluido que integra concepto, ejemplo del caso e implicación ejecutiva; incluye referencia académica al final; máx 120 palabras; docente-only)",
+    "solucion_esperada": "string (respuesta modelo en un párrafo fluido que integra concepto, ejemplo del caso e implicación ejecutiva; máx 120 palabras; docente-only)",
     "bloom_level": "analysis|evaluation|synthesis",
     "chart_ref": "chart_01|chart_02|...|Ninguno",
     "exhibit_ref": "Exhibit 1|Exhibit 2|Dataset|Ninguno",
@@ -550,7 +550,7 @@ sesgo de confirmación y confusión entre correlación y causalidad.
 3. **Diseña:** Preguntas que obliguen al estudiante a cuestionar lo que los datos PARECEN decir.
    Usa los IDs y títulos del `{chart_manifest}` para que las referencias sean precisas.
 4. **Redacta:** `solucion_esperada` como un párrafo fluido que integre el concepto, el ejemplo
-   concreto del caso y la implicación ejecutiva. Incluye la referencia académica al final.
+   concreto del caso y la implicación ejecutiva.
    Máx 120 palabras. No uses sub-campos ni estructuras anidadas — solo texto plano.
 5. **task_type siempre "text_response":** M2 no genera notebook — todas las preguntas son argumentativas.
 
@@ -558,7 +558,6 @@ sesgo de confirmación y confusión entre correlación y causalidad.
 - Solo JSON schema. PROHIBIDO Markdown libre.
 - Toda pregunta referencia métricas, variables o gráficas reales y exactas del M2.
 - Las referencias a gráficos deben usar el `id` y `title` del `{chart_manifest}`.
-- La referencia académica va integrada al final del párrafo `solucion_esperada` — sin inventar DOIs ni URLs.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}
