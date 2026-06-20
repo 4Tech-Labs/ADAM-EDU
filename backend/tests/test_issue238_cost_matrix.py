@@ -106,9 +106,13 @@ def test_business_cost_matrix_rejects_non_finite() -> None:
         BusinessCostMatrix(fp_cost=10.0, fn_cost=float("nan"))
 
 
-def test_business_cost_matrix_rejects_unsupported_currency() -> None:
-    with pytest.raises(ValidationError, match="currency"):
-        BusinessCostMatrix(fp_cost=10.0, fn_cost=50.0, currency="dollars")
+def test_business_cost_matrix_coerces_unsupported_currency_to_usd() -> None:
+    # Issue #370 (USD-only): a non-USD / garbage label COERCES to "USD" instead of raising,
+    # so a stray LLM value never nullifies the whole matrix (losing fp/fn). See _normalize_currency.
+    m = BusinessCostMatrix(fp_cost=10.0, fn_cost=50.0, currency="dollars")
+    assert m.currency == "USD"
+    assert m.fp_cost == 10.0
+    assert m.fn_cost == 50.0
 
 
 def test_business_cost_matrix_rejects_absurd_cost_cap() -> None:
@@ -152,10 +156,11 @@ def test_dataset_schema_required_business_cost_matrix_optional_default_none() ->
 
 
 def test_dataset_schema_required_accepts_business_cost_matrix() -> None:
+    # Issue #370 (USD-only): even a non-USD input coerces to "USD" through the schema; fp/fn kept.
     cm = BusinessCostMatrix(fp_cost=20.0, fn_cost=200.0, currency="EUR")
     s = _build_minimal_schema(business_cost_matrix=cm)
     assert s.business_cost_matrix is not None
-    assert s.business_cost_matrix.currency == "EUR"
+    assert s.business_cost_matrix.currency == "USD"
     dumped = s.model_dump()
     assert dumped["business_cost_matrix"]["fp_cost"] == 20.0
     assert dumped["business_cost_matrix"]["fn_cost"] == 200.0
@@ -250,7 +255,7 @@ def test_validator_preserves_matrix_when_family_is_unknown(graph_logs) -> None:
     ni en el legacy resolver), el dispatcher M3 cae a `clasificacion` por
     defecto. Por eso el helper NO debe nulificar la matriz: la perdería antes
     de que M3 la consuma. Debe emitir warning ``unknown_family`` y preservar
-    la matriz **normalizada** (currency upper)."""
+    la matriz **normalizada** (Issue #370: currency coercida a USD)."""
     contract = {
         "target_column": {"name": "churn"},
         "business_cost_matrix": {"fp_cost": 7, "fn_cost": 70, "currency": "eur"},
@@ -260,7 +265,8 @@ def test_validator_preserves_matrix_when_family_is_unknown(graph_logs) -> None:
     # NO nulificada: M3 hará fallback a clasificación y la usará.
     assert out["business_cost_matrix"] is not None
     assert out["business_cost_matrix"]["fp_cost"] == 7.0
-    assert out["business_cost_matrix"]["currency"] == "EUR"
+    # Issue #370 (USD-only): "eur" se COERCE a "USD" sin perder fp/fn (no se nulifica la matriz).
+    assert out["business_cost_matrix"]["currency"] == "USD"
     assert any("unknown_family" in w for w in warnings)
     # Log estructurado no debe leakear keys inesperadas (acotado a 3 keys).
     assert any("ChurnCo" in m for m in graph_logs.messages)

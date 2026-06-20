@@ -71,6 +71,9 @@ Sigue estos pasos SECUENCIALMENTE:
 - CAMPO `industria`: debe ser un sustantivo específico (ej: "retail B2B", "fintech latinoamericana",
   "manufactura automotriz"). NO usar descripciones largas. dataset_generator lo consume directamente.
 - **Idioma de salida: {output_language}**
+- **Moneda:** TODA cifra monetaria del caso (Exhibits 1/2/3, dilema, inversión, revenue, costos,
+  métricas) se expresa en dólares estadounidenses (USD). Usa el símbolo `$` o el código `USD`;
+  NUNCA otra moneda (€, £, COP, MXN, etc.) ni símbolos locales.
 
 # Perfil del estudiante: {student_profile}
 - Si es "business":

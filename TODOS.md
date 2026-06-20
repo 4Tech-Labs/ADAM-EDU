@@ -2024,3 +2024,53 @@ sugerida: el `dilema_brief` generado expone opciones A, B y C (y no solo A/B) pa
 `course_level="undergrad"` + `primary_family="clasificacion"`.
 
 **Depends on / blocked by:** Cableado del harness de golden-eval (diferido en #340/#361).
+
+
+## TODO-USD-EXHIBIT-GUARD-370A: Guardia determinista de moneda en los Exhibits
+
+**What:** Extender `m1_grounding.py` con un validador determinista, puro y best-effort (gate
+`_is_ml_ds_classification`, logger-only, reprompt-once-then-DEGRADE — el patrón de #360) que escanee
+los anexos CRUDOS (`doc1_anexo_financiero`/`_operativo`/`_stakeholders`) y marque cualquier símbolo
+o código de moneda NO-USD (`€`, `£`, `COP`, `MXN`, …). Es la versión USD-only del detector original
+de #370 ("debe ser USD", no "debe coincidir").
+
+**Why:** Tras el PR de USD-only (#370), la coherencia de moneda en las CIFRAS de los Exhibits es
+solo-prompt (la regla global del architect base). Si el LLM desobedece y escribe `€` en un Exhibit,
+nada lo atrapa hoy — es el único modo de fallo silencioso restante. La etiqueta `currency` ya es
+determinista (coerce a USD); falta el backstop determinista para los numerales de los Exhibits.
+
+**Pros:** Cierra el último modo de fallo silencioso de moneda; reutiliza el patrón #360 y la regex
+`_CURRENCY` (`m1_grounding.py:55`) que ya reconoce los símbolos; mueve la coherencia del prompt al
+código determinista (estándar de calidad de la review).
+
+**Cons:** Toca el módulo más sensible (`backend/src/case_generator/**`); riesgo de falsos positivos
+con el `$` ambiguo (tratarlo como señal débil); no se puede "re-denominar" una cifra inventada, solo
+detectar/degradar.
+
+**Context:** El PR de USD-only shippea coerce (campo) + regla global de moneda (Exhibits, prompt) por
+decisión de la review (Issue 2/5). Esta guardia es el follow-up determinista. Empezar por
+`m1_grounding.py` (reutilizar `_build_m1_exhibit_anexos` y `_CURRENCY`); gate ml_ds+clf; logger-only,
+sin nueva clave canónica/estado.
+
+**Depends on / blocked by:** El PR de USD-only (#370) aterrizado primero.
+
+
+## TODO-USD-LIVE-EVAL-370B: Golden-eval live de que los Exhibits salen en USD
+
+**What:** Rellenar el scaffold `live_llm` ya existente
+(`test_issue340_architect_cost_matrix_emission.py:124-134`, hoy `pytest.skip`) con un check
+`RUN_LIVE_LLM_TESTS=1` que verifique que una generación real ml_ds+clf produce los Exhibits Y la
+`business_cost_matrix` en USD (sin otra moneda/símbolo).
+
+**Why:** Los tests deterministas prueban el cambio de código/etiqueta y la presencia de la regla en
+el prompt, pero solo un modelo real prueba que el LLM OBEDECE la regla de moneda USD en los Exhibits.
+
+**Pros:** Confianza de que el prompt aterriza; reutiliza el scaffold diferido; complementa la guardia
+determinista (370A).
+
+**Cons:** El harness de golden-eval no está cableado aún; costo y flakiness de LLM real.
+
+**Context:** El PR de USD-only shippea solo-determinista por decisión de la review (Issue 5). Este
+check vive junto a los demás golden-eval diferidos, gateado por `RUN_LIVE_LLM_TESTS=1`.
+
+**Depends on / blocked by:** El PR de USD-only (#370) aterrizado; cableado del harness de golden-eval.

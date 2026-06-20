@@ -71,11 +71,11 @@ _MLDS_CTX: dict[str, object] = {
 # Frozen digest of the assembled ml_ds+clasificación prompt. If this changes, the ml_ds
 # prompt changed — confirm it was NOT the business gate leaking in before updating.
 _MLDS_ARCHITECT_PROMPT_SHA256 = (
-    # Issue F1 — regenerated deliberately after tying the Exhibit-2 occurrence-rate row to the
-    # new `target_event_rate` contract field + adding its emission block (fuente única M1↔M2).
-    # Confirmed via test_mlds_architect_prompt_unchanged_by_business_gate (differential GREEN
-    # → not a business-gate leak).
-    "4807710d0ddcb1bd922bc8d1a9d7f444698449de079cef52476915b75ea69ab4"
+    # Issue #370 (USD-only) — regenerated deliberately after adding the global USD money rule to
+    # `_architect_base.py` (Boundaries) and rewriting the anchor currency line to "currency SIEMPRE
+    # USD" (removed the 9-code ISO list). Confirmed via
+    # test_mlds_architect_prompt_unchanged_by_business_gate (differential GREEN → not a business-gate leak).
+    "87ba89ed746adc1b37d24322b0ee1a57ea19f2947b1e4dfe064520616e466240"
 )
 
 
