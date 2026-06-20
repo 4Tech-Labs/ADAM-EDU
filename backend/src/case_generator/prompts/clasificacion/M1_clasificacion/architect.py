@@ -54,6 +54,14 @@ _M1_CLASSIFICATION_ANCHOR_ARCHITECT = """
    "el riesgo de destinar recursos donde el problema no existía" frente a
    "el riesgo de no actuar donde la pérdida era evitable".
 
+**Conteo de opciones en `dilema_brief` (anula la regla base de nivel de curso):** en
+clasificación, `dilema_brief` SIEMPRE contiene exactamente 3 opciones (A, B, C), también
+para `undergrad`. Esta regla REEMPLAZA la línea base de nivel de curso que sugiere
+"2 opciones estratégicas claras" para undergrad: en esta familia, undergrad emite 3
+opciones igual que grad. Las 3 son igualmente presentables pero no igualmente óptimas
+(como ya exige la regla base de balance A/B/C). Son 3 opciones de DECISIÓN gerencial;
+no 3 clases del target.
+
 4. **Exhibit 2 (Operativo) — 2 filas obligatorias de calidad de datos:**
    Añade exactamente 2 filas numéricas y específicas que capturen la realidad del
    evento objetivo en los datos históricos de la empresa:
@@ -61,6 +69,10 @@ _M1_CLASSIFICATION_ANCHOR_ARCHITECT = """
    - Completitud de campos críticos (ej: "% registros con campo contractual sin dato: 12 %").
    Sin estas filas el `schema_designer` downstream no puede modelar el desbalance de
    clases real del caso, comprometiendo la coherencia pedagógica del notebook M3.
+   Esta instrucción REEMPLAZA la regla base de "al menos 2 métricas de calidad de datos"
+   de Exhibit 2: para clasificación las 2 filas de calidad de datos son EXACTAMENTE las dos
+   anteriores (tasa de ocurrencia del evento objetivo + completitud de campos críticos) y
+   ninguna otra. No uses otras filas genéricas de plumbing como las 2 filas obligatorias.
 
 ## Matriz de costos de negocio (`business_cost_matrix`) — opcional, condicional
 

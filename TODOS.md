@@ -1967,3 +1967,60 @@ del writer (M1 narrativa); las preguntas usan el campo estructurado `exhibit_ref
 
 **Depends on / blocked by:** Issue #362 (fix de prompt) mergeado. Coordinar con #360 (mismo
 módulo/gate) y con #347 (de-churn: ligar la tasa de Exhibit 2 a la prevalencia real del dataset).
+
+---
+
+## TODO-363-A: Resolver la contradicción undergrad-2 vs 3-opciones para familias no-clasificación
+
+**What:** El fix de Issue #363 corrige el conteo de opciones (undergrad debe emitir 3, no 2) SOLO
+para `clasificacion`, vía una cláusula de "supersede" en `_M1_CLASSIFICATION_ANCHOR_ARCHITECT`
+(`prompts/clasificacion/M1_clasificacion/architect.py`). Las familias `regresion`, `clustering` y
+`serie_temporal` caen al `CASE_ARCHITECT_PROMPT` genérico (sin anchor), por lo que siguen
+expuestas a la misma contradicción: el base dice `undergrad → 2 opciones estratégicas claras`
+(`_architect_base.py:88`) mientras el resto del producto asume 3 (A, B, C).
+
+**Why:** En la rama minoritaria donde el architect honra la línea 88 para un caso `undergrad` de
+otra familia, P3 / `solucion_esperada` / la columna "Postura (A/B/C)" del Exhibit 3 referencian una
+Opción C que el caso nunca definió — la misma incoherencia M1 que #363 cierra para clasificación.
+
+**Pros:** Cierra la contradicción a nivel de producto; M1 coherente en las 4 familias canónicas.
+
+**Cons:** `regresion`/`clustering`/`serie_temporal` no tienen hoy un anchor de architect M1 propio,
+así que cada una necesitaría uno (mismo patrón base+anchor que clasificación) — o bien una edición
+del base GATEADA por familia, que amplía el blast radius y requiere ADR según las reglas del repo.
+`serie_temporal` está retirada del catálogo activo.
+
+**Context:** Causa raíz compartida = `_architect_base.py:88`. #363 la arregla en el anchor para no
+tocar el base (el enfoque familia-por-familia del producto). Empezar por verificar si regresion/
+clustering tienen un anchor M1 que extender; si no, sopesar anchors por familia vs. un base
+gateado. El patrón de cláusula supersede + drift-guard de `test_issue363_architect_option_exhibit2.py`
+es el template a replicar. Independiente de #363.
+
+**Depends on / blocked by:** Issue #363 mergeado (establece el patrón). Ninguna dependencia técnica.
+
+---
+
+## TODO-363-B: Golden-eval live de que el supersede de conteo de opciones se OBEDECE
+
+**What:** Cuando el harness de golden-eval esté cableado, añadir un check `live_llm`
+(`RUN_LIVE_LLM_TESTS=1`) que verifique que un caso `undergrad` de clasificación realmente emite
+exactamente 3 opciones (A, B, C) — es decir, que el LLM honra la cláusula del anchor por encima de
+la línea base `undergrad → 2 opciones`.
+
+**Why:** El fix de #363 es prompt-only: una cláusula que DICE "siempre 3, reemplaza la regla base".
+Los tests deterministas de #363 prueban que la cláusula está PRESENTE y bien acoplada (drift-guard),
+pero NO que el modelo la obedezca. Ese es el modo de fallo silencioso #5 de la review: undergrad
+emite 2 → P3 cita una Opción C fantasma. En un lanzamiento universitario, M1 es lo PRIMERO que lee
+el estudiante; esa incoherencia es ultra-crítica.
+
+**Pros:** Cierra el único gap crítico marcado en la review; reutiliza la superficie de golden-eval
+ya diferida (`test_issue340_architect_cost_matrix_emission.py` §c, #361).
+
+**Cons:** El harness de golden-eval no está cableado aún; costo y flakiness de LLM real.
+
+**Context:** Este PR (#363) shippea solo-determinista por decisión de la review. El check vive
+naturalmente junto a los demás golden-eval diferidos, gateado por `RUN_LIVE_LLM_TESTS=1`. Sentinela
+sugerida: el `dilema_brief` generado expone opciones A, B y C (y no solo A/B) para
+`course_level="undergrad"` + `primary_family="clasificacion"`.
+
+**Depends on / blocked by:** Cableado del harness de golden-eval (diferido en #340/#361).
