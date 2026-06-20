@@ -1932,3 +1932,38 @@ modelo. Diferido y explícitamente gateado por ADR.
 
 **Depends on / blocked by:** ADR que apruebe un canal de tokens fuera del modelo Realtime actual;
 PR de preview progresivo por-módulo primero.
+
+---
+
+## TODO-362-A: Red de runtime para coherencia M1 (tasa-como-desconocida)
+
+**What:** Extender el validador de Issue #360 (`validate_narrative_exhibit_coherence` /
+`validate_questions_exhibit_coherence` en `case_generator/m1_grounding.py`) para que TAMBIÉN
+señale prosa de M1 que enmarque la tasa de ocurrencia del evento (la que imprime Exhibit 2)
+como **desconocida / no cuantificada / no computada** ("rate-as-unknown") — el espejo en
+runtime de lo que el fix de prompt de #362 corrige en el writer.
+
+**Why:** Issue #362 es **prompt-only**: reescribe la fricción de desbalance hacia la
+confiabilidad de la tasa y añade una guardia que la fija a "lo que SÍ se sabe". Pero M1 NO
+tiene validador propio para esta propiedad, así que el único modo de fallo silencioso —el LLM
+ignora la guardia y vuelve a colocar la tasa bajo "lo que no se sabe"— no tiene red en runtime.
+En un lanzamiento universitario, M1 es lo PRIMERO que lee el estudiante; una incoherencia ahí
+es ultra-crítica.
+
+**Pros:** Cierra el último vector silencioso de la contradicción prosa↔tasa-impresa con una
+defensa en profundidad determinista, sin depender solo de que el modelo obedezca el prompt.
+
+**Cons:** #360 hace match EXACTO de cifras citadas contra la tabla del anexo; "rate-as-unknown"
+es semántico (negación/ausencia), no numérico, así que requeriría una heurística distinta
+(p. ej. detectar la tasa/Exhibit 2 en proximidad de marcadores de desconocimiento como
+"no se sabe", "nunca se cuantificó", "se desconoce"). Riesgo de falsos positivos si la
+heurística es laxa; necesita pruebas negativas fuertes (la confiabilidad SÍ puede estar en duda).
+
+**Context:** #360 ya lee las tablas RAW de Exhibits del architect en `m1_grounding.py` y corre
+en `case_writer` / `case_questions` bajo el gate `_is_ml_ds_classification`. Es el hogar natural
+para el chequeo confiabilidad-vs-existencia. Reusar el patrón **reprompt-once-then-DEGRADE** de
+#360 (no hard-fail), prefijo de violación tipo `EXHIBIT_RATE_AS_UNKNOWN:`. Empezar por la prosa
+del writer (M1 narrativa); las preguntas usan el campo estructurado `exhibit_ref`.
+
+**Depends on / blocked by:** Issue #362 (fix de prompt) mergeado. Coordinar con #360 (mismo
+módulo/gate) y con #347 (de-churn: ligar la tasa de Exhibit 2 a la prevalencia real del dataset).

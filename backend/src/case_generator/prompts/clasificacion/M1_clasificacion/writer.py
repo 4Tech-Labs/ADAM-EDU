@@ -33,13 +33,23 @@ _M1_CLASSIFICATION_ANCHOR_WRITER = """
    - *Definición inconsistente del evento:* dos áreas de la empresa usaban
      criterios distintos para determinar cuándo ocurrió el evento objetivo
      (ej: "abandono" según Ventas vs según Servicio al Cliente).
-   - *Desbalance no documentado:* la empresa nunca cuantificó la proporción real
-     de ocurrencias del evento en su historial (ej: "nadie sabía cuántos clientes
-     realmente habían incumplido versus cuántos simplemente tardaron en pagar").
+   - *Tasa reportada poco confiable:* la empresa sí reporta una tasa de ocurrencia del
+     evento (Exhibit 2), pero como un porcentaje material de registros tiene campos
+     críticos incompletos (Exhibit 2), la dirección no puede afirmar que esa tasa refleje
+     la realidad — la proporción verdadera podría ser mayor o menor (ej: "la cifra de
+     morosidad figuraba en los reportes, pero con tantos expedientes a medio llenar su
+     exactitud estaba en duda").
    - *Ventana temporal ambigua:* no existía consenso sobre el periodo de observación
      necesario para declarar el evento (ej: "¿30 días de inactividad? ¿90 días?
      Cada área usaba un criterio distinto").
    Elige la fricción que mejor encaje con el dilema generado en `{architect_output}`.
+
+   **Coherencia obligatoria con Exhibit 2:** la tasa de ocurrencia del evento SIEMPRE
+   pertenece a "lo que SÍ se sabe" — el Exhibit 2 la imprime explícitamente. Al separar
+   "lo que se sabe" vs "lo que no se sabe" (sección "Problema Central"), NUNCA coloques la
+   proporción ni la magnitud reportada del evento bajo "lo que no se sabe". Lo que está en
+   duda es su confiabilidad o validez, jamás su existencia ni su valor reportado — esto
+   aplica bajo CUALQUIERA de las fricciones anteriores.
 
 2. **Prohibición de jerga técnica:** NUNCA escribas "clasificación", "modelo
    predictivo", "AUC", "precisión", "recall", "umbral" ni "threshold".
