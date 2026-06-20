@@ -11,14 +11,16 @@ defecto que queda es de COHERENCIA pedagógica (la señal proviene de `churn_rat
 dominio), NO un fallo de gate. El de-churn real del generador determinista quedó DIFERIDO
 por su alto riesgo (snapshots/hashes congelados + parte más sensible del repo).
 
-Este módulo NO cambia comportamiento. Es el guardarraíl que FIJA el invariante que hoy
-funciona: el target de contrato no-churn de un caso ml_ds+clasificación es binario, con
-ambas clases y con señal medible. Si una regresión futura rompe el path no-churn (la falla
-REAL que el issue temía), este test se pone rojo.
+ACTUALIZACIÓN Issue #382 — el de-churn del DATO YA está implementado: la cadena ahora corre
+el sibling determinista `_enforce_mlds_classification_schema` tras el spine business, de modo
+que el target no-churn deriva su señal de un driver de DOMINIO (no de `churn_rate`) y el template
+churn/SaaS se elimina. Este módulo conserva el invariante original ("target binario con señal")
+y lo ENDURECE con `test_signal_comes_from_domain_not_churn`: la señal debe ser medible usando SOLO
+las features de dominio del contrato (con las columnas churn excluidas), confirmando que ya NO
+proviene de churn residual.
 
-Deliberado: NO asierta presencia de `churn_rate` ni que la señal venga de churn. Solo el
-invariante "target binario con señal", de modo que siga verde si algún día se implementa el
-de-churn real (target ← driver de dominio) pero falle si el target degrada a ruido.
+El invariante original "hay señal" sigue siendo agnóstico a la fuente (sobrevive a cualquier
+re-fuente futura); el guard añadido fija explícitamente la fuente de DOMINIO.
 
 Determinista y sin LLM: opera sobre los helpers puros de `case_generator.graph`. No hace
 I/O de DB propio, pero corre dentro de la suite backend estándar — importar `graph` trae el
@@ -38,10 +40,12 @@ from sklearn.preprocessing import StandardScaler
 
 from case_generator.graph import (
     _CHURN_TEMPLATE_COLUMNS,
+    _MLDS_SAAS_TEMPLATE_COLUMNS,
     _align_ml_ds_classification_target,
     _augment_schema_with_contract,
     _build_fallback_schema,
     _enforce_business_classification_schema,
+    _enforce_mlds_classification_schema,
     _generate_dataset_from_schema,
 )
 
@@ -84,6 +88,12 @@ def _build_mlds_nonchurn_schema() -> dict:
     schema = _augment_schema_with_contract(schema, _FRAUD_CONTRACT)
     # business-only; NOOP para ml_ds — se incluye por fidelidad de la cadena.
     schema, _notes, _biz_target = _enforce_business_classification_schema(
+        schema, _FRAUD_CONTRACT, profile="ml_ds", primary_family="clasificacion"
+    )
+    # Issue #382 — el sibling ml_ds de-churna la señal: re-apunta el target a un driver de
+    # DOMINIO y elimina el template churn/SaaS. Es el paso REAL que graph.py:schema_designer
+    # corre tras el spine business (con enabled=settings.mlds_dechurn_signal).
+    schema = _enforce_mlds_classification_schema(
         schema, _FRAUD_CONTRACT, profile="ml_ds", primary_family="clasificacion"
     )
     return schema
@@ -158,11 +168,10 @@ def test_target_has_measurable_signal_and_noise_does_not() -> None:
     )
     df = pd.DataFrame(rows)
     y = df[_TARGET].astype(int).to_numpy()
-    # AUC sobre TODAS las features numéricas — espeja al EJECUTOR real (que NO descarta
-    # churn_rate al entrenar), así el guard predice el resultado del gate del ejecutor en vez
-    # de una métrica domain-only frágil. Hoy la señal proviene de churn_rate (driver del
-    # target); tras un de-churn real vendría del driver de dominio. El invariante "hay señal"
-    # es agnóstico a la fuente — deliberado: el guard pin "el target NO degrada a ruido".
+    # AUC sobre TODAS las features numéricas presentes — espeja al EJECUTOR real. Tras el
+    # de-churn de #382 la señal proviene del driver de DOMINIO (las columnas churn ya no están
+    # en el schema). El invariante "hay señal" es agnóstico a la fuente — el guard pin "el
+    # target NO degrada a ruido"; `test_signal_comes_from_domain_not_churn` fija la fuente.
     X = df.select_dtypes(include="number").drop(columns=[_TARGET]).fillna(0.0)
 
     real_auc = _cv_auc(X, y)
@@ -183,4 +192,65 @@ def test_target_has_measurable_signal_and_noise_does_not() -> None:
     )
     assert real_auc - noise_auc >= 0.15, (
         f"señal del target ({real_auc:.3f}) no se separa del ruido ({noise_auc:.3f})"
+    )
+
+
+# ─────────────────────────────────────────────────────────
+# Issue #382 — tightening: la señal viene del DOMINIO, no de churn residual
+# ─────────────────────────────────────────────────────────
+
+
+def test_churn_and_saas_template_absent_after_dechurn() -> None:
+    """El de-churn elimina el template churn/SaaS de un caso ml_ds no-retención y re-apunta
+    el target a un driver de DOMINIO, marcándolo is_domain_target."""
+    schema = _build_mlds_nonchurn_schema()
+    names = {c["name"] for c in schema["columns"]}
+    leftover = names & (_CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS)
+    assert not leftover, f"columnas churn/SaaS sobrevivieron al de-churn: {sorted(leftover)}"
+
+    tgt = _col(schema, _TARGET)
+    assert tgt is not None
+    driver = tgt["dependency"]["depends_on"]
+    contract_features = {f["name"] for f in _FRAUD_CONTRACT["feature_columns"]}
+    assert driver != "churn_rate", "el target sigue derivando de churn_rate tras el de-churn"
+    assert driver in contract_features or driver == "domain_driver_score", (
+        f"el target debe derivar de una feature de dominio, no de '{driver}'"
+    )
+    assert tgt.get("is_domain_target") is True
+
+
+def test_signal_comes_from_domain_not_churn() -> None:
+    """TIGHTENING #382: la señal del target es medible usando SOLO las features de DOMINIO.
+
+    Antes del de-churn el AUC domain-only era ~0.5 (azar) porque la señal vivía en churn_rate;
+    tras el de-churn el driver es una feature de dominio → AUC domain-only ∈ [0.55, 0.99]. El
+    control negativo (ruido) sigue por debajo del piso → la aserción NO es tautológica.
+    """
+    schema = _build_mlds_nonchurn_schema()
+    rows = _generate_dataset_from_schema(
+        schema, profile="ml_ds", target_event_rate=_RATE, target_col_name=_TARGET
+    )
+    df = pd.DataFrame(rows)
+    y = df[_TARGET].astype(int).to_numpy()
+    # X = SOLO features de dominio del contrato; excluye explícitamente cualquier columna
+    # churn/SaaS por si una regresión la reintrodujera.
+    domain_cols = [
+        f["name"] for f in _FRAUD_CONTRACT["feature_columns"]
+        if f["name"] in df.columns
+        and f["name"] not in (_CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS)
+    ]
+    assert domain_cols, "no quedó ninguna feature de dominio para medir la señal"
+    X_domain = df[domain_cols].fillna(0.0)
+    domain_auc = _cv_auc(X_domain, y)
+    assert _AUC_FLOOR <= domain_auc <= 0.99, (
+        f"señal domain-only AUC {domain_auc:.3f} fuera de [{_AUC_FLOOR}, 0.99] — el de-churn no "
+        "trasladó la señal al dominio (o introdujo leakage)."
+    )
+
+    rng = np.random.default_rng(2382)
+    k = int(round(_RATE * len(y)))
+    noise = np.zeros(len(y), dtype=int)
+    noise[rng.choice(len(y), size=k, replace=False)] = 1
+    assert _cv_auc(X_domain, noise) < _AUC_FLOOR, (
+        "control negativo inválido: ruido alcanzó el piso sobre las features de dominio"
     )

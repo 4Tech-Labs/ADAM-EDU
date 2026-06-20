@@ -97,17 +97,17 @@ _EDA_FEATURE_ENGINEERING_BLOCK_ML_DS = """\
 ## 3. Feature Engineering para Modelos Predictivos
 Explica 4-5 variables derivadas orientadas a la clasificación binaria del evento objetivo,
 justificando cada una con su relevancia para predecir `categoria` con el algoritmo seleccionado.
-Fórmulas simples:
-- engagement_decay_rate: tasa de caída de engagement en la ventana de observación.
+Fórmulas simples (ejemplos genéricos — adáptalos al dominio del caso):
+- intensity_rate: frecuencia o intensidad del comportamiento clave en la ventana de observación.
 - risk_score: score compuesto de factores de riesgo ponderados por historial.
-- support_intensity_index: frecuencia de contacto con soporte / antigüedad del cliente.
-- payment_stress_index: ratio de fallos de pago sobre intentos de pago totales.
+- recency_index: tiempo transcurrido desde el último evento relevante del caso.
+- anomaly_ratio: proporción de eventos anómalos sobre el total observado.
 
 **ADVERTENCIA DE FUGA TEMPORAL (Leakage Guard):**
-Variables como `days_since_last_login` y `payment_failures` pueden introducir fuga
-temporal si el valor observado ocurre después del evento objetivo. Verificar la ventana
-de observación antes de incluirlas: el valor debe corresponder a un momento anterior a la
-fecha del evento objetivo. Si hay duda, excluir la variable del entrenamiento inicial.
+Una variable derivada puede introducir fuga temporal si su valor observado ocurre DESPUÉS del
+evento objetivo. Verificar la ventana de observación antes de incluirla: el valor debe corresponder
+a un momento anterior a la fecha del evento objetivo. Si hay duda, excluir la variable del
+entrenamiento inicial.
 
 **Umbral pedagógico para el modelo:**
 AUC-ROC >= 0.70 es el umbral pedagógico mínimo para este caso. Si el dataset muestra un

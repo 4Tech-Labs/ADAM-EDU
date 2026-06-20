@@ -4,12 +4,20 @@ Canonical home for SCHEMA_DESIGNER_PROMPT_CLASSIFICATION.  Mirrors the
 ``M1_clasificacion/`` subfolder pattern so every ADAM module has its own
 per-family prompt namespace.
 
-Specialised for binary classification (churn prediction):
-- 18 fixed columns for ml_ds profile (cols 1-12 shared; cols 13-18 classification-specific)
-- ``categoria`` is always ``int`` (0/1) with a ``dependency`` on ``churn_rate``
-  so LR/RF receive a ~70%-signal binary target (AUC-ROC ≥ 0.70) instead of a
-  random categorical string.
+Specialised for binary classification — dilemma-aware (Issue #382 de-churn):
+- RETENTION/CHURN dilemma: an 18-column SaaS template (cols 1-12 shared; 13-18
+  classification-specific) whose binary target derives its signal from ``churn_rate``.
+- NON-retention DOMAIN dilemma (fraud, default, approval, late-delivery…): a CONTRACT-FIRST
+  schema whose binary target derives from a DOMAIN ``feature_columns`` entry, NOT ``churn_rate``,
+  and which omits the churn/SaaS template columns.
+- The binary target is always ``int`` (0/1) with a ``dependency`` so LR/RF receive a
+  signal-bearing target (AUC-ROC ≥ 0.70) instead of a random categorical string.
 - n_rows = {max_rows} (600 for ml_ds) → Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV.
+
+The deterministic post-LLM sibling ``_enforce_mlds_classification_schema`` (graph.py) is the
+GUARANTEE for the de-churned signal: for a non-retention ml_ds target it re-points the driver to
+a domain feature and strips the churn/SaaS columns regardless of what the LLM emits. This prompt
+makes the happy path emit the right shape; the sibling enforces it.
 
 Do NOT diverge the 7 required placeholders or the REGLAS DE COBERTURA DEL CONTRATO
 section — both are validated by test_m2_clasificacion_dispatch.py.
@@ -38,7 +46,7 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
 
 ## ESTRUCTURA DE OUTPUT OBLIGATORIA (JSON puro, sin markdown, sin claves extra)
 {{
-  "columns": [ ... 18 columnas exactas para ml_ds, 10 para business — ver contratos abajo ... ],
+  "columns": [ ... ml_ds según el dilema del caso (ver contratos abajo), 10 para business ... ],
   "n_rows": <VER REGLA DE FILAS ABAJO>,
   "time_granularity": "monthly",
   "constraints": {{
@@ -50,7 +58,7 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
     "tolerance_pct": 0.05,
     "revenue_column": "revenue"
   }},
-  "reasoning_summary": "Dataset de clasificación binaria (predicción de churn) — columnas fijas por contrato de familia clasificacion. Target: categoria (int 0/1) correlado con churn_rate (noise_factor=0.30)."
+  "reasoning_summary": "Dataset de clasificación binaria alineado al dilema del caso (contrato dataset_schema_required). Target binario (int 0/1) correlado con un driver del DOMINIO; churn_rate solo si el dilema es de retención."
 }}
 
 ## Regla de filas (n_rows)
@@ -71,19 +79,32 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
   retenidos en el mes X. Son obligatorias para el heatmap de análisis de cohortes.
   Asegúrate de que range_min/max respeten: retention_m1 > retention_m3 > retention_m6 > retention_m12.)
 
-## CONTRATO DE COLUMNAS PARA CLASIFICACION (ml_ds) — 18 columnas exactas
+## CONTRATO DE COLUMNAS PARA CLASIFICACION (ml_ds)
 
-Dos casos según el valor de `dataset_contract_block` arriba:
+El esquema ml_ds depende del DILEMA del caso (mira `target_column` en el contrato de arriba):
 
-**Caso A — contrato null o {{}} (sin dataset_schema_required):**
-DEBES generar EXACTAMENTE estas 18 columnas en este orden. No añadas columnas fuera de esta lista.
+**Caso DOMINIO no-retención** — target tipo `fraud_flag`, `default_60d`, `approval_flag`,
+`late_delivery_flag` (cualquier evento que NO sea churn/retención). CONTRACT-FIRST; emite, en este orden:
+1. la base financiera: `period` (str), `revenue` (float, trend up), `costs` (float, trend up), `margin_pct` (float, 10–35);
+2. el `target_column` del contrato como binaria int (range_min=0, range_max=1) cuya `dependency.depends_on`
+   sea UNA `feature_columns` numérica (int/float) NO marcada `is_leakage_risk` — la señal del target proviene del
+   DOMINIO del caso, NUNCA de `churn_rate`;
+3. TODAS las `feature_columns` del contrato (con su `name` y `type`/dtype exactos);
+4. si el contrato no trae ninguna feature numérica usable como driver, añade UNA columna numérica de dominio
+   (float 0–1) y haz que el target dependa de ella.
+NO incluyas `churn_rate`, `nps`, `retention_m1/m3/m6/m12` ni columnas SaaS (`customer_ltv`, `engagement_score`,
+`payment_failures`, `support_tickets_count`, `days_since_last_login`, `plan_tier`, `monthly_usage_pct`):
+no pertenecen a un dilema de fraude/mora/aprobación/entrega.
 
-**Caso B — contrato activo (dataset_schema_required no vacío):**
-Aplica las REGLAS DE COBERTURA DEL CONTRATO de arriba primero (cubre target + feature_columns).
-Usa las 18 columnas de abajo como base; completa con las columnas del contrato que no estén ya cubiertas.
-Puedes superar 18 columnas si el contrato lo requiere — la cobertura del contrato tiene prioridad.
+**Caso RETENCIÓN/CHURN** — target tipo `churn_flag`, `customer_abandon_flag`, `retention_*` — o contrato
+`null`/`{{}}` (sin dominio que inferir): usa el template SaaS de 18 columnas de abajo (el target `categoria`
+o el del contrato deriva de `churn_rate`). Con contrato activo aplica primero las REGLAS DE COBERTURA
+(cubre target + feature_columns), usa las 18 columnas como base y completa con las del contrato no cubiertas
+(puedes superar 18). Sin contrato genera EXACTAMENTE estas 18 columnas en este orden.
 
-En AMBOS casos: NUNCA uses type="str" para "categoria" — el notebook M3 requiere int para el target binario.
+En TODOS los casos: el target binario es type="int" (0/1), NUNCA type="str" — el notebook M3 lo requiere int.
+La capa determinista post-LLM reconcilia y limpia el esquema para garantizar la coherencia del dominio;
+emite el mejor esquema que puedas según estas reglas.
 
 | # | name                    | type    | range_min | range_max | nullable | depends_on       | relationship | noise_factor |
 |---|-------------------------|---------|-----------|-----------|----------|------------------|--------------|--------------|
