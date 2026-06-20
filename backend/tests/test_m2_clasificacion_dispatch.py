@@ -308,7 +308,8 @@ def test_select_eda_text_blocks_contract():
     ml_ds = select_eda_text_blocks("ml_ds")
     assert set(business) == expected_keys
     assert set(ml_ds) == expected_keys
-    assert ml_ds["event_label"] == "el churn"
+    # Issue #346 — ml_ds is now domain-general too (was "el churn").
+    assert ml_ds["event_label"] == "el evento objetivo"
     assert business["event_label"] == "el evento objetivo"
     # Default / unknown / None → business (the safe non-technical variant).
     assert select_eda_text_blocks(None) == business
@@ -321,9 +322,8 @@ def test_eda_text_ml_ds_preserves_technical_rigor():
     rendered = _render_classification_eda("ml_ds")
     for token in _DS_JARGON_TOKENS:
         assert token in rendered, f"ml_ds render lost technical token: {token!r}"
-    # imbalance-ratio formula and class labels intact.
+    # imbalance-ratio formula intact after the #346 de-churn.
     assert "max(count_cat0, count_cat1)" in rendered
-    assert "churn" in rendered  # ml_ds keeps the churn framing
 
 
 def test_eda_text_business_has_no_ds_jargon():
@@ -338,6 +338,15 @@ def test_eda_text_business_not_churn_hardcoded():
     event (fraude, impago, entrega tardía…)."""
     rendered = _render_classification_eda("business").lower()
     assert "churn" not in rendered, "business render still hardcodes 'churn'"
+    assert "el evento objetivo" in rendered
+
+
+def test_eda_text_ml_ds_not_churn_hardcoded():
+    """Issue #346 — the ml_ds render must not hardcode 'churn' either. The EDA narrative
+    is now domain-general (fraude, impago, entrega tardía…), mirroring business; only the
+    DS rigor (kept by test_eda_text_ml_ds_preserves_technical_rigor) distinguishes it."""
+    rendered = _render_classification_eda("ml_ds").lower()
+    assert "churn" not in rendered, "ml_ds render still hardcodes 'churn'"
     assert "el evento objetivo" in rendered
 
 
@@ -358,3 +367,39 @@ def test_eda_text_format_smoke_both_profiles():
                 f"placeholder {{{key}}} survived .format() for profile={profile} — "
                 "an injected block must not contain nested placeholders"
             )
+
+
+# ── Issue #346 — EDA Socratic questions (M2). Unlike eda_text (per-profile injected
+# blocks), this is a SINGLE shared template; the de-churn covers the whole P1/P2 body so
+# NEITHER profile renders churn. There is no byte-identical-business contract here. ──
+
+def _render_classification_eda_questions(profile: str) -> str:
+    """Render EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION exactly as eda_questions_generator
+    does (base context + eda_context + chart_manifest)."""
+    return EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION.format(
+        chart_manifest="[]",
+        eda_context="eda",
+        pregunta_eje="pregunta",
+        case_id="c1",
+        student_profile=profile,
+        primary_family="clasificacion",
+        output_language="Spanish",
+    )
+
+
+def test_eda_questions_classification_not_churn():
+    """Issue #346 — the shared EDA-questions template must not hardcode churn for EITHER
+    profile (acceptance criterion: no 'churn rate', no 'churners', no 'churn')."""
+    for profile in ("business", "ml_ds"):
+        rendered = _render_classification_eda_questions(profile).lower()
+        assert "churn" not in rendered, f"{profile!r} EDA-questions render still hardcodes 'churn'"
+        assert "churn rate" not in rendered, f"{profile!r} EDA-questions render still cites 'churn rate'"
+        assert "churners" not in rendered, f"{profile!r} EDA-questions render still names 'churners'"
+
+
+def test_eda_questions_classification_preserves_pedagogy():
+    """De-churning the questions must NOT degrade the DS rigor: the Accuracy Paradox,
+    Precision-Recall trade-off, F-beta, AUC-ROC and threshold framing must remain."""
+    rendered = _render_classification_eda_questions("ml_ds").lower()
+    for token in ("accuracy paradox", "precision-recall", "f-beta", "auc-roc", "threshold"):
+        assert token in rendered, f"EDA-questions render lost pedagogy token: {token!r}"
