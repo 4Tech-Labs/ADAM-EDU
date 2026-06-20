@@ -165,6 +165,8 @@ from case_generator.narrative_grounding import (
     validate_narrative_grounding,
 )
 from case_generator.m1_grounding import (
+    detect_exhibit2_completeness_row,
+    validate_exhibit2_event_rate,
     validate_narrative_exhibit_coherence,
     validate_questions_exhibit_coherence,
 )
@@ -996,6 +998,18 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
                 "(#301): revisar que el nombre refleje el evento del dilema."
             )
 
+        # Issue #372 — verifica que Exhibit 2 imprima la fila de tasa de ocurrencia del
+        # evento con el MISMO número que `target_event_rate` (acople F1). Reprompt-once-
+        # then-DEGRADE targeted al anexo; gateado a ml_ds+clf, best-effort, nunca lanza. La
+        # fila de completitud es warning-only. No toca el prompt → SHA256 intacto; no-op
+        # byte-idéntico para business y otras familias.
+        anexo_operativo_final = _invoke_m1_exhibit2_coherence(
+            llm=llm,
+            state=state,
+            anexo_operativo=result.anexo_operativo,
+            contract=contract_dict,
+        )
+
         return {
             "current_agent": "case_architect",
             "titulo": result.titulo,
@@ -1005,7 +1019,7 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             "pregunta_eje": pregunta_eje,
             "doc1_instrucciones": result.instrucciones_estudiante,
             "doc1_anexo_financiero": result.anexo_financiero,
-            "doc1_anexo_operativo": result.anexo_operativo,
+            "doc1_anexo_operativo": anexo_operativo_final,
             "doc1_anexo_stakeholders": result.anexo_stakeholders,
             # downstream nodes leen state["dataset_schema_required"] y degradan
             # gracefully al comportamiento previo si es None.
@@ -1184,6 +1198,121 @@ def _apply_m1_questions_exhibit_coherence(
             extra={"node": "case_questions", "case_id": state.get("case_id")},
         )
         return preguntas_dict
+
+
+# ─────────────────────────────────────────────────────────
+# Issue #372 — Exhibit 2 mandatory-row coherence (ml_ds + clasificacion)
+# Runs INSIDE case_architect (the owner of anexo_operativo + target_event_rate), unlike
+# #360 which runs in the writer/questions fan-out. Only the architect can fix a missing
+# row. Reprompt-once-then-DEGRADE; best-effort; never raises. The PRIMARY trigger is the
+# deterministic F1 coupling; the completeness row is heuristic → warning-only (never
+# reprompts). No prompt-constant edit → _MLDS_ARCHITECT_PROMPT_SHA256 stays frozen.
+# ─────────────────────────────────────────────────────────
+# A corrected anexo shorter than this fraction of the original is treated as a gutted
+# rewrite (rate row added at the cost of dropping operational rows) and rejected, so the
+# writer/questions never read a thinner Exhibit 2 than the architect produced.
+_M1_EXHIBIT2_MIN_REPROMPT_RATIO = 0.6
+
+
+def _m1_exhibit2_reprompt(anexo_operativo: str, rate_pct: float) -> str:
+    """Focused, self-contained reprompt to rewrite the COMPLETE Exhibit 2 anexo (#372).
+
+    Asks for the full anexo (heading + every row), changing only what's needed to print the
+    rate row, so the corrected text replaces ``doc1_anexo_operativo`` at comparable length
+    (the length-floor guard at the call site rejects a gutted rewrite). Carries the EXACT
+    required number (``rate_pct``) so the correction is deterministic, not a vague "you are
+    incoherent". Concatenated at runtime (never ``.format`` — the anexo may carry ``{}``) and
+    is a runtime string, so it never touches the frozen architect prompt.
+    """
+    return (
+        "\n\n# CORRECCIÓN OBLIGATORIA DE EXHIBIT 2 (Operativo)\n"
+        "El Exhibit 2 (Operativo) que generaste NO imprime la fila obligatoria de calidad "
+        "de datos «Tasa de ocurrencia del evento objetivo» con el número correcto. Reescribe "
+        "el Exhibit 2 (Operativo) COMPLETO — su encabezado y TODAS sus filas — corrigiendo "
+        "ÚNICAMENTE lo necesario para que incluya una fila de calidad de datos cuya tasa de "
+        f"ocurrencia del evento sea EXACTAMENTE {rate_pct:.1f} % (debe coincidir con la "
+        "prevalencia del dataset). Conserva la fila de completitud de campos críticos y toda "
+        "otra fila operativa existente. Devuelve SOLO el markdown del Exhibit 2 (Operativo) "
+        "(encabezado + tabla), sin otros Exhibits ni texto adicional.\n\n"
+        "Exhibit 2 actual:\n"
+        f"{anexo_operativo}\n"
+    )
+
+
+def _invoke_m1_exhibit2_coherence(
+    *, llm: Any, state: ADAMState, anexo_operativo: str, contract: dict | None
+) -> str:
+    """Validate + reprompt-once-then-DEGRADE the Exhibit 2 rate row (Issue #372).
+
+    Gated to ml_ds + clasificacion (byte-identical no-op otherwise). PRIMARY check is the
+    deterministic F1 coupling: a miss triggers ONE targeted text reprompt that rewrites the
+    full Exhibit 2 with the exact number; the rewrite is accepted only if it now prints the
+    rate AND preserves the anexo's bulk, otherwise the original is kept. The completeness row
+    is a SECONDARY heuristic that only logs a warning — it NEVER drives the reprompt.
+    Best-effort: any internal error keeps the original anexo and the job continues. Never raises.
+    """
+    if not _is_ml_ds_classification(state):
+        return anexo_operativo
+    try:
+        rate = contract.get("target_event_rate") if isinstance(contract, dict) else None
+
+        # SECONDARY heuristic — warning-only, never reprompt (D2).
+        completeness_violations = detect_exhibit2_completeness_row(anexo_operativo)
+        if completeness_violations:
+            logger.warning(
+                "[case_architect] Exhibit 2 sin fila de completitud reconocible "
+                "(heurística, warning-only)",
+                extra={
+                    "node": "case_architect",
+                    "violations": completeness_violations,
+                    "case_id": state.get("case_id"),
+                },
+            )
+
+        # PRIMARY deterministic F1 coupling — reprompt-worthy.
+        violations = validate_exhibit2_event_rate(anexo_operativo, rate)
+        if not violations:
+            return anexo_operativo
+        if not isinstance(rate, (int, float)) or isinstance(rate, bool):
+            return anexo_operativo  # unreachable when violations≠[]; satisfies typing
+        rate_pct = float(rate) * 100.0
+        print(
+            f"[case_architect] Exhibit 2 no imprime la tasa F1 ({rate_pct:.1f} %): "
+            f"{violations}. Reprompt targeted (1/1)."
+        )
+        corrected = sanitize_markdown(
+            _extract_text(llm.invoke(_m1_exhibit2_reprompt(anexo_operativo, rate_pct)))
+        )
+        # Accept ONLY a rewrite that (a) now prints the rate AND (b) preserves the anexo's
+        # bulk. A gutted rewrite that satisfies the rate by dropping operational rows is
+        # rejected — we keep the original (richer, only rate-incoherent) anexo instead of
+        # shipping a thinner one downstream. F1 presence is binary, so there is no
+        # "partially better" pass to salvage.
+        corrected_ok = (
+            bool(corrected)
+            and not validate_exhibit2_event_rate(corrected, rate)
+            and len(corrected) >= int(len(anexo_operativo) * _M1_EXHIBIT2_MIN_REPROMPT_RATIO)
+        )
+        if corrected_ok:
+            print("[case_architect] Reprompt coherencia Exhibit 2 F1 OK")
+            return corrected
+        logger.warning(
+            "[case_architect] coherencia Exhibit 2 F1 no corregida tras reprompt — "
+            "se conserva el anexo original",
+            extra={
+                "node": "case_architect",
+                "violations": violations,
+                "case_id": state.get("case_id"),
+            },
+        )
+        return anexo_operativo
+    except Exception as exc:  # best-effort — a validator bug must never fail M1
+        logger.warning(
+            "[case_architect] validador coherencia Exhibit 2 F1 falló (best-effort): %s",
+            exc,
+            extra={"node": "case_architect", "case_id": state.get("case_id")},
+        )
+        return anexo_operativo
 
 
 # ─────────────────────────────────────────────────────────
