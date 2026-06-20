@@ -12,7 +12,7 @@ Covers:
 7.  EDA_QUESTIONS_PROMPT_BY_FAMILY["clasificacion"] resolves to
     EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION (not the generic) and is non-empty
 8.  Fallback: non-clasificacion family falls back to generic prompt
-9.  EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION contains exactly the 14 required placeholders
+9.  EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION contains exactly the 19 required placeholders
 10. SCHEMA_DESIGNER_PROMPT_CLASSIFICATION contains exactly the 7 required placeholders
 11. EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION contains exactly the 7 required
     placeholders (guards against KeyError in eda_questions_generator node at runtime)
@@ -212,11 +212,11 @@ def test_eda_questions_classification_format_smoke():
 
 
 def test_eda_text_analyst_placeholder_contract():
-    """EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION contains exactly the 14 required placeholders.
+    """EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION contains exactly the 19 required placeholders.
 
     Guards against accidental extra {placeholder} expressions that would cause a
     KeyError in graph.py eda_text_analyst() at runtime when prompt.format(**context)
-    is called with the fixed 14-key context dict.
+    is called with the fixed 19-key context dict.
     """
     # Use string.Formatter().parse() instead of a regex so that format-spec
     # placeholders ({foo:,.0f}) and conversion placeholders ({bar!r}) are also
@@ -247,6 +247,8 @@ def test_eda_text_analyst_placeholder_contract():
         "class_balance_block",
         "target_distribution_block",
         "feature_engineering_block",
+        # Issue #383 — real target column name threaded into the body
+        "target_column_name",
     }
     assert placeholders == expected, (
         f"Placeholder contract violated for EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION. "
@@ -272,9 +274,10 @@ _DS_JARGON_TOKENS = (
 )
 
 
-def _render_classification_eda(profile: str) -> str:
+def _render_classification_eda(profile: str, target_name: str = "categoria") -> str:
     """Render EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION exactly as eda_text_analyst does:
-    base 14-key context + the 4 profile-gated keys from select_eda_text_blocks()."""
+    base 14-key context + the 4 profile-gated keys from select_eda_text_blocks() + the
+    Issue #383 target_column_name (body) pre-substituted into the ml_ds blocks."""
     ctx = {
         "dilema_hypotheses": "hipotesis",
         "dataset_instruction": "DATASET_AVAILABLE",
@@ -290,8 +293,9 @@ def _render_classification_eda(profile: str) -> str:
         "operational_exhibit": "exhibit operativo",
         "case_id": "case-1",
         "output_depth": "visual_plus_technical",
+        "target_column_name": target_name,
     }
-    ctx.update(select_eda_text_blocks(profile))
+    ctx.update(select_eda_text_blocks(profile, target_name))
     return EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION.format(**ctx)
 
 
@@ -367,6 +371,120 @@ def test_eda_text_format_smoke_both_profiles():
                 f"placeholder {{{key}}} survived .format() for profile={profile} — "
                 "an injected block must not contain nested placeholders"
             )
+
+
+# ── Issue #383 — parametrize the M2 EDA target column name (ml_ds+clf). The data layer
+# (_align_ml_ds_classification_target) renames the fixed `categoria` binary to the contract
+# domain name BEFORE eda_text_analyst runs; the narrative must cite that real name. business
+# stays byte-identical (always "categoria"); the ml_ds blocks pre-substitute via str.replace. ──
+
+def _mlds_clf_state(
+    *,
+    contract_target=None,
+    dataset_cols=None,
+    profile="ml_ds",
+    algoritmos=("Logistic Regression",),
+):
+    """Minimal graph state for _resolve_eda_target_name() unit tests."""
+    state: dict = {"studentProfile": profile, "algoritmos": list(algoritmos)}
+    if contract_target is not None:
+        state["dataset_schema_required"] = {
+            "target_column": {
+                "name": contract_target,
+                "role": "classification_target",
+                "dtype": "int",
+            }
+        }
+    if dataset_cols is not None:
+        state["doc7_dataset"] = [{col: 0 for col in dataset_cols}]
+    return state
+
+
+def test_eda_text_ml_ds_renames_target_to_contract_name():
+    """ml_ds render cites the real contract column name, never the literal `categoria`."""
+    rendered = _render_classification_eda("ml_ds", "fraud_flag")
+    assert "fraud_flag" in rendered
+    assert "categoria" not in rendered, "ml_ds render still leaks the literal 'categoria'"
+    # Pedagogy preserved: the imbalance formula variables are NOT the target name.
+    assert "max(count_cat0, count_cat1)" in rendered
+    for token in _DS_JARGON_TOKENS:
+        assert token in rendered, f"ml_ds render lost technical token: {token!r}"
+
+
+def test_eda_text_ml_ds_default_target_is_categoria():
+    """Reversibility / safety net: with the default target the render is the pre-#383
+    ml_ds text (str.replace('categoria','categoria') is a no-op)."""
+    rendered = _render_classification_eda("ml_ds")  # default target_name="categoria"
+    assert "`categoria`" in rendered
+    assert "fraud_flag" not in rendered
+    assert "max(count_cat0, count_cat1)" in rendered
+
+
+def test_eda_text_blocks_business_invariant_to_target_name():
+    """The target name never affects business: business blocks carry no `categoria`
+    token, so the selector output is identical regardless of the argument."""
+    assert select_eda_text_blocks("business", "fraud_flag") == select_eda_text_blocks("business")
+    assert select_eda_text_blocks("business", "fraud_flag") == select_eda_text_blocks("business", "categoria")
+
+
+def test_eda_text_business_render_unaffected_by_target():
+    """business render (gate always passes 'categoria') must keep the literal and never
+    leak a domain target name — the byte-identical guarantee at the node level."""
+    rendered = _render_classification_eda("business", "categoria")
+    assert "`categoria`" in rendered
+    assert "fraud_flag" not in rendered
+
+
+def test_resolve_eda_target_name_business():
+    """business → literal 'categoria' (shared body stays byte-identical)."""
+    state = _mlds_clf_state(profile="business", contract_target="abandono", dataset_cols=["abandono"])
+    assert _graph._resolve_eda_target_name(state) == "categoria"
+
+
+def test_resolve_eda_target_name_mlds_clf_happy():
+    """ml_ds+clf, contract name present in the dataset → the contract name."""
+    state = _mlds_clf_state(contract_target="fraud_flag", dataset_cols=["fraud_flag", "amount"])
+    assert _graph._resolve_eda_target_name(state) == "fraud_flag"
+
+
+def test_resolve_eda_target_name_mlds_clf_align_collision():
+    """ml_ds+clf, _align skipped the rename (collision) so the dataset still has
+    'categoria' → resolve to 'categoria' to match the data the LLM sees."""
+    state = _mlds_clf_state(contract_target="fraud_flag", dataset_cols=["categoria", "amount"])
+    assert _graph._resolve_eda_target_name(state) == "categoria"
+
+
+def test_resolve_eda_target_name_mlds_clf_invalid_contract_name():
+    """ml_ds+clf but the contract target name is not a valid identifier
+    (_safe_contract_target_name → '') → safety-net 'categoria'."""
+    state = _mlds_clf_state(contract_target="fraud flag", dataset_cols=["categoria"])
+    assert _graph._resolve_eda_target_name(state) == "categoria"
+
+
+def test_resolve_eda_target_name_mlds_unresolved_family():
+    """KEY GUARD: ml_ds with empty algoritmos is treated as clasificacion by both the
+    prompt selection and _align (default_unresolved_ml_ds_to_classification=True). The
+    resolver must mirror that, else the narrative keeps 'categoria' while the column was
+    renamed → the #383 bug would persist for that cohort."""
+    state = _mlds_clf_state(
+        contract_target="fraud_flag", dataset_cols=["fraud_flag"], algoritmos=()
+    )
+    assert _graph._resolve_eda_target_name(state) == "fraud_flag"
+
+
+def test_resolve_eda_target_name_mlds_regresion():
+    """ml_ds + regresion is not classification → literal 'categoria' (and the regresion
+    family uses the generic prompt that ignores the key anyway)."""
+    state = _mlds_clf_state(
+        contract_target="precio", dataset_cols=["precio"], algoritmos=("Linear Regression",)
+    )
+    assert _graph._resolve_eda_target_name(state) == "categoria"
+
+
+def test_resolve_eda_target_name_mlds_clf_no_dataset_sample():
+    """ml_ds+clf with no dataset rows yet → trust the contract name."""
+    state = _mlds_clf_state(contract_target="fraud_flag", dataset_cols=None)
+    assert _graph._resolve_eda_target_name(state) == "fraud_flag"
 
 
 # ── Issue #346 — EDA Socratic questions (M2). Unlike eda_text (per-profile injected

@@ -136,7 +136,10 @@ sensación de certeza.
 """
 
 
-def select_eda_text_blocks(student_profile: str | None) -> dict[str, str]:
+def select_eda_text_blocks(
+    student_profile: str | None,
+    target_column_name: str = "categoria",
+) -> dict[str, str]:
     """Return the profile-gated M2 classification blocks + event label.
 
     Mirrors the M3 ``{lr_business_block}`` injection: ``eda_text_analyst`` merges
@@ -146,13 +149,27 @@ def select_eda_text_blocks(student_profile: str | None) -> dict[str, str]:
       formula, Leakage Guard) preserved verbatim; event label ``"el evento objetivo"``.
     - anything else (``business`` default) → managerial language, zero DS jargon,
       no hardcoded "churn"; event label ``"el evento objetivo"``.
+
+    ``target_column_name`` (Issue #383) is the real dataset target column name.
+    ``_align_ml_ds_classification_target`` renames the fixed ``categoria`` binary to
+    the contract name (e.g. ``fraud_flag``) BEFORE this node runs, so the ml_ds blocks
+    must cite that name, not the literal ``categoria``. The blocks are placeholder-free
+    (a ``{...}`` inside them would NOT survive the single ``.format(**context)`` pass —
+    see module docstring), so the name is PRE-substituted here via ``str.replace`` rather
+    than threaded as a nested placeholder. The default ``"categoria"`` makes the call a
+    byte-identical no-op (``str.replace("categoria", "categoria")``), preserving the churn
+    path and any caller that omits the argument. The ``business`` blocks contain no
+    ``categoria`` token, so the argument never affects the business render. ``str`` is
+    immutable, so ``.replace`` returns a fresh copy — the module-level block constants are
+    never mutated (pure, thread-safe).
     """
     profile = (student_profile or "business").strip().lower()
     if profile == "ml_ds":
+        name = target_column_name or "categoria"
         return {
-            "class_balance_block": _EDA_CLASS_BALANCE_BLOCK_ML_DS,
-            "target_distribution_block": _EDA_TARGET_DISTRIBUTION_BLOCK_ML_DS,
-            "feature_engineering_block": _EDA_FEATURE_ENGINEERING_BLOCK_ML_DS,
+            "class_balance_block": _EDA_CLASS_BALANCE_BLOCK_ML_DS.replace("categoria", name),
+            "target_distribution_block": _EDA_TARGET_DISTRIBUTION_BLOCK_ML_DS.replace("categoria", name),
+            "feature_engineering_block": _EDA_FEATURE_ENGINEERING_BLOCK_ML_DS.replace("categoria", name),
             "event_label": "el evento objetivo",
         }
     return {
@@ -165,13 +182,13 @@ def select_eda_text_blocks(student_profile: str | None) -> dict[str, str]:
 
 # Classification-specific EDA narrative — binary target framing with a class-balance
 # axis. Profile-sensitive subsections are injected (see select_eda_text_blocks).
-# Placeholders (18 total, must match the context dict in graph.py eda_text_analyst):
+# Placeholders (19 total, must match the context dict in graph.py eda_text_analyst):
 #   {dilema_hypotheses}, {dataset_instruction}, {data_gap_warnings_block},
 #   {output_language}, {student_profile}, {algoritmos}, {case_context},
 #   {dataset_str}, {dataset_summary}, {dataset_total_rows},
 #   {financial_exhibit}, {operational_exhibit}, {case_id}, {output_depth},
 #   {event_label}, {class_balance_block}, {target_distribution_block},
-#   {feature_engineering_block}
+#   {feature_engineering_block}, {target_column_name}
 EDA_TEXT_ANALYST_PROMPT_CLASSIFICATION: str = """\
 # Your Identity
 Eres el EDA Text Analyst de ADAM para casos de CLASIFICACIÓN BINARIA. Tu misión es
@@ -181,13 +198,13 @@ conectados con el dilema del Módulo 1.
 # Your Mission
 Generar el Módulo 2 (reporte EDA) en Markdown puro para un caso de clasificación binaria.
 Confirmar o rechazar las hipótesis del M1 usando exclusivamente los datos del dataset y
-los Exhibits provistos. Identificar la variable objetivo `categoria` (int 0/1, donde
+los Exhibits provistos. Identificar la variable objetivo `{target_column_name}` (int 0/1, donde
 1 = ocurre {event_label}) y colocar el análisis de balance de clases como eje central
 del reporte.
 
 # How You Work (Workflow)
 1. **Lee el Contexto:** Revisa el dilema del M1, las hipótesis implícitas del dilema
-   (si están disponibles en {dilema_hypotheses}) y la variable objetivo `categoria`.
+   (si están disponibles en {dilema_hypotheses}) y la variable objetivo `{target_column_name}`.
 2. **Extracción Estricta:** Lee el dataset campo por campo.
    REGLA: Si necesitas calcular un promedio, suma o porcentaje, escríbelo como:
    "Valor calculado: [operación]. Resultado: [número]." — no lo afirmes sin mostrarlo.
@@ -202,7 +219,7 @@ del reporte.
 - {dataset_instruction}
 - Si una métrica no muestra tendencia clara o anomalía: repórtala como ESTABLE.
   NO fuerces un hallazgo donde los datos no lo soportan.
-- Si `categoria` no existe en el dataset, reporta la columna más cercana que actúe
+- Si `{target_column_name}` no existe en el dataset, reporta la columna más cercana que actúe
   como variable objetivo binaria y justifica la elección.
 
 ## Brechas dilema↔dataset
@@ -238,7 +255,7 @@ REGLAS para brechas:
 
 ## 1. Qué hace el Detective de Datos
 Introducción inspirada en Sherlock Holmes: el EDA es inspeccionar la escena del crimen
-donde cada número es una pista y la variable `categoria` es el "cuerpo del delito"
+donde cada número es una pista y la variable `{target_column_name}` es el "cuerpo del delito"
 (el evento que queremos anticipar: {event_label}). Usa una tabla analógica que mapee
 conceptos detectivescos (lupa, conexiones entre sospechosos, evidencia forense) con
 técnicas de análisis de datos (gráficos de dispersión, correlaciones, cohortes).
@@ -265,7 +282,7 @@ Para "ml_ds": mencionar implicaciones para el preprocessing antes del modelado
 (imputación, escalado, encoding de categóricas para LR/RF).
 
 ### Análisis Exploratorio de Predictores
-3-4 subsecciones H3 con los predictores más correlacionados con `categoria`.
+3-4 subsecciones H3 con los predictores más correlacionados con `{target_column_name}`.
 Narrar números EXACTOS extraídos del dataset.
 Ejemplo: "Los casos con más de 2 fallos de pago presentan una tasa de evento del 72%
 frente al 18% en los que no tienen fallos de pago."
