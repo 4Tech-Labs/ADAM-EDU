@@ -101,22 +101,30 @@ def test_business_classification_carries_gated_cost_matrix_text() -> None:
     assert _GATE_PHRASE in assembled
 
 
-# ── drift guard: prompt currency allowlist must stay in sync with the validator ──
+# ── drift guard: USD-only must stay in sync between prompt and validator (Issue #370) ──
 
-def test_prompt_currency_allowlist_stays_in_sync_with_validator() -> None:
-    """The anchor lists the supported currencies as prose; ``BusinessCostMatrix``
-    enforces the same set (``_SUPPORTED_COST_CURRENCIES``). If either drifts the LLM
-    would be taught a stale allowlist (and the validator would silently reject the
-    stray currency). Compare both directions so they can never diverge unnoticed."""
+def test_prompt_currency_is_usd_only() -> None:
+    """Issue #370 — the product operates only in USD. The validator allowlist is now ``{USD}``
+    and the anchor must teach ``currency SIEMPRE "USD"`` with NO multi-currency ISO list left.
+    If either drifts (the set re-expands, or a stale ``{USD, EUR, ...}`` list survives), this
+    fails — keeping prompt and validator in lockstep on USD-only."""
     assembled = _assemble_architect_prompt(_ctx("ml_ds", "clasificacion"))
-    match = re.search(r"\{([A-Z]{3}(?:, [A-Z]{3})+)\}", assembled)
-    assert match is not None, "currency allowlist block not found in architect prompt"
-    prompt_codes = set(match.group(1).split(", "))
-    assert prompt_codes == set(_SUPPORTED_COST_CURRENCIES), (
-        "architect prompt currency list drifted from the BusinessCostMatrix validator "
-        f"(prompt={sorted(prompt_codes)}, validator={sorted(_SUPPORTED_COST_CURRENCIES)}); "
-        "update the anchor subsection and tools_and_schemas together."
+    assert _SUPPORTED_COST_CURRENCIES == frozenset({"USD"}), (
+        f"validator allowlist re-expanded beyond USD: {sorted(_SUPPORTED_COST_CURRENCIES)}"
     )
+    assert 'currency` SIEMPRE "USD"' in assembled, "anchor no longer teaches USD-only currency"
+    # No multi-currency ISO list ({USD, EUR, ...}) may remain anywhere in the assembled prompt.
+    assert re.search(r"\{[A-Z]{3}(?:, [A-Z]{3})+\}", assembled) is None, (
+        "a stale multi-currency ISO list survived in the architect prompt"
+    )
+
+
+def test_base_prompt_forces_usd_for_all_profiles() -> None:
+    """Issue #370 — the global money rule lives in the shared base prompt, so EVERY profile and
+    family (business + ml_ds) emits Exhibits in USD, not just the classification anchor path."""
+    for profile in ("business", "ml_ds"):
+        assembled = _assemble_architect_prompt(_ctx(profile, "clasificacion"))
+        assert "se expresa en dólares estadounidenses (USD)" in assembled
 
 
 # ── (c) OPTIONAL live golden-eval (deferred) ──────────────────────────────────

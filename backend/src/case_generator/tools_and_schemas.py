@@ -10,7 +10,10 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-_SUPPORTED_COST_CURRENCIES = frozenset({"USD", "EUR", "GBP", "COP", "MXN", "BRL", "CLP", "PEN", "ARS"})
+# USD-only product (Issue #370): el producto opera exclusivamente en dólares. Este sigue siendo
+# el único allowlist (single source) — ahora con un solo código. `_normalize_currency` COERCE
+# cualquier otro valor a "USD" en vez de rechazarlo (ver allí el porqué del coerce-no-reject).
+_SUPPORTED_COST_CURRENCIES = frozenset({"USD"})
 _MAX_BUSINESS_COST = 1_000_000_000.0
 _MAX_BUSINESS_COST_RATIO = 1_000.0
 
@@ -148,7 +151,7 @@ class DatasetSchemaRequired(BaseModel):
     business_cost_matrix: Optional["BusinessCostMatrix"] = Field(
         default=None,
         description=(
-            "Costos asimétricos del negocio (USD/EUR/etc.) para tuning de "
+            "Costos asimétricos del negocio (en USD) para tuning de "
             "threshold en clasificación. fp_cost = costo de un falso positivo "
             "(predecir 1 cuando es 0). fn_cost = costo de un falso negativo "
             "(predecir 0 cuando es 1). Si None, M3 usa fallback fp=1, fn=5."
@@ -197,7 +200,7 @@ class BusinessCostMatrix(BaseModel):
       * fn_cost > 0 y finito
             * cada costo <= 1e9
             * ratio fp/fn plausible dentro de 1000:1 y 1:1000
-            * currency normalizada y validada contra catálogo ISO 4217 mínimo
+            * currency coercida a "USD" (producto USD-only, Issue #370)
     """
 
     fp_cost: float = Field(
@@ -221,8 +224,8 @@ class BusinessCostMatrix(BaseModel):
     currency: str = Field(
         default="USD",
         description=(
-            "Código de moneda ISO 4217 soportado: USD/EUR/GBP/COP/MXN/BRL/CLP/PEN/ARS. "
-            "Se normaliza a mayúsculas."
+            "Moneda del caso: el producto opera solo en dólares, así que SIEMPRE 'USD'. "
+            "Cualquier otro valor se coerce a 'USD' (no se rechaza)."
         ),
     )
 
@@ -236,12 +239,13 @@ class BusinessCostMatrix(BaseModel):
     @field_validator("currency")
     @classmethod
     def _normalize_currency(cls, v: str) -> str:
+        # USD-only product (Issue #370): empty / stray ISO code / garbage all COERCE to "USD".
+        # We coerce rather than raise so a stray LLM label never propagates a ValidationError up
+        # to ``_validate_business_cost_matrix`` (graph.py), which would nullify the WHOLE matrix
+        # — dropping fp_cost/fn_cost and erasing the M3 cost asymmetry (fallback fp=1/fn=5).
         normalized = (v or "").strip().upper()
-        if not normalized:
-            return "USD"
         if normalized not in _SUPPORTED_COST_CURRENCIES:
-            supported = ", ".join(sorted(_SUPPORTED_COST_CURRENCIES))
-            raise ValueError(f"currency must be one of: {supported}")
+            return "USD"
         return normalized
 
     @model_validator(mode="after")
@@ -560,7 +564,7 @@ class DatasetRow(BaseModel):
     period: str = Field(description="Período temporal, ej: 'Q1 2023', 'Año 1', 'Mes 3'")
     variable: str = Field(description="Nombre de la variable, ej: 'Revenue', 'Churn Rate', 'NPS'")
     value: float = Field(description="Valor numérico de la métrica")
-    unit: str = Field(description="Unidad de medida, ej: 'COP millones', '%', 'puntos'")
+    unit: str = Field(description="Unidad de medida, ej: 'USD millones', '%', 'puntos'")
     category: str = Field(description="Categoría: 'financial' | 'operational' | 'market'")
     source: str = Field(description="Fuente de referencia: 'Exhibit 1' | 'Exhibit 2' | 'EDA simulado'")
 

@@ -101,8 +101,8 @@ Condición de emisión (si NO se cumple, deja la clave ausente / `null`):
 Valores VÁLIDOS o el pipeline la descarta en silencio:
 - `fp_cost` y `fn_cost` ambos > 0 y finitos; cada uno ≤ 1e9.
 - ratio max(fp,fn)/min(fp,fn) ≤ 1000:1 (en cualquier dirección).
-- `currency` en MAYÚSCULAS dentro de {{USD, EUR, GBP, COP, MXN, BRL, CLP, PEN, ARS}}
-  (default "USD"); elige la moneda coherente con los Exhibits del caso.
+- `currency` SIEMPRE "USD" (el caso entero está en dólares — ver la regla global de
+  moneda). No uses ninguna otra moneda.
 
 Ubicación EXACTA: añade `business_cost_matrix` como clave ANIDADA dentro de
 `dataset_schema_required` (junto a `target_column` / `feature_columns`), NUNCA como
