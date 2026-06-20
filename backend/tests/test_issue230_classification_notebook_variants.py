@@ -7,6 +7,11 @@ with the unselected LR/RF model.
 
 from __future__ import annotations
 
+import contextlib
+import io
+
+import numpy as np
+import pandas as pd
 import pytest
 
 from case_generator.graph import (
@@ -24,6 +29,7 @@ from case_generator.prompts import (
     M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY,
     M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST,
     M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY,
+    M3_NOTEBOOK_BASE_TEMPLATE,
     TOC_MARKDOWN_CELL_BY_VARIANT,
 )
 
@@ -672,3 +678,131 @@ def test_contract_target_name_only_allows_valid_identifier() -> None:
     assert _safe_contract_target_name({"target_column": None}) == ""
     assert _safe_contract_target_name({}) == ""
     assert _safe_contract_target_name(None) == ""
+
+
+# ---------------------------------------------------------------------------
+# #348 — Execution-identity coverage for the dummy_baseline cell.
+#
+# The string tests above prove the contract literal is wired BEFORE the aliases.
+# These go further: they EXECUTE the real assembled cell (no LLM, no heavy
+# notebook executor) and assert IDENTITY — the target the cell resolves
+# (`target_col`, the exact value the downstream metrics_summary_json cell
+# consumes for auc/f1/prevalence/top_features) equals the declared contract
+# target. The assertion is independent of whether the contract target carries
+# signal (#347): `target_col` is resolved at the top of the cell's try-block,
+# before any model fit.
+# ---------------------------------------------------------------------------
+
+_VARIANT_PROMPTS = [
+    pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_ONLY, id="lr_only"),
+    pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY, id="rf_only"),
+    pytest.param(M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST, id="lr_rf_contrast"),
+]
+
+
+def _dummy_baseline_cell(rendered: str) -> str:
+    """Extract ONLY the executable dummy_baseline cell from a rendered prompt.
+
+    ``_executable_region`` returns everything from the cell to the end of the
+    prompt; the next ``# %%`` marker bounds the cell (there is none inside it).
+    After ``.format(...)`` the ``{{...}}``/``%%`` escapes collapse to valid
+    Python, so the slice is directly exec-able.
+    """
+    return _executable_region(rendered).split("\n# %%", 1)[0]
+
+
+def _base_template_defs() -> str:
+    """Extract the real helper + alias-list region from the base template.
+
+    ``normalize_colname`` / ``find_first_matching_column`` / ``label_aliases`` /
+    ``churn_aliases`` are defined INSIDE ``M3_NOTEBOOK_BASE_TEMPLATE`` (notebook
+    runtime), not as importable module symbols. We exec the production source
+    verbatim (no re-implementation → zero drift), sliced to stop before the
+    ``## Sección 1`` data-load cell so no CSV read / matplotlib import is pulled
+    in. ``label_aliases[0] == "categoria"`` lives in this region.
+    """
+    tail = M3_NOTEBOOK_BASE_TEMPLATE[M3_NOTEBOOK_BASE_TEMPLATE.index("def normalize_colname") :]
+    return tail[: tail.index("# %% [markdown]")]
+
+
+def _exec_dummy_baseline(rendered: str, df: pd.DataFrame) -> dict:
+    """Run the real cell against ``df`` in a faithful namespace and return it.
+
+    The namespace is seeded with the authentic base-template helpers/aliases
+    (the sklearn imports live inside the cell). ``target_col`` is assigned at the
+    top of the cell's try-block BEFORE any fit, so the resolved identity survives
+    even if a later fit raises into the cell's own ``except``.
+    """
+    namespace: dict = {"pd": pd, "np": np, "df": df}
+    exec(_base_template_defs(), namespace)
+    exec(_dummy_baseline_cell(rendered), namespace)
+    return namespace
+
+
+def _make_classification_df(*, include_fraud_flag: bool, n: int = 40) -> pd.DataFrame:
+    """Synthetic ml_ds frame.
+
+    The churn base column ``categoria`` is ALWAYS present (mirrors the real
+    ml_ds dataset, which keeps the churn spine in Caso A/B); ``fraud_flag`` is
+    the optional non-churn contract target. Two well-populated classes plus
+    numeric/categorical drivers so the cell runs its full path cleanly.
+    """
+    data: dict = {
+        "categoria": [i % 2 for i in range(n)],
+        "tenure_months": [i % 24 for i in range(n)],
+        "monthly_charges": [50 + (i % 10) * 5 for i in range(n)],
+        "region": [("norte", "sur", "centro")[i % 3] for i in range(n)],
+    }
+    if include_fraud_flag:
+        data["fraud_flag"] = [1 if i % 3 == 0 else 0 for i in range(n)]
+    return pd.DataFrame(data)
+
+
+@pytest.mark.parametrize("prompt", _VARIANT_PROMPTS)
+def test_dummy_baseline_execution_trains_contract_target(prompt: str) -> None:
+    """#348 PRINCIPAL — executing the real cell with a non-churn contract target
+    present in df resolves THAT target, not the always-present ``categoria``.
+
+    Declared (contract) == trained (target_col), in all 3 variants, independent
+    of whether ``fraud_flag`` carries signal.
+    """
+    df = _make_classification_df(include_fraud_flag=True)
+    keys = dict(SHARED_FORMAT_KEYS, contract_target_name="fraud_flag")
+
+    namespace = _exec_dummy_baseline(prompt.format(**keys), df)
+
+    assert namespace["target_col"] == "fraud_flag"
+    assert namespace["target_col"] != "categoria"
+
+
+@pytest.mark.parametrize("prompt", _VARIANT_PROMPTS)
+def test_dummy_baseline_execution_churn_unchanged(prompt: str) -> None:
+    """#348 regression — with NO contract (empty literal) the cell falls back to
+    the alias-first heredado path and resolves ``categoria`` exactly as before
+    the fix; a contract that names the churn target resolves identically.
+    """
+    df = _make_classification_df(include_fraud_flag=True)
+
+    no_contract = dict(SHARED_FORMAT_KEYS, contract_target_name="")
+    assert _exec_dummy_baseline(prompt.format(**no_contract), df)["target_col"] == "categoria"
+
+    churn_contract = dict(SHARED_FORMAT_KEYS, contract_target_name="categoria")
+    assert _exec_dummy_baseline(prompt.format(**churn_contract), df)["target_col"] == "categoria"
+
+
+@pytest.mark.parametrize("prompt", _VARIANT_PROMPTS)
+def test_dummy_baseline_execution_missing_contract_target_skips(prompt: str) -> None:
+    """#348 — a contract target ABSENT from df emits REQUISITO FALTANTE and skips
+    (target_col=None, is_binary=False). It must NOT silently fall back to
+    training the always-present ``categoria``.
+    """
+    df = _make_classification_df(include_fraud_flag=False)  # no fraud_flag column
+    keys = dict(SHARED_FORMAT_KEYS, contract_target_name="fraud_flag")
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        namespace = _exec_dummy_baseline(prompt.format(**keys), df)
+
+    assert namespace["target_col"] is None
+    assert namespace["is_binary"] is False
+    assert "REQUISITO FALTANTE" in buffer.getvalue()
