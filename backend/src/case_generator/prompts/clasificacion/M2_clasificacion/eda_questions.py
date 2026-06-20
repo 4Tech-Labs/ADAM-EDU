@@ -39,7 +39,7 @@ correlación/causalidad, sino los específicos de clasificación binaria:
       "numero": 1,
       "titulo": "string corto (≤8 palabras)",
       "enunciado": "string (pregunta completa que cita métricas y datos reales del M2)",
-      "solucion_esperada": "string (respuesta modelo en un párrafo fluido que integra concepto, ejemplo del caso e implicación ejecutiva; incluye referencia académica al final; máx 120 palabras; docente-only)",
+      "solucion_esperada": "string (respuesta modelo en un párrafo fluido que integra concepto, ejemplo del caso e implicación ejecutiva; máx 120 palabras; docente-only)",
       "bloom_level": "analysis",
       "chart_ref": "id del chart de distribución de clases del manifest, o null si no existe",
       "exhibit_ref": "Dataset",
@@ -80,8 +80,7 @@ correlación/causalidad, sino los específicos de clasificación binaria:
    (accuracy) hacia métricas de negocio (recall, F-beta, AUC-ROC, costo de retención).
 6. **Redacta solucion_esperada como un párrafo fluido** que integre el concepto estadístico,
    el ejemplo concreto del caso y la implicación ejecutiva en una sola prosa coherente.
-   Incluye la referencia académica al final del párrafo. Máx 120 palabras. No uses
-   sub-campos ni estructuras anidadas — solo texto plano.
+   Máx 120 palabras. No uses sub-campos ni estructuras anidadas — solo texto plano.
 7. **task_type siempre "text_response"** — M2 no genera notebook; ambas preguntas son argumentativas.
 
 # Your Boundaries
@@ -90,7 +89,6 @@ correlación/causalidad, sino los específicos de clasificación binaria:
 - Las referencias a gráficos: `chart_ref` contiene SOLO el `id` del chart (string exacto del
   manifest). Usa el `title` únicamente para identificar cuál chart seleccionar — nunca lo
   incluyas en el valor de `chart_ref`.
-- La referencia académica va integrada al final del párrafo `solucion_esperada` — sin inventar DOIs ni URLs.
 - PROHIBIDO usar "sesgo de confirmación" o "correlación vs causalidad" como tema principal
   de P1 o P2 — esos pertenecen al prompt genérico para otras familias.
 - P1 es SIEMPRE accuracy_paradox (bloom: "analysis"), P2 es SIEMPRE precision_recall
@@ -127,8 +125,7 @@ solucion_esperada: (párrafo único, ej:)
   sin capturar ni un solo churner real — eso es el accuracy paradox. Usar threshold=0.5 en
   un dataset 92/8 implica que LR o RF 'funcionan' en accuracy pero el equipo pierde 40-60%
   de churners reales y el presupuesto de retención se dirige al segmento equivocado. La
-  alternativa es evaluar con recall, F-beta (beta>1) o AUC-ROC. Ref: Chawla et al. (2002)
-  'SMOTE'; James et al. 'An Introduction to Statistical Learning' cap. sobre imbalanced data."
+  alternativa es evaluar con recall, F-beta (beta>1) o AUC-ROC."
 
 chart_ref: id del chart de distribución de clases/target de {chart_manifest}
 exhibit_ref: "Dataset"
@@ -149,8 +146,7 @@ solucion_esperada: (párrafo único, ej:)
   puede dar recall ~40%; bajarlo a 0.3 sube el recall a ~70% con +15pp de falsos positivos.
   La decisión depende del ratio costo_retención / ingreso_perdido por churner: si perder un
   churner cuesta más que retener a un cliente leal, F-beta con beta>1 es la métrica correcta
-  sobre AUC-ROC. Ref: Provost & Fawcett 'Data Science for Business' (2013); Fawcett (2006)
-  'An Introduction to ROC Analysis' Pattern Recognition Letters."
+  sobre AUC-ROC."
 
 chart_ref: id del chart de correlación o scatter de {chart_manifest}, o null si no hay relevante
 exhibit_ref: "Dataset"
