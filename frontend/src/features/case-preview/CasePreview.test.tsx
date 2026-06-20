@@ -193,4 +193,14 @@ describe("CasePreview Enviar Caso button", () => {
 
         expect(mockNavigate).toHaveBeenCalledWith("/teacher/dashboard", { replace: true });
     });
+
+    it("[T9] vista solo-lectura (sin onEditParams): muestra 'Volver' y oculta la marca ADAM/Vista Profesor", () => {
+        renderWithProviders(<CasePreview caseData={caseData} />);
+
+        expect(screen.queryByText("Vista Profesor")).toBeNull();
+
+        const backBtn = screen.getByRole("button", { name: /^volver$/i });
+        fireEvent.click(backBtn);
+        expect(mockNavigate).toHaveBeenCalledWith(-1);
+    });
 });
