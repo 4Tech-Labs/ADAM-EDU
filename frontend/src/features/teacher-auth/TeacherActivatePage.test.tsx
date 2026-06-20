@@ -9,6 +9,7 @@ import { TeacherActivatePage } from "./TeacherActivatePage";
 
 vi.mock("@/shared/activationContext");
 vi.mock("@/shared/supabaseClient");
+vi.mock("@/shared/authConfig");
 vi.mock("react-router-dom", async () => {
     const actual = await vi.importActual<typeof import("react-router-dom")>(
         "react-router-dom",
@@ -41,6 +42,7 @@ import {
     clearActivationContext,
     saveActivationContext,
 } from "@/shared/activationContext";
+import { isMicrosoftLoginEnabled } from "@/shared/authConfig";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/shared/api";
@@ -84,6 +86,8 @@ describe("TeacherActivatePage", () => {
         vi.mocked(clearActivationContext).mockImplementation(() => undefined);
         vi.mocked(saveActivationContext).mockImplementation(() => undefined);
         vi.mocked(getSupabaseClient).mockReturnValue(makeSupabaseMock() as never);
+        // Default: Microsoft login deshabilitado (estado de producción actual).
+        vi.mocked(isMicrosoftLoginEnabled).mockReturnValue(false);
         // Default: resolve hangs (never resolves) unless overridden per test
         vi.mocked(api.auth.resolveInvite).mockReturnValue(new Promise(() => undefined));
     });
@@ -298,8 +302,9 @@ describe("TeacherActivatePage", () => {
         expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
     });
 
-    // 9. Botón Microsoft → llama signInWithOAuth con provider: "azure"
+    // 9. Botón Microsoft → llama signInWithOAuth con provider: "azure" (flag on)
     it("calls signInWithOAuth with provider azure when Microsoft button is clicked", async () => {
+        vi.mocked(isMicrosoftLoginEnabled).mockReturnValue(true);
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "teacher_activate",
             token_kind: "invite",
@@ -322,5 +327,26 @@ describe("TeacherActivatePage", () => {
         expect(supabaseMock.auth.signInWithOAuth).toHaveBeenCalledWith(
             expect.objectContaining({ provider: "azure" }),
         );
+    });
+
+    // 10. Por defecto (flag off) el botón Microsoft no se renderiza en el formulario de activación
+    it("does not render the Microsoft button when Microsoft login is disabled", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "teacher_activate",
+            token_kind: "invite",
+            invite_token: "tok-abc",
+            role: "teacher",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingResolveResponse);
+
+        renderPage();
+
+        // Espera a que el formulario de activación (estado 4) esté montado.
+        await waitFor(() => screen.getByRole("button", { name: /Activar cuenta/i }));
+
+        expect(screen.queryByText(/Continuar con Microsoft/i)).toBeNull();
+        expect(screen.queryByText(/Activar con Microsoft/i)).toBeNull();
+        expect(screen.queryByText(/o usa contraseña/i)).toBeNull();
     });
 });

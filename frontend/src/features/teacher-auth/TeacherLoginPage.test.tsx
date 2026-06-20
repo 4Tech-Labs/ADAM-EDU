@@ -8,7 +8,9 @@ import { TeacherLoginPage } from "./TeacherLoginPage";
 // ---------------------------------------------------------------------------
 
 vi.mock("@/shared/supabaseClient");
+vi.mock("@/shared/authConfig");
 
+import { isMicrosoftLoginEnabled } from "@/shared/authConfig";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 
 function makeSupabaseMock(
@@ -34,10 +36,21 @@ describe("TeacherLoginPage", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         vi.mocked(getSupabaseClient).mockReturnValue(makeSupabaseMock() as never);
+        // Default: Microsoft login deshabilitado (estado de producción actual).
+        vi.mocked(isMicrosoftLoginEnabled).mockReturnValue(false);
     });
 
-    // 1. Botón Microsoft → llama signInWithOAuth con provider: "azure"
+    // 0. Por defecto (flag off) el botón Microsoft no se renderiza
+    it("does not render the Microsoft button when Microsoft login is disabled", () => {
+        renderPage();
+
+        expect(screen.queryByText(/Continuar con Microsoft/i)).toBeNull();
+        expect(screen.queryByText(/o usa contraseña/i)).toBeNull();
+    });
+
+    // 1. Botón Microsoft → llama signInWithOAuth con provider: "azure" (flag on)
     it("calls signInWithOAuth with provider azure when Microsoft button is clicked", async () => {
+        vi.mocked(isMicrosoftLoginEnabled).mockReturnValue(true);
         const supabaseMock = makeSupabaseMock();
         vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
 

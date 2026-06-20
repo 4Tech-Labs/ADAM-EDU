@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "@/shared/api";
+import { isMicrosoftLoginEnabled } from "@/shared/authConfig";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 import {
     saveActivationContext,
@@ -232,28 +233,32 @@ export function TeacherActivatePage() {
                     />
                 </div>
 
-                {/* Opción A — Microsoft */}
-                <div className="space-y-2">
-                    <p className="text-sm font-medium">Activar con Microsoft (recomendado)</p>
-                    <button
-                        type="button"
-                        onClick={() => void handleMicrosoftActivation()}
-                        className="w-full rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-                    >
-                        Continuar con Microsoft
-                    </button>
-                </div>
+                {/* Opción A — Microsoft (oculto tras isMicrosoftLoginEnabled) */}
+                {isMicrosoftLoginEnabled() && (
+                    <>
+                        <div className="space-y-2">
+                            <p className="text-sm font-medium">Activar con Microsoft (recomendado)</p>
+                            <button
+                                type="button"
+                                onClick={() => void handleMicrosoftActivation()}
+                                className="w-full rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                            >
+                                Continuar con Microsoft
+                            </button>
+                        </div>
 
-                <div className="relative">
-                    <div className="absolute inset-0 flex items-center">
-                        <span className="w-full border-t border-border" />
-                    </div>
-                    <div className="relative flex justify-center">
-                        <span className="bg-background px-2 text-xs text-muted-foreground">
-                            o usa contraseña
-                        </span>
-                    </div>
-                </div>
+                        <div className="relative">
+                            <div className="absolute inset-0 flex items-center">
+                                <span className="w-full border-t border-border" />
+                            </div>
+                            <div className="relative flex justify-center">
+                                <span className="bg-background px-2 text-xs text-muted-foreground">
+                                    o usa contraseña
+                                </span>
+                            </div>
+                        </div>
+                    </>
+                )}
 
                 {/* Opción B — Password */}
                 <form onSubmit={(e) => void handlePasswordSubmit(e)} className="space-y-4">

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { readActivationContext, saveActivationContext } from "@/shared/activationContext";
+import { isMicrosoftLoginEnabled } from "@/shared/authConfig";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 
 /**
@@ -86,24 +87,29 @@ export function StudentLoginPage() {
                     <h1 className="text-xl font-semibold">Acceso estudiantes</h1>
                 </div>
 
-                <button
-                    type="button"
-                    onClick={() => void handleMicrosoftLogin()}
-                    className="w-full rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-                >
-                    Continuar con Microsoft
-                </button>
+                {/* Microsoft login oculto tras isMicrosoftLoginEnabled */}
+                {isMicrosoftLoginEnabled() && (
+                    <>
+                        <button
+                            type="button"
+                            onClick={() => void handleMicrosoftLogin()}
+                            className="w-full rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                        >
+                            Continuar con Microsoft
+                        </button>
 
-                <div className="relative">
-                    <div className="absolute inset-0 flex items-center">
-                        <span className="w-full border-t border-border" />
-                    </div>
-                    <div className="relative flex justify-center">
-                        <span className="bg-background px-2 text-xs text-muted-foreground">
-                            o usa contraseña
-                        </span>
-                    </div>
-                </div>
+                        <div className="relative">
+                            <div className="absolute inset-0 flex items-center">
+                                <span className="w-full border-t border-border" />
+                            </div>
+                            <div className="relative flex justify-center">
+                                <span className="bg-background px-2 text-xs text-muted-foreground">
+                                    o usa contraseña
+                                </span>
+                            </div>
+                        </div>
+                    </>
+                )}
 
                 <form onSubmit={(event) => void handlePasswordSubmit(event)} className="space-y-4">
                     <div className="space-y-2">
