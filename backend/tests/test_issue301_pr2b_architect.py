@@ -71,10 +71,11 @@ _MLDS_CTX: dict[str, object] = {
 # Frozen digest of the assembled ml_ds+clasificación prompt. If this changes, the ml_ds
 # prompt changed — confirm it was NOT the business gate leaking in before updating.
 _MLDS_ARCHITECT_PROMPT_SHA256 = (
-    # Issue #363 — regenerated deliberately after adding option-count (D2) +
-    # Exhibit-2 (D3) supersede clauses to the classification anchor. Confirmed via
-    # test_mlds_architect_prompt_unchanged_by_business_gate (differential GREEN → not a leak).
-    "04af5c2947bf1f7bf522768370dbee455a660dde36bd7bf23b45de83d5678176"
+    # Issue F1 — regenerated deliberately after tying the Exhibit-2 occurrence-rate row to the
+    # new `target_event_rate` contract field + adding its emission block (fuente única M1↔M2).
+    # Confirmed via test_mlds_architect_prompt_unchanged_by_business_gate (differential GREEN
+    # → not a business-gate leak).
+    "4807710d0ddcb1bd922bc8d1a9d7f444698449de079cef52476915b75ea69ab4"
 )
 
 
