@@ -20,7 +20,9 @@ Deliberado: NO asierta presencia de `churn_rate` ni que la señal venga de churn
 invariante "target binario con señal", de modo que siga verde si algún día se implementa el
 de-churn real (target ← driver de dominio) pero falle si el target degrada a ruido.
 
-Determinista, sin LLM y sin DB: opera sobre los helpers puros de `case_generator.graph`.
+Determinista y sin LLM: opera sobre los helpers puros de `case_generator.graph`. No hace
+I/O de DB propio, pero corre dentro de la suite backend estándar — importar `graph` trae el
+engine de `shared.database` vía `conftest`, como el resto de tests (no es una lane DB-less).
 Usa `_build_fallback_schema` como stand-in determinista de la salida del schema_designer
 (los mismos transforms post-LLM corren en el camino feliz).
 """
@@ -156,6 +158,11 @@ def test_target_has_measurable_signal_and_noise_does_not() -> None:
     )
     df = pd.DataFrame(rows)
     y = df[_TARGET].astype(int).to_numpy()
+    # AUC sobre TODAS las features numéricas — espeja al EJECUTOR real (que NO descarta
+    # churn_rate al entrenar), así el guard predice el resultado del gate del ejecutor en vez
+    # de una métrica domain-only frágil. Hoy la señal proviene de churn_rate (driver del
+    # target); tras un de-churn real vendría del driver de dominio. El invariante "hay señal"
+    # es agnóstico a la fuente — deliberado: el guard pin "el target NO degrada a ruido".
     X = df.select_dtypes(include="number").drop(columns=[_TARGET]).fillna(0.0)
 
     real_auc = _cv_auc(X, y)
