@@ -1524,7 +1524,15 @@ def eda_text_analyst(state: ADAMState, config: RunnableConfig) -> dict:
         # matriz de confusión, leakage guard). Espejo del patrón {lr_business_block}
         # de M3. Solo afecta al prompt de clasificación (las demás familias ignoran
         # estas claves extra en su .format()).
-        context.update(select_eda_text_blocks(state.get("studentProfile", "business")))
+        # Issue #383 — el nombre real del target (ml_ds+clf: el dataset ya renombró
+        # `categoria` al nombre del contrato). business / no-clf → "categoria" (cuerpo
+        # byte-idéntico). Se inyecta al cuerpo Y se pre-sustituye en los bloques ml_ds
+        # (que son placeholder-free → un {..} dentro no se re-expande en el único .format).
+        target_column_name = _resolve_eda_target_name(state)
+        context["target_column_name"] = target_column_name
+        context.update(
+            select_eda_text_blocks(state.get("studentProfile", "business"), target_column_name)
+        )
 
         prompt = EDA_TEXT_ANALYST_PROMPT_BY_FAMILY.get(
             context.get("primary_family", ""), EDA_TEXT_ANALYST_PROMPT
@@ -4948,6 +4956,48 @@ def _safe_contract_target_name(schema_required: object) -> str:
         return ""
     name = (spec.get("name") or "").strip()
     return name if name.isidentifier() else ""
+
+
+def _resolve_eda_target_name(state: ADAMState) -> str:
+    """Resolve the target column name the M2 EDA narrative must cite (Issue #383).
+
+    For ml_ds + clasificacion, ``_align_ml_ds_classification_target`` renames the fixed
+    ``categoria`` binary to the contract domain name (e.g. ``fraud_flag``) in
+    ``schema_designer`` — BEFORE this node runs. The classification EDA prompt must cite
+    that real name instead of the hardcoded literal ``categoria`` (the follow-up that
+    #346 / #382 deferred).
+
+    Returns the literal ``"categoria"`` for everything outside ml_ds+clasificacion
+    (business — including business+clf, which still gets the classification prompt — and
+    the regresion/clustering/serie_temporal families), so the shared prompt body renders
+    byte-identically for those cases.
+
+    Gate uses ``default_unresolved_ml_ds_to_classification=True`` to mirror BOTH the prompt
+    selection (``_build_base_context``) and the data layer (``_align`` treats an ml_ds job
+    with unresolved/empty algoritmos as clasificacion); otherwise that cohort would render
+    the classification prompt + a renamed dataset column while still narrating "categoria".
+
+    The contract name is the intended target, but ``_align`` skips its rename on a name
+    collision (leaving the dataset column as ``categoria``). To guarantee the narrated name
+    matches the column the LLM actually sees, the contract name is verified against the real
+    dataset columns; the prompt's own "si no existe, reporta la columna más cercana" line is
+    the final safety net.
+    """
+    if not _is_ml_ds_classification(
+        state, default_unresolved_ml_ds_to_classification=True
+    ):
+        return "categoria"
+    contract_name = _safe_contract_target_name(state.get("dataset_schema_required"))
+    if not contract_name:
+        return "categoria"
+    dataset = state.get("doc7_dataset") or []
+    sample = next((row for row in dataset[:5] if isinstance(row, dict)), None)
+    if sample is not None:
+        if contract_name in sample:
+            return contract_name          # rename applied (happy path)
+        if "categoria" in sample:
+            return "categoria"            # rename skipped (collision) → match the data
+    return contract_name                  # no dataset sample → trust the contract name
 
 
 def _resolve_classification_notebook_variant(
