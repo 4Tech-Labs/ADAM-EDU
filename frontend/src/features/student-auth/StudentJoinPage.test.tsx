@@ -6,6 +6,7 @@ import { StudentJoinPage } from "./StudentJoinPage";
 
 vi.mock("@/shared/activationContext");
 vi.mock("@/shared/supabaseClient");
+vi.mock("@/shared/authConfig");
 vi.mock("@/app/auth/useAuth", () => ({
     useAuth: vi.fn(),
 }));
@@ -43,6 +44,7 @@ import {
     saveActivationContext,
 } from "@/shared/activationContext";
 import { api } from "@/shared/api";
+import { isMicrosoftLoginEnabled } from "@/shared/authConfig";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 import { useAuth } from "@/app/auth/useAuth";
 import { useNavigate } from "react-router-dom";
@@ -114,6 +116,8 @@ describe("StudentJoinPage", () => {
         vi.mocked(clearActivationContext).mockImplementation(() => undefined);
         vi.mocked(saveActivationContext).mockImplementation(() => undefined);
         vi.mocked(getSupabaseClient).mockReturnValue(makeSupabaseMock() as never);
+        // Default: Microsoft login deshabilitado (estado de producción actual).
+        vi.mocked(isMicrosoftLoginEnabled).mockReturnValue(false);
     });
 
     it("shows invalid link state when there is no activation context", () => {
@@ -341,6 +345,7 @@ describe("StudentJoinPage", () => {
     });
 
     it("stores oauth intent for course-access Microsoft sign-in", async () => {
+        vi.mocked(isMicrosoftLoginEnabled).mockReturnValue(true);
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "student_join_course_access",
             token_kind: "course_access",
@@ -376,6 +381,32 @@ describe("StudentJoinPage", () => {
         expect(supabaseMock.auth.signInWithOAuth).toHaveBeenCalledWith(
             expect.objectContaining({ provider: "azure" }),
         );
+    });
+
+    it("hides the Microsoft button even when the backend allows it, while disabled", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-oauth",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["microsoft", "password"],
+        });
+
+        renderPage();
+
+        // El formulario de password aparece aunque el backend permita Microsoft.
+        await screen.findByPlaceholderText("tu.correo@universidad.edu");
+
+        expect(screen.queryByText(/Continuar con Microsoft/i)).toBeNull();
+        expect(screen.queryByText(/o crea una contraseña/i)).toBeNull();
     });
 
     it("auto-enrolls an already-authenticated student into a second course without showing the form", async () => {

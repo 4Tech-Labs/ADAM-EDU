@@ -13,6 +13,7 @@ import type {
     CourseAccessResolveResponse,
     InviteResolveResponse,
 } from "@/shared/adam-types";
+import { isMicrosoftLoginEnabled } from "@/shared/authConfig";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 
 function resolveInviteErrorMessage(err: ApiError | null, inviteStatus?: string): string {
@@ -364,7 +365,8 @@ export function StudentJoinPage() {
     }
 
     const isInviteFlow = joinContext?.token_kind === "invite";
-    const allowMicrosoft = isInviteFlow || resolvedCourseAccess?.allowed_auth_methods.includes("microsoft") || false;
+    // Microsoft login oculto tras isMicrosoftLoginEnabled (manda sobre allowed_auth_methods del backend)
+    const allowMicrosoft = isMicrosoftLoginEnabled() && (isInviteFlow || resolvedCourseAccess?.allowed_auth_methods.includes("microsoft") || false);
     const universityName = isInviteFlow ? resolvedInvite?.university_name : resolvedCourseAccess?.university_name;
     const courseTitle = isInviteFlow ? resolvedInvite?.course_title : resolvedCourseAccess?.course_title;
     const teacherName = isInviteFlow ? resolvedInvite?.teacher_name : resolvedCourseAccess?.teacher_display_name;

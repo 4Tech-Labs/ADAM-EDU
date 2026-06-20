@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StudentLoginPage } from "./StudentLoginPage";
 
 vi.mock("@/shared/supabaseClient");
+vi.mock("@/shared/authConfig");
 vi.mock("@/shared/activationContext", () => ({
     readActivationContext: vi.fn(),
     saveActivationContext: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock("react-router-dom", async () => {
 });
 
 import { readActivationContext, saveActivationContext } from "@/shared/activationContext";
+import { isMicrosoftLoginEnabled } from "@/shared/authConfig";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 import { useNavigate } from "react-router-dom";
 
@@ -45,9 +47,19 @@ describe("StudentLoginPage", () => {
         vi.mocked(getSupabaseClient).mockReturnValue(makeSupabaseMock() as never);
         vi.mocked(readActivationContext).mockReturnValue(null);
         vi.mocked(useNavigate).mockReturnValue(mockNavigate);
+        // Default: Microsoft login deshabilitado (estado de producción actual).
+        vi.mocked(isMicrosoftLoginEnabled).mockReturnValue(false);
+    });
+
+    it("does not render the Microsoft button when Microsoft login is disabled", () => {
+        renderPage();
+
+        expect(screen.queryByText(/Continuar con Microsoft/i)).toBeNull();
+        expect(screen.queryByText(/o usa contraseña/i)).toBeNull();
     });
 
     it("calls signInWithOAuth with provider azure when Microsoft button is clicked", async () => {
+        vi.mocked(isMicrosoftLoginEnabled).mockReturnValue(true);
         const supabaseMock = makeSupabaseMock();
         vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
 
@@ -63,6 +75,7 @@ describe("StudentLoginPage", () => {
     });
 
     it("stores oauth auth_path when resuming a course-access login with Microsoft", async () => {
+        vi.mocked(isMicrosoftLoginEnabled).mockReturnValue(true);
         const supabaseMock = makeSupabaseMock();
         vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
         vi.mocked(readActivationContext).mockReturnValue({
