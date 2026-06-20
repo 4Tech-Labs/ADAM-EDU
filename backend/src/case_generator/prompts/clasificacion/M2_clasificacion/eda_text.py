@@ -41,13 +41,15 @@ __all__ = [
 ]
 
 # ── Profile-gated blocks (placeholder-free — see module docstring). ───────────
-# ml_ds variants keep the original DS rigor verbatim. business variants drop the
-# jargon and the hardcoded "churn" framing.
+# ml_ds variants keep the full DS rigor (AUC-ROC, imbalance formula, Leakage Guard);
+# business variants drop the jargon. Neither hardcodes "churn" — both work for any
+# binary event (fraude, impago, entrega tardía…).  [Issue #346 de-churned ml_ds.]
 
 _EDA_CLASS_BALANCE_BLOCK_ML_DS = """\
 - **Balance de clases (obligatorio):** Extrae del dataset el conteo de
-  `categoria == 0` (no-churn) y `categoria == 1` (churn). Presenta como:
-  "Clase 0 (no-churn): N filas (X%). Clase 1 (churn): M filas (Y%)."
+  `categoria == 0` (sin el evento objetivo) y `categoria == 1` (con el evento objetivo).
+  Presenta como:
+  "Clase 0 (sin evento): N filas (X%). Clase 1 (con evento): M filas (Y%)."
   Si la clase minoritaria es < 20% del total, añade:
   "Riesgo de Accuracy Paradox: un modelo que prediga siempre la clase mayoritaria
   alcanzaría accuracy del X% sin aprender nada. Priorizar AUC-ROC sobre accuracy."\
@@ -76,8 +78,8 @@ Calcula desde el dataset:
   sin asumir a priori qué clase es mayoritaria en el dataset concreto.
 - Si imbalance ratio > 4:1: "Desbalance severo (ratio X:1). La accuracy como métrica
   única es engañosa. El estudiante debe analizar Matriz de Confusión, Precision, Recall
-  y F1-Score — especialmente para la clase 1 (churners). Considerar ajuste de threshold
-  antes de entrenar el algoritmo de clasificación seleccionado."\
+  y F1-Score — especialmente para la clase 1 (casos con el evento objetivo). Considerar
+  ajuste de threshold antes de entrenar el algoritmo de clasificación seleccionado."\
 """
 
 _EDA_TARGET_DISTRIBUTION_BLOCK_BUSINESS = """\
@@ -93,25 +95,25 @@ A partir del dataset, describe en lenguaje de negocio:
 
 _EDA_FEATURE_ENGINEERING_BLOCK_ML_DS = """\
 ## 3. Feature Engineering para Modelos Predictivos
-Explica 4-5 variables derivadas orientadas a clasificación binaria de churn, justificando
-cada una con su relevancia para predecir `categoria` con el algoritmo seleccionado. Fórmulas
-simples:
+Explica 4-5 variables derivadas orientadas a la clasificación binaria del evento objetivo,
+justificando cada una con su relevancia para predecir `categoria` con el algoritmo seleccionado.
+Fórmulas simples:
 - engagement_decay_rate: tasa de caída de engagement en la ventana de observación.
-- churn_risk_score: score compuesto de factores de riesgo ponderados por historial.
+- risk_score: score compuesto de factores de riesgo ponderados por historial.
 - support_intensity_index: frecuencia de contacto con soporte / antigüedad del cliente.
 - payment_stress_index: ratio de fallos de pago sobre intentos de pago totales.
 
 **ADVERTENCIA DE FUGA TEMPORAL (Leakage Guard):**
 Variables como `days_since_last_login` y `payment_failures` pueden introducir fuga
-temporal si el valor observado ocurre después del evento de churn. Verificar la ventana
+temporal si el valor observado ocurre después del evento objetivo. Verificar la ventana
 de observación antes de incluirlas: el valor debe corresponder a un momento anterior a la
-fecha del evento de churn. Si hay duda, excluir la variable del entrenamiento inicial.
+fecha del evento objetivo. Si hay duda, excluir la variable del entrenamiento inicial.
 
 **Umbral pedagógico para el modelo:**
 AUC-ROC >= 0.70 es el umbral pedagógico mínimo para este caso. Si el dataset muestra un
 imbalance > 3:1, considerar ajuste de threshold por sobre 0.5 para maximizar recall en la
-clase 1 (churners) — en muchos contextos de negocio el costo de no detectar un churner
-supera el costo de un falso positivo.
+clase 1 (casos con el evento objetivo) — en muchos contextos de negocio el costo de no detectar
+un caso positivo supera el costo de un falso positivo.
 (Objetivo: 200 palabras)\
 """
 
@@ -141,7 +143,7 @@ def select_eda_text_blocks(student_profile: str | None) -> dict[str, str]:
     the returned dict into the ``.format(**context)`` context.
 
     - ``ml_ds``    → technical blocks (AUC-ROC, Matriz de Confusión, imbalance-ratio
-      formula, Leakage Guard) preserved verbatim; event label ``"el churn"``.
+      formula, Leakage Guard) preserved verbatim; event label ``"el evento objetivo"``.
     - anything else (``business`` default) → managerial language, zero DS jargon,
       no hardcoded "churn"; event label ``"el evento objetivo"``.
     """
@@ -151,7 +153,7 @@ def select_eda_text_blocks(student_profile: str | None) -> dict[str, str]:
             "class_balance_block": _EDA_CLASS_BALANCE_BLOCK_ML_DS,
             "target_distribution_block": _EDA_TARGET_DISTRIBUTION_BLOCK_ML_DS,
             "feature_engineering_block": _EDA_FEATURE_ENGINEERING_BLOCK_ML_DS,
-            "event_label": "el churn",
+            "event_label": "el evento objetivo",
         }
     return {
         "class_balance_block": _EDA_CLASS_BALANCE_BLOCK_BUSINESS,

@@ -48,7 +48,7 @@ correlación/causalidad, sino los específicos de clasificación binaria:
     {{
       "numero": 2,
       "titulo": "string corto (≤8 palabras)",
-      "enunciado": "string (pregunta completa que cita threshold, churn rate y costo asimétrico reales del M2)",
+      "enunciado": "string (pregunta completa que cita threshold, tasa del evento y costo asimétrico reales del M2)",
       "solucion_esperada": "string (respuesta modelo en un párrafo fluido; máx 120 palabras; docente-only)",
       "bloom_level": "synthesis",
       "chart_ref": "id del chart de correlación o scatter del manifest, o null si no hay uno relevante",
@@ -59,25 +59,26 @@ correlación/causalidad, sino los específicos de clasificación binaria:
 }}
 
 # How You Work (Workflow)
-1. **Lee {eda_context}** — extrae: churn rate exacto, balance de clases (% clase 0 / % clase 1),
+1. **Lee {eda_context}** — extrae: la tasa del evento objetivo exacta, balance de clases (% clase 0 / % clase 1),
    accuracy reportada si existe, y cualquier métrica de desbalanceo (Gini, entropía, etc.).
 2. **Lee {chart_manifest}** — identifica:
    - El chart con distribución de clases (barras o pie de target) → chart_ref de P1.
    - El chart de correlación o scatter más informativo → chart_ref de P2 (null si no existe).
 3. **Diseña P1 — Accuracy Paradox** anclada en los datos reales:
-   - Cita el churn rate exacto del caso. Si el accuracy reportado es ~(1 - churn_rate), el
-     modelo trivial "siempre predice clase 0" logra ese accuracy sin poder predictivo.
-   - Pregunta: "Si el modelo reporta X% de accuracy y el churn rate es Y%, ¿qué modelo trivial
-     logra ese accuracy sin ningún poder predictivo sobre churners?"
+   - Cita la tasa del evento objetivo exacta del caso. Si el accuracy reportado es
+     ~(1 - tasa_evento), el modelo trivial "siempre predice clase 0" logra ese accuracy
+     sin poder predictivo.
+   - Pregunta: "Si el modelo reporta X% de accuracy y la tasa del evento es Y%, ¿qué modelo trivial
+     logra ese accuracy sin ningún poder predictivo sobre los casos positivos?"
    Referencia el id del chart de distribución de clases en chart_ref (usa el title del manifest
    solo para seleccionar el chart correcto; chart_ref = solo el id, sin incluir el title).
 4. **Diseña P2 — Precision/Recall Trade-off** anclada en el costo asimétrico del negocio:
-   - Usa el churn rate de {eda_context} para cuantificar el trade-off.
+   - Usa la tasa del evento objetivo de {eda_context} para cuantificar el trade-off.
    - Pregunta al estudiante qué threshold debería usar LR/RF en {primary_family} para maximizar
-     recall (capturar churners) y cómo afecta esto la elección entre F-beta (beta>1) y AUC-ROC.
+     recall (capturar los casos positivos) y cómo afecta esto la elección entre F-beta (beta>1) y AUC-ROC.
    - Exige que proponga un umbral concreto (ej: 0.3) con justificación cuantitativa.
 5. **Verifica** que cada pregunta obligue al estudiante a ir más allá de la métrica superficial
-   (accuracy) hacia métricas de negocio (recall, F-beta, AUC-ROC, costo de retención).
+   (accuracy) hacia métricas de negocio (recall, F-beta, AUC-ROC, costo de la acción correctiva).
 6. **Redacta solucion_esperada como un párrafo fluido** que integre el concepto estadístico,
    el ejemplo concreto del caso y la implicación ejecutiva en una sola prosa coherente.
    Máx 120 palabras. No uses sub-campos ni estructuras anidadas — solo texto plano.
@@ -103,9 +104,9 @@ correlación/causalidad, sino los específicos de clasificación binaria:
 - Si es "business":
   Mismas preguntas pero sin jerga técnica:
   P1 → "¿Por qué el modelo que parece acertar 9 de 10 veces falla en identificar
-          a los clientes que realmente se van?"
-  P2 → "¿Cómo decide el modelo a partir de qué probabilidad contactar a un cliente?
-          ¿Qué pasa con el presupuesto de retención si ese umbral es demasiado alto?"
+          los casos que sí presentan el evento objetivo?"
+  P2 → "¿Cómo decide el modelo a partir de qué probabilidad actuar sobre un caso?
+          ¿Qué pasa con el presupuesto de la acción correctiva si ese umbral es demasiado alto?"
   El estudiante "business" NO necesita conocimiento estadístico avanzado.
 - En ambos casos: task_type = "text_response" — la respuesta es argumentativa, no código.
 
@@ -115,37 +116,37 @@ correlación/causalidad, sino los específicos de clasificación binaria:
 
 **Enunciado:** Usar los datos reales de {eda_context} para construir la pregunta. Ejemplo
 de estructura (sustituir X e Y con los valores reales del caso):
-  "El informe EDA muestra un churn rate de Y% en el dataset. Si un modelo de clasificación
+  "El informe EDA muestra una tasa del evento de Y% en el dataset. Si un modelo de clasificación
    reporta un accuracy de X%, ¿qué modelo trivial logra exactamente ese accuracy sin ningún
-   poder predictivo sobre los clientes que se van? ¿Por qué el accuracy es una métrica engañosa
-   en este contexto y qué alternativas debería usar el equipo para evaluar el modelo?"
+   poder predictivo sobre los casos que sí presentan el evento? ¿Por qué el accuracy es una métrica
+   engañosa en este contexto y qué alternativas debería usar el equipo para evaluar el modelo?"
 
 solucion_esperada: (párrafo único, ej:)
-  "Con un churn rate del 8%, un modelo que siempre predice 'no churn' logra 92% de accuracy
-  sin capturar ni un solo churner real — eso es el accuracy paradox. Usar threshold=0.5 en
+  "Con una tasa del evento del 8%, un modelo que siempre predice 'sin evento' logra 92% de accuracy
+  sin capturar ni un solo caso positivo real — eso es el accuracy paradox. Usar threshold=0.5 en
   un dataset 92/8 implica que LR o RF 'funcionan' en accuracy pero el equipo pierde 40-60%
-  de churners reales y el presupuesto de retención se dirige al segmento equivocado. La
-  alternativa es evaluar con recall, F-beta (beta>1) o AUC-ROC."
+  de los casos positivos reales y el presupuesto de la acción correctiva se dirige al segmento
+  equivocado. La alternativa es evaluar con recall, F-beta (beta>1) o AUC-ROC."
 
 chart_ref: id del chart de distribución de clases/target de {chart_manifest}
 exhibit_ref: "Dataset"
 
 ## P2 — Precision/Recall Trade-off (bloom_level: "synthesis")
 
-**Enunciado:** Usar el churn rate de {eda_context} y el contexto de {primary_family}. Ejemplo
+**Enunciado:** Usar la tasa del evento de {eda_context} y el contexto de {primary_family}. Ejemplo
 de estructura:
-  "Dado el costo asimétrico del negocio — un falso negativo (churner no contactado) representa
-   ingreso perdido, mientras que un falso positivo (oferta enviada a cliente leal) es costo
-   de retención recuperable — ¿qué threshold de decisión debería usar el modelo en {primary_family}?
+  "Dado el costo asimétrico del negocio — un falso negativo (caso positivo no atendido) representa
+   valor perdido, mientras que un falso positivo (acción tomada sobre un caso negativo) es costo
+   de la acción recuperable — ¿qué threshold de decisión debería usar el modelo en {primary_family}?
    Proponga un umbral concreto (distinto de 0.5) y justifique su elección usando F-beta con
    beta>1 o AUC-ROC. ¿Cómo afecta esta decisión la elección entre los modelos disponibles?"
 
 solucion_esperada: (párrafo único, ej:)
-  "Bajar el threshold de 0.5 a 0.3 aumenta el recall capturando más churners a costa de más
-  falsos positivos — ese es el precision-recall trade-off. Con churn rate del 8%, threshold=0.5
+  "Bajar el threshold de 0.5 a 0.3 aumenta el recall capturando más casos positivos a costa de más
+  falsos positivos — ese es el precision-recall trade-off. Con una tasa del evento del 8%, threshold=0.5
   puede dar recall ~40%; bajarlo a 0.3 sube el recall a ~70% con +15pp de falsos positivos.
-  La decisión depende del ratio costo_retención / ingreso_perdido por churner: si perder un
-  churner cuesta más que retener a un cliente leal, F-beta con beta>1 es la métrica correcta
+  La decisión depende del ratio costo_acción / valor_perdido por caso: si perder un caso positivo
+  cuesta más que actuar sobre un caso negativo, F-beta con beta>1 es la métrica correcta
   sobre AUC-ROC."
 
 chart_ref: id del chart de correlación o scatter de {chart_manifest}, o null si no hay relevante

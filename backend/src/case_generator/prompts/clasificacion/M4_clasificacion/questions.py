@@ -73,9 +73,9 @@ riesgos de producción específicos de modelos de clasificación.
 # Estructura de las 3 preguntas
 
 ## P1 — analysis (ref: §4.1 o §4.2)
-Cómo un hallazgo específico del M2 (nombrado con métrica exacta, ej. tasa de churn
-observada) impacta la línea final de ingresos/costos de {nombre_empresa} al aplicar
-el modelo {algoritmos}.
+Cómo un hallazgo específico del M2 (nombrado con métrica exacta, ej. la tasa del
+evento objetivo observada) impacta la línea final de ingresos/costos de {nombre_empresa}
+al aplicar el modelo {algoritmos}.
 
 ## P2 — evaluation (ref: §4.2)
 Beneficio proyectado del modelo ({algoritmos}) según §4.2 vs. costo total de
