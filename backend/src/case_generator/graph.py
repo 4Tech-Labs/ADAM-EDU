@@ -983,6 +983,13 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             contract_dict, family_resolved, result.titulo
         )
         coherence_warnings = list(coherence_warnings) + cost_warnings
+
+        # Issue F1 — valida la tasa de evento (fuente única M1↔M2) con la misma
+        # resolución de perfil/familia. Gateada a ml_ds + clasificación binaria.
+        contract_dict, rate_warnings = _validate_target_event_rate(
+            contract_dict, family_resolved, result.titulo, profile_resolved
+        )
+        coherence_warnings = list(coherence_warnings) + rate_warnings
         if target_enforced:
             coherence_warnings.append(
                 "target business+clasificación normalizado a classification_target binario "
@@ -2856,6 +2863,106 @@ def _validate_business_cost_matrix(
     return new_contract, warnings
 
 
+def _validate_target_event_rate(
+    contract: dict | None,
+    family: str | None,
+    case_title: str | None,
+    profile: str | None,
+) -> tuple[dict | None, list[str]]:
+    """Valida y sanitiza ``target_event_rate`` del contrato (Issue F1).
+
+    Fuente única de verdad de la prevalencia del evento: el architect la emite, Exhibit 2 la
+    imprime, y el generador determinista calibra la columna target a ella. Best-effort
+    (case_architect-style), NUNCA lanza ni muta el dict in-place:
+      * Gate = ml_ds + clasificación + target binario (``role==classification_target`` y
+        ``dtype==int``). Fuera del gate y poblado → warning + nulificado (no aplica a
+        business/multiclase/otras familias).
+      * Dentro del gate y ausente → warning estructurado (el generador cae al umbral ~0.50 y
+        Exhibit 2 quedará incoherente — señal accionable para operadores).
+      * Dentro del gate, presente pero fuera de [_MIN, _MAX] o no finito → warning + nulificado.
+      * OK → contrato con el rate como ``float``.
+    Devuelve ``(contract_or_copy, warnings)``.
+    """
+    from case_generator.tools_and_schemas import (
+        _MAX_TARGET_EVENT_RATE,
+        _MIN_TARGET_EVENT_RATE,
+    )
+
+    warnings: list[str] = []
+    if contract is None:
+        return contract, warnings
+
+    raw_value = contract.get("target_event_rate")
+    family_norm = (family or "").strip().lower()
+    profile_norm = (profile or "").strip().lower()
+    target = contract.get("target_column") or {}
+    is_binary_clf = (
+        profile_norm == "ml_ds"
+        and family_norm == "clasificacion"
+        and isinstance(target, dict)
+        and target.get("role") == "classification_target"
+        and target.get("dtype") == "int"
+    )
+
+    # Fuera del gate: si viene poblado, nulificar (no aplica).
+    if not is_binary_clf:
+        if raw_value is not None:
+            logger.warning(
+                "[case_architect.target_event_rate] emitido fuera del gate ml_ds+clf binario "
+                "(profile=%r, family=%r, case_title=%r) — nulificado",
+                profile, family, case_title or "<sin titulo>",
+            )
+            new_contract = dict(contract)
+            new_contract["target_event_rate"] = None
+            warnings.append(
+                "target_event_rate_wrong_scope: target_event_rate solo aplica a ml_ds + "
+                "clasificación binaria; se ignoró para este caso."
+            )
+            return new_contract, warnings
+        return contract, warnings
+
+    # Dentro del gate, ausente.
+    if raw_value is None:
+        logger.warning(
+            "[case_architect.target_event_rate] missing for ml_ds binary classification "
+            "(case_title=%r) — el generador usará ~0.50 y Exhibit 2 quedará incoherente",
+            case_title or "<sin titulo>",
+        )
+        warnings.append(
+            "target_event_rate_missing: caso ml_ds de clasificación sin tasa de evento; "
+            "el dataset usará prevalencia ~0.50 que puede no coincidir con Exhibit 2."
+        )
+        return contract, warnings
+
+    # Dentro del gate, presente — bounds + finitud (la comparación excluye NaN/inf sin `math`).
+    valid = (
+        isinstance(raw_value, (int, float))
+        and not isinstance(raw_value, bool)
+        and _MIN_TARGET_EVENT_RATE <= float(raw_value) <= _MAX_TARGET_EVENT_RATE
+    )
+    if not valid:
+        logger.warning(
+            "[case_architect.target_event_rate] inválido (%r) fuera de [%.2f, %.2f] o no finito "
+            "(case_title=%r) — nulificado",
+            raw_value, _MIN_TARGET_EVENT_RATE, _MAX_TARGET_EVENT_RATE,
+            case_title or "<sin titulo>",
+        )
+        new_contract = dict(contract)
+        new_contract["target_event_rate"] = None
+        warnings.append(
+            "target_event_rate_invalid: tasa de evento fuera del rango plausible [1%, 50%]; "
+            "se ignoró (el dataset usará prevalencia ~0.50)."
+        )
+        return new_contract, warnings
+
+    # OK — normaliza a float si vino como int.
+    if not isinstance(raw_value, float):
+        new_contract = dict(contract)
+        new_contract["target_event_rate"] = float(raw_value)
+        return new_contract, warnings
+    return contract, warnings
+
+
 def _format_dataset_contract_block(contract: dict | None) -> str:
     """Renderiza el contrato como bloque legible para inyectar en SCHEMA_DESIGNER_PROMPT.
 
@@ -2975,11 +3082,41 @@ def _augment_schema_with_contract(schema: dict, contract: dict | None) -> dict:
     target = contract.get("target_column") or {}
     target_name = (target.get("name") or "").strip()
     if target_name and target_name not in existing_names:
-        columns.append(_default_column(
-            name=target_name,
-            dtype=target.get("dtype", "float"),
-            description=target.get("description", "Variable objetivo declarada por contrato"),
-        ))
+        if (
+            target.get("role") == "classification_target"
+            and target.get("dtype") == "int"
+            and target_name.isidentifier()
+        ):
+            # Endurecimiento R2: un classification_target BINARIO (dtype int) inyectado DEBE ser
+            # {0,1} con señal, NO un int [0,100] random — el notebook lo resuelve contract-first
+            # (#348) y un target no-binario degrada el modeling entero. Lo inyectamos como
+            # `categoria`: int [0,1] dependiente de un driver numérico existente. Un target
+            # multiclase (dtype str) cae al `_default_column` (str categórico), sin tocar.
+            # El guard `.isidentifier()` espeja `_safe_contract_target_name`/`_align`: un nombre
+            # no-identificador NO debe producir una binaria inyectada (el notebook caería al
+            # alias `categoria`, dejando esta binaria como duplicado con leakage).
+            driver = _pick_numeric_driver(columns, exclude=target_name)
+            columns.append({
+                "name": target_name,
+                "type": "int",
+                "description": target.get(
+                    "description", "Variable objetivo binaria declarada por contrato"
+                ),
+                "range_min": 0,
+                "range_max": 1,
+                "nullable": False,
+                "trend": None,
+                "dependency": (
+                    {"depends_on": driver, "relationship": "linear", "noise_factor": 0.30}
+                    if driver else None
+                ),
+            })
+        else:
+            columns.append(_default_column(
+                name=target_name,
+                dtype=target.get("dtype", "float"),
+                description=target.get("description", "Variable objetivo declarada por contrato"),
+            ))
         existing_names.add(target_name)
         logger.warning(
             "[contract.augment] target '%s' faltante — inyectado con defaults seguros",
@@ -3003,6 +3140,121 @@ def _augment_schema_with_contract(schema: dict, contract: dict | None) -> dict:
         )
 
     new_schema["columns"] = columns
+    return new_schema
+
+
+def _pick_numeric_driver(columns: list[dict], *, exclude: str = "") -> str | None:
+    """Elige una columna numérica existente como driver de un target binario inyectado.
+
+    Prefiere ``churn_rate`` (el driver canónico del template ml_ds de clasificación); si no
+    está, la primera columna ``int``/``float`` con rango declarado distinta del propio target.
+    Devuelve ``None`` si no hay ninguna (→ el target se genera independiente, igual binario).
+    """
+    names = {c.get("name") for c in columns}
+    if "churn_rate" in names and exclude != "churn_rate":
+        return "churn_rate"
+    for c in columns:
+        if (
+            c.get("name") != exclude
+            and c.get("type") in ("int", "float")
+            and c.get("range_min") is not None
+            and c.get("range_max") is not None
+        ):
+            return c.get("name")
+    return None
+
+
+def _align_ml_ds_classification_target(
+    schema_result: dict,
+    contract: dict | None,
+    *,
+    profile: str,
+    primary_family: str | None,
+) -> dict:
+    """Reconcilia la identidad del target binario para ml_ds + clasificación (R2).
+
+    El architect nombra el target con un nombre de dominio (``churn_flag``) en el contrato,
+    pero el schema fijo M2 construye la binaria como ``categoria``. Si divergen, el notebook
+    (contract-first, #348) entrena el nombre del contrato: o el augmenter lo inyecta como
+    ``int [0,100]`` random (no binario → degrada el modeling) o coexiste con ``categoria`` (otra
+    binaria del MISMO driver → feature con leakage). Este normalizador garantiza UNA sola
+    binaria, con el nombre del contrato, derivada del driver:
+
+      1. renombra la binaria fija (``categoria``) al nombre del contrato si éste aún no es columna;
+      2. elimina cualquier binaria duplicada derivada del MISMO driver que el target (anti-leakage).
+
+    Determinista, 0 tokens, no muta el dict de entrada. NO toca business, otras familias, ni el
+    caso sin un ``classification_target`` de contrato con nombre válido (→ ``categoria`` se
+    preserva). Debe correr ANTES de ``_augment_schema_with_contract`` para que el augmenter vea
+    el target ya presente y no inyecte la columna ``[0,100]``.
+    """
+    if profile != "ml_ds":
+        return schema_result
+    # ml_ds: None family → "clasificacion" (espeja `_effective_family` de schema_designer,
+    # graph.py ~3494). Sin esto, un job ml_ds con algoritmos vacíos (primary_family=None)
+    # construye el template `categoria` pero NO se reconcilia aquí → el augmenter inyecta un
+    # duplicado del mismo driver (el leakage que esta función previene).
+    if (primary_family or "clasificacion") != "clasificacion":
+        return schema_result
+    contract_target = _safe_contract_target_name(contract)
+    if not contract_target:
+        return schema_result
+    tgt = (contract or {}).get("target_column") or {}
+    # Solo reconciliamos un target BINARIO (dtype int). Un classification_target multiclase
+    # (dtype str) NO debe heredar la binaria `categoria` — se deja intacto.
+    if tgt.get("role") != "classification_target" or tgt.get("dtype") != "int":
+        return schema_result
+
+    columns = [dict(c) for c in schema_result.get("columns", [])]
+    binary_targets = [
+        c for c in columns
+        if _is_declared_binary_int(c) and isinstance(c.get("dependency"), dict)
+    ]
+    if not binary_targets:
+        return schema_result  # nada que reconciliar; el augmenter endurecido es la red.
+
+    # Elige la binaria objetivo de forma orden-robusta (no asumas binary_targets[0]): la que ya
+    # lleva el nombre del contrato → la canónica `categoria` → la primera.
+    target_col = (
+        next((c for c in binary_targets if c.get("name") == contract_target), None)
+        or next((c for c in binary_targets if c.get("name") == "categoria"), None)
+        or binary_targets[0]
+    )
+    if target_col.get("name") != contract_target:
+        # Renombra la binaria al nombre del contrato — SOLO si ese nombre no colisiona con otra
+        # columna existente (evitar dos columnas homónimas → corrupción del df al ensamblar).
+        if contract_target in {c.get("name") for c in columns}:
+            logger.warning(
+                "[_align_ml_ds_classification_target] nombre de contrato '%s' ya existe como "
+                "columna no-objetivo — se omite el rename para no duplicar nombre.",
+                contract_target,
+            )
+            return schema_result
+        old_name = target_col.get("name")
+        target_col["name"] = contract_target
+        logger.info(
+            "[_align_ml_ds_classification_target] target binario '%s' → '%s' (nombre del contrato)",
+            old_name, contract_target,
+        )
+    keep_name = target_col.get("name")
+    keep_driver = (target_col.get("dependency") or {}).get("depends_on")
+    # anti-leakage: descarta otras binarias {0,1} derivadas del MISMO driver que el target.
+    new_columns = [
+        c for c in columns
+        if not (
+            c.get("name") != keep_name
+            and _is_declared_binary_int(c)
+            and isinstance(c.get("dependency"), dict)
+            and c["dependency"].get("depends_on") == keep_driver
+        )
+    ]
+    if len(new_columns) != len(columns):
+        logger.info(
+            "[_align_ml_ds_classification_target] binaria duplicada del driver '%s' eliminada "
+            "(anti-leakage) — target único: '%s'", keep_driver, keep_name,
+        )
+    new_schema = dict(schema_result)
+    new_schema["columns"] = new_columns
     return new_schema
 
 
@@ -3373,6 +3625,12 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
             #   2) validator: registra residuales (vacío post-augment) + leakage flags
             #      como data_gap_warnings que M2 EDA y M3 notebook leerán.
             contract = state.get("dataset_schema_required")
+            # R2 — reconcilia la identidad del target binario ANTES del augment (ml_ds+clf),
+            # para que el augmenter no inyecte un target [0,100] random y no quede una binaria
+            # duplicada con leakage. No-op fuera del gate.
+            schema_result = _align_ml_ds_classification_target(
+                schema_result, contract, profile=profile, primary_family=primary_family
+            )
             schema_result = _augment_schema_with_contract(schema_result, contract)
             # Issue #301 — spine determinista business+clasificación: garantiza un target
             # binario de dominio + driver (no el template fijo de churn). Business-only;
@@ -3411,6 +3669,10 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     )
     # Issue #225 — incluso en fallback respetamos el contrato del architect.
     contract = state.get("dataset_schema_required")
+    # R2 — misma reconciliación de identidad del target que en el camino feliz.
+    fallback_schema = _align_ml_ds_classification_target(
+        fallback_schema, contract, profile=profile, primary_family=primary_family
+    )
     fallback_schema = _augment_schema_with_contract(fallback_schema, contract)
     # Issue #301 — el spine determinista también aplica en fallback (red de seguridad).
     fallback_schema, biz_notes, biz_target = _enforce_business_classification_schema(
@@ -3563,7 +3825,28 @@ def _is_declared_binary_int(col: dict) -> bool:
 # HELPER — _generate_dataset_from_schema (Python puro, 0 tokens LLM)
 # ─────────────────────────────────────────────────────────
 
-def _generate_dataset_from_schema(schema: dict, profile: str = "business") -> list:
+def _is_mlds_event_target(col: dict, target_col_name: str | None) -> bool:
+    """¿Es ``col`` el target binario ml_ds a calibrar (Issue F1)?
+
+    El target del contrato (ya reconciliado a una binaria por ``_align_ml_ds_classification_target``)
+    o ``categoria`` como fallback alias-first cuando no hay nombre de contrato — espejo de la
+    resolución contract-first del notebook (#348). Solo binarias {0,1} int.
+    """
+    if not _is_declared_binary_int(col):
+        return False
+    name = col.get("name")
+    if target_col_name:
+        return name == target_col_name
+    return name == "categoria"
+
+
+def _generate_dataset_from_schema(
+    schema: dict,
+    profile: str = "business",
+    *,
+    target_event_rate: float | None = None,
+    target_col_name: str | None = None,
+) -> list:
     """
     Genera filas de datos a partir del schema producido por schema_designer.
     Vectorizado con numpy. Cero tokens LLM. Determinista con seed derivado del schema.
@@ -3707,6 +3990,27 @@ def _generate_dataset_from_schema(schema: dict, profile: str = "business") -> li
 
         if col_type == "float":
             result = [None if null_mask[i] else round(float(values[i]), 2) for i in range(n_rows)]
+        elif (
+            profile == "ml_ds"
+            # isinstance (no solo `is not None`): defensa-en-profundidad sobre un valor de
+            # origen LLM, por si un rate malformado (str/bool/None) llegara sin pasar por
+            # `_validate_target_event_rate` — cae al camino round normal en vez de crashear.
+            and isinstance(target_event_rate, (int, float))
+            and not isinstance(target_event_rate, bool)
+            and _is_mlds_event_target(col, target_col_name)
+        ):
+            # Issue F1 — calibra la prevalencia del target binario ml_ds al `target_event_rate`
+            # anunciado en Exhibit 2 (fuente única M1↔M2). Umbral top-k por argsort sobre los
+            # `values` (= clip(base+noise), que ya codifican la señal driver→target): preserva
+            # el ORDEN (señal/AUC intacta) y fija la prevalencia EXACTA a la tasa. `k` con
+            # piso/techo garantiza ambas clases. Mutuamente excluyente con el balance business.
+            scores = np.asarray(values, dtype=float)
+            n = scores.size
+            k = max(1, min(n - 1, int(round(float(target_event_rate) * n))))
+            order = np.argsort(scores, kind="stable")  # ascendente, determinista con seed fijo
+            labels = np.zeros(n, dtype=int)
+            labels[order[n - k:]] = 1  # top-k scores → positivos → exactamente k=round(rate·n)
+            result = [None if null_mask[i] else int(labels[i]) for i in range(n_rows)]
         else:
             # Issue #301 — guard anti-degeneración del target binario de dominio (business).
             # SOLO el target que el spine etiquetó con ``is_domain_target`` se balancea;
@@ -3856,7 +4160,20 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
         if profile == "business":
             schema["n_rows"] = max(80, min(120, schema.get("n_rows", 100)))
 
-        rows = _generate_dataset_from_schema(schema, profile=profile)
+        # Issue F1 — pasa la tasa de evento + nombre del target (fuente única M1↔M2) para que
+        # el generador calibre la prevalencia del target binario ml_ds. Como kwargs (no en
+        # `schema`) el seed no cambia → datasets sin rate / business byte-idénticos.
+        contract = state.get("dataset_schema_required")
+        target_event_rate = (
+            contract.get("target_event_rate") if isinstance(contract, dict) else None
+        )
+        target_col_name = _safe_contract_target_name(contract) or None
+        rows = _generate_dataset_from_schema(
+            schema,
+            profile=profile,
+            target_event_rate=target_event_rate,
+            target_col_name=target_col_name,
+        )
         constraints = schema.get("constraints", {})
         constraints_with_count = {**constraints, "n_rows_expected": schema.get("n_rows", 100)}
 

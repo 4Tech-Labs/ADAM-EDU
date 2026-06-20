@@ -111,7 +111,9 @@ Notas críticas:
 - col 18 (categoria): type="int", range_min=0, range_max=1, trend=null.
   dependency.depends_on="churn_rate", relationship="linear", noise_factor=0.30.
   NUNCA type="str" para categoria — convierte el target en ruido aleatorio sin señal.
-- El data_generator normaliza el padre, agrega ruido gaussiano, y redondea a int → ~70% señal → AUC ≥ 0.70.
+- El data_generator normaliza el padre y agrega ruido gaussiano → ~70% señal → AUC ≥ 0.70.
+  Si el contrato trae `target_event_rate`, el target se calibra a esa prevalencia preservando
+  el ORDEN (la señal/AUC no cambia, solo la tasa de positivos); si no, usa el umbral ~0.50.
 - revenue en col 2 y 3: rev = revenue_annual_total / {max_rows} (por fila, no anual).
 
 ## Ejemplo de columnas con dependency y target (JSON listo para emitir)
