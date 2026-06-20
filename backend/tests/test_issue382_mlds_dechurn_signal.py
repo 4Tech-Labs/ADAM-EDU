@@ -268,3 +268,65 @@ def test_both_classes_without_rate() -> None:
         "sin target_event_rate, el target de-churnado (is_domain_target) debe seguir teniendo "
         "ambas clases vía _ensure_both_classes ampliado a ml_ds"
     )
+
+
+# ─────────────────────────────────────────────────────────
+# (h) reparación de dependencias colgantes (F2 — ejercita el branch repair)
+# ─────────────────────────────────────────────────────────
+
+
+def test_dangling_dependency_repaired_to_none() -> None:
+    """Una columna SUPERVIVIENTE (no contrato/target/driver) cuyo padre fue eliminado por el strip
+    queda con `dependency=None` (genera independiente), no huérfana apuntando a un padre ausente."""
+    base = _post_augment(_FRAUD_CONTRACT)
+    # Columna de dominio que depende de una churn col que SÍ se eliminará (no es contrato/target/driver).
+    base["columns"].append({
+        "name": "extra_metric", "type": "float", "range_min": 0.0, "range_max": 1.0,
+        "nullable": False, "trend": None,
+        "dependency": {"depends_on": "churn_rate", "relationship": "linear", "noise_factor": 0.2},
+    })
+    out = _enforce_mlds_classification_schema(
+        base, _FRAUD_CONTRACT, profile="ml_ds", primary_family="clasificacion"
+    )
+    assert _col(out, "churn_rate") is None  # el padre fue stripeado
+    extra = _col(out, "extra_metric")
+    assert extra is not None, "la columna de dominio no debe eliminarse (no es churn/SaaS)"
+    assert extra["dependency"] is None, (
+        "el padre (churn_rate) fue eliminado → la dependency colgante debe repararse a None"
+    )
+
+
+# ─────────────────────────────────────────────────────────
+# (i) RT1 — driver elegido ausente del schema → sintetiza, el target nunca queda huérfano
+# ─────────────────────────────────────────────────────────
+
+
+def test_absent_driver_feature_gets_synth_not_orphan() -> None:
+    """Defensa en profundidad (RT1): si el driver elegido (feature del contrato) NO quedó como
+    columna (p.ej. un orden de pipeline sin `_augment`), el sibling garantiza un driver PRESENTE —
+    el target nunca queda huérfano apuntando a un padre ausente (que sería AUC ~0.5)."""
+    base = _post_augment(_FRAUD_CONTRACT)
+    # Simula que la feature-driver del contrato no quedó como columna.
+    base["columns"] = [c for c in base["columns"] if c["name"] != "transaction_amount"]
+    out = _enforce_mlds_classification_schema(
+        base, _FRAUD_CONTRACT, profile="ml_ds", primary_family="clasificacion"
+    )
+    tgt = _col(out, "fraud_flag")
+    assert tgt is not None
+    driver = tgt["dependency"]["depends_on"]
+    names = {c["name"] for c in out["columns"]}
+    assert driver in names, f"el target se re-apuntó a '{driver}', que NO está presente (huérfano)"
+    assert tgt.get("is_domain_target") is True
+
+
+# ─────────────────────────────────────────────────────────
+# (j) F3 — kill-switch: default ON (env→Settings)
+# ─────────────────────────────────────────────────────────
+
+
+def test_kill_switch_default_is_true() -> None:
+    """El kill-switch MLDS_DECHURN_SIGNAL está ON por defecto (de-churn activo en producción).
+    Asierta el DEFAULT declarado (independiente del env) para que la cadena env→Settings→call-site
+    no dependa de un valor de entorno en CI."""
+    from shared.database import Settings
+    assert Settings.model_fields["mlds_dechurn_signal"].default is True

@@ -74,8 +74,13 @@ _N_ROWS = 600  # ml_ds + clasificación: cascada GridSearchCV #240 (no cambia).
 _AUC_FLOOR = 0.55  # espeja el piso del gate del ejecutor (m3_notebook_execution.py:477).
 
 
-def _build_mlds_nonchurn_schema() -> dict:
-    """Replica el orden REAL del pipeline ml_ds en schema_designer (graph.py:3760-3769)."""
+def _build_mlds_nonchurn_schema(*, dechurn: bool = True) -> dict:
+    """Replica el orden REAL del pipeline ml_ds en schema_designer (graph.py:3760-3769).
+
+    ``dechurn=False`` deja el sibling como no-op (kill-switch off) → el target conserva el driver
+    `churn_rate` y el template churn/SaaS (estado PRE-#382), usado como línea base para asertar la
+    GANANCIA de señal de dominio (no-tautológico).
+    """
     base = _build_fallback_schema(
         {"studentProfile": "ml_ds", "doc1_anexo_financiero": "Ingresos anuales: $120M"},
         _N_ROWS,
@@ -94,7 +99,8 @@ def _build_mlds_nonchurn_schema() -> dict:
     # DOMINIO y elimina el template churn/SaaS. Es el paso REAL que graph.py:schema_designer
     # corre tras el spine business (con enabled=settings.mlds_dechurn_signal).
     schema = _enforce_mlds_classification_schema(
-        schema, _FRAUD_CONTRACT, profile="ml_ds", primary_family="clasificacion"
+        schema, _FRAUD_CONTRACT, profile="ml_ds", primary_family="clasificacion",
+        enabled=dechurn,
     )
     return schema
 
@@ -220,37 +226,51 @@ def test_churn_and_saas_template_absent_after_dechurn() -> None:
 
 
 def test_signal_comes_from_domain_not_churn() -> None:
-    """TIGHTENING #382: la señal del target es medible usando SOLO las features de DOMINIO.
+    """TIGHTENING #382: la señal del target proviene del DOMINIO, no de churn residual.
 
-    Antes del de-churn el AUC domain-only era ~0.5 (azar) porque la señal vivía en churn_rate;
-    tras el de-churn el driver es una feature de dominio → AUC domain-only ∈ [0.55, 0.99]. El
-    control negativo (ruido) sigue por debajo del piso → la aserción NO es tautológica.
+    Medido: CON el de-churn la AUC domain-only ≈ 0.91; SIN el de-churn (target acoplado a
+    ``churn_rate``) ≈ 0.57 — apenas por encima del azar por correlación de rango incidental del
+    top-k. Por eso un piso absoluto de 0.55 NO discriminaría 0.57 de 0.91 (sería tautológico).
+    Este test asierta (a) un piso alto que la línea base churn-acoplada NO alcanza y (b) la
+    GANANCIA explícita vs esa línea base (sibling off), de modo que se pone ROJO si el de-churn se
+    revierte; más el control de ruido no-tautológico.
     """
-    schema = _build_mlds_nonchurn_schema()
-    rows = _generate_dataset_from_schema(
-        schema, profile="ml_ds", target_event_rate=_RATE, target_col_name=_TARGET
-    )
-    df = pd.DataFrame(rows)
-    y = df[_TARGET].astype(int).to_numpy()
-    # X = SOLO features de dominio del contrato; excluye explícitamente cualquier columna
-    # churn/SaaS por si una regresión la reintrodujera.
-    domain_cols = [
+    domain_names = {
         f["name"] for f in _FRAUD_CONTRACT["feature_columns"]
-        if f["name"] in df.columns
-        and f["name"] not in (_CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS)
-    ]
-    assert domain_cols, "no quedó ninguna feature de dominio para medir la señal"
-    X_domain = df[domain_cols].fillna(0.0)
-    domain_auc = _cv_auc(X_domain, y)
-    assert _AUC_FLOOR <= domain_auc <= 0.99, (
-        f"señal domain-only AUC {domain_auc:.3f} fuera de [{_AUC_FLOOR}, 0.99] — el de-churn no "
+        if f["name"] not in (_CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS)
+    }
+
+    def _domain_only_auc(schema: dict) -> tuple[float, "pd.DataFrame", "np.ndarray", list[str]]:
+        rows = _generate_dataset_from_schema(
+            schema, profile="ml_ds", target_event_rate=_RATE, target_col_name=_TARGET
+        )
+        df = pd.DataFrame(rows)
+        y = df[_TARGET].astype(int).to_numpy()
+        # X = SOLO features de dominio del contrato; excluye explícitamente cualquier columna
+        # churn/SaaS por si una regresión la reintrodujera (en la línea base SÍ están presentes).
+        cols = [c for c in domain_names if c in df.columns]
+        assert cols, "no quedó ninguna feature de dominio para medir la señal"
+        return _cv_auc(df[cols].fillna(0.0), y), df, y, cols
+
+    dechurned_auc, df, y, domain_cols = _domain_only_auc(_build_mlds_nonchurn_schema(dechurn=True))
+    baseline_auc, *_ = _domain_only_auc(_build_mlds_nonchurn_schema(dechurn=False))
+
+    # (a) Piso alto + rango sano — la línea base churn-acoplada (~0.57) NO lo alcanza.
+    assert 0.70 <= dechurned_auc <= 0.99, (
+        f"señal domain-only AUC {dechurned_auc:.3f} fuera de [0.70, 0.99] — el de-churn no "
         "trasladó la señal al dominio (o introdujo leakage)."
     )
+    # (b) GANANCIA vs el target churn-acoplado: NO-tautológico (ROJO si el sibling se revierte).
+    assert dechurned_auc - baseline_auc >= 0.20, (
+        f"el de-churn no ganó señal de dominio: con-sibling={dechurned_auc:.3f} vs "
+        f"base(churn)={baseline_auc:.3f} (Δ={dechurned_auc - baseline_auc:.3f} < 0.20)"
+    )
 
+    # Control negativo: ruido con la misma prevalencia NO alcanza el piso del executor.
     rng = np.random.default_rng(2382)
     k = int(round(_RATE * len(y)))
     noise = np.zeros(len(y), dtype=int)
     noise[rng.choice(len(y), size=k, replace=False)] = 1
-    assert _cv_auc(X_domain, noise) < _AUC_FLOOR, (
+    assert _cv_auc(df[domain_cols].fillna(0.0), noise) < _AUC_FLOOR, (
         "control negativo inválido: ruido alcanzó el piso sobre las features de dominio"
     )

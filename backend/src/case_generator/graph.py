@@ -3679,13 +3679,6 @@ def _enforce_mlds_classification_schema(
 
     keep_name = target_col.get("name")
     driver_name, synth_driver = _select_driver_feature(contract, target_name=keep_name)
-    existing = {c.get("name") for c in columns}
-    # Si no había feature de dominio usable, asegura el driver sintetizado EN el schema (espejo
-    # del spine business ~3546-3548); de lo contrario el target re-apuntado quedaría huérfano
-    # (padre ausente → `_generate_independent_values` → AUC ~0.5).
-    if synth_driver is not None and driver_name not in existing:
-        columns.append(synth_driver)
-        existing.add(driver_name)
 
     # NUNCA elimines una columna declarada por el contrato (aunque su nombre coincida con el
     # template), ni el target ni el driver.
@@ -3697,6 +3690,28 @@ def _enforce_mlds_classification_schema(
     strip_set = (_CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS) - protected
     stripped = [c.get("name") for c in columns if c.get("name") in strip_set]
     columns = [c for c in columns if c.get("name") not in strip_set]
+
+    # Defensa en profundidad (RT1): tras el strip el driver DEBE existir como columna, o el target
+    # re-apuntado quedaría huérfano (padre ausente → `_generate_independent_values` → AUC ~0.5). En
+    # el pipeline cableado `_augment_schema_with_contract` ya inyectó las features del contrato ANTES
+    # de este nodo, pero el sibling NO debe depender de ese orden: si el driver elegido (nombre de
+    # feature del contrato) no quedó presente, garantiza un driver de dominio sintetizado y reapunta.
+    present = {c.get("name") for c in columns}
+    if driver_name not in present:
+        if synth_driver is None:
+            synth_driver = {
+                "name": "domain_driver_score",
+                "type": "float",
+                "description": "Driver de dominio sintetizado correlado con el objetivo del caso",
+                "range_min": 0.0,
+                "range_max": 1.0,
+                "nullable": False,
+                "trend": None,
+                "dependency": None,
+            }
+        driver_name = synth_driver["name"]
+        if driver_name not in present:
+            columns.append(synth_driver)
 
     # Re-apunta la señal del target al driver de dominio + márcalo (anti-degeneración no-rate:
     # el `is_domain_target` activa `_ensure_both_classes` ampliado a ml_ds). noise_factor con la
@@ -4415,10 +4430,12 @@ def _generate_dataset_from_schema(
             profile == "business"
             and any(tok in c["name"].lower() for tok in _financial_tokens)
         )
-        # N-7 (Issue #301): nunca inyectes el outlier en el target binario {0,1} de
-        # business — un ×3.5 capado lo convertiría en float 0.0/1.0 (dtype mixto en una
-        # columna de clasificación). Se excluye toda columna int declarada en [0,1].
-        and not (profile == "business" and _is_declared_binary_int(c))
+        # N-7 (Issue #301): nunca inyectes el outlier en el target binario {0,1} — un ×3.5
+        # capado lo convertiría en float 0.0/1.0 (dtype mixto en una columna de clasificación).
+        # Se excluye toda columna int declarada en [0,1]. Issue #382 — ampliado a ml_ds (consistente
+        # con `_ensure_both_classes`): el target de-churnado es un binario {0,1} real. Sin cambio de
+        # comportamiento hoy (el target nunca es `numeric_non_revenue[0]`), es defensa-en-profundidad.
+        and not (profile in ("business", "ml_ds") and _is_declared_binary_int(c))
     ]
     if numeric_non_revenue and n_rows >= 50:
         target_col_def = numeric_non_revenue[0]
