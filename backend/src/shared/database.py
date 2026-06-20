@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     # preview). Kill-switch: set AUTHORING_LIVE_PREVIEW=false to disable the per-node
     # partial-canonical write + /preview endpoint and degrade cleanly to the step loader.
     authoring_live_preview: bool = True
+    # De-churn the ml_ds + clasificación dataset SIGNAL (Issue #382). When true, the
+    # deterministic sibling `_enforce_mlds_classification_schema` re-points a NON-retention
+    # binary target to a domain driver and strips the churn/SaaS template. Kill-switch: set
+    # MLDS_DECHURN_SIGNAL=false to disable the sibling and ship the prior churn-coupled schema
+    # byte-identically (instant env-only revert; no redeploy). churn/retention is unaffected
+    # either way (the sibling no-ops on retention targets).
+    mlds_dechurn_signal: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

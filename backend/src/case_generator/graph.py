@@ -3408,6 +3408,17 @@ _CHURN_TEMPLATE_COLUMNS: frozenset[str] = frozenset({
     "churn_rate", "nps", "retention_m1", "retention_m3", "retention_m6", "retention_m12",
 })
 
+# Columnas SaaS no-churn del template fijo ml_ds de clasificación (cols 11–17 del contrato de
+# 18 columnas en M2_clasificacion/dataset.py y de `_build_fallback_schema`). NO son churn por
+# nombre, pero pertenecen al mismo escenario SaaS: dos de ellas (`payment_failures`→churn_rate,
+# `support_tickets_count`→nps) quedarían HUÉRFANAS si solo se quitan las 6 `_CHURN_TEMPLATE_COLUMNS`
+# (→ ruido vía `_generate_dataset_from_schema`). El sibling ml_ds de-churn (Issue #382) las elimina
+# JUNTO con el bloque churn en un caso NO-retención, EXCEPTO las declaradas por el contrato del caso.
+_MLDS_SAAS_TEMPLATE_COLUMNS: frozenset[str] = frozenset({
+    "customer_ltv", "engagement_score", "days_since_last_login", "support_tickets_count",
+    "plan_tier", "payment_failures", "monthly_usage_pct",
+})
+
 
 def _is_retention_target_name(name: str, role: str = "") -> bool:
     """True si el target pertenece a la familia retención/churn (por nombre o rol).
@@ -3582,6 +3593,164 @@ def _enforce_business_classification_schema(
 
     new_schema["columns"] = columns
     return new_schema, notes, target_name
+
+
+def _enforce_mlds_classification_schema(
+    schema: dict,
+    contract: dict | None,
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+) -> dict:
+    """De-churna la SEÑAL del target para ml_ds + clasificación NO-retención (Issue #382).
+
+    SIBLING determinista de ``_enforce_business_classification_schema`` — NO generalizar esa
+    función (``test_enforce_noop_for_ml_ds`` exige que siga siendo identidad para ml_ds). Corre
+    DESPUÉS de ``_align`` + ``_augment`` + el spine business en ``schema_designer``, sobre el
+    schema ya ensamblado. 0 tokens LLM, PURO copy-on-write (no muta el dict de entrada) →
+    determinismo del seed (``_generate_dataset_from_schema``) + thread-safety bajo jobs
+    concurrentes.
+
+    Para un target binario de DOMINIO (no churn/retención) re-apunta su señal a un driver de
+    dominio y elimina el template churn/SaaS, de modo que un caso de fraude/mora/aprobación
+    aprenda del dominio y no de ``churn_rate``. El camino churn/retención salta el sibling
+    completo → schema BYTE-IDÉNTICO (gate ``_is_retention_target_name``). Reusa los helpers del
+    spine #301 (``_select_driver_feature``, ``_CHURN_TEMPLATE_COLUMNS``); no reescribe el
+    mecanismo de señal — solo cambia de qué columna DERIVA el target.
+
+    Gate (fuera de él → mismo objeto, byte-idéntico):
+      ``enabled`` (kill-switch ``MLDS_DECHURN_SIGNAL``) AND ``profile=="ml_ds"`` AND
+      ``(primary_family or "clasificacion")=="clasificacion"`` AND el target del contrato es
+      binario (``role==classification_target`` y ``dtype=="int"``) AND
+      ``NOT _is_retention_target_name(target_name)``.
+    """
+    if not enabled or profile != "ml_ds":
+        return schema
+    # ml_ds: None family → "clasificacion" (espeja `_align`/`_effective_family`); NO el
+    # early-return business (`primary_family != "clasificacion"`), que mataría un job ml_ds con
+    # algoritmos vacíos (primary_family=None) que igual construye el template `categoria`.
+    if (primary_family or "clasificacion") != "clasificacion":
+        return schema
+    tgt = (contract or {}).get("target_column") or {}
+    if tgt.get("role") != "classification_target" or tgt.get("dtype") != "int":
+        return schema
+    contract_target = _safe_contract_target_name(contract)
+    if not contract_target:
+        return schema
+    # LÍNEA ROJA: churn/retención conserva el template intacto (byte-idéntico).
+    if _is_retention_target_name(contract_target):
+        return schema
+
+    columns = [dict(c) for c in schema.get("columns", [])]
+    binary_targets = [
+        c for c in columns
+        if _is_declared_binary_int(c) and isinstance(c.get("dependency"), dict)
+    ]
+    if not binary_targets:
+        return schema  # sin binaria objetivo que de-churnar (el augmenter endurecido es la red).
+
+    # Resuelve la binaria objetivo orden-robusta (igual que `_align`): la que ya lleva el nombre
+    # del contrato → la canónica `categoria` → la primera.
+    target_col = (
+        next((c for c in binary_targets if c.get("name") == contract_target), None)
+        or next((c for c in binary_targets if c.get("name") == "categoria"), None)
+        or binary_targets[0]
+    )
+    # Guard de colisión: si `_align` saltó el rename (el nombre del contrato YA existe como una
+    # columna NO-objetivo, graph.py ~3355-3361), el notebook contract-first entrenaría ESA
+    # columna, no la binaria. Re-apuntar `categoria` a ciegas ampliaría la incoherencia. NO-OP +
+    # warning observable (defecto pre-existente de `_align`, fuera del alcance de #382).
+    if (
+        target_col.get("name") != contract_target
+        and contract_target in {c.get("name") for c in columns}
+    ):
+        logger.warning(
+            "[_enforce_mlds_classification_schema] colisión de nombre: target del contrato '%s' "
+            "existe como columna no-objetivo; se omite el de-churn (defecto pre-existente de "
+            "_align). Binaria objetivo resuelta: '%s'.",
+            contract_target, target_col.get("name"),
+            extra={
+                "node": "schema_designer", "target_name": contract_target,
+                "resolved_binary": target_col.get("name"), "reason": "name_collision",
+            },
+        )
+        return schema
+
+    keep_name = target_col.get("name")
+    driver_name, synth_driver = _select_driver_feature(contract, target_name=keep_name)
+
+    # NUNCA elimines una columna declarada por el contrato (aunque su nombre coincida con el
+    # template), ni el target ni el driver.
+    contract_features = {
+        (f.get("name") or "").strip()
+        for f in (contract or {}).get("feature_columns") or []
+    }
+    protected = contract_features | {keep_name, driver_name}
+    strip_set = (_CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS) - protected
+    stripped = [c.get("name") for c in columns if c.get("name") in strip_set]
+    columns = [c for c in columns if c.get("name") not in strip_set]
+
+    # Defensa en profundidad (RT1): tras el strip el driver DEBE existir como columna, o el target
+    # re-apuntado quedaría huérfano (padre ausente → `_generate_independent_values` → AUC ~0.5). En
+    # el pipeline cableado `_augment_schema_with_contract` ya inyectó las features del contrato ANTES
+    # de este nodo, pero el sibling NO debe depender de ese orden: si el driver elegido (nombre de
+    # feature del contrato) no quedó presente, garantiza un driver de dominio sintetizado y reapunta.
+    present = {c.get("name") for c in columns}
+    if driver_name not in present:
+        if synth_driver is None:
+            synth_driver = {
+                "name": "domain_driver_score",
+                "type": "float",
+                "description": "Driver de dominio sintetizado correlado con el objetivo del caso",
+                "range_min": 0.0,
+                "range_max": 1.0,
+                "nullable": False,
+                "trend": None,
+                "dependency": None,
+            }
+        driver_name = synth_driver["name"]
+        if driver_name not in present:
+            columns.append(synth_driver)
+
+    # Re-apunta la señal del target al driver de dominio + márcalo (anti-degeneración no-rate:
+    # el `is_domain_target` activa `_ensure_both_classes` ampliado a ml_ds). noise_factor con la
+    # MISMA fórmula que `_binary_target_column` (#301) para señal consistente.
+    min_signal = float((contract or {}).get("min_signal_strength") or 0.15)
+    noise_factor = round(max(0.08, min(0.30, 0.30 - min_signal)), 3)
+    for c in columns:
+        if c.get("name") == keep_name:
+            c["dependency"] = {
+                "depends_on": driver_name,
+                "relationship": "linear",
+                "noise_factor": noise_factor,
+            }
+            c["is_domain_target"] = True
+
+    # Reparación de dependencias colgantes: cualquier columna restante cuyo padre fue eliminado
+    # por el strip genera independiente (evita huérfanos → ruido con warning de runtime). El
+    # target queda a salvo: su nuevo `depends_on` es `driver_name`, que está protegido.
+    remaining = {c.get("name") for c in columns}
+    for c in columns:
+        dep = c.get("dependency")
+        if isinstance(dep, dict) and dep.get("depends_on") not in remaining:
+            c["dependency"] = None
+
+    # Observabilidad LOG-ONLY (no teacher-facing; precedente #336). Best-effort por estar dentro
+    # de un nodo best-effort; un fallo de logging nunca debe propagarse.
+    logger.warning(
+        "[_enforce_mlds_classification_schema] de-churn ml_ds+clf: target '%s' ← driver de "
+        "dominio '%s'; columnas removidas: %s",
+        keep_name, driver_name, stripped,
+        extra={
+            "node": "schema_designer", "family": "clasificacion", "target_name": keep_name,
+            "driver_chosen": driver_name, "columns_stripped": stripped, "is_retention": False,
+        },
+    )
+
+    new_schema = dict(schema)
+    new_schema["columns"] = columns
+    return new_schema
 
 
 def _contract_with_enforced_target(contract: dict | None, target_name: str | None) -> dict | None:
@@ -3767,6 +3936,14 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
             schema_result, biz_notes, biz_target = _enforce_business_classification_schema(
                 schema_result, contract, profile=profile, primary_family=primary_family
             )
+            # Issue #382 — sibling determinista ml_ds+clasificación: de-churna la SEÑAL del target
+            # (re-apunta a un driver de DOMINIO + elimina el template churn/SaaS) en casos
+            # NO-retención. Corre tras el spine business; no-op byte-idéntico para churn/retención,
+            # business y otras familias. Kill-switch MLDS_DECHURN_SIGNAL (default true).
+            schema_result = _enforce_mlds_classification_schema(
+                schema_result, contract, profile=profile, primary_family=primary_family,
+                enabled=settings.mlds_dechurn_signal,
+            )
             missing, leakage = _validate_schema_against_contract(schema_result, contract)
             # Issue #228 — preserva semillas de data_gap_warnings emitidas por
             # case_architect (ej: target_semantic_mismatch). LangGraph reemplaza
@@ -3806,6 +3983,12 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     # Issue #301 — el spine determinista también aplica en fallback (red de seguridad).
     fallback_schema, biz_notes, biz_target = _enforce_business_classification_schema(
         fallback_schema, contract, profile=profile, primary_family=primary_family
+    )
+    # Issue #382 — mismo de-churn ml_ds+clf que en el camino feliz (red de seguridad aguas
+    # abajo del fallback; NO se toca `_build_fallback_schema`).
+    fallback_schema = _enforce_mlds_classification_schema(
+        fallback_schema, contract, profile=profile, primary_family=primary_family,
+        enabled=settings.mlds_dechurn_signal,
     )
     missing, leakage = _validate_schema_against_contract(fallback_schema, contract)
     # Issue #228 — preserva warnings sembrados por case_architect.
@@ -4141,14 +4324,20 @@ def _generate_dataset_from_schema(
             labels[order[n - k:]] = 1  # top-k scores → positivos → exactamente k=round(rate·n)
             result = [None if null_mask[i] else int(labels[i]) for i in range(n_rows)]
         else:
-            # Issue #301 — guard anti-degeneración del target binario de dominio (business).
+            # Issue #301 — guard anti-degeneración del target binario de dominio.
             # SOLO el target que el spine etiquetó con ``is_domain_target`` se balancea;
             # las demás binarias {0,1} (features no-target emitidas por el LLM, p. ej.
             # compliance_flag/late_flag) se dejan EXACTAMENTE como se generaron — no se
             # voltean filas sintéticas no anunciadas (PR2a). Garantizar ambas clases en el
             # target evita una LR sin sentido por una sola clase.
+            # Issue #382 — ampliado a ml_ds: el sibling `_enforce_mlds_classification_schema`
+            # marca `is_domain_target=True` en el target ml_ds de-churnado. Cuando
+            # `target_event_rate` está presente la calibración top-k de arriba ya garantiza ambas
+            # clases (este else no corre); este guard cubre el caso SIN rate (architect lo omitió,
+            # graph.py ~3054-3064) para que un target de-churnado no degenere a una sola clase
+            # silenciosamente. Byte-idéntico para churn: `categoria` no lleva `is_domain_target`.
             if (
-                profile == "business"
+                profile in ("business", "ml_ds")
                 and low == 0.0
                 and high == 1.0
                 and col.get("is_domain_target")
@@ -4241,10 +4430,12 @@ def _generate_dataset_from_schema(
             profile == "business"
             and any(tok in c["name"].lower() for tok in _financial_tokens)
         )
-        # N-7 (Issue #301): nunca inyectes el outlier en el target binario {0,1} de
-        # business — un ×3.5 capado lo convertiría en float 0.0/1.0 (dtype mixto en una
-        # columna de clasificación). Se excluye toda columna int declarada en [0,1].
-        and not (profile == "business" and _is_declared_binary_int(c))
+        # N-7 (Issue #301): nunca inyectes el outlier en el target binario {0,1} — un ×3.5
+        # capado lo convertiría en float 0.0/1.0 (dtype mixto en una columna de clasificación).
+        # Se excluye toda columna int declarada en [0,1]. Issue #382 — ampliado a ml_ds (consistente
+        # con `_ensure_both_classes`): el target de-churnado es un binario {0,1} real. Sin cambio de
+        # comportamiento hoy (el target nunca es `numeric_non_revenue[0]`), es defensa-en-profundidad.
+        and not (profile in ("business", "ml_ds") and _is_declared_binary_int(c))
     ]
     if numeric_non_revenue and n_rows >= 50:
         target_col_def = numeric_non_revenue[0]
