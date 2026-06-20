@@ -14,6 +14,12 @@ _SUPPORTED_COST_CURRENCIES = frozenset({"USD", "EUR", "GBP", "COP", "MXN", "BRL"
 _MAX_BUSINESS_COST = 1_000_000_000.0
 _MAX_BUSINESS_COST_RATIO = 1_000.0
 
+# Issue F1 — prevalencia del evento objetivo anunciada en Exhibit 2. Un evento de
+# clasificación debe ser una minoría aprendible: piso 1% (≥1 positivo a n=600), techo 50%
+# (un evento "raro" no debería ser mayoría; > 0.5 sería el complemento).
+_MIN_TARGET_EVENT_RATE = 0.01
+_MAX_TARGET_EVENT_RATE = 0.50
+
 
 # ═══════════════════════════════════════════════════════
 # ISSUE #225 — Dataset Schema Required Contract
@@ -148,6 +154,35 @@ class DatasetSchemaRequired(BaseModel):
             "(predecir 0 cuando es 1). Si None, M3 usa fallback fp=1, fn=5."
         ),
     )
+    # Issue F1 — prevalencia del evento objetivo (fracción target=1) anunciada en la fila
+    # "Tasa de ocurrencia" de Exhibit 2. Solo ml_ds + clasificación binaria. El generador
+    # determinista calibra la columna target a esta prevalencia (fuente única M1↔M2); si None,
+    # usa el umbral histórico (~0.50). Mantiene Exhibit 2 ↔ dataset ↔ M3 prevalence coherentes.
+    #
+    # Los límites [_MIN, _MAX] NO se imponen como `ge`/`le` aquí a PROPÓSITO: un valor LLM fuera
+    # de rango (p. ej. emitir 8.3 en vez de 0.083) levantaría un ValidationError que abortaría el
+    # PARSE de TODO el `CaseArchitectOutput` y degradaría el caso entero a un placeholder de error.
+    # En su lugar, `graph._validate_target_event_rate` aplica los límites de forma TOLERANTE
+    # (fuera de rango → nulificado + warning, el caso COMPLETA con prevalencia ~0.50). Aquí solo
+    # rechazamos NaN/inf (no representables como prevalencia y nunca recuperables).
+    target_event_rate: Optional[float] = Field(
+        default=None,
+        description=(
+            "Prevalencia del evento objetivo (fracción de filas con target=1); el rango válido es "
+            "[0.01, 0.50]. DEBE coincidir con la 'Tasa de ocurrencia del evento' impresa en "
+            "Exhibit 2 (8.3 % → 0.083). Solo ml_ds + clasificación binaria; None en otro caso. "
+            "Fuera de rango se nulifica downstream (no falla el caso)."
+        ),
+    )
+
+    @field_validator("target_event_rate")
+    @classmethod
+    def _finite_event_rate(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return v
+        if not math.isfinite(v):
+            raise ValueError("target_event_rate must be a finite number (no inf/nan)")
+        return v
 
 
 class BusinessCostMatrix(BaseModel):

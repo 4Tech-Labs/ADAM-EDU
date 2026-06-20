@@ -66,9 +66,12 @@ no 3 clases del target.
    Añade exactamente 2 filas numéricas y específicas que capturen la realidad del
    evento objetivo en los datos históricos de la empresa:
    - Tasa de ocurrencia del evento objetivo (ej: "Tasa histórica de abandono: 8.3 %").
+     Este porcentaje DEBE ser el MISMO número que emites en
+     `dataset_schema_required.target_event_rate`, expresado como fracción (8.3 % ⇔ 0.083).
+     El generador determinista del dataset calibra la columna objetivo a esa prevalencia,
+     de modo que si Exhibit 2 y `target_event_rate` difieren, el caso queda incoherente
+     (el estudiante vería en el dataset una proporción distinta a la que anuncia el caso).
    - Completitud de campos críticos (ej: "% registros con campo contractual sin dato: 12 %").
-   Sin estas filas el `schema_designer` downstream no puede modelar el desbalance de
-   clases real del caso, comprometiendo la coherencia pedagógica del notebook M3.
    Esta instrucción REEMPLAZA la regla base de "al menos 2 métricas de calidad de datos"
    de Exhibit 2: para clasificación las 2 filas de calidad de datos son EXACTAMENTE las dos
    anteriores (tasa de ocurrencia del evento objetivo + completitud de campos críticos) y
@@ -113,6 +116,23 @@ Forma exacta (dentro de `dataset_schema_required`):
     "fn_cost": 5000,
     "currency": "USD"
   }}
+}}
+
+## Tasa de ocurrencia del evento (`target_event_rate`) — ml_ds clasificación binaria
+
+Emite `target_event_rate` SOLO para el perfil ml_ds con target binario de clasificación
+(el mismo gate que `business_cost_matrix`). Es la fracción de la población que presenta el
+evento objetivo, y DEBE ser el MISMO número que la fila "Tasa de ocurrencia del evento" de
+Exhibit 2, expresado como fracción en [0.01, 0.50] (8.3 % → 0.083). El generador determinista
+del dataset calibra la columna objetivo a esta prevalencia (fuente única M1↔M2). Para business,
+target multiclase u otras familias: NO lo emitas (déjalo ausente / `null`).
+
+Ubicación EXACTA: clave ANIDADA dentro de `dataset_schema_required` (junto a `target_column`
+/ `business_cost_matrix`), NUNCA como clave de nivel superior.
+
+Forma exacta (dentro de `dataset_schema_required`):
+{{
+  "target_event_rate": 0.083
 }}
 """
 
