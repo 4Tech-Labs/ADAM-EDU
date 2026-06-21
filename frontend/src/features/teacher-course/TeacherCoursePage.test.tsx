@@ -26,6 +26,7 @@ vi.mock("@/shared/api", async () => {
                 getCourseDetail: vi.fn(),
                 getCourseAccessLink: vi.fn(),
                 getCourseStudents: vi.fn(),
+                getCourseCases: vi.fn(),
                 regenerateCourseAccessLink: vi.fn(),
                 saveCourseSyllabus: vi.fn(),
             },
@@ -331,6 +332,7 @@ describe("TeacherCoursePage", () => {
         vi.mocked(api.teacher.getCourseStudents).mockResolvedValue(
             createCourseStudentsResponse(),
         );
+        vi.mocked(api.teacher.getCourseCases).mockResolvedValue({ cases: [], total: 0 });
         Object.defineProperty(window.navigator, "clipboard", {
             configurable: true,
             value: {
