@@ -151,6 +151,48 @@ describe("TeacherSubmissionPreview", () => {
         expect(renderer.getAttribute("data-has-grading")).toBe("false");
         expect(screen.getByTestId("teacher-submission-grading-locked")).toBeTruthy();
         expect(screen.queryByTestId("question-grading-panel")).toBeNull();
+        // no grading progress chips when the response is not gradeable
+        expect(screen.queryByTestId("teacher-submission-grading-progress")).toBeNull();
+    });
+
+    it("shows live grading progress in the topbar (graded count + running points)", async () => {
+        renderPreview({
+            detail: createSubmissionDetailResponse({
+                modules: [
+                    {
+                        id: "M1",
+                        title: "Módulo 1",
+                        questions: [
+                            {
+                                id: "M1-Q1", order: 1, statement: "", context: null, expected_solution: "",
+                                student_answer: null, student_answer_chars: 0, is_answer_from_draft: false,
+                                grade: { question_id: "M1-Q1", points_awarded: 7, max_points: 10, feedback: null, graded_at: "2026-06-06T18:00:00Z", graded_by_membership_id: "t" },
+                            },
+                            {
+                                id: "M1-Q2", order: 2, statement: "", context: null, expected_solution: "",
+                                student_answer: null, student_answer_chars: 0, is_answer_from_draft: false,
+                                grade: { question_id: "M1-Q2", points_awarded: 8.5, max_points: 10, feedback: "ok", graded_at: "2026-06-06T18:00:00Z", graded_by_membership_id: "t" },
+                            },
+                        ],
+                    },
+                    {
+                        id: "M5",
+                        title: "Módulo 5",
+                        questions: [
+                            {
+                                id: "M5-Q1", order: 1, statement: "", context: null, expected_solution: "",
+                                student_answer: null, student_answer_chars: 0, is_answer_from_draft: false, grade: null,
+                            },
+                        ],
+                    },
+                ],
+            }),
+        });
+
+        const progress = await screen.findByTestId("teacher-submission-grading-progress");
+        expect(within(progress).getByTestId("grading-progress-count").textContent).toBe("2/3");
+        // 7 + 8,5 = 15,5 awarded out of 10 + 10 = 20 over the graded questions
+        expect(within(progress).getByTestId("grading-progress-points").textContent).toBe("15,5 / 20");
     });
 
     it("passes canonical output, answers and read-only flags to the renderer", async () => {

@@ -59,6 +59,41 @@ function buildGradeMap(
     }, {});
 }
 
+// Points use their own formatter (no forced decimal) so a running tally reads "23 / 30" and "8,5",
+// not "23,0 / 30,0" like the 0-5 gradebook score.
+const POINTS_FORMATTER = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 2 });
+
+function formatPoints(value: number): string {
+    return POINTS_FORMATTER.format(value);
+}
+
+interface GradeProgress {
+    graded: number;
+    total: number;
+    earned: number;
+    max: number;
+}
+
+/** Live grading progress derived from the per-question grades injected into the detail. */
+function buildGradeProgress(detail: TeacherCaseSubmissionDetailResponse): GradeProgress {
+    let graded = 0;
+    let total = 0;
+    let earned = 0;
+    let max = 0;
+    for (const module of detail.modules) {
+        for (const question of module.questions) {
+            total += 1;
+            const grade = question.grade;
+            if (grade) {
+                graded += 1;
+                earned += grade.points_awarded;
+                max += grade.max_points;
+            }
+        }
+    }
+    return { graded, total, earned, max };
+}
+
 function formatTimestamp(value: string | null, fallback: string): string {
     return value ? formatTeacherCourseTimestamp(value) : fallback;
 }
@@ -109,6 +144,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
     const canonicalOutput = useMemo(() => toCanonicalCaseOutput(detail), [detail]);
     const answers = useMemo(() => buildAnswersMap(detail), [detail]);
     const gradeMap = useMemo(() => buildGradeMap(detail), [detail]);
+    const gradeProgress = useMemo(() => buildGradeProgress(detail), [detail]);
     const visibleModules = useMemo(() => getVisibleModules(detail), [detail]);
     const membershipId = detail.student.membership_id;
     const saveGrade = useSaveQuestionGrade(assignmentId, membershipId);
@@ -236,6 +272,29 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                         </div>
 
                         <div className="flex items-center gap-3">
+                            {canGrade ? (
+                                <div
+                                    className="hidden items-center gap-2 lg:flex"
+                                    data-testid="teacher-submission-grading-progress"
+                                >
+                                    <span
+                                        className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200"
+                                        title="Preguntas calificadas"
+                                    >
+                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Calificadas</span>
+                                        <span data-testid="grading-progress-count">{gradeProgress.graded}/{gradeProgress.total}</span>
+                                    </span>
+                                    <span
+                                        className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200"
+                                        title="Puntos otorgados sobre el total de las preguntas calificadas"
+                                    >
+                                        <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Puntos</span>
+                                        <span data-testid="grading-progress-points">
+                                            {formatPoints(gradeProgress.earned)} / {formatPoints(gradeProgress.max)}
+                                        </span>
+                                    </span>
+                                </div>
+                            ) : null}
                             <span className={`hidden rounded-full px-3 py-1 text-xs font-semibold lg:inline-flex ${statusBadgeClasses}`}>
                                 {statusLabel}
                             </span>
