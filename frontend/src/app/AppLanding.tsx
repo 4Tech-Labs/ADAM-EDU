@@ -1,45 +1,106 @@
-import {
-    ArrowRight,
-    GraduationCap,
-    ShieldCheck,
-    UserRound,
-    type LucideIcon,
-} from "lucide-react";
-import { Link } from "react-router-dom";
+import { GraduationCap } from "lucide-react";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
-type LandingOption = {
-    to: string;
-    title: string;
-    description: string;
-    Icon: LucideIcon;
-};
-
-const LANDING_OPTIONS: LandingOption[] = [
-    {
-        to: "/teacher/login",
-        title: "Ingresar como docente",
-        description: "Gestiona cursos, casos y seguimiento",
-        Icon: GraduationCap,
-    },
-    {
-        to: "/student/login",
-        title: "Ingresar como estudiante",
-        description: "Accede a tus cursos, casos y notas",
-        Icon: UserRound,
-    },
-    {
-        to: "/admin/login",
-        title: "Portal administrador",
-        description: "Panel de control institucional",
-        Icon: ShieldCheck,
-    },
-];
+import { readActivationContext, saveActivationContext } from "@/shared/activationContext";
+import { isMicrosoftLoginEnabled } from "@/shared/authConfig";
+import { getSupabaseClient } from "@/shared/supabaseClient";
 
 /**
- * Root landing page shown to unauthenticated users.
- * Provides real entry-point links per role — no demo toggles.
+ * Root landing page shown to unauthenticated users (`/`).
+ *
+ * Unified login for ALL roles (teachers, students, admins): a single
+ * role-agnostic credential form. Supabase auth never receives a role; the
+ * backend derives it from the account's memberships. Once `actor` resolves,
+ * `RootRedirect` routes the user to their real dashboard by `primary_role`
+ * (admin → /admin/dashboard, or /admin/change-password if must_rotate) — so
+ * there is no "wrong door" state to get stuck in.
+ *
+ * Two paths:
+ * A) Microsoft OAuth — hidden behind `isMicrosoftLoginEnabled()` (kill-switch,
+ *    currently false). Handler kept intact for one-line reversibility.
+ * B) Password — signInWithPassword; AuthContext fires SIGNED_IN → RootRedirect
+ *    reacts automatically. If the user arrived from a course-access link we
+ *    resume the enrollment flow in /auth/callback after sign-in.
+ *
+ * Non-negotiables:
+ * - No "Forgot password" CTA
+ * - Password errors never reveal whether the email exists
  */
 export function AppLanding() {
+    const navigate = useNavigate();
+    const [email, setEmail] = useState("");
+    const [password, setPassword] = useState("");
+    const [submitting, setSubmitting] = useState(false);
+    const [loginError, setLoginError] = useState<string | null>(null);
+
+    async function handleMicrosoftLogin() {
+        const supabase = getSupabaseClient();
+        if (!supabase) return;
+
+        const activationContext = readActivationContext();
+        if (activationContext?.flow === "student_join_course_access") {
+            saveActivationContext({
+                flow: "student_join_course_access",
+                token_kind: "course_access",
+                course_access_token: activationContext.course_access_token,
+                auth_path: "oauth",
+            });
+        }
+
+        await supabase.auth.signInWithOAuth({
+            provider: "azure",
+            options: { redirectTo: import.meta.env.VITE_AUTH_CALLBACK_URL },
+        });
+        // signInWithOAuth redirects — no code after this
+    }
+
+    async function handlePasswordSubmit(event: React.FormEvent) {
+        event.preventDefault();
+        setLoginError(null);
+        setSubmitting(true);
+
+        try {
+            const supabase = getSupabaseClient();
+            if (!supabase) {
+                setLoginError("Credenciales incorrectas. Verifica tu correo y contraseña.");
+                return;
+            }
+
+            const { error } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+            });
+
+            if (error) {
+                // Never reveal whether the email exists
+                setLoginError("Credenciales incorrectas. Verifica tu correo y contraseña.");
+                return;
+            }
+
+            // Course-access resume: finish enrollment in /auth/callback.
+            const activationContext = readActivationContext();
+            if (activationContext?.flow === "student_join_course_access") {
+                saveActivationContext({
+                    flow: "student_join_course_access",
+                    token_kind: "course_access",
+                    course_access_token: activationContext.course_access_token,
+                    auth_path: "password_sign_in",
+                });
+                navigate("/auth/callback", { replace: true });
+            }
+            // Normal case: no manual navigation — RootRedirect routes by
+            // primary_role once AuthContext resolves the actor.
+        } catch {
+            // Defensive: signInWithPassword resolves `{ error }` for auth
+            // failures, but guard against an unexpected throw (network/internal)
+            // so the user always gets feedback instead of a silent failure.
+            setLoginError("Credenciales incorrectas. Verifica tu correo y contraseña.");
+        } finally {
+            setSubmitting(false);
+        }
+    }
+
     return (
         <div className="min-h-screen bg-[#f4f7fd] text-[#0f1f3d]">
             <div className="grid min-h-screen lg:grid-cols-[5fr_7fr]">
@@ -149,55 +210,100 @@ export function AppLanding() {
 
                     <div className="relative z-10 w-full max-w-[400px]">
                         <header
-                            className="mb-10 text-center"
+                            className="mb-8 text-center"
                             style={{ animation: "fadeInUp 0.5s 0.15s ease both" }}
                         >
                             <h1 className="mb-2 text-[clamp(1.5rem,1.2rem+1.25vw,2.25rem)] font-bold leading-[1.15] tracking-[-0.025em] text-[#0f1f3d]">
-                                Selecciona tu perfil
+                                Inicia sesión
                             </h1>
                             <p className="mx-auto max-w-[380px] text-base font-medium leading-[1.7] text-[#6b7280]">
-                                Elige el tipo de cuenta con la que deseas acceder a la plataforma.
+                                Accede a tu cuenta de ADAM-EDU.
                             </p>
                         </header>
 
-                        <nav
-                            aria-label="Selecciona tu perfil para continuar"
-                            className="grid gap-4"
-                        >
-                            {LANDING_OPTIONS.map(({ to, title, description, Icon }, index) => (
-                                <Link
-                                    key={to}
-                                    to={to}
-                                    className="group relative flex h-[112px] w-full items-center gap-5 overflow-hidden rounded-2xl border border-transparent bg-[linear-gradient(135deg,#0144a0_0%,#0b5edd_100%)] px-6 py-5 text-left no-underline shadow-[0_6px_16px_rgba(1,68,160,0.2)] transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] hover:-translate-y-0.5 hover:bg-[linear-gradient(135deg,#012b68_0%,#0144a0_100%)] hover:shadow-[0_10px_24px_rgba(1,68,160,0.35)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#0144a0]"
-                                    style={{
-                                        animation: `fadeInUp 0.5s ${0.25 + index * 0.08}s ease both`,
-                                    }}
-                                >
-                                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/25 bg-white/15 text-white shadow-[0_4px_12px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-all duration-300 group-hover:scale-105 group-hover:bg-white/25 group-hover:shadow-[0_4px_12px_rgba(0,0,0,0.18)]">
-                                        <Icon
-                                            aria-hidden
-                                            className="h-5 w-5"
-                                            strokeWidth={2}
-                                        />
-                                    </div>
+                        <div style={{ animation: "fadeInUp 0.5s 0.25s ease both" }}>
+                            {/* Opción A — Microsoft (oculto tras isMicrosoftLoginEnabled) */}
+                            {isMicrosoftLoginEnabled() && (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleMicrosoftLogin()}
+                                        className="mb-5 flex w-full items-center justify-center rounded-xl border border-[#d8e0ee] bg-white px-4 py-3 text-sm font-semibold text-[#0f1f3d] transition-colors hover:bg-[#f4f7fd]"
+                                    >
+                                        Continuar con Microsoft
+                                    </button>
 
-                                    <div className="flex min-w-0 flex-1 flex-col justify-center">
-                                        <div className="text-base font-semibold leading-[1.25] tracking-[-0.01em] text-white">
-                                            {title}
+                                    <div className="relative mb-5">
+                                        <div className="absolute inset-0 flex items-center">
+                                            <span className="w-full border-t border-[#e5e9f2]" />
                                         </div>
-                                        <div className="mt-1 text-sm leading-[1.4] text-white/75">
-                                            {description}
+                                        <div className="relative flex justify-center">
+                                            <span className="bg-white px-3 text-xs font-medium text-[#8b9bb8]">
+                                                o usa tu correo
+                                            </span>
                                         </div>
                                     </div>
+                                </>
+                            )}
 
-                                    <ArrowRight
-                                        aria-hidden
-                                        className="h-[18px] w-[18px] shrink-0 text-white/50 transition-all duration-300 group-hover:translate-x-1 group-hover:text-white"
-                                        strokeWidth={2}
+                            {/* Opción B — Contraseña */}
+                            <form onSubmit={(event) => void handlePasswordSubmit(event)} className="space-y-4">
+                                <div className="space-y-1.5">
+                                    <label
+                                        htmlFor="login-email"
+                                        className="block text-sm font-medium text-[#0f1f3d]"
+                                    >
+                                        Correo electrónico
+                                    </label>
+                                    <input
+                                        id="login-email"
+                                        type="email"
+                                        value={email}
+                                        onChange={(event) => setEmail(event.target.value)}
+                                        required
+                                        autoComplete="email"
+                                        className="w-full rounded-xl border border-[#d8e0ee] bg-white px-4 py-3 text-sm text-[#0f1f3d] outline-none transition-colors placeholder:text-[#9aa7bd] focus:border-[#0144a0] focus:ring-2 focus:ring-[#0144a0]/20"
                                     />
-                                </Link>
-                            ))}
-                        </nav>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                    <label
+                                        htmlFor="login-password"
+                                        className="block text-sm font-medium text-[#0f1f3d]"
+                                    >
+                                        Contraseña
+                                    </label>
+                                    <input
+                                        id="login-password"
+                                        type="password"
+                                        value={password}
+                                        onChange={(event) => setPassword(event.target.value)}
+                                        required
+                                        autoComplete="current-password"
+                                        className="w-full rounded-xl border border-[#d8e0ee] bg-white px-4 py-3 text-sm text-[#0f1f3d] outline-none transition-colors placeholder:text-[#9aa7bd] focus:border-[#0144a0] focus:ring-2 focus:ring-[#0144a0]/20"
+                                    />
+                                </div>
+
+                                {loginError && (
+                                    <p role="alert" className="text-sm text-[#d23b3b]">
+                                        {loginError}
+                                    </p>
+                                )}
+
+                                <button
+                                    type="submit"
+                                    disabled={submitting}
+                                    className="w-full rounded-xl bg-[linear-gradient(135deg,#0144a0_0%,#0b5edd_100%)] px-4 py-3 text-sm font-semibold text-white shadow-[0_6px_16px_rgba(1,68,160,0.25)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_10px_24px_rgba(1,68,160,0.35)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0144a0] disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {submitting ? "Iniciando sesión…" : "Iniciar sesión"}
+                                </button>
+                            </form>
+
+                            <p className="mt-5 text-center text-xs leading-[1.6] text-[#6b7280]">
+                                ¿Recibiste un enlace de activación o de acceso a un curso? Úsalo
+                                directamente.
+                            </p>
+                        </div>
 
                         <footer
                             className="mt-8 text-center text-xs leading-[1.6] text-[#8b9bb8]"

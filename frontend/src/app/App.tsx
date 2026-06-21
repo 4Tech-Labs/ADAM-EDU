@@ -3,7 +3,6 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { SiteHeader } from "@/shared/SiteHeader";
 import { ToastProvider } from "@/shared/Toast";
 
-import { GuestOnlyRoute } from "./auth/GuestOnlyRoute";
 import { RequirePasswordRotation } from "./auth/RequirePasswordRotation";
 import { RequireRole } from "./auth/RequireRole";
 import { RootRedirect } from "./auth/RootRedirect";
@@ -43,19 +42,9 @@ const AuthCallbackPage = lazy(() =>
         default: module.AuthCallbackPage,
     })),
 );
-const TeacherLoginPage = lazy(() =>
-    import("@/features/teacher-auth/TeacherLoginPage").then((module) => ({
-        default: module.TeacherLoginPage,
-    })),
-);
 const TeacherActivatePage = lazy(() =>
     import("@/features/teacher-auth/TeacherActivatePage").then((module) => ({
         default: module.TeacherActivatePage,
-    })),
-);
-const StudentLoginPage = lazy(() =>
-    import("@/features/student-auth/StudentLoginPage").then((module) => ({
-        default: module.StudentLoginPage,
     })),
 );
 const StudentJoinPage = lazy(() =>
@@ -71,11 +60,6 @@ const StudentDashboardPage = lazy(() =>
 const StudentCaseResolutionPage = lazy(() =>
     import("@/features/student-runtime/StudentCaseResolutionPage").then((module) => ({
         default: module.StudentCaseResolutionPage,
-    })),
-);
-const AdminLoginPage = lazy(() =>
-    import("@/features/admin-auth/AdminLoginPage").then((module) => ({
-        default: module.AdminLoginPage,
     })),
 );
 const AdminChangePasswordPage = lazy(() =>
@@ -124,14 +108,6 @@ function App() {
                     <Routes>
                         <Route path="/" element={<RootRedirect />} />
 
-                        <Route
-                            path="/teacher/login"
-                            element={
-                                <GuestOnlyRoute role="teacher">
-                                    <TeacherLoginPage />
-                                </GuestOnlyRoute>
-                            }
-                        />
                         <Route path="/teacher/activate" element={<TeacherActivatePage />} />
                         <Route
                             path="/teacher/dashboard"
@@ -183,14 +159,6 @@ function App() {
                             }
                         />
 
-                        <Route
-                            path="/student/login"
-                            element={
-                                <GuestOnlyRoute role="student">
-                                    <StudentLoginPage />
-                                </GuestOnlyRoute>
-                            }
-                        />
                         <Route path="/join" element={<StudentJoinPage />} />
                         <Route
                             path="/student/dashboard"
@@ -210,14 +178,6 @@ function App() {
                         />
                         <Route path="/student" element={<Navigate to="/student/dashboard" replace />} />
 
-                        <Route
-                            path="/admin/login"
-                            element={
-                                <GuestOnlyRoute role="university_admin">
-                                    <AdminLoginPage />
-                                </GuestOnlyRoute>
-                            }
-                        />
                         <Route
                             path="/admin/change-password"
                             element={

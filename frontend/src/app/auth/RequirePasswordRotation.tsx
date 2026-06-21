@@ -14,7 +14,7 @@ export function RequirePasswordRotation({ children }: Props) {
     const { session, actor, loading } = useAuth();
 
     if (loading) return null;
-    if (!session) return <Navigate to="/admin/login" replace />;
+    if (!session) return <Navigate to="/" replace />;
     if (!actor?.must_rotate_password) return <Navigate to="/" replace />;
 
     return <>{children}</>;

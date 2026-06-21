@@ -8,9 +8,6 @@ vi.mock("@/app/auth/useAuth");
 vi.mock("@/features/teacher-authoring/TeacherAuthoringPage", () => ({
     TeacherAuthoringPage: () => <div data-testid="teacher-authoring-page">Teacher area</div>,
 }));
-vi.mock("@/features/teacher-auth/TeacherLoginPage", () => ({
-    TeacherLoginPage: () => <div data-testid="teacher-login-page">Teacher login</div>,
-}));
 vi.mock("@/features/teacher-dashboard/TeacherDashboardPage", () => ({
     TeacherDashboardPage: () => <div data-testid="teacher-dashboard-page">Teacher dashboard</div>,
 }));
@@ -32,17 +29,11 @@ vi.mock("@/features/teacher-case-submission-detail/TeacherCaseSubmissionDetailPa
 vi.mock("@/features/admin-dashboard/AdminDashboardPage", () => ({
     AdminDashboardPage: () => <div data-testid="admin-dashboard-page">Dashboard admin</div>,
 }));
-vi.mock("@/features/admin-auth/AdminLoginPage", () => ({
-    AdminLoginPage: () => <div data-testid="admin-login-page">Admin login</div>,
-}));
 vi.mock("@/features/auth-callback/AuthCallbackPage", () => ({
     AuthCallbackPage: () => <div data-testid="auth-callback-page">Auth callback</div>,
 }));
 vi.mock("@/features/student-auth/StudentJoinPage", () => ({
     StudentJoinPage: () => <div data-testid="student-join-page">Student join</div>,
-}));
-vi.mock("@/features/student-auth/StudentLoginPage", () => ({
-    StudentLoginPage: () => <div data-testid="student-login-page">Student login</div>,
 }));
 vi.mock("@/features/student-dashboard/StudentDashboardPage", () => ({
     StudentDashboardPage: () => (
@@ -153,31 +144,41 @@ describe("App admin shell layout", () => {
         expect(screen.queryByTestId("admin-dashboard-page")).toBeNull();
     });
 
-    it("redirects an anonymous user to the admin login route", async () => {
+    it("redirects an anonymous user from /admin/dashboard to the unified login", async () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
         renderWithProviders(<App />, {
             initialEntries: ["/admin/dashboard"],
         });
 
-        expect(await screen.findByTestId("admin-login-page")).toBeTruthy();
+        expect(await screen.findByTestId("app-landing")).toBeTruthy();
     });
 
-    it("redirects an anonymous user to the teacher login route from /teacher/dashboard", async () => {
+    it("redirects the legacy /admin/login path to the unified login", async () => {
+        vi.mocked(useAuth).mockReturnValue(baseContext);
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/admin/login"],
+        });
+
+        expect(await screen.findByTestId("app-landing")).toBeTruthy();
+    });
+
+    it("redirects an anonymous user from /teacher/dashboard to the unified login", async () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
         renderWithProviders(<App />, {
             initialEntries: ["/teacher/dashboard"],
         });
 
-        expect(await screen.findByTestId("teacher-login-page")).toBeTruthy();
+        expect(await screen.findByTestId("app-landing")).toBeTruthy();
     });
 
-    it("keeps the global SiteHeader on non-admin-dashboard routes", () => {
+    it("keeps the global SiteHeader on non-shell, non-landing routes", () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
         renderWithProviders(<App />, {
-            initialEntries: ["/teacher/login"],
+            initialEntries: ["/join"],
         });
 
         expect(screen.getByTestId("site-header")).toBeTruthy();
@@ -336,14 +337,24 @@ describe("App admin shell layout", () => {
         expect(await screen.findByTestId("student-join-page")).toBeTruthy();
     });
 
-    it("resolves the lazy student login route with an access token", async () => {
+    it("redirects the legacy /student/login path to the unified login", async () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
         renderWithProviders(<App />, {
-            initialEntries: ["/student/login?course_access_token=test-token"],
+            initialEntries: ["/student/login"],
         });
 
-        expect(await screen.findByTestId("student-login-page")).toBeTruthy();
+        expect(await screen.findByTestId("app-landing")).toBeTruthy();
+    });
+
+    it("redirects the legacy /teacher/login path to the unified login", async () => {
+        vi.mocked(useAuth).mockReturnValue(baseContext);
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/teacher/login"],
+        });
+
+        expect(await screen.findByTestId("app-landing")).toBeTruthy();
     });
 
     it("does not render the global SiteHeader on /student/dashboard", async () => {

@@ -477,7 +477,7 @@ export function StudentJoinPage() {
                             <p className="text-sm text-danger">{submitError}</p>
                             {submitError.includes("Inicia sesión") && (
                                 <Link
-                                    to="/student/login"
+                                    to="/"
                                     className="inline-flex text-sm font-medium underline hover:opacity-80"
                                 >
                                     Iniciar sesión para continuar

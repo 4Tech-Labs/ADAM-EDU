@@ -341,7 +341,7 @@ describe("StudentJoinPage", () => {
         });
         expect(
             screen.getByRole("link", { name: /Iniciar sesión para continuar/i }),
-        ).toHaveAttribute("href", "/student/login");
+        ).toHaveAttribute("href", "/");
     });
 
     it("stores oauth intent for course-access Microsoft sign-in", async () => {
