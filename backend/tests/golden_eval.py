@@ -109,6 +109,10 @@ def check_domain_coherence(schema: dict) -> bool:
 
     columns = schema.get("columns") or []
     names = {c.get("name") for c in columns}
+    # Limitation: a contract feature legitimately NAMED like a SaaS-template column would be
+    # protected (kept) by the de-churn yet trip this set-membership check → a False negative on a
+    # correct schema. No catalog domain collides today; if a future ml_ds contract reuses a template
+    # name as a real feature, pass the contract here and exclude its declared features before this check.
     if names & (_CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS):
         return False
     domain_targets = [c for c in columns if c.get("is_domain_target") is True]
