@@ -57,6 +57,14 @@ class Settings(BaseSettings):
     # byte-identically (instant env-only revert; no redeploy). churn/retention is unaffected
     # either way (the sibling no-ops on retention targets).
     mlds_dechurn_signal: bool = True
+    # Coerce the ml_ds + clasificación target to a binary int classification_target (Issue #350).
+    # When true, the deterministic sibling `_normalize_mlds_classification_target` forces any
+    # non-int / non-classification target the LLM emits to int binary {0,1} BEFORE the schema
+    # chain, so the binary-only downstream never silently degrades (post-#348 skipped_non_binary
+    # path). Kill-switch: set MLDS_BINARY_TARGET_COERCE=false to disable the sibling and restore the
+    # prior behavior byte-identically (instant env-only revert; no redeploy). churn / already-binary
+    # cases are unaffected either way (the sibling passes them through unchanged).
+    mlds_binary_target_coerce: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

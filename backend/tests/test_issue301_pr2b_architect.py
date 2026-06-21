@@ -71,11 +71,12 @@ _MLDS_CTX: dict[str, object] = {
 # Frozen digest of the assembled ml_ds+clasificación prompt. If this changes, the ml_ds
 # prompt changed — confirm it was NOT the business gate leaking in before updating.
 _MLDS_ARCHITECT_PROMPT_SHA256 = (
-    # Issue #370 (USD-only) — regenerated deliberately after adding the global USD money rule to
-    # `_architect_base.py` (Boundaries) and rewriting the anchor currency line to "currency SIEMPRE
-    # USD" (removed the 9-code ISO list). Confirmed via
-    # test_mlds_architect_prompt_unchanged_by_business_gate (differential GREEN → not a business-gate leak).
-    "87ba89ed746adc1b37d24322b0ee1a57ea19f2947b1e4dfe064520616e466240"
+    # Issue #350 (ml_ds clf binary-only) — regenerated deliberately after tightening anchor rule 1
+    # to a binary int 0/1 target (removed "o multiclase", added the multiclass prohibition, mirrored
+    # the business dtype pin) and reframing rule 2's pregunta_eje to a binary intervene/no-intervene
+    # decision. Confirmed via test_mlds_architect_prompt_unchanged_by_business_gate (differential
+    # GREEN → not a business-gate leak). Prior digest 87ba89ed… was the Issue #370 USD-only regen.
+    "1d1894b148a806be7b5db931b3043c4d5b014d2e2fdcafd35d5c8861104d8d4d"
 )
 
 
