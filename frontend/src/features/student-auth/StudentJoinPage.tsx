@@ -17,6 +17,17 @@ import type {
 import { isMicrosoftLoginEnabled } from "@/shared/authConfig";
 import { getSupabaseClient } from "@/shared/supabaseClient";
 
+import { JoinHeroPanel } from "./components/JoinHeroPanel";
+import { PasswordField } from "./components/PasswordField";
+import { FIELD_INPUT_CLASS, FIELD_LABEL_CLASS, TOGGLE_LINK_CLASS } from "./components/fieldStyles";
+import {
+    AlertCircleIcon,
+    ArrowRightIcon,
+    CheckCircleIcon,
+    LockIcon,
+    SpinnerIcon,
+} from "./components/icons";
+
 function resolveInviteErrorMessage(err: ApiError | null, inviteStatus?: string): string {
     if (inviteStatus === "expired") {
         return "Tu invitación ha expirado. Solicita una nueva al docente.";
@@ -82,6 +93,30 @@ function isStudentJoinContext(
 ): ctx is Extract<ActivationContext, { flow: "student_join_invite" | "student_join_course_access" }> {
     return ctx?.flow === "student_join_invite" || ctx?.flow === "student_join_course_access";
 }
+
+const SUBMIT_BUTTON_CLASS =
+    "flex w-full items-center justify-center gap-[9px] rounded-[13px] border-none " +
+    "bg-[linear-gradient(160deg,#0A57B5,#013C8F)] p-[15px] text-[15px] font-bold text-white " +
+    "shadow-[0_12px_26px_-10px_rgba(1,68,160,0.5)] transition-transform " +
+    "hover:-translate-y-0.5 active:translate-y-0 disabled:translate-y-0 " +
+    "disabled:cursor-not-allowed disabled:opacity-60";
+
+function isValidEmail(value: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+/** Full-bleed cool-gradient backdrop shared by every /join render state. */
+function JoinShell({ children }: { children: React.ReactNode }) {
+    return (
+        <div className="flex min-h-screen flex-col items-center justify-center bg-[radial-gradient(120%_110%_at_50%_-10%,#F5F8FC_0%,#E9EEF6_58%,#DCE4F0_100%)] p-[40px_24px] font-['Plus_Jakarta_Sans'] antialiased">
+            {children}
+        </div>
+    );
+}
+
+const MESSAGE_CARD_CLASS =
+    "w-full max-w-md rounded-[26px] border border-[rgba(12,32,72,0.07)] bg-white p-10 text-center " +
+    "shadow-[0_40px_90px_-38px_rgba(12,32,72,0.30),_0_2px_10px_rgba(0,0,0,0.04)]";
 
 export function StudentJoinPage() {
     const navigate = useNavigate();
@@ -406,41 +441,51 @@ export function StudentJoinPage() {
 
     if (!joinContext && !resolving) {
         return (
-            <div className="flex flex-col items-center justify-center gap-6 px-4 py-24 text-center">
-                <h1 className="text-xl font-semibold">Unirse a un curso</h1>
-                <p className="text-sm text-danger max-w-sm">
-                    Este enlace de acceso no es válido. Solicita un nuevo enlace.
-                </p>
-            </div>
+            <JoinShell>
+                <div className={MESSAGE_CARD_CLASS}>
+                    <h1 className="font-['Source_Serif_4'] text-[22px] font-semibold text-[#16181D]">
+                        Unirse a un curso
+                    </h1>
+                    <p className="mt-3 text-[14px] leading-[1.5] text-[#C2462E]">
+                        Este enlace de acceso no es válido. Solicita un nuevo enlace.
+                    </p>
+                </div>
+            </JoinShell>
         );
     }
 
     if (resolving) {
         return (
-            <div className="flex flex-col items-center justify-center gap-4 px-4 py-24">
-                <span className="text-sm text-muted-foreground">
+            <JoinShell>
+                <div className="flex items-center gap-3 text-[14px] text-[#667085]">
+                    <SpinnerIcon className="text-[#0144a0]" />
                     Verificando acceso...
-                </span>
-            </div>
+                </div>
+            </JoinShell>
         );
     }
 
     if (autoEnrolling) {
         return (
-            <div className="flex flex-col items-center justify-center gap-4 px-4 py-24">
-                <span className="text-sm text-muted-foreground">
+            <JoinShell>
+                <div className="flex items-center gap-3 text-[14px] text-[#667085]">
+                    <SpinnerIcon className="text-[#0144a0]" />
                     Inscribiéndote en el curso...
-                </span>
-            </div>
+                </div>
+            </JoinShell>
         );
     }
 
     if (resolveError) {
         return (
-            <div className="flex flex-col items-center justify-center gap-6 px-4 py-24 text-center">
-                <h1 className="text-xl font-semibold">Unirse a un curso</h1>
-                <p className="text-sm text-danger max-w-sm">{resolveError}</p>
-            </div>
+            <JoinShell>
+                <div className={MESSAGE_CARD_CLASS}>
+                    <h1 className="font-['Source_Serif_4'] text-[22px] font-semibold text-[#16181D]">
+                        Unirse a un curso
+                    </h1>
+                    <p className="mt-3 text-[14px] leading-[1.5] text-[#C2462E]">{resolveError}</p>
+                </div>
+            </JoinShell>
         );
     }
 
@@ -454,198 +499,256 @@ export function StudentJoinPage() {
     if (isInviteFlow && !resolvedInvite) return null;
     if (!isInviteFlow && !resolvedCourseAccess) return null;
 
+    const isSignIn = authMode === "signin" && !isInviteFlow && !session;
+
     return (
-        <div className="flex flex-col items-center justify-center gap-6 px-4 py-16">
-            <div className="w-full max-w-sm space-y-6">
-                <div className="space-y-1 text-center">
-                    <h1 className="text-xl font-semibold">Unirse a un curso</h1>
-                    <p className="text-sm text-muted-foreground">{universityName}</p>
-                    {courseTitle && (
-                        <p className="text-sm text-muted-foreground">Curso: {courseTitle}</p>
-                    )}
-                    {teacherName && (
-                        <p className="text-sm text-muted-foreground">Docente: {teacherName}</p>
-                    )}
-                </div>
+        <JoinShell>
+            <div className="flex w-full max-w-[1040px] flex-col overflow-hidden rounded-[26px] border border-[rgba(12,32,72,0.07)] bg-white shadow-[0_40px_90px_-38px_rgba(12,32,72,0.30),_0_2px_10px_rgba(0,0,0,0.04)] md:flex-row">
+                <JoinHeroPanel
+                    universityName={universityName}
+                    courseTitle={courseTitle}
+                    teacherName={teacherName}
+                />
 
-                {authMode === "signin" && !isInviteFlow && !session ? (
-                    <>
-                        <p className="text-center text-sm text-muted-foreground">
-                            {signInNotice ?? "Inicia sesión para unirte a este curso."}
-                        </p>
+                <div className="flex w-full flex-col p-[36px_28px_32px] md:w-auto md:min-w-[340px] md:flex-[1.18_1_420px] md:p-[48px_48px_40px]">
+                    {isSignIn ? (
+                        <>
+                            <h1 className="mb-2 font-['Source_Serif_4'] text-[27px] font-semibold tracking-[-0.4px] text-[#16181D]">
+                                Inicia sesión
+                            </h1>
+                            <p className="mb-7 text-[14.5px] leading-[1.5] text-[#667085]">
+                                {signInNotice ?? "Inicia sesión para unirte a este curso."}
+                            </p>
 
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Correo electrónico</label>
-                            <input
-                                type="email"
-                                value={email}
-                                onChange={(event) => setEmail(event.target.value)}
-                                placeholder="tu.correo@universidad.edu"
-                                required
-                                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                            />
-                        </div>
-
-                        <form onSubmit={(event) => void handleSignInSubmit(event)} className="space-y-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Contraseña</label>
-                                <input
-                                    type="password"
-                                    value={password}
-                                    onChange={(event) => setPassword(event.target.value)}
-                                    required
-                                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                                />
-                            </div>
-
-                            {signInError && (
-                                <p className="text-sm text-danger">{signInError}</p>
-                            )}
-
-                            <button
-                                type="submit"
-                                disabled={signInSubmitting}
-                                className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                            >
-                                {signInSubmitting ? "Iniciando sesión..." : "Iniciar sesión"}
-                            </button>
-                        </form>
-
-                        <p className="text-center text-sm text-muted-foreground">
-                            ¿Eres nuevo?{" "}
-                            <button
-                                type="button"
-                                onClick={goToActivate}
-                                className="font-medium underline hover:opacity-80"
-                            >
-                                Crear cuenta
-                            </button>
-                        </p>
-                    </>
-                ) : (
-                    <>
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Correo electrónico</label>
-                            {isInviteFlow ? (
-                                <input
-                                    type="email"
-                                    value={resolvedInvite?.email_masked ?? ""}
-                                    disabled
-                                    className="w-full rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground"
-                                />
-                            ) : (
-                                <input
-                                    type="email"
-                                    value={email}
-                                    onChange={(event) => setEmail(event.target.value)}
-                                    placeholder="tu.correo@universidad.edu"
-                                    required
-                                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                                />
-                            )}
-                        </div>
-
-                        {allowMicrosoft && (
-                            <div className="space-y-2">
-                                <p className="text-sm font-medium">Continuar con Microsoft</p>
-                                <button
-                                    type="button"
-                                    onClick={() => void handleMicrosoftJoin()}
-                                    className="w-full rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-                                >
-                                    Continuar con Microsoft
-                                </button>
-                            </div>
-                        )}
-
-                        {allowMicrosoft && (
-                            <div className="relative">
-                                <div className="absolute inset-0 flex items-center">
-                                    <span className="w-full border-t border-border" />
-                                </div>
-                                <div className="relative flex justify-center">
-                                    <span className="bg-background px-2 text-xs text-muted-foreground">
-                                        o crea una contraseña
-                                    </span>
-                                </div>
-                            </div>
-                        )}
-
-                        <form onSubmit={(event) => void handlePasswordSubmit(event)} className="space-y-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">
-                                    Nombre completo <span className="text-danger">*</span>
+                            <div className="mb-[18px]">
+                                <label htmlFor="join-signin-email" className={`${FIELD_LABEL_CLASS} mb-2`}>
+                                    Correo electrónico <span className="text-[#0144a0]">*</span>
                                 </label>
-                                <input
-                                    type="text"
-                                    value={fullName}
-                                    onChange={(event) => setFullName(event.target.value)}
-                                    placeholder="Nombre completo"
-                                    required
-                                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                                />
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Contraseña</label>
-                                <input
-                                    type="password"
-                                    value={password}
-                                    onChange={(event) => setPassword(event.target.value)}
-                                    required
-                                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                                />
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Confirmar contraseña</label>
-                                <input
-                                    type="password"
-                                    value={confirmPassword}
-                                    onChange={(event) => setConfirmPassword(event.target.value)}
-                                    required
-                                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                                />
-                            </div>
-
-                            {submitError && (
-                                <div className="space-y-2">
-                                    <p className="text-sm text-danger">{submitError}</p>
-                                    {submitError.includes("Inicia sesión") && (
-                                        <Link
-                                            to="/"
-                                            className="inline-flex text-sm font-medium underline hover:opacity-80"
-                                        >
-                                            Iniciar sesión para continuar
-                                        </Link>
+                                <div className="relative">
+                                    <input
+                                        id="join-signin-email"
+                                        type="email"
+                                        autoComplete="email"
+                                        value={email}
+                                        onChange={(event) => setEmail(event.target.value)}
+                                        placeholder="tu.correo@universidad.edu"
+                                        required
+                                        className={`${FIELD_INPUT_CLASS} pr-[42px]`}
+                                    />
+                                    {isValidEmail(email) && (
+                                        <span className="absolute right-[14px] top-1/2 -translate-y-1/2">
+                                            <CheckCircleIcon />
+                                        </span>
                                     )}
                                 </div>
-                            )}
+                            </div>
 
-                            <button
-                                type="submit"
-                                disabled={submitting}
-                                className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                            >
-                                {submitting ? "Activando..." : "Activar cuenta"}
-                            </button>
-                        </form>
+                            <form onSubmit={(event) => void handleSignInSubmit(event)}>
+                                <div className="mb-[18px]">
+                                    <PasswordField
+                                        id="join-signin-password"
+                                        name="password"
+                                        label="Contraseña"
+                                        value={password}
+                                        onChange={(event) => setPassword(event.target.value)}
+                                        autoComplete="current-password"
+                                    />
+                                </div>
 
-                        {!isInviteFlow && !session && (
-                            <p className="text-center text-sm text-muted-foreground">
-                                ¿Ya tienes una cuenta?{" "}
+                                {signInError && (
+                                    <p
+                                        role="alert"
+                                        className="mb-[18px] flex items-center gap-[5px] text-[12.5px] text-[#C2462E]"
+                                    >
+                                        <AlertCircleIcon />
+                                        {signInError}
+                                    </p>
+                                )}
+
+                                <button type="submit" disabled={signInSubmitting} className={SUBMIT_BUTTON_CLASS}>
+                                    {signInSubmitting ? (
+                                        <>
+                                            <SpinnerIcon className="text-white" />
+                                            Iniciando sesión…
+                                        </>
+                                    ) : (
+                                        <>
+                                            Iniciar sesión
+                                            <ArrowRightIcon />
+                                        </>
+                                    )}
+                                </button>
+                            </form>
+
+                            <div className="mt-[22px] border-t border-[#EAEDF2] pt-[22px] text-center text-[13.5px] text-[#667085]">
+                                ¿Eres nuevo?{" "}
                                 <button
                                     type="button"
-                                    onClick={() => goToSignIn(null)}
-                                    className="font-medium underline hover:opacity-80"
+                                    onClick={goToActivate}
+                                    className={TOGGLE_LINK_CLASS}
                                 >
-                                    Inicia sesión
+                                    Crear cuenta
                                 </button>
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <h1 className="mb-2 font-['Source_Serif_4'] text-[27px] font-semibold tracking-[-0.4px] text-[#16181D]">
+                                Activa tu cuenta
+                            </h1>
+                            <p className="mb-7 text-[14.5px] leading-[1.5] text-[#667085]">
+                                Completa tus datos para unirte al curso. Solo te tomará un momento.
                             </p>
-                        )}
-                    </>
-                )}
+
+                            <div className="mb-[18px]">
+                                <label htmlFor="join-email" className={`${FIELD_LABEL_CLASS} mb-2`}>
+                                    Correo electrónico <span className="text-[#0144a0]">*</span>
+                                </label>
+                                <div className="relative">
+                                    {isInviteFlow ? (
+                                        <input
+                                            id="join-email"
+                                            type="email"
+                                            value={resolvedInvite?.email_masked ?? ""}
+                                            disabled
+                                            className={`${FIELD_INPUT_CLASS} disabled:cursor-not-allowed disabled:text-[#667085]`}
+                                        />
+                                    ) : (
+                                        <>
+                                            <input
+                                                id="join-email"
+                                                type="email"
+                                                autoComplete="email"
+                                                value={email}
+                                                onChange={(event) => setEmail(event.target.value)}
+                                                placeholder="tu.correo@universidad.edu"
+                                                required
+                                                className={`${FIELD_INPUT_CLASS} pr-[42px]`}
+                                            />
+                                            {isValidEmail(email) && (
+                                                <span className="absolute right-[14px] top-1/2 -translate-y-1/2">
+                                                    <CheckCircleIcon />
+                                                </span>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+
+                            {allowMicrosoft && (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleMicrosoftJoin()}
+                                        className="mb-[18px] w-full rounded-[13px] border-[1.5px] border-[#DEE3EC] bg-white p-[13px] text-[14px] font-semibold text-[#2B3340] transition-colors hover:bg-[#F6F8FB]"
+                                    >
+                                        Continuar con Microsoft
+                                    </button>
+                                    <div className="mb-[18px] flex items-center gap-3">
+                                        <span className="h-px flex-1 bg-[#EAEDF2]" />
+                                        <span className="text-[12px] text-[#98A1B0]">o crea una contraseña</span>
+                                        <span className="h-px flex-1 bg-[#EAEDF2]" />
+                                    </div>
+                                </>
+                            )}
+
+                            <form onSubmit={(event) => void handlePasswordSubmit(event)}>
+                                <div className="mb-[18px]">
+                                    <label htmlFor="join-name" className={`${FIELD_LABEL_CLASS} mb-2`}>
+                                        Nombre completo <span className="text-[#0144a0]">*</span>
+                                    </label>
+                                    <input
+                                        id="join-name"
+                                        name="name"
+                                        type="text"
+                                        autoComplete="name"
+                                        value={fullName}
+                                        onChange={(event) => setFullName(event.target.value)}
+                                        placeholder="Nombre y apellidos"
+                                        required
+                                        className={FIELD_INPUT_CLASS}
+                                    />
+                                </div>
+
+                                <div className="mb-[18px]">
+                                    <PasswordField
+                                        id="join-password"
+                                        name="password"
+                                        label="Contraseña"
+                                        value={password}
+                                        onChange={(event) => setPassword(event.target.value)}
+                                        autoComplete="new-password"
+                                        showMeter
+                                    />
+                                </div>
+
+                                <div className="mb-[26px]">
+                                    <PasswordField
+                                        id="join-confirm"
+                                        name="confirm_password"
+                                        label="Confirmar contraseña"
+                                        value={confirmPassword}
+                                        onChange={(event) => setConfirmPassword(event.target.value)}
+                                        autoComplete="new-password"
+                                    />
+                                </div>
+
+                                {submitError && (
+                                    <div className="mb-[18px] space-y-2">
+                                        <p
+                                            role="alert"
+                                            className="flex items-center gap-[5px] text-[12.5px] text-[#C2462E]"
+                                        >
+                                            <AlertCircleIcon />
+                                            {submitError}
+                                        </p>
+                                        {submitError.includes("Inicia sesión") && (
+                                            <Link
+                                                to="/"
+                                                className="inline-flex text-[13px] font-semibold text-[#0144a0] hover:opacity-80"
+                                            >
+                                                Iniciar sesión para continuar
+                                            </Link>
+                                        )}
+                                    </div>
+                                )}
+
+                                <button type="submit" disabled={submitting} className={SUBMIT_BUTTON_CLASS}>
+                                    {submitting ? (
+                                        <>
+                                            <SpinnerIcon className="text-white" />
+                                            Activando tu cuenta…
+                                        </>
+                                    ) : (
+                                        <>
+                                            Activar cuenta
+                                            <ArrowRightIcon />
+                                        </>
+                                    )}
+                                </button>
+
+                                <div className="mt-4 flex items-center justify-center gap-1.5 text-[12px] text-[#98A1B0]">
+                                    <LockIcon />
+                                    Tus datos están protegidos y solo se usan para tu acceso.
+                                </div>
+                            </form>
+
+                            {!isInviteFlow && !session && (
+                                <div className="mt-[22px] border-t border-[#EAEDF2] pt-[22px] text-center text-[13.5px] text-[#667085]">
+                                    ¿Ya tienes una cuenta?{" "}
+                                    <button
+                                        type="button"
+                                        onClick={() => goToSignIn(null)}
+                                        className={TOGGLE_LINK_CLASS}
+                                    >
+                                        Inicia sesión
+                                    </button>
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
             </div>
-        </div>
+        </JoinShell>
     );
 }

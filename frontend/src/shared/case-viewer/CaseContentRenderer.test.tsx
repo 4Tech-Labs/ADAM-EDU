@@ -98,6 +98,23 @@ describe("CaseContentRenderer", () => {
         expect(screen.getByPlaceholderText(/Escriba su respuesta aquí/i)).toHaveAttribute("readonly");
     });
 
+    it("invokes renderQuestionFooter per question with the question id and module", () => {
+        const renderQuestionFooter = vi.fn(
+            (args: { questionId: string }) => <div data-testid="q-footer">{args.questionId}</div>,
+        );
+        renderRenderer({ readOnly: true, showExpectedSolutions: true, renderQuestionFooter });
+
+        expect(renderQuestionFooter).toHaveBeenCalledWith(
+            expect.objectContaining({ questionId: "M1-Q1", moduleId: "m1" }),
+        );
+        expect(screen.getByTestId("q-footer")).toHaveTextContent("M1-Q1");
+    });
+
+    it("renders no question footer slot when renderQuestionFooter is absent", () => {
+        renderRenderer({ readOnly: true, showExpectedSolutions: true });
+        expect(document.querySelector("[data-question-grading-slot]")).toBeNull();
+    });
+
     it("renders a custom right panel in place of the default section rail", () => {
         renderRenderer({
             rightPanelSlot: <div data-testid="custom-right-panel">Custom panel</div>,

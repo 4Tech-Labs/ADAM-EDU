@@ -27,6 +27,7 @@ from shared.models import (
     AssignmentCourse,
     AuthoringJob,
     CaseGrade,
+    CaseQuestionGrade,
     Course,
     CourseAccessLink,
     CourseMembership,
@@ -61,6 +62,7 @@ from shared.teacher_gradebook_schema import (
     TeacherCourseGradebookResponse,
     TeacherCourseGradebookStatus,
     TeacherCourseGradebookStudent,
+    TeacherQuestionGrade,
 )
 
 _BOGOTA_TZ = ZoneInfo("America/Bogota")
@@ -460,6 +462,85 @@ def _build_submission_detail_modules(
             )
 
     return modules
+
+
+def build_gradeable_question_ids(teacher_payload: dict[str, Any]) -> list[str]:
+    """Ordered, per-card question ids the teacher can grade.
+
+    SINGLE SOURCE OF TRUTH (decision A1) shared by the submission-detail builder, the
+    grade write-validation, and the rollup denominator. Derives ids identically to
+    ``_build_submission_detail_modules`` (same module iteration + ``_detail_question_id``)
+    so the set the teacher SEES == the set VALIDATED == the rollup DENOMINATOR on every
+    path, including the degraded minimal-``case_view`` fallback. Callers must build the
+    teacher payload with ``build_teacher_case_review_payload`` first, exactly as the
+    detail does.
+    """
+    from shared.student_reads import QUESTION_FIELD_TO_MODULE
+
+    content = teacher_payload.get("content")
+    if not isinstance(content, dict):
+        return []
+
+    ids: list[str] = []
+    for field_name, module_id in QUESTION_FIELD_TO_MODULE.items():
+        raw_questions = content.get(field_name)
+        if not isinstance(raw_questions, list) or not raw_questions:
+            continue
+        for order, raw_question in enumerate(raw_questions, start=1):
+            if not isinstance(raw_question, dict):
+                continue
+            ids.append(_detail_question_id(module_id, raw_question, order))
+    return ids
+
+
+def _load_question_grades_by_qid(
+    db: Session,
+    *,
+    assignment_id: str,
+    membership_id: str,
+) -> dict[str, TeacherQuestionGrade]:
+    """Per-question grades for a submission, keyed by question_id."""
+    rows = (
+        db.execute(
+            select(CaseQuestionGrade).where(
+                CaseQuestionGrade.assignment_id == assignment_id,
+                CaseQuestionGrade.membership_id == membership_id,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        row.question_id: TeacherQuestionGrade(
+            question_id=row.question_id,
+            points_awarded=row.points_awarded,
+            max_points=row.max_points,
+            feedback=row.feedback,
+            graded_at=row.graded_at,
+            graded_by_membership_id=row.graded_by_membership_id,
+        )
+        for row in rows
+    }
+
+
+def _inject_question_grades_into_modules(
+    modules: list[TeacherCaseSubmissionDetailModule],
+    grades_by_qid: Mapping[str, TeacherQuestionGrade],
+) -> list[TeacherCaseSubmissionDetailModule]:
+    """Attach persisted grades to each question by id (post-truncation, teacher-only)."""
+    if not grades_by_qid:
+        return modules
+    return [
+        module.model_copy(
+            update={
+                "questions": [
+                    question.model_copy(update={"grade": grades_by_qid.get(question.id)})
+                    for question in module.questions
+                ]
+            }
+        )
+        for module in modules
+    ]
 
 
 def _truncate_detail_payload_if_needed(
@@ -918,6 +999,15 @@ def get_teacher_case_submission_detail(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="case_canonical_output_invalid",
         )
+
+    # Attach per-question grades AFTER truncation so they never affect the size cap
+    # and are never part of the binary-search payload. Teacher path only.
+    grades_by_qid = _load_question_grades_by_qid(
+        db,
+        assignment_id=assignment.id,
+        membership_id=membership_id,
+    )
+    modules = _inject_question_grades_into_modules(modules, grades_by_qid)
 
     return TeacherCaseSubmissionDetailResponse(
         is_truncated=is_truncated,

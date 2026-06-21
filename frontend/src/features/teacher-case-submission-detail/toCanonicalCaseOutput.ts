@@ -261,6 +261,9 @@ function sanitizeM5QuestionSolutions(value: unknown): M5QuestionSolution[] | und
 
 function buildFallbackQuestion(question: TeacherCaseSubmissionDetailQuestion): PreguntaMinimalista {
     return {
+        // H1: carry the authoritative backend id so the renderer keys this question by it
+        // (the degraded case_view path otherwise renumbers numero:=order and mis-keys grades).
+        id: question.id,
         numero: question.order,
         titulo: `Pregunta ${question.order}`,
         enunciado: question.context

@@ -1,5 +1,5 @@
 import { marked } from "marked";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type { EDASocraticQuestion, ModuleId, PreguntaMinimalista } from "@/shared/adam-types";
 
@@ -19,6 +19,7 @@ export function PreguntaCard({
     onAnswerChange,
     readOnly,
     showExpectedSolutions,
+    footerSlot,
 }: {
     p: QuestionRenderable;
     questionId: string;
@@ -27,6 +28,8 @@ export function PreguntaCard({
     readOnly: boolean;
     showExpectedSolutions: boolean;
     moduleId?: ModuleId;
+    /** Optional content rendered under the question (teacher grading panel). */
+    footerSlot?: ReactNode;
 }) {
     const [showSolucion, setShowSolucion] = useState(showExpectedSolutions);
     const formattedEnunciado = marked(p.enunciado) as string;
@@ -46,7 +49,10 @@ export function PreguntaCard({
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                         <span className="border border-slate-200 text-slate-500 text-[9px] font-bold uppercase tracking-wider px-3 py-1 rounded-full">Respuesta Abierta</span>
-                        <span className="border border-slate-200 text-slate-500 text-[9px] font-bold uppercase tracking-wider px-3 py-1 rounded-full">10 pts</span>
+                        {/* CQ1: the grading panel owns the real per-question value; hide the static "10 pts" when it is shown. */}
+                        {!footerSlot && (
+                            <span className="border border-slate-200 text-slate-500 text-[9px] font-bold uppercase tracking-wider px-3 py-1 rounded-full">10 pts</span>
+                        )}
                         {p.bloom_level && (
                             <span className="border border-violet-200 bg-violet-50 text-violet-700 text-[9px] font-bold uppercase tracking-wider px-3 py-1 rounded-full">
                                 Bloom: {p.bloom_level}
@@ -97,6 +103,11 @@ export function PreguntaCard({
                     <SolucionEsperadaRenderer solucion={p.solucion_esperada} />
                 </div>
             )}
+            {footerSlot ? (
+                <div className="border-t border-slate-200" data-question-grading-slot={questionId}>
+                    {footerSlot}
+                </div>
+            ) : null}
         </div>
     );
 }

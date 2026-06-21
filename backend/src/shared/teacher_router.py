@@ -18,9 +18,12 @@ from shared.teacher_gradebook_schema import (
     TeacherCaseSubmissionDetailResponse,
     TeacherCaseSubmissionsResponse,
     TeacherCourseGradebookResponse,
+    TeacherQuestionGradeUpsertRequest,
+    TeacherQuestionGradeWriteResponse,
 )
 from shared.syllabus_schema import TeacherCourseDetailResponse, TeacherSyllabusSaveRequest
 from shared.teacher_context import TeacherContext, require_teacher_context
+from shared.teacher_grading import clear_question_grade, upsert_question_grade
 from shared.teacher_reads import (
     _assignment_target_course_metadata,
     TeacherCoursesResponse,
@@ -301,13 +304,53 @@ def get_teacher_case_submission_detail_view(
     context: Annotated[TeacherContext, Depends(require_teacher_context)],
     db: Session = Depends(get_db),
 ) -> TeacherCaseSubmissionDetailResponse:
-    """Read-only teacher submission detail view.
-
-    Mutations de calificación (`POST/PUT /api/teacher/cases/.../grade`) se entregarán
-    en una issue posterior. Este endpoint es solo de lectura.
-    """
+    """Read-only teacher submission detail view (per-question grades injected by id)."""
     response.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
     return get_teacher_case_submission_detail(db, context, assignment_id, membership_id)
+
+
+@router.put(
+    "/cases/{assignment_id}/submissions/{membership_id}/questions/{question_id}/grade",
+    response_model=TeacherQuestionGradeWriteResponse,
+)
+def put_teacher_question_grade(
+    assignment_id: str,
+    membership_id: str,
+    question_id: str,
+    request: TeacherQuestionGradeUpsertRequest,
+    context: Annotated[TeacherContext, Depends(require_teacher_context)],
+    db: Session = Depends(get_db),
+) -> TeacherQuestionGradeWriteResponse:
+    """Create or replace a teacher's grade for one question of a submitted response."""
+    return upsert_question_grade(
+        db,
+        context,
+        assignment_id=assignment_id,
+        membership_id=membership_id,
+        question_id=question_id,
+        request=request,
+    )
+
+
+@router.delete(
+    "/cases/{assignment_id}/submissions/{membership_id}/questions/{question_id}/grade",
+    response_model=TeacherQuestionGradeWriteResponse,
+)
+def delete_teacher_question_grade(
+    assignment_id: str,
+    membership_id: str,
+    question_id: str,
+    context: Annotated[TeacherContext, Depends(require_teacher_context)],
+    db: Session = Depends(get_db),
+) -> TeacherQuestionGradeWriteResponse:
+    """Un-grade one question (idempotent); reverts the rollup if the case was graded."""
+    return clear_question_grade(
+        db,
+        context,
+        assignment_id=assignment_id,
+        membership_id=membership_id,
+        question_id=question_id,
+    )
 
 
 @router.patch("/cases/{assignment_id}/publish", response_model=TeacherCaseDetailResponse)

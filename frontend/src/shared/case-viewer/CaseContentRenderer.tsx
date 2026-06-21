@@ -92,6 +92,16 @@ interface CaseContentRendererProps {
     /** Optional: regenerate the degraded M3 notebook (only the generation preview wires it). */
     onRegenerateNotebook?: () => void;
     isRegeneratingNotebook?: boolean;
+    /**
+     * Optional per-question footer (opt-in). Only the teacher submission review passes it,
+     * to attach a grading panel under each question. When omitted, the render is byte-identical
+     * for the student runtime / live preview / authoring preview.
+     */
+    renderQuestionFooter?: (args: {
+        questionId: string;
+        question: QuestionRenderable;
+        moduleId: ModuleId;
+    }) => ReactNode;
 }
 
 interface MarkdownMap extends Record<string, string | null> {
@@ -296,6 +306,7 @@ export function CaseContentRenderer({
     rightPanelSlot,
     onRegenerateNotebook,
     isRegeneratingNotebook,
+    renderQuestionFooter,
 }: CaseContentRendererProps) {
     const content = result.content;
     const isEDA = result.caseType === "harvard_with_eda";
@@ -450,7 +461,9 @@ export function CaseContentRenderer({
         return (
             <div className="space-y-6">
                 {preguntas.map((pregunta) => {
-                    const questionId = buildQuestionId(moduleId, pregunta.numero);
+                    // H1: prefer the authoritative backend id (threaded onto the renderable in the
+                    // teacher view) so the panel/answers key matches the backend on every path.
+                    const questionId = pregunta.id ?? buildQuestionId(moduleId, pregunta.numero);
                     return (
                         <PreguntaCard
                             key={questionId}
@@ -460,12 +473,13 @@ export function CaseContentRenderer({
                             onAnswerChange={(value) => onAnswersChange({ ...answers, [questionId]: value })}
                             readOnly={readOnly}
                             showExpectedSolutions={showExpectedSolutions}
+                            footerSlot={renderQuestionFooter?.({ questionId, question: pregunta, moduleId })}
                         />
                     );
                 })}
             </div>
         );
-    }, [answers, onAnswersChange, readOnly, showExpectedSolutions]);
+    }, [answers, onAnswersChange, readOnly, showExpectedSolutions, renderQuestionFooter]);
 
     const commonProps = useMemo(() => ({
         result,
