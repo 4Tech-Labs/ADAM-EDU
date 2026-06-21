@@ -126,7 +126,9 @@ describe("TeacherSubmissionPreview", () => {
         expect(within(summary).getByText("Borrador vigente")).toBeTruthy();
         expect(within(summary).getByText("2/2")).toBeTruthy();
         expect(within(summary).getByText("Pendiente")).toBeTruthy();
-        expect(within(header).getByText("Caso Plataforma")).toBeTruthy();
+        // The case title now lives only in the sidebar; the topbar shows the course/student context line.
+        expect(within(header).queryByText("Caso Plataforma")).toBeNull();
+        expect(within(header).getByText(/ana\.student@example\.edu/)).toBeTruthy();
         // A submitted response is gradeable: the renderer receives renderQuestionFooter and a panel renders.
         const renderer = screen.getByTestId("case-content-renderer");
         expect(renderer.getAttribute("data-has-grading")).toBe("true");
@@ -252,12 +254,31 @@ describe("TeacherSubmissionPreview", () => {
         expect(within(summary).getByText(`${formatTeacherGradebookScore(4.5)} / ${formatTeacherGradebookScore(5)}`)).toBeTruthy();
     });
 
-    it("navigates back to the submissions list", async () => {
+    it("navigates back to the submissions list from the sidebar", async () => {
         renderPreview();
 
-        fireEvent.click(await screen.findByRole("button", { name: /Volver/i }));
+        const sidebar = await screen.findByTestId("teacher-submission-preview-sidebar");
+        fireEvent.click(within(sidebar).getByRole("button", { name: /Volver/i }));
 
         expect(await screen.findByTestId("submissions-list")).toBeTruthy();
+    });
+
+    it("navigates back from the mobile module bar", async () => {
+        renderPreview();
+
+        const mobileBar = await screen.findByTestId("teacher-submission-preview-mobile-modules");
+        fireEvent.click(within(mobileBar).getByRole("button", { name: /Volver/i }));
+
+        expect(await screen.findByTestId("submissions-list")).toBeTruthy();
+    });
+
+    it("labels the mobile module pills with readable names instead of raw ids", async () => {
+        renderPreview();
+
+        const mobileBar = await screen.findByTestId("teacher-submission-preview-mobile-modules");
+        // business + harvard_only => m1 renders as "Case Reader", not the raw "m1" id.
+        expect(within(mobileBar).getByRole("button", { name: "Case Reader" })).toBeTruthy();
+        expect(within(mobileBar).queryByRole("button", { name: "m1" })).toBeNull();
     });
 
     it("forwards the refresh action", async () => {
