@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, api } from "@/shared/api";
 import type {
+    TeacherCasesResponse,
     TeacherCourseGradebookResponse,
     TeacherCourseDetailResponse,
     TeacherDidacticStrategy,
@@ -13,7 +14,7 @@ import type {
 } from "@/shared/adam-types";
 import { queryKeys } from "@/shared/queryKeys";
 
-export type TeacherCourseTab = "syllabus" | "estudiantes" | "configuracion";
+export type TeacherCourseTab = "syllabus" | "casos" | "estudiantes" | "configuracion";
 export type TeacherCourseDraft = TeacherSyllabusPayload;
 
 const SPANISH_DATETIME_FORMATTER = new Intl.DateTimeFormat("es-CO", {
@@ -256,6 +257,9 @@ export function getTeacherCourseTab(searchValue: string | null): TeacherCourseTa
     if (searchValue === "configuracion") {
         return "configuracion";
     }
+    if (searchValue === "casos") {
+        return "casos";
+    }
     if (searchValue === "estudiantes") {
         return "estudiantes";
     }
@@ -497,6 +501,18 @@ export function useTeacherCourseStudents(courseId: string, enabled: boolean) {
         enabled: Boolean(courseId) && enabled,
         staleTime: 30_000,
         refetchOnMount: true,
+        refetchOnWindowFocus: true,
+    });
+}
+
+export function useTeacherCourseCases(courseId: string) {
+    // Eager (no `enabled` gate beyond courseId): the sidebar "Casos" badge shows
+    // the count before the tab is opened. Listing is lightweight and course-scoped.
+    return useQuery<TeacherCasesResponse>({
+        queryKey: queryKeys.teacher.courseCases(courseId),
+        queryFn: () => api.teacher.getCourseCases(courseId),
+        enabled: Boolean(courseId),
+        staleTime: 30_000,
         refetchOnWindowFocus: true,
     });
 }

@@ -1,6 +1,5 @@
 import { GraduationCap } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router-dom";
 
 import { useEmailPasswordSignIn } from "@/app/auth/useEmailPasswordSignIn";
 import { readActivationContext, saveActivationContext } from "@/shared/activationContext";
@@ -10,11 +9,12 @@ import { getSupabaseClient } from "@/shared/supabaseClient";
 /**
  * Root landing page shown to unauthenticated users (`/`).
  *
- * Unified login for end users (teachers + students): a single role-agnostic
- * credential form. Supabase auth never receives a role; the backend derives it
- * from the account's memberships. Once `actor` resolves, `RootRedirect` routes
- * the user to their real dashboard by `primary_role` — so there is no "wrong
- * door" state to get stuck in.
+ * Unified login for ALL roles (teachers, students, admins): a single
+ * role-agnostic credential form. Supabase auth never receives a role; the
+ * backend derives it from the account's memberships. Once `actor` resolves,
+ * `RootRedirect` routes the user to their real dashboard by `primary_role`
+ * (admin → /admin/dashboard, or /admin/change-password if must_rotate) — so
+ * there is no "wrong door" state to get stuck in.
  *
  * Two paths:
  * A) Microsoft OAuth — hidden behind `isMicrosoftLoginEnabled()` (kill-switch,
@@ -22,8 +22,6 @@ import { getSupabaseClient } from "@/shared/supabaseClient";
  * B) Password — signInWithPassword; AuthContext fires SIGNED_IN → RootRedirect
  *    reacts automatically. If the user arrived from a course-access link we
  *    resume the enrollment flow in /auth/callback after sign-in.
- *
- * Admin login stays a separate, discreet entry (`/admin/login`).
  *
  * Non-negotiables:
  * - No "Forgot password" CTA
@@ -274,13 +272,6 @@ export function AppLanding() {
                             <span className="font-medium text-[#0144a0]">
                                 Contacta a soporte
                             </span>
-                            <br />
-                            <Link
-                                to="/admin/login"
-                                className="font-medium text-[#8b9bb8] underline underline-offset-2 transition-colors hover:text-[#0144a0]"
-                            >
-                                Portal administrador
-                            </Link>
                             <br />
                             © 2026 ADAM-EDU · Todos los derechos reservados
                         </footer>

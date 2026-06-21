@@ -2093,3 +2093,123 @@ def list_teacher_active_cases(
         )
 
     return items
+
+
+def list_teacher_course_cases(
+    db: Session,
+    context: TeacherContext,
+    course_id: str,
+    *,
+    now: datetime,
+) -> list[TeacherCaseItem]:
+    """Return every published case for a teacher-owned course.
+
+    Unlike ``list_teacher_active_cases`` this is *course-scoped* (authorized via
+    ``TeacherContext`` course ownership, not the teacher-wide legacy bridge) and
+    does NOT drop expired cases: it returns all ``status == "published"``
+    assignments targeting the course — active, scheduled, and past-deadline —
+    so the per-course "Casos" tab can show the full history. ``now`` is unused by
+    the DB filter but is accepted for parity with ``list_teacher_active_cases``
+    so the router can compute ``days_remaining`` against the same instant.
+    """
+    owned_course_id = (
+        db.execute(
+            select(Course.id)
+            .where(
+                Course.id == course_id,
+                Course.university_id == context.university_id,
+                Course.teacher_membership_id == context.teacher_membership_id,
+            )
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+    if owned_course_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="course_not_found")
+
+    assignment_target_courses = _build_assignment_target_courses_subquery()
+    assignments = (
+        db.execute(
+            select(Assignment)
+            .options(
+                load_only(
+                    Assignment.id,
+                    Assignment.course_id,
+                    Assignment.title,
+                    Assignment.canonical_output,
+                    Assignment.available_from,
+                    Assignment.deadline,
+                    Assignment.status,
+                    Assignment.created_at,
+                ),
+                joinedload(Assignment.course).load_only(Course.code),
+                joinedload(Assignment.assignment_courses)
+                .joinedload(AssignmentCourse.course)
+                .load_only(Course.code),
+            )
+            .join(
+                assignment_target_courses,
+                assignment_target_courses.c.assignment_id == Assignment.id,
+            )
+            .where(
+                assignment_target_courses.c.course_id == course_id,
+                Assignment.status == "published",
+            )
+            .order_by(
+                Assignment.available_from.asc().nullslast(),
+                Assignment.created_at.asc(),
+                Assignment.id.asc(),
+            )
+        )
+        .unique()
+        .scalars()
+        .all()
+    )
+
+    legacy_assignment_ids = [
+        assignment.id
+        for assignment in assignments
+        if assignment.available_from is None or assignment.deadline is None
+    ]
+    legacy_schedule_payloads: dict[str, dict[str, Any]] = {}
+    if legacy_assignment_ids:
+        # Legacy-only bridge: records created before the #175 schedule persistence fix
+        # may still carry dates only inside authoring_jobs.task_payload. Mirrors the
+        # fallback in ``list_teacher_active_cases``.
+        legacy_schedule_rows = db.execute(
+            select(
+                AuthoringJob.assignment_id,
+                AuthoringJob.created_at,
+                AuthoringJob.task_payload,
+            )
+            .where(AuthoringJob.assignment_id.in_(legacy_assignment_ids))
+            .order_by(AuthoringJob.assignment_id.asc(), AuthoringJob.created_at.desc())
+        ).all()
+        for assignment_id, _created_at, task_payload in legacy_schedule_rows:
+            if assignment_id not in legacy_schedule_payloads and isinstance(task_payload, dict):
+                legacy_schedule_payloads[assignment_id] = task_payload
+
+    items: list[TeacherCaseItem] = []
+    for assignment in assignments:
+        canonical_output = assignment.canonical_output if isinstance(assignment.canonical_output, dict) else {}
+        canonical_title = canonical_output.get("title")
+        title = canonical_title if isinstance(canonical_title, str) and canonical_title.strip() else assignment.title
+        course_codes = _assignment_course_codes(assignment)
+        available_from, deadline = _resolve_schedule_values_from_payload(
+            available_from=assignment.available_from,
+            deadline=assignment.deadline,
+            task_payload=legacy_schedule_payloads.get(assignment.id),
+        )
+        items.append(
+            TeacherCaseItem(
+                id=assignment.id,
+                title=title,
+                available_from=available_from,
+                deadline=deadline,
+                status=assignment.status,
+                course_codes=course_codes,
+            )
+        )
+
+    return items

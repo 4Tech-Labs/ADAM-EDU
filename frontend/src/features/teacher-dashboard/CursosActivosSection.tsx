@@ -69,7 +69,7 @@ function CourseCard({ course }: CourseCardProps) {
     return (
         <article
             className={[
-                "course-card relative overflow-hidden rounded-[18px] border-[1.5px] border-[#e2e8f0] bg-white transition-all duration-[180ms]",
+                "course-card relative flex h-full flex-col overflow-hidden rounded-[18px] border-[1.5px] border-[#e2e8f0] bg-white transition-all duration-[180ms]",
                 isActive
                     ? "hover:-translate-y-0.5 hover:border-[#bfdbfe] hover:shadow-[0_12px_40px_-8px_rgba(1,68,160,0.13)]"
                     : "opacity-75",
@@ -77,7 +77,7 @@ function CourseCard({ course }: CourseCardProps) {
         >
             <AccentBar status={course.status} />
 
-            <div className="p-6 pl-8">
+            <div className="flex flex-1 flex-col p-6 pl-8">
                 <div className="mb-4 flex items-start justify-between gap-4">
                     <div className="min-w-0">
                         <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -88,7 +88,10 @@ function CourseCard({ course }: CourseCardProps) {
                                 {course.semester} · {course.code}
                             </span>
                         </div>
-                        <h3 className="text-[16px] font-bold leading-snug text-slate-900">
+                        <h3
+                            title={course.title}
+                            className="line-clamp-2 min-h-[2.8em] text-[16px] font-bold leading-snug text-slate-900"
+                        >
                             {course.title}
                         </h3>
                     </div>
@@ -101,7 +104,7 @@ function CourseCard({ course }: CourseCardProps) {
                     <StatPill value="—" label="Promedio" />
                 </div>
 
-                <div className="border-t border-slate-100 pt-5">
+                <div className="mt-auto border-t border-slate-100 pt-5">
                     {isActive ? (
                         <button
                             type="button"
@@ -260,7 +263,7 @@ export function CursosActivosSection() {
                     {filteredCourses.map((course, index) => (
                         <div
                             key={course.id}
-                            className="fade-card"
+                            className="fade-card h-full"
                             style={{
                                 opacity: 0,
                                 animation: "cardIn 0.35s ease forwards",
