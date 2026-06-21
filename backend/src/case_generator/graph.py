@@ -171,6 +171,7 @@ from case_generator.m1_grounding import (
     enforce_usd_currency,
     validate_exhibit2_event_rate,
     validate_narrative_exhibit_coherence,
+    validate_question_option_coherence,
     validate_questions_exhibit_coherence,
 )
 from case_generator.m3_notebook_execution import (
@@ -1129,6 +1130,17 @@ _M1_QUESTIONS_EXHIBIT_REPROMPT_HEADER = (
     "cifras que aparezcan textualmente en el Exhibit referido; NUNCA aproximes ni "
     "redondees. Incoherencias detectadas:\n"
 )
+_M1_QUESTIONS_OPTION_REPROMPT_HEADER = (
+    "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE OPCIONES\n"
+    "Algunas preguntas recomiendan en `solucion_esperada` una opción estratégica que NO "
+    "existe en el caso, o que el propio enunciado de esa pregunta no presenta al estudiante. "
+    "El caso define un conjunto cerrado de opciones (A, B, C). Regenera EXACTAMENTE 3 "
+    "preguntas con el mismo schema: el enunciado de cada pregunta de decisión DEBE presentar "
+    "las opciones (A/B/C) entre las que el estudiante elige, y `solucion_esperada` SOLO puede "
+    "recomendar una de las opciones presentadas en su enunciado, nombrándola por su letra. "
+    "NUNCA recomiendes una opción inexistente ni ausente del enunciado. Incoherencias "
+    "detectadas:\n"
+)
 
 
 def _build_m1_exhibit_anexos(state: ADAMState) -> dict[str, str]:
@@ -1258,6 +1270,67 @@ def _apply_m1_questions_exhibit_coherence(
     except Exception as exc:  # best-effort — never fail M1
         logger.warning(
             "[case_questions] validador coherencia Exhibit M1 falló (best-effort): %s",
+            exc,
+            extra={"node": "case_questions", "case_id": state.get("case_id")},
+        )
+        return preguntas_dict
+
+
+def _apply_m1_questions_option_coherence(
+    *, llm: Any, prompt: str, state: ADAMState, preguntas_dict: list[dict]
+) -> list[dict]:
+    """Validate + reprompt-once-then-DEGRADE the M1 question option coherence.
+
+    Internal coherence: a ``solucion_esperada`` must only recommend a strategic option that
+    exists in the case (A/B/C, derived from ``dilema_brief``) and that its own ``enunciado``
+    presents. Gated to the classification family for BOTH profiles (business AND ml_ds) and
+    behind the ``m1_option_coherence`` kill-switch; a byte-identical no-op otherwise. The
+    reprompt re-invokes structured output (may raise ``ValidationError`` /
+    ``OutputParserException`` / ``ValueError``); any failure or a residual violation degrades
+    to the pass-1 questions. Best-effort: never raises (in particular never propagates
+    ``RuntimeError``), so the job always completes. Runs AFTER the Exhibit-coherence pass.
+    """
+    if not settings.m1_option_coherence or not _is_classification_family(state):
+        return preguntas_dict
+    try:
+        dilema_brief = str(state.get("dilema_brief") or "")
+        violations = validate_question_option_coherence(preguntas_dict, dilema_brief)
+        if not violations:
+            return preguntas_dict
+        bullet_list = "\n".join(f"- {violation}" for violation in violations)
+        print(
+            f"[case_questions] Incoherencias de opciones M1 detectadas: {violations}. "
+            "Reprompt explícito (1/1)."
+        )
+        reprompt = prompt + _M1_QUESTIONS_OPTION_REPROMPT_HEADER + bullet_list
+        try:
+            resultado: GeneradorPreguntasM1Output = llm.with_structured_output(
+                GeneradorPreguntasM1Output
+            ).invoke(reprompt)
+            corrected = [p.model_dump() for p in resultado.preguntas]
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[case_questions] reprompt coherencia de opciones inválido — degrada a pass-1: %s",
+                exc,
+                extra={"node": "case_questions", "case_id": state.get("case_id")},
+            )
+            return preguntas_dict
+        violations_2 = validate_question_option_coherence(corrected, dilema_brief)
+        if not violations_2:
+            print("[case_questions] Reprompt coherencia de opciones M1 OK")
+            return corrected
+        logger.warning(
+            "[case_questions] coherencia de opciones M1 degradada tras reprompt",
+            extra={
+                "node": "case_questions",
+                "violations": violations_2,
+                "case_id": state.get("case_id"),
+            },
+        )
+        return preguntas_dict
+    except Exception as exc:  # best-effort — never fail M1
+        logger.warning(
+            "[case_questions] validador coherencia de opciones M1 falló (best-effort): %s",
             exc,
             extra={"node": "case_questions", "case_id": state.get("case_id")},
         )
@@ -1522,6 +1595,11 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
     # Issue #360 — best-effort Exhibit coherence (outside the try above so the existing
     # `except RuntimeError: raise` is untouched; this helper never raises).
     preguntas_dict = _apply_m1_questions_exhibit_coherence(
+        llm=llm, prompt=prompt, state=state, preguntas_dict=preguntas_dict
+    )
+    # Option coherence (clasificación, both profiles) — best-effort, runs after the Exhibit
+    # pass; the solución must only recommend options the case defines and the enunciado presents.
+    preguntas_dict = _apply_m1_questions_option_coherence(
         llm=llm, prompt=prompt, state=state, preguntas_dict=preguntas_dict
     )
     # No escribe current_agent — nodo paralelo (evita race condition)
@@ -5257,6 +5335,20 @@ def _is_ml_ds_classification(
         default_unresolved_ml_ds_to_classification=default_unresolved_ml_ds_to_classification,
     )
     return profile == "ml_ds" and family == "clasificacion"
+
+
+def _is_classification_family(state: ADAMState) -> bool:
+    """True for ANY profile (business OR ml_ds) when the resolved family is clasificación.
+
+    Mirrors the family resolution `_build_base_context` uses for ``primary_family``
+    (``default_unresolved_ml_ds_to_classification=True``), so this fires exactly when the
+    classification M1 questions prompt was selected — covering BOTH ``business+clf`` and
+    ``ml_ds+clf``. (Contrast with `_is_ml_ds_classification`, which is ml_ds-only.)
+    """
+    _profile, family = _resolve_generation_focus(
+        state, default_unresolved_ml_ds_to_classification=True
+    )
+    return family == "clasificacion"
 
 
 def _sanitize_pregunta_eje(

@@ -64,6 +64,16 @@ de costo EXCLUSIVAMENTE de la matriz de costos del caso provista a continuación
   CUALITATIVA (a quién priorizar bajo incertidumbre), SIN exigir ni inventar cifras.
   (La instrucción de hipótesis inicial ya está en el bloque base — no duplicar.)
 
+## Coherencia obligatoria de opciones (P3)
+El caso define un conjunto CERRADO de opciones estratégicas etiquetadas A, B y C (las del
+`dilema_brief` y la narrativa). Respeta estas reglas sin excepción:
+- El enunciado de P3 DEBE presentar al estudiante las opciones (A, B, C) entre las que elige,
+  usando las MISMAS etiquetas del caso. NO inventes una "Opción D", ni renombres ni reordenes
+  las opciones.
+- `solucion_esperada` de P3 DEBE nombrar la opción recomendada por su LETRA (A, B o C) y SOLO
+  puede recomendar una de las opciones presentadas en el enunciado de P3. NUNCA recomiendes una
+  opción inexistente en el caso ni una que el enunciado no haya presentado al estudiante.
+
 Referencia para contextualizar las preguntas — pregunta eje del caso:
 {pregunta_eje}
 """
