@@ -169,6 +169,32 @@ describe("CursosActivosSection", () => {
         expect(navigate).toHaveBeenCalledWith("/teacher/courses/course-1");
     });
 
+    it("decouples card height from title length (clamp + full-title tooltip + equal-height affordances)", () => {
+        const longTitle =
+            "Gerencia Estratégica y Modelos de Negocio en Ecosistemas Digitales";
+        useTeacherCourses.mockReturnValue({
+            data: {
+                courses: [{ ...courses[0], title: longTitle }],
+                total: 1,
+            },
+            isLoading: false,
+            isError: false,
+        });
+
+        const { container } = renderWithProviders(<CursosActivosSection />);
+
+        const heading = screen.getByRole("heading", { name: longTitle, level: 3 });
+        // Full title preserved via native tooltip even though it is visually clamped.
+        expect(heading).toHaveAttribute("title", longTitle);
+        // Title reserves a fixed two-line block so single- and multi-line titles match.
+        expect(heading.className).toContain("line-clamp-2");
+
+        // The card stretches to fill its grid cell so siblings share a row height.
+        const article = container.querySelector("article.course-card");
+        expect(article?.className).toContain("h-full");
+        expect(article?.className).toContain("flex-col");
+    });
+
     it("falls back to a dash semester badge when there are no courses", () => {
         useTeacherCourses.mockReturnValue({
             data: { courses: [], total: 0 },
