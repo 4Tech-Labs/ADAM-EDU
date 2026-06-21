@@ -68,6 +68,8 @@ function resolveSubmitError(err: ApiError, tokenKind: "invite" | "course_access"
             return "Tu correo institucional no está habilitado para esta universidad.";
         case "account_exists_sign_in_required":
             return "Ya existe una cuenta con este correo. Inicia sesión para completar la inscripción.";
+        case "staff_account_cannot_enroll_as_student":
+            return "Tu cuenta es de docente o administrador; no puede unirse a un curso como estudiante.";
         default:
             return tokenKind === "invite"
                 ? "No se pudo completar la activación. Intenta de nuevo."
