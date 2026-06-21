@@ -12,6 +12,7 @@
  *   [5] No blank line after the last table row (breaks next paragraph)
  *   [6] Heading immediately adjacent to table (### Exhibit\n| col |)
  *   [7] Blank line(s) trapped between two table rows (premature </table> close)
+ *   [9] Literal <br> row separators with zero real newlines (issue #356)
  */
 import { isMarkdownTableRow } from "./markdownTable";
 
@@ -91,6 +92,17 @@ export function sanitizeExhibitMarkdown(raw: string): string {
 
     // [2] Normalize line endings to \n only
     text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+    // [9] HTML <br> normalization: the architect (case_architect) frequently emits
+    //     exhibit tables with literal <br> as row separators and ZERO real newlines
+    //     (a structured-output quirk — issue #356). marked / remark-gfm require real
+    //     newlines to detect a GFM table, so without this the whole table collapses to
+    //     one line and renders raw. Covers <br>, <br/>, <br /> (any case, optional inner
+    //     spaces). Runs BEFORE expandInlineTable so the row-split, separator-injection
+    //     and table-glue passes operate on real lines. Purely additive: a string with no
+    //     <br> is byte-identical. Scoped to exhibit fields (table-only), so a global
+    //     conversion is safe here.
+    text = text.replace(/<br\s*\/?>/gi, "\n");
 
     // [8] Inline table expansion: collapse a single-line GFM table into proper
     // multiline rows before the remaining passes run.
