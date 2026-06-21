@@ -465,6 +465,97 @@ class CaseGrade(Base):
     )
 
 
+class CaseQuestionGrade(Base):
+    """
+    Per-question manual grade for a student's case submission.
+
+    One row per (membership, assignment, question_id). A row is written ONLY for a
+    question a teacher has graded, so `graded_at` is always NOT NULL. The case-level
+    `CaseGrade` rollup is DERIVED from these rows and recomputed transactionally on
+    every upsert/clear: it reaches `graded` only when every gradeable question of the
+    case has a row here.
+
+    Grading is gated to submitted student responses at the service layer; partial
+    grading leaves the rollup at `submitted` (truthful, since the student submitted).
+    """
+
+    __tablename__ = "case_question_grades"
+    __table_args__ = (
+        UniqueConstraint(
+            "membership_id",
+            "assignment_id",
+            "question_id",
+            name="uix_case_question_grades_membership_assignment_question",
+        ),
+        CheckConstraint(
+            "points_awarded >= 0 AND points_awarded <= max_points",
+            name="ck_case_question_grades_points_range",
+        ),
+        CheckConstraint(
+            "max_points > 0",
+            name="ck_case_question_grades_max_points_positive",
+        ),
+        Index(
+            "ix_case_question_grades_assignment_membership",
+            "assignment_id",
+            "membership_id",
+        ),
+        Index(
+            "ix_case_question_grades_course_assignment",
+            "course_id",
+            "assignment_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    membership_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("memberships.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    assignment_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("assignments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    course_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("courses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    question_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    points_awarded: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False)
+    max_points: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2),
+        nullable=False,
+        default=Decimal("10.00"),
+        server_default=sql_text("10.00"),
+    )
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    graded_by_membership_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("memberships.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    graded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    membership: Mapped["Membership"] = relationship(foreign_keys=[membership_id])
+    assignment: Mapped["Assignment"] = relationship()
+    course: Mapped["Course"] = relationship()
+    graded_by_membership: Mapped["Membership | None"] = relationship(
+        foreign_keys=[graded_by_membership_id],
+    )
+
+
 class StudentCaseResponse(Base):
     """
     Student-authored case resolution draft keyed by membership and assignment.

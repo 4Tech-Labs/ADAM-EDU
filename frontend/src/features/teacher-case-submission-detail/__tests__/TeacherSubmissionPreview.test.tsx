@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -48,6 +49,8 @@ vi.mock("@/shared/case-viewer", async () => {
                 showExpectedSolutions: boolean;
                 answers: Record<string, string>;
                 result: { studentProfile?: string | null };
+                renderQuestionFooter?: (args: { questionId: string; question: unknown; moduleId: string }) => ReactNode;
+                headerSlot?: ReactNode;
             };
 
             return (
@@ -59,7 +62,11 @@ vi.mock("@/shared/case-viewer", async () => {
                     data-show-expected-solutions={String(rendererProps.showExpectedSolutions)}
                     data-answer-keys={Object.keys(rendererProps.answers).sort().join(",")}
                     data-student-profile={rendererProps.result.studentProfile ?? "null"}
-                />
+                    data-has-grading={String(typeof rendererProps.renderQuestionFooter === "function")}
+                >
+                    {rendererProps.headerSlot}
+                    {rendererProps.renderQuestionFooter?.({ questionId: "M1-Q1", question: {}, moduleId: "m1" })}
+                </div>
             );
         },
     };
@@ -120,7 +127,30 @@ describe("TeacherSubmissionPreview", () => {
         expect(within(summary).getByText("2/2")).toBeTruthy();
         expect(within(summary).getByText("Pendiente")).toBeTruthy();
         expect(within(header).getByText("Caso Plataforma")).toBeTruthy();
-        expect(screen.getAllByTestId("teacher-case-submission-detail-grading-slot").length).toBeGreaterThan(0);
+        // A submitted response is gradeable: the renderer receives renderQuestionFooter and a panel renders.
+        const renderer = screen.getByTestId("case-content-renderer");
+        expect(renderer.getAttribute("data-has-grading")).toBe("true");
+        expect(screen.getByTestId("question-grading-panel")).toBeTruthy();
+    });
+
+    it("hides grading and shows the locked note for an unsubmitted response", async () => {
+        renderPreview({
+            detail: createSubmissionDetailResponse({
+                response_state: {
+                    status: "in_progress",
+                    first_opened_at: "2026-06-02T12:00:00Z",
+                    last_autosaved_at: "2026-06-05T18:15:00Z",
+                    submitted_at: null,
+                    snapshot_id: null,
+                    snapshot_hash: null,
+                },
+            }),
+        });
+
+        const renderer = await screen.findByTestId("case-content-renderer");
+        expect(renderer.getAttribute("data-has-grading")).toBe("false");
+        expect(screen.getByTestId("teacher-submission-grading-locked")).toBeTruthy();
+        expect(screen.queryByTestId("question-grading-panel")).toBeNull();
     });
 
     it("passes canonical output, answers and read-only flags to the renderer", async () => {

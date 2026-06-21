@@ -82,6 +82,43 @@ describe("PreguntaCard", () => {
         expect(screen.queryByText("Conexión con la pregunta eje")).not.toBeInTheDocument();
     });
 
+    it("shows the static '10 pts' badge and no grading slot when footerSlot is absent", () => {
+        render(
+            <PreguntaCard
+                p={{ numero: 1, titulo: "T", enunciado: "E" } as unknown as PreguntaCardQuestion}
+                questionId="M1-Q1"
+                answer=""
+                onAnswerChange={vi.fn()}
+                readOnly
+                showExpectedSolutions={false}
+            />,
+        );
+        expect(screen.getByText("10 pts")).toBeInTheDocument();
+        expect(document.querySelector("[data-question-grading-slot]")).toBeNull();
+    });
+
+    it("hides the '10 pts' badge and renders the footerSlot inside the question card", () => {
+        render(
+            <PreguntaCard
+                p={{ numero: 1, titulo: "T", enunciado: "E" } as unknown as PreguntaCardQuestion}
+                questionId="M1-Q1"
+                answer="respuesta"
+                onAnswerChange={vi.fn()}
+                readOnly
+                showExpectedSolutions={false}
+                footerSlot={<div data-testid="grading-here">grade</div>}
+            />,
+        );
+        expect(screen.queryByText("10 pts")).not.toBeInTheDocument();
+        const slot = screen.getByTestId("grading-here");
+        expect(slot).toBeInTheDocument();
+        // slot lives inside the question card root (keyed by data-question-id)
+        expect(slot.closest("[data-question-id='M1-Q1']")).not.toBeNull();
+        // the answer textarea remains read-only
+        const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+        expect(textarea.readOnly).toBe(true);
+    });
+
     it("renders EDA question with legacy 4-field solucion_esperada without crashing", () => {
         render(
             <PreguntaCard

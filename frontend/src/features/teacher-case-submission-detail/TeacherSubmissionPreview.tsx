@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, RefreshCcw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -7,7 +7,8 @@ import {
     countSubmissionQuestions,
 } from "./teacherCaseSubmissionDetailModel";
 import { toCanonicalCaseOutput } from "./toCanonicalCaseOutput";
-import { GradingPlaceholderSlot } from "./components/GradingPlaceholderPanel";
+import { QuestionGradingPanel } from "./components/QuestionGradingPanel";
+import { useClearQuestionGrade, useSaveQuestionGrade } from "./useQuestionGradeMutations";
 
 import {
     formatTeacherCourseTimestamp,
@@ -17,6 +18,7 @@ import {
 import type {
     ModuleId,
     TeacherCaseSubmissionDetailResponse,
+    TeacherQuestionGrade,
 } from "@/shared/adam-types";
 import {
     CASE_VIEWER_STYLES,
@@ -42,6 +44,18 @@ function buildAnswersMap(detail: TeacherCaseSubmissionDetailResponse): Record<st
         }
 
         return answers;
+    }, {});
+}
+
+function buildGradeMap(
+    detail: TeacherCaseSubmissionDetailResponse,
+): Record<string, TeacherQuestionGrade | null> {
+    return detail.modules.reduce<Record<string, TeacherQuestionGrade | null>>((grades, module) => {
+        for (const question of module.questions) {
+            grades[question.id] = question.grade ?? null;
+        }
+
+        return grades;
     }, {});
 }
 
@@ -94,7 +108,31 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
     const navigate = useNavigate();
     const canonicalOutput = useMemo(() => toCanonicalCaseOutput(detail), [detail]);
     const answers = useMemo(() => buildAnswersMap(detail), [detail]);
+    const gradeMap = useMemo(() => buildGradeMap(detail), [detail]);
     const visibleModules = useMemo(() => getVisibleModules(detail), [detail]);
+    const membershipId = detail.student.membership_id;
+    const saveGrade = useSaveQuestionGrade(assignmentId, membershipId);
+    const clearGrade = useClearQuestionGrade(assignmentId, membershipId);
+    // D1: only submitted (or already graded) responses can be graded.
+    const canGrade =
+        detail.response_state.status === "submitted" || detail.response_state.status === "graded";
+    const renderQuestionFooter = useCallback(
+        (args: { questionId: string }) => (
+            <QuestionGradingPanel
+                questionId={args.questionId}
+                initialGrade={gradeMap[args.questionId] ?? null}
+                defaultMaxPoints={10}
+                disabled={isRefreshing}
+                onSave={(payload) =>
+                    saveGrade.mutateAsync({ questionId: args.questionId, payload }).then(() => undefined)
+                }
+                onClear={() =>
+                    clearGrade.mutateAsync({ questionId: args.questionId }).then(() => undefined)
+                }
+            />
+        ),
+        [gradeMap, isRefreshing, saveGrade, clearGrade],
+    );
     const [activeModule, setActiveModule] = useState<ModuleId>(visibleModules[0] ?? "m1");
     const answeredQuestions = countAnsweredSubmissionQuestions(detail);
     const totalQuestions = countSubmissionQuestions(detail);
@@ -241,11 +279,18 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                         onAnswersChange={() => undefined}
                         readOnly={true}
                         showExpectedSolutions={true}
+                        renderQuestionFooter={canGrade ? renderQuestionFooter : undefined}
+                        headerSlot={
+                            canGrade ? undefined : (
+                                <div
+                                    className="rounded-[14px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+                                    data-testid="teacher-submission-grading-locked"
+                                >
+                                    La calificación estará disponible cuando el estudiante entregue su solución.
+                                </div>
+                            )
+                        }
                     />
-
-                    <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 md:hidden">
-                        <GradingPlaceholderSlot />
-                    </div>
                 </div>
             </div>
         </>

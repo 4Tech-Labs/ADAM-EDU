@@ -2106,3 +2106,33 @@ legacy en vez de construirle paridad de "ya tengo cuenta". Se difirió a un PR a
 de la feature aislado. Antes de borrar: confirmar 0 invites de estudiante pendientes en cualquier entorno.
 
 **Depends on / blocked by:** El PR del botón "Ya tengo cuenta" (in-place sign-in en `/join`) aterrizado primero.
+
+---
+
+## TODO-JOIN-A2: Exponer al estudiante su calificación por pregunta + retroalimentación
+
+**What:** El docente ya puede calificar manualmente cada pregunta de una entrega (puntos por pregunta,
+valor editable, retroalimentación), y esas notas se consolidan en la nota global del caso
+(`case_question_grades` → rollup en `CaseGrade`). Falta exponer esas notas y comentarios al ESTUDIANTE
+en su vista del caso (`StudentCaseResolutionPage`): un read gateado a casos ya calificados (`status="graded"`)
+y un render por pregunta de `points_awarded / max_points` + `feedback`.
+
+**Why:** El panel docente se titula "RETROALIMENTACIÓN PARA EL ESTUDIANTE"; el valor pedagógico solo se
+completa cuando el estudiante puede leerla. Hoy se persiste pero nunca se le muestra.
+
+**Pros:** Cierra el ciclo docente→estudiante de la calificación manual; el estudiante recibe feedback
+accionable por pregunta, no solo una nota global.
+
+**Cons:** Nuevo endpoint de lectura estudiante (o extensión del read existente) + UI en el runtime del
+estudiante + sanitización cuidadosa (NO filtrar `solucion_esperada` docente-only ni notas parciales;
+exponer SOLO cuando el caso esté completamente calificado). Aumenta la superficie de QA del runtime del
+estudiante.
+
+**Context:** Esta iteración decidió **solo docente** (D3 de la plan-eng-review de calificación por
+pregunta). El dato ya vive en `backend/src/shared/models.py::CaseQuestionGrade` y se inyecta en el detalle
+DOCENTE vía `teacher_reads._inject_question_grades_into_modules` (nunca en los reads del estudiante). Para
+el estudiante: empezar por `backend/src/shared/student_reads.py` (read del caso) + `frontend/src/features/
+student-runtime/StudentCaseResolutionPage.tsx`. Gatear por `CaseGrade.status == "graded"` para no mostrar
+calificaciones parciales en curso. Reusar el mismo id de pregunta (`_detail_question_id`) para mapear nota→pregunta.
+
+**Depends on / blocked by:** El PR de calificación manual por pregunta (docente) aterrizado primero (este).
