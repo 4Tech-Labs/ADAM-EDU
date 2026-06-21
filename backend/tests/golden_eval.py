@@ -49,6 +49,10 @@ class NodeEvalInputs:
     judge_candidate_mean: float | None = None  # Flash
     pairwise_pro_win_rate: float | None = None  # fraction of jobs Pro judged better
     auc_distribution_ok: bool = True           # schema_designer guard; True (n/a) for others
+    # Issue #351 — ml_ds + clasificación de-churn coherence: every ml_ds non-churn golden job must
+    # produce a domain-coherent schema (no churn/SaaS template, domain-driven target). True (n/a) for
+    # business / non-classification jobs. Computed deterministically via ``check_domain_coherence``.
+    domain_coherence_ok: bool = True
 
 
 @dataclass
@@ -73,6 +77,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("deterministic oracle failure on >=1 golden job")
     if not r.auc_distribution_ok:
         reasons.append("AUC distribution degraded toward the 0.55 floor")
+    if not r.domain_coherence_ok:
+        reasons.append("domain coherence failure: churn-coupled target on ml_ds non-churn job")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -82,6 +88,36 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             f"pairwise Pro-win {r.pairwise_pro_win_rate:.2f} > {PAIRWISE_MAX_PRO_WIN:.2f}"
         )
     return GateResult(node=r.node, passed=not reasons, reasons=reasons)
+
+
+# ── Issue #351 — deterministic domain-coherence oracle ───
+
+
+def check_domain_coherence(schema: dict) -> bool:
+    """Pure oracle: is ``schema`` a domain-coherent ml_ds + clasificación NON-churn schema?
+
+    True iff the de-churn (#382) held: (1) NO churn/SaaS template column survives, AND (2) the binary
+    domain target (``is_domain_target``) derives its signal from a non-churn driver (``depends_on`` is
+    set and is not ``churn_rate``). A churn-coupled schema (kill-switch off, or a regression) fails on
+    either count. The single source of truth for the template column names is ``case_generator.graph``;
+    the import is function-level so this support module stays lightweight at import time.
+
+    Scope note: this checks the de-churned DATA SIGNAL (#382's surface), not description prose — a
+    schema may carry a residual ``categoria``-template description and still be signal-coherent.
+    """
+    from case_generator.graph import _CHURN_TEMPLATE_COLUMNS, _MLDS_SAAS_TEMPLATE_COLUMNS
+
+    columns = schema.get("columns") or []
+    names = {c.get("name") for c in columns}
+    if names & (_CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS):
+        return False
+    domain_targets = [c for c in columns if c.get("is_domain_target") is True]
+    if not domain_targets:
+        return False
+    return all(
+        (t.get("dependency") or {}).get("depends_on") not in (None, "churn_rate")
+        for t in domain_targets
+    )
 
 
 # ── frozen golden set ────────────────────────────────────
@@ -115,4 +151,9 @@ GOLDEN_SET: tuple[GoldenJobSpec, ...] = (
     GoldenJobSpec("g10", "business", "regresion", "single", "golden/g10_business_single.json"),
     GoldenJobSpec("g11", "ml_ds", "clasificacion", "single", "golden/g11_mlds_clf_single.json"),
     GoldenJobSpec("g12", "ml_ds", "regresion", "single", "golden/g12_mlds_reg_single.json"),
+    # Issue #351 — first golden entry with a MATERIALIZED fixture on disk. Its payload_fixture is a
+    # real post-chain de-churned ml_ds+clf NON-churn SCHEMA snapshot (default_60d) loaded by the
+    # deterministic domain-coherence test in test_golden_eval.py (the other fixtures stay unmaterialized
+    # until the live runner is wired; a live-runner INPUT payload for g13 is a separate follow-up).
+    GoldenJobSpec("g13", "ml_ds", "clasificacion", "single", "golden/g13_mlds_clf_single.json"),
 )

@@ -8,7 +8,9 @@ is unit-tested here even though the live run that produces its inputs is gated.
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -17,8 +19,12 @@ from golden_eval import (
     GOLDEN_SET,
     JUDGE_MAX_DROP,
     NodeEvalInputs,
+    check_domain_coherence,
     evaluate_downgrade_gate,
 )
+from test_issue351_mlds_multidomain_evals import _build_schema
+
+_FIXTURES = Path(__file__).parent / "fixtures" / "golden"
 
 
 # ── gate decision ────────────────────────────────────────
@@ -121,6 +127,49 @@ def test_downgrade_candidates_are_the_three_med_nodes() -> None:
         "m3_content_generator",
         "m5_questions_generator",
     }
+
+
+# ── Issue #351 — domain-coherence gate + oracle (deterministic, no live runner) ────
+
+
+def test_gate_blocks_on_domain_coherence_failure() -> None:
+    # An ml_ds non-churn job whose schema regressed to churn-coupled must block the downgrade.
+    r = NodeEvalInputs(node="schema_designer", deterministic_pass=True, domain_coherence_ok=False)
+    result = evaluate_downgrade_gate(r)
+    assert not result.passed
+    assert any("domain coherence" in reason for reason in result.reasons)
+
+
+def test_gate_domain_coherence_defaults_true_backcompat() -> None:
+    # Existing NodeEvalInputs callers (business / non-clf) omit the field → must stay passing.
+    assert evaluate_downgrade_gate(NodeEvalInputs(node="schema_designer", deterministic_pass=True)).passed
+
+
+def test_g13_fixture_is_domain_coherent() -> None:
+    """The materialized g13 fixture (real de-churned default_60d schema) is domain-coherent: no
+    churn/SaaS columns, a binary is_domain_target derived from a domain driver."""
+    schema = json.loads((_FIXTURES / "g13_mlds_clf_single.json").read_text(encoding="utf-8"))
+    assert check_domain_coherence(schema) is True
+    target = next(c for c in schema["columns"] if c.get("is_domain_target") is True)
+    assert target["name"] == "default_60d"
+    assert target["dependency"]["depends_on"] == "debt_to_income_ratio"
+    assert (target["dependency"]["depends_on"] != "churn_rate")
+
+
+def test_domain_coherence_oracle_discriminates_churn_coupled() -> None:
+    """Oracle non-tautology: the churn-coupled (kill-switch-OFF) schema for the SAME domain is NOT
+    domain-coherent — the oracle provably tells the two apart."""
+    churn_coupled, _contract = _build_schema(
+        "default_60d", "debt_to_income_ratio", 0.12, dechurn=False
+    )
+    assert check_domain_coherence(churn_coupled) is False
+
+
+def test_domain_coherence_oracle_on_rebuilt_dechurned_schema() -> None:
+    """Anti-staleness: rebuilding the de-churned schema from the live chain (not the frozen fixture)
+    is also domain-coherent, so a real chain change is caught even if the on-disk fixture drifts."""
+    rebuilt, _contract = _build_schema("default_60d", "debt_to_income_ratio", 0.12, dechurn=True)
+    assert check_domain_coherence(rebuilt) is True
 
 
 # ── live Pro-vs-Flash harness skeleton (auto-skipped) ────
