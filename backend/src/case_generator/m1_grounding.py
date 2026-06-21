@@ -164,6 +164,35 @@ _COMPLETENESS_KEYWORD_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── M1 question option coherence (internal) ───────────────────────────────────
+# Internal coherence of the M1 discussion questions: a `solucion_esperada` must never
+# recommend a strategic option that does NOT exist in the case, nor one its own
+# `enunciado` does not present. The case's options live ONLY as free text labeled A/B/C
+# in `dilema_brief` (there is no structured `opciones` field), so the check is textual.
+# Scope is gated by the caller to the classification family for BOTH profiles
+# (business + ml_ds); this module is profile-agnostic and never imports the graph.
+#
+# Detection precision (zero-FP doctrine, mirrors #360/#372):
+#  * The option letter is UPPERCASE-only, so the Spanish prepositions "a"/"o" in
+#    "opción a corto plazo" / "Opción A o B" are never read as labels.
+#  * The keyword anchor ("opción"/"opciones"/"alternativa") means a stray capital
+#    ("plan B", "modelo B2B") is never mistaken for an option label.
+#  * Each option letter must be a STANDALONE token — the `(?![\w/-])` guard rejects a
+#    letter glued to a compound term by a hyphen or slash, so Spanish/ML collocations like
+#    "opción E-commerce", "opción C-suite", "opción C-level" or "opción A/B testing" are
+#    never read as option labels E / C / A / B. A spaced enumeration ("Opción A / Opción B")
+#    still parses (the slash there is surrounded by whitespace, not glued to the letter).
+#  * The enumeration tail captures runs like "Opciones A, B y C" / "Opción A o B" so the
+#    universe and enunciado label sets are complete.
+#  * All quantifiers are bounded (no unbounded `+` over a letter run) → LINEAR matching,
+#    no catastrophic backtracking (ReDoS).
+_VALID_OPTION_LABELS = frozenset({"A", "B", "C"})  # architect contract: SIEMPRE 3 (A, B, C)
+_OPTION_REF_RE = re.compile(
+    r"(?:[Oo]pci[oó]n|[Aa]lternativa)\w*\s+"
+    r"(?P<labels>[A-F](?![\w/-])(?:\s*(?:,|/|&|y|o)\s*[A-F](?![\w/-]))*)"
+)
+_OPTION_LETTER_RE = re.compile(r"[A-F]")
+
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
@@ -356,7 +385,104 @@ def detect_exhibit2_completeness_row(anexo_operativo: str) -> list[str]:
     ]
 
 
+def validate_question_option_coherence(
+    preguntas: list[dict], dilema_brief: str = ""
+) -> list[str]:
+    """Return option-coherence violations for the M1 discussion questions.
+
+    Pure, deterministic, total on well-typed input (never raises; the caller still wraps
+    it best-effort). Two independent rules per question, evaluated over both ``enunciado``
+    and ``solucion_esperada``:
+
+    * ``OPTION_NONEXISTENT`` (PRIMARY) — an option label cited that is OUTSIDE the case's
+      option universe. The universe is the floor ``{A, B, C}`` plus any extra label the
+      ``dilema_brief`` (the case's authority) actually defines, so a legitimate 4th option
+      never false-positives while an invented "Opción D" always flags. The enunciados are
+      deliberately NOT part of the universe — a question that invents an option must not
+      self-justify; it must be flagged.
+    * ``OPTION_NOT_PRESENTED`` (SECONDARY) — when a question's ``enunciado`` enumerates ≥2
+      distinct option labels (it presents a closed choice set) and the ``solucion_esperada``
+      recommends an in-universe label that the enunciado does not present. The ≥2 guard
+      avoids flagging when the enunciado merely names one option in passing. This is the
+      literal reported defect: the answer key picks an option the question never offered.
+
+    Zero false positives by construction: detection is uppercase keyword-anchored, and
+    over-capturing the universe only relaxes the check. Returns a deduplicated, ordered
+    list of human-readable violation strings; ``[]`` means coherent.
+    """
+    if not isinstance(preguntas, list):
+        return []
+    universe = _option_universe(dilema_brief)
+    universe_label = _format_universe(universe)
+    violations: list[str] = []
+    for index, pregunta in enumerate(preguntas):
+        if not isinstance(pregunta, Mapping):
+            continue
+        numero = pregunta.get("numero")
+        num = numero if isinstance(numero, int) else index + 1
+        enunciado = pregunta.get("enunciado")
+        solucion = pregunta.get("solucion_esperada")
+        enunciado_labels = _extract_option_labels(
+            enunciado if isinstance(enunciado, str) else ""
+        )
+        enunciado_set = set(enunciado_labels)
+        solucion_labels = _extract_option_labels(
+            solucion if isinstance(solucion, str) else ""
+        )
+        # PRIMARY — an enunciado that itself cites an invented option is a defect.
+        for opt in dict.fromkeys(enunciado_labels):
+            if opt not in universe:
+                violations.append(
+                    f"OPTION_NONEXISTENT: el enunciado de la pregunta {num} cita la opción "
+                    f"{opt}, que no existe en el caso (opciones: {universe_label})"
+                )
+        for opt in dict.fromkeys(solucion_labels):
+            if opt not in universe:
+                violations.append(
+                    f"OPTION_NONEXISTENT: la solución de la pregunta {num} recomienda la "
+                    f"opción {opt}, que no existe en el caso (opciones: {universe_label})"
+                )
+                continue
+            # SECONDARY — in-universe but not presented by this question's enunciado.
+            if len(enunciado_set) >= 2 and opt not in enunciado_set:
+                violations.append(
+                    f"OPTION_NOT_PRESENTED: la solución de la pregunta {num} recomienda la "
+                    f"opción {opt}, que su enunciado no presenta al estudiante"
+                )
+    return violations
+
+
 # ── Internals ─────────────────────────────────────────────────────────────────
+
+def _extract_option_labels(text: str) -> list[str]:
+    """Ordered option letters referenced via 'Opción/Opciones/alternativa X' (with dups).
+
+    Handles singletons ("Opción A") and enumerations ("Opciones A, B y C", "Opción A o B").
+    Returns letters in source order; the caller dedups for deterministic messages.
+    """
+    if not isinstance(text, str) or not text:
+        return []
+    labels: list[str] = []
+    for match in _OPTION_REF_RE.finditer(text):
+        labels.extend(_OPTION_LETTER_RE.findall(match.group("labels")))
+    return labels
+
+
+def _option_universe(dilema_brief: str) -> set[str]:
+    """Valid option labels for the case: floor {A, B, C} ∪ labels the brief defines.
+
+    The ``dilema_brief`` is the case's authority on which options exist; over-capturing a
+    legitimate 4th option (e.g. a future grad case with A–D) only relaxes the check, so it
+    can never create a false positive. The enunciados are NOT consulted here on purpose.
+    """
+    universe = set(_VALID_OPTION_LABELS)
+    if isinstance(dilema_brief, str) and dilema_brief:
+        universe.update(_extract_option_labels(dilema_brief))
+    return universe
+
+
+def _format_universe(universe: set[str]) -> str:
+    return ", ".join(sorted(universe))
 
 def _iter_table_cells(text: str) -> list[str]:
     """Yield the cell strings of every markdown-table data row in ``text`` (skips

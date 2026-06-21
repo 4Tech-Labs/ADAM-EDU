@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     # env-only revert; no redeploy). The frontend `sanitizeExhibitMarkdown` repairs existing cases
     # regardless of this flag.
     m1_exhibit_normalize: bool = True
+    # Internal coherence of M1 discussion-question options (clasificación, both profiles).
+    # When true, `validate_question_option_coherence` checks that each `solucion_esperada`
+    # only recommends a strategic option that (a) exists in the case (A/B/C, derived from
+    # `dilema_brief`) and (b) its own `enunciado` presents; `case_questions` reprompts once
+    # then degrades to the pass-1 questions. Best-effort + gated to the classification family,
+    # so business/other-family/non-clf cases are unaffected. Kill-switch: set
+    # M1_OPTION_COHERENCE=false to passthrough exactly (instant env-only revert; no redeploy).
+    m1_option_coherence: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 
