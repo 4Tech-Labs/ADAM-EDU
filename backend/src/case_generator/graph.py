@@ -957,6 +957,14 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         contract_dict, target_enforced = _normalize_business_classification_target(
             contract_dict, profile=profile_resolved, family=family_resolved
         )
+        # Issue #350 — sibling ml_ds+clasificación: coacciona un classification_target no-int
+        # (str/multiclase) o de rol no-clasificación a int binario ANTES de persistir el contrato,
+        # para que la cadena de schema (binario-only) no degrade en silencio (post-#348). No-op
+        # para business / otras familias. Kill-switch MLDS_BINARY_TARGET_COERCE (default true).
+        contract_dict, _ = _normalize_mlds_classification_target(
+            contract_dict, profile=profile_resolved, family=family_resolved,
+            enabled=settings.mlds_binary_target_coerce,
+        )
 
         # Issue #301 #305 Gate 2 — enforcement de #228 por mismatch título↔target.
         # Si la forma NO se tuvo que normalizar (target ya era un classification_target
@@ -2791,6 +2799,76 @@ def _normalize_business_classification_target(
 
     new_contract = dict(src)
     new_contract["target_column"] = new_target
+    return new_contract, True
+
+
+def _normalize_mlds_classification_target(
+    contract: dict | None, *, profile: str, family: str | None, enabled: bool = True
+) -> tuple[dict | None, bool]:
+    """Endurece la FORMA del target para ml_ds + clasificación a binario (Issue #350).
+
+    SIBLING de ``_normalize_business_classification_target`` — NO generalizar esa función
+    (``test_normalize_noop_for_ml_ds`` exige que siga siendo identidad para ml_ds). El ancla M1
+    ml_ds es ahora binario-only, pero el prompt es PROBABILÍSTICO: un LLM puede emitir igual un
+    ``classification_target`` ``dtype="str"`` (multiclase) o un rol no-clasificación. Toda la
+    cadena downstream es binario-only y, post-#348 (notebook contract-first), un target no-int
+    DEGRADA EN SILENCIO (``_align``/``_enforce_mlds`` hacen early-return en ``dtype!="int"``, el
+    augmenter inyecta una columna ``str``/``int[0,100]`` y el notebook hace
+    ``skipped_non_binary_target`` → job COMPLETA sin modelo, sin flag ``m3NotebookDegraded``). Este
+    normalizador determinista cierra ese hueco en el ORIGEN: coacciona cualquier target que no sea
+    ya un ``classification_target`` binario a ``role=classification_target`` + ``dtype=int``,
+    ANTES de persistir el contrato (``case_architect`` lo escribe en ``dataset_schema_required``),
+    de modo que ``_align``/``_augment``/``_enforce_mlds`` lo vean ya binario.
+
+    Coacciona AMBOS ``role`` Y ``dtype`` (no solo dtype): las 3 puertas downstream exigen
+    ``role=="classification_target"`` AND ``dtype=="int"``; un ``anomaly_target`` con ``dtype=int``
+    pasaría un chequeo dtype-only, conservaría su rol y DEGRADARÍA igual vía
+    ``_augment._default_column`` → ``int[0,100]``. Preserva el NOMBRE de dominio para roles de
+    clasificación adyacentes (``_CLASSIFICATION_ADJACENT_ROLES``); si no, cae a ``target_event_flag``
+    (mismo árbol que el sibling business). Determinista, 0 tokens, copy-on-write (no muta el dict de
+    entrada → determinismo del seed + thread-safety). Kill-switch ``MLDS_BINARY_TARGET_COERCE``.
+
+    Fuera del gate (kill-switch off / business / no-clasificación) devuelve ``(contract, False)``
+    intacto. Passthrough byte-idéntico (mismo objeto) cuando el target ya es binario válido
+    (cubre churn y todo caso binario normal).
+    """
+    if not enabled or profile != "ml_ds":
+        return contract, False
+    # ml_ds: None family → "clasificacion" (espeja `_align`/`_enforce_mlds`/`_effective_family`):
+    # un job ml_ds con algoritmos vacíos (family None) igual construye el template clf downstream,
+    # así que el contrato debe normalizarse para ese cohorte también.
+    if (family or "clasificacion") != "clasificacion":
+        return contract, False
+
+    src = contract or {}
+    target = src.get("target_column") or {}
+    name = (target.get("name") or "").strip()
+    role = (target.get("role") or "").strip().lower()
+    dtype = (target.get("dtype") or "").strip().lower()
+
+    if name and role == "classification_target" and dtype == "int":
+        return contract, False  # ya es un classification_target binario — passthrough
+
+    keep_name = bool(name) and role in _CLASSIFICATION_ADJACENT_ROLES
+    new_target = dict(target)
+    new_target.update({
+        "name": name if keep_name else "target_event_flag",
+        "role": "classification_target",
+        "dtype": "int",
+    })
+    if not (new_target.get("description") or "").strip():
+        new_target["description"] = "Variable objetivo binaria del caso (0/1)"
+
+    new_contract = dict(src)
+    new_contract["target_column"] = new_target
+    # Observabilidad LOG-ONLY (precedente #336): no teacher-facing, no persistido.
+    logger.warning(
+        "[case_architect] ml_ds classification target coerced to binary int (#350)",
+        extra={
+            "node": "case_architect", "original_role": role, "original_dtype": dtype,
+            "coerced_name": new_target["name"], "reason": "mlds_binary_target_coerced",
+        },
+    )
     return new_contract, True
 
 

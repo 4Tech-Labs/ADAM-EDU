@@ -28,18 +28,20 @@ _M1_CLASSIFICATION_ANCHOR_ARCHITECT = """
 
 ## Contrato obligatorio para casos de clasificación
 
-1. **`dataset_schema_required.target_column.role` DEBE ser `classification_target`.**
-   El target debe representar un evento binario o multiclase directamente observable
+1. **`dataset_schema_required.target_column.role` DEBE ser `classification_target` y
+   `dtype` DEBE ser `int` binario (valores 0/1).**
+   El target debe representar un evento binario (ocurre / no ocurre) directamente observable
    y accionable en producción.  Ejemplos correctos: `churn_flag`, `default_60d`,
    `approval_flag`, `fraud_flag`, `late_delivery_flag`.
-   NUNCA uses un target continuo (`revenue`, `margin_pct`) ni un índice compuesto.
+   NUNCA uses un target continuo (`revenue`, `margin_pct`), un índice compuesto, ni un
+   target multiclase (más de dos clases): en esta familia el evento es SIEMPRE binario.
 
 2. **`pregunta_eje` es OBLIGATORIA cuando `student_profile = "ml_ds"` — NUNCA `null` para ese perfil en esta familia.**
    La regla del contrato base (encima de este bloque) sigue vigente:
    - Si `student_profile = "ml_ds"` → emitir `pregunta_eje` como pregunta directiva gerencial.
    - Si `student_profile = "business"` → emitir `null` (el sanitizador de graph.py lo forzará igualmente).
    La pregunta debe plantear una decisión ejecutiva que requiere clasificar entidades (clientes,
-   transacciones, solicitudes) en categorías mutuamente excluyentes.
+   transacciones, solicitudes) en dos categorías mutuamente excluyentes (intervenir / no intervenir).
    Formulación correcta:
      "¿A qué segmentos debe la empresa priorizar intervención para reducir la pérdida
      financiera por incumplimiento sin sobrecargar al equipo de riesgo?"
