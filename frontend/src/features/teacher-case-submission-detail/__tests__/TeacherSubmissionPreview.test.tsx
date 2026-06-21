@@ -122,7 +122,7 @@ describe("TeacherSubmissionPreview", () => {
 
         expect(within(sidebar).getByText("Ana Student")).toBeTruthy();
         expect(within(sidebar).getByText("Caso Plataforma")).toBeTruthy();
-        expect(within(summary).getByText("ENTREGADO")).toBeTruthy();
+        expect(within(summary).getByText("POR CALIFICAR")).toBeTruthy();
         expect(within(summary).getByText("Borrador vigente")).toBeTruthy();
         expect(within(summary).getByText("2/2")).toBeTruthy();
         expect(within(summary).getByText("Pendiente")).toBeTruthy();
@@ -193,8 +193,38 @@ describe("TeacherSubmissionPreview", () => {
 
         const progress = await screen.findByTestId("teacher-submission-grading-progress");
         expect(within(progress).getByTestId("grading-progress-count").textContent).toBe("2/3");
-        // 7 + 8,5 = 15,5 awarded out of 10 + 10 = 20 over the graded questions
-        expect(within(progress).getByTestId("grading-progress-points").textContent).toBe("15,5 / 20");
+        // 7 + 8,5 = 15,5 awarded; total = 10 + 10 (graded) + 10 (default for the ungraded M5-Q1) = 30
+        expect(within(progress).getByTestId("grading-progress-points").textContent).toBe("15,5 / 30");
+    });
+
+    it("totals max points across ALL questions (default 10 each; reflects per-question edits)", async () => {
+        renderPreview({
+            detail: createSubmissionDetailResponse({
+                modules: [
+                    {
+                        id: "M1",
+                        title: "Módulo 1",
+                        questions: [
+                            {
+                                id: "M1-Q1", order: 1, statement: "", context: null, expected_solution: "",
+                                student_answer: null, student_answer_chars: 0, is_answer_from_draft: false,
+                                // teacher raised this question's value to 20
+                                grade: { question_id: "M1-Q1", points_awarded: 4, max_points: 20, feedback: null, graded_at: "2026-06-06T18:00:00Z", graded_by_membership_id: "t" },
+                            },
+                            {
+                                id: "M1-Q2", order: 2, statement: "", context: null, expected_solution: "",
+                                student_answer: null, student_answer_chars: 0, is_answer_from_draft: false, grade: null,
+                            },
+                        ],
+                    },
+                ],
+            }),
+        });
+
+        const progress = await screen.findByTestId("teacher-submission-grading-progress");
+        expect(within(progress).getByTestId("grading-progress-count").textContent).toBe("1/2");
+        // 4 awarded; total = 20 (edited) + 10 (default for the ungraded question) = 30
+        expect(within(progress).getByTestId("grading-progress-points").textContent).toBe("4 / 30");
     });
 
     it("passes canonical output, answers and read-only flags to the renderer", async () => {
@@ -251,6 +281,7 @@ describe("TeacherSubmissionPreview", () => {
         const summary = await screen.findByTestId("teacher-submission-preview-summary");
 
         expect(within(summary).getByText("Borrador vigente")).toBeTruthy();
+        expect(within(summary).getByText("CALIFICADO")).toBeTruthy();
         expect(within(summary).getByText(`${formatTeacherGradebookScore(4.5)} / ${formatTeacherGradebookScore(5)}`)).toBeTruthy();
     });
 

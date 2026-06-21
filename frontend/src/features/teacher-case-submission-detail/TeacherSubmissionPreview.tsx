@@ -12,7 +12,6 @@ import { useClearQuestionGrade, useSaveQuestionGrade } from "./useQuestionGradeM
 
 import {
     formatTeacherCourseTimestamp,
-    formatTeacherGradebookCellStatus,
     formatTeacherGradebookScore,
 } from "@/features/teacher-course/teacherCourseModel";
 import type {
@@ -67,6 +66,10 @@ function formatPoints(value: number): string {
     return POINTS_FORMATTER.format(value);
 }
 
+// Default points a question is worth until the teacher edits its "Valor de la pregunta".
+// Keep in sync with the QuestionGradingPanel `defaultMaxPoints` prop passed below.
+const DEFAULT_QUESTION_MAX_POINTS = 10;
+
 interface GradeProgress {
     graded: number;
     total: number;
@@ -84,10 +87,13 @@ function buildGradeProgress(detail: TeacherCaseSubmissionDetailResponse): GradeP
         for (const question of module.questions) {
             total += 1;
             const grade = question.grade;
+            // Denominator = the FULL points possible across every question: a graded question
+            // contributes its (teacher-editable) max_points, an ungraded one the default value the
+            // grading panel seeds. So editing a question's "Valor de la pregunta" moves the total.
+            max += grade ? grade.max_points : DEFAULT_QUESTION_MAX_POINTS;
             if (grade) {
                 graded += 1;
                 earned += grade.points_awarded;
-                max += grade.max_points;
             }
         }
     }
@@ -120,11 +126,36 @@ function getGradeSummary(detail: TeacherCaseSubmissionDetailResponse): string {
     return `${formatTeacherGradebookScore(detail.grade_summary.score)} / ${formatTeacherGradebookScore(detail.grade_summary.max_score)}`;
 }
 
-function getStatusBadgeClasses(status: string): string {
-    switch (status) {
-        case "submitted":
+type ReviewStatusTone = "graded" | "pending" | "in_progress" | "not_started";
+
+interface ReviewStatus {
+    label: string;
+    tone: ReviewStatusTone;
+}
+
+/**
+ * Status framed for the GRADING view: a submitted-but-ungraded entry reads "Por calificar" and a
+ * fully graded one "Calificado", so the teacher sees their own pending work at a glance. The raw
+ * submission state is still conveyed by the "Entrega" timestamp and "Versión" rows.
+ */
+function getReviewStatus(detail: TeacherCaseSubmissionDetailResponse): ReviewStatus {
+    if (detail.grade_summary.status === "graded") {
+        return { label: "Calificado", tone: "graded" };
+    }
+    if (detail.response_state.status === "submitted" || detail.response_state.status === "graded") {
+        return { label: "Por calificar", tone: "pending" };
+    }
+    if (detail.response_state.status === "in_progress") {
+        return { label: "En progreso", tone: "in_progress" };
+    }
+    return { label: "Sin iniciar", tone: "not_started" };
+}
+
+function getReviewStatusBadgeClasses(tone: ReviewStatusTone): string {
+    switch (tone) {
         case "graded":
             return "bg-emerald-100 text-emerald-800 ring-1 ring-inset ring-emerald-200";
+        case "pending":
         case "in_progress":
             return "bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-200";
         default:
@@ -164,7 +195,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
             <QuestionGradingPanel
                 questionId={args.questionId}
                 initialGrade={gradeMap[args.questionId] ?? null}
-                defaultMaxPoints={10}
+                defaultMaxPoints={DEFAULT_QUESTION_MAX_POINTS}
                 disabled={isRefreshing}
                 onSave={(payload) =>
                     saveGrade.mutateAsync({ questionId: args.questionId, payload }).then(() => undefined)
@@ -181,8 +212,9 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
     const totalQuestions = countSubmissionQuestions(detail);
     const refreshLabel = isRefreshing ? "Actualizando entrega" : "Actualizar entrega";
     const snapshotLabel = getSnapshotLabel(detail);
-    const statusLabel = formatTeacherGradebookCellStatus(detail.response_state.status).toUpperCase();
-    const statusBadgeClasses = getStatusBadgeClasses(detail.response_state.status);
+    const reviewStatus = getReviewStatus(detail);
+    const statusLabel = reviewStatus.label.toUpperCase();
+    const statusBadgeClasses = getReviewStatusBadgeClasses(reviewStatus.tone);
 
     useEffect(() => {
         if (visibleModules.length === 0) {
@@ -257,10 +289,12 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                             <dt className="text-[10px] uppercase tracking-wider text-slate-400">Calificación</dt>
                             <dd className="text-right text-[11px] tabular-nums">{getGradeSummary(detail)}</dd>
 
-                            <dt className="text-[10px] uppercase tracking-wider text-slate-400">Entrega</dt>
-                            <dd className="truncate text-right text-[11px]" title={formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}>
-                                {formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}
-                            </dd>
+                            <div className="col-span-2 flex items-baseline justify-between gap-3">
+                                <dt className="text-[10px] uppercase tracking-wider text-slate-400">Entrega</dt>
+                                <dd className="whitespace-nowrap text-right text-[11px] tabular-nums" title={formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}>
+                                    {formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}
+                                </dd>
+                            </div>
                         </dl>
                     </div>
                 </aside>
@@ -272,7 +306,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                     >
                         <div className="min-w-0">
                             <p
-                                className="truncate text-xs text-slate-500"
+                                className="truncate text-xs font-semibold text-slate-600"
                                 title={`${detail.case.course_code} · ${detail.case.course_name} · ${detail.student.email}`}
                             >
                                 {detail.case.course_code} · {detail.case.course_name} · {detail.student.email}
@@ -294,7 +328,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                                     </span>
                                     <span
                                         className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200"
-                                        title="Puntos otorgados sobre el total de las preguntas calificadas"
+                                        title="Puntos otorgados sobre el total de puntos de todas las preguntas"
                                     >
                                         <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Puntos</span>
                                         <span data-testid="grading-progress-points" className="whitespace-nowrap tabular-nums">
