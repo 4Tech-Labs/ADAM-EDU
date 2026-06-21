@@ -22,6 +22,7 @@ These are pure-Python unit tests — no LLM calls, no DB, no fixtures.
 """
 
 import inspect as _inspect
+import re as _re
 import string as _string
 
 from case_generator.graph import (
@@ -30,10 +31,12 @@ from case_generator.graph import (
     _extract_state_algoritmos,
     _maybe_business_classification_prompt,
     _resolve_classification_notebook_variant,
+    _resolve_family_prompt,
     _resolve_generation_focus,
 )
 from case_generator.prompts import (
     M5_BUSINESS_PROMPT_CLASSIFICATION,
+    M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
     M5_CONTENT_GENERATOR_PROMPT,
     M5_PROMPT_BY_FAMILY,
     M5_QUESTIONS_GENERATOR_PROMPT,
@@ -386,3 +389,149 @@ def test_m5_content_generator_node_wires_variant_dispatch() -> None:
     # El contrato M5 (matriz de decisión) sigue cableado vía _is_ml_ds_classification.
     assert "_invoke_m5_content_with_contract" in source
     assert "require_decision_matrix" in source
+
+
+# ── 14. Issue #329 — business+clasificación QUESTIONS prompt swap (M5) ────────
+#
+# m5_questions_generator resuelve el prompt en dos pasos (graph.py):
+#     prompt_text = _resolve_family_prompt(state, M5_QUESTIONS_PROMPT_BY_FAMILY, M5_QUESTIONS_GENERATOR_PROMPT)
+#     prompt_text = _maybe_business_classification_prompt(state, prompt_text, M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION)
+# CLAVE (diagnóstico corregido): _resolve_family_prompt despacha por familia SOLO para ml_ds, así que
+# business hoy recibe el GENÉRICO (ya enmarcado a "Junta Directiva"), no el prompt ml_ds. El swap lo
+# alinea con el arco LR de contenido (#306/#319): no es un fix de leak de jerga.
+
+# Context que cubre los placeholders del base genérico de preguntas M5. Valores benignos.
+_M5_QUESTIONS_CONTEXT: dict[str, object] = {
+    "m5_content": "Informe de resolución del Módulo 5.",
+    "doc1_preguntas_complejas": "[]",
+    "pregunta_eje": "¿Qué intervención debería priorizar la dirección?",
+    "main_risk_from_m3_m4": "El supuesto hallado en M2 podría no sostenerse.",
+    "implementation_timeframe": "90 días",
+    "nombre_empresa": "ACME",
+    "case_id": "case-0001",
+    "student_profile": "business",
+    "primary_family": "clasificacion",
+    "output_language": "Spanish",
+}
+
+_QUESTIONS_DS_JARGON = (
+    "auc",
+    "drift",
+    "reentrena",
+    "umbral",
+    "a/b testing",
+    "architect engineer",
+    "log-odds",
+)
+
+
+def _normalize_ws(text: str) -> str:
+    """Colapsa espacios/saltos de línea (el wrapping del prompt no debe romper un match multi-palabra)."""
+    return " ".join(text.split())
+
+
+def _resolve_m5_questions_prompt(state: dict) -> str:
+    """Replica la cadena de resolución de prompt de m5_questions_generator."""
+    prompt = _resolve_family_prompt(
+        state, M5_QUESTIONS_PROMPT_BY_FAMILY, M5_QUESTIONS_GENERATOR_PROMPT
+    )
+    return _maybe_business_classification_prompt(
+        state, prompt, M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
+    )
+
+
+def test_m5_questions_business_clasificacion_resolves_business_prompt() -> None:
+    """business + clasificación → M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION (no genérico, no ml_ds)."""
+    state = _make_state_mode(
+        student_profile="business", algoritmos=["Logistic Regression"], algorithm_mode="single"
+    )
+    result = _resolve_m5_questions_prompt(state)
+    assert result is M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
+    assert result is not M5_QUESTIONS_GENERATOR_PROMPT
+    assert result is not M5_QUESTIONS_PROMPT_BY_FAMILY["clasificacion"]  # no el prompt ml_ds
+
+
+def test_m5_questions_business_regresion_stays_generic() -> None:
+    """business + regresión → genérico (el swap es no-op fuera de clasificación)."""
+    state = _make_state_mode(
+        student_profile="business", algoritmos=["Linear Regression"], algorithm_mode="single"
+    )
+    result = _resolve_m5_questions_prompt(state)
+    assert result is M5_QUESTIONS_GENERATOR_PROMPT
+    assert result is not M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
+
+
+def test_m5_questions_business_clustering_stays_generic() -> None:
+    """business + clustering → genérico (el swap es no-op fuera de clasificación)."""
+    state = _make_state_mode(
+        student_profile="business", algoritmos=["K-Means"], algorithm_mode="single"
+    )
+    result = _resolve_m5_questions_prompt(state)
+    assert result is M5_QUESTIONS_GENERATOR_PROMPT
+    assert result is not M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
+
+
+def test_m5_questions_mlds_clasificacion_unchanged() -> None:
+    """ml_ds + clasificación → prompt ml_ds intacto (swap no-op para ml_ds → byte-idéntico)."""
+    state = _make_state_mode(
+        student_profile="ml_ds", algoritmos=["Logistic Regression"], algorithm_mode="single"
+    )
+    result = _resolve_m5_questions_prompt(state)
+    assert result is M5_QUESTIONS_PROMPT_BY_FAMILY["clasificacion"]
+    assert result is not M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
+
+
+def test_m5_questions_mlds_regresion_unchanged() -> None:
+    """ml_ds + regresión → genérico (familias no-clasificación intactas)."""
+    state = _make_state_mode(
+        student_profile="ml_ds", algoritmos=["Linear Regression"], algorithm_mode="single"
+    )
+    result = _resolve_m5_questions_prompt(state)
+    assert result is M5_QUESTIONS_GENERATOR_PROMPT
+    assert result is not M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
+
+
+def test_m5_questions_generator_node_wires_business_swap() -> None:
+    """m5_questions_generator debe llamar _maybe_business_classification_prompt con el prompt business."""
+    from case_generator import graph as _graph
+
+    source = _inspect.getsource(_graph.m5_questions_generator)
+    assert "_maybe_business_classification_prompt" in source, (
+        "m5_questions_generator must apply the business+clasificación swap"
+    )
+    assert "M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION" in source, (
+        "m5_questions_generator must swap to M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION"
+    )
+
+
+def test_m5_questions_business_prompt_no_ds_jargon() -> None:
+    """El render business+clasificación NO expone jerga DS a la Junta Directiva."""
+    rendered = _normalize_ws(
+        M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION.format(**_M5_QUESTIONS_CONTEXT).lower()
+    )
+    leaked = [t for t in _QUESTIONS_DS_JARGON if t in rendered]
+    assert not leaked, f"business M5 questions render leaked DS jargon: {leaked}"
+    assert not _re.search(r"\broc\b", rendered), "business M5 questions render leaked 'roc'"
+
+
+def test_m5_questions_business_prompt_keeps_priorization_framing() -> None:
+    """El bloque #329 vuelve el memorándum clasificación-aware sin perder la audiencia gerencial."""
+    rendered = _normalize_ws(M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION.lower())
+    assert "probabilidad de evento" in rendered
+    assert "valor en riesgo" in rendered
+    assert "junta directiva" in rendered  # audiencia business (presente en base + bloque)
+
+
+def test_m5_questions_business_prompt_placeholder_contract() -> None:
+    """El bloque #329 NO añade placeholders y se ensambla sobre el GENÉRICO (no el prompt ml_ds)."""
+    assert _placeholders(M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION) == _placeholders(
+        M5_QUESTIONS_GENERATOR_PROMPT
+    ), "M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION must not add/remove placeholders vs the generic base"
+    assert _placeholders(M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION) != _placeholders(
+        M5_QUESTIONS_PROMPT_CLASSIFICATION
+    ), "must be assembled over the GENERIC base, not the ml_ds clasificación prompt"
+
+
+def test_m5_questions_business_prompt_format_smoke() -> None:
+    """.format(**context) no lanza KeyError/ValueError (caza llaves literales sin escapar)."""
+    assert M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION.format(**_M5_QUESTIONS_CONTEXT)
