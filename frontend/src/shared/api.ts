@@ -60,6 +60,8 @@ import type {
     TeacherCoursesResponse,
     DeadlineUpdateRequest,
     TeacherSyllabusSaveRequest,
+    TeacherQuestionGradeUpsertRequest,
+    TeacherQuestionGradeWriteResponse,
 } from "@/shared/adam-types";
 
 /**
@@ -1283,6 +1285,31 @@ export const api = {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(body),
                 },
+            );
+        },
+        async saveQuestionGrade(
+            assignmentId: string,
+            membershipId: string,
+            questionId: string,
+            body: TeacherQuestionGradeUpsertRequest,
+        ): Promise<TeacherQuestionGradeWriteResponse> {
+            return parseJsonResponse<TeacherQuestionGradeWriteResponse>(
+                `/teacher/cases/${assignmentId}/submissions/${membershipId}/questions/${encodeURIComponent(questionId)}/grade`,
+                {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body),
+                },
+            );
+        },
+        async clearQuestionGrade(
+            assignmentId: string,
+            membershipId: string,
+            questionId: string,
+        ): Promise<TeacherQuestionGradeWriteResponse> {
+            return parseJsonResponse<TeacherQuestionGradeWriteResponse>(
+                `/teacher/cases/${assignmentId}/submissions/${membershipId}/questions/${encodeURIComponent(questionId)}/grade`,
+                { method: "DELETE" },
             );
         },
     },

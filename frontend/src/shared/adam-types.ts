@@ -18,6 +18,13 @@ export interface EDAChartSpec {
 }
 
 export interface PreguntaMinimalista {
+    /**
+     * Optional stable backend question id (e.g. "M1-Q1"). When present (teacher submission
+     * view) the renderer keys the question by this id instead of re-deriving from `numero`,
+     * so grading panels and answers stay correctly keyed even on the degraded case_view path
+     * where positional `order` would otherwise diverge from the authored `numero`.
+     */
+    id?: string;
     numero: number;
     titulo: string;
     enunciado: string;
@@ -38,6 +45,8 @@ export interface M5QuestionSolution {
 }
 
 export interface EDASocraticQuestion {
+    /** See {@link PreguntaMinimalista.id}. */
+    id?: string;
     numero: number;
     titulo: string;
     enunciado: string;
@@ -887,6 +896,15 @@ export interface TeacherCaseSubmissionsResponse {
     submissions: TeacherCaseSubmissionRow[];
 }
 
+export interface TeacherQuestionGrade {
+    question_id: string;
+    points_awarded: number;
+    max_points: number;
+    feedback: string | null;
+    graded_at: string;
+    graded_by_membership_id: string | null;
+}
+
 export interface TeacherCaseSubmissionDetailQuestion {
     id: string;
     order: number;
@@ -896,6 +914,21 @@ export interface TeacherCaseSubmissionDetailQuestion {
     student_answer: string | null;
     student_answer_chars: number;
     is_answer_from_draft: boolean;
+    grade?: TeacherQuestionGrade | null;
+}
+
+export interface TeacherQuestionGradeUpsertRequest {
+    points_awarded: number;
+    max_points: number;
+    feedback: string | null;
+}
+
+export interface TeacherQuestionGradeWriteResponse {
+    grade: TeacherQuestionGrade | null;
+    grade_summary: TeacherCaseSubmissionDetailGradeSummary;
+    is_case_fully_graded: boolean;
+    graded_question_count: number;
+    total_question_count: number;
 }
 
 export interface TeacherCaseSubmissionDetailModule {

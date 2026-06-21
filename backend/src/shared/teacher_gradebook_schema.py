@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
 
 class StrictModel(BaseModel):
@@ -74,6 +74,23 @@ class TeacherCaseSubmissionsResponse(StrictModel):
     submissions: list[TeacherCaseSubmissionRow]
 
 
+class TeacherQuestionGrade(StrictModel):
+    """A teacher's persisted grade for a single question of a submission."""
+
+    question_id: str
+    points_awarded: Decimal = Field(ge=0)
+    max_points: Decimal = Field(gt=0)
+    feedback: str | None = None
+    graded_at: datetime
+    graded_by_membership_id: str | None = None
+
+    @field_serializer("points_awarded", "max_points", when_used="json")
+    def _serialize_decimals(self, value: Decimal | None) -> float | None:
+        if value is None:
+            return None
+        return float(value)
+
+
 class TeacherCaseSubmissionDetailQuestion(StrictModel):
     id: str
     order: int = Field(ge=1)
@@ -83,6 +100,7 @@ class TeacherCaseSubmissionDetailQuestion(StrictModel):
     student_answer: str | None = None
     student_answer_chars: int = Field(ge=0)
     is_answer_from_draft: bool
+    grade: TeacherQuestionGrade | None = None
 
 
 class TeacherCaseSubmissionDetailModule(StrictModel):
@@ -129,6 +147,26 @@ class TeacherCaseSubmissionDetailGradeSummary(StrictModel):
         if value is None:
             return None
         return float(value)
+
+
+class TeacherQuestionGradeUpsertRequest(StrictModel):
+    points_awarded: Decimal = Field(ge=0)
+    max_points: Decimal = Field(gt=0, default=Decimal("10"))
+    feedback: str | None = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def _check_points_within_max(self) -> "TeacherQuestionGradeUpsertRequest":
+        if self.points_awarded > self.max_points:
+            raise ValueError("points_awarded must be <= max_points")
+        return self
+
+
+class TeacherQuestionGradeWriteResponse(StrictModel):
+    grade: TeacherQuestionGrade | None = None
+    grade_summary: TeacherCaseSubmissionDetailGradeSummary
+    is_case_fully_graded: bool
+    graded_question_count: int = Field(ge=0)
+    total_question_count: int = Field(ge=0)
 
 
 class TeacherCaseSubmissionDetailResponse(StrictModel):
