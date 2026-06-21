@@ -337,7 +337,10 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                                     </span>
                                 </div>
                             ) : null}
-                            <span className={`hidden rounded-full px-3 py-1 text-xs font-semibold lg:inline-flex ${statusBadgeClasses}`}>
+                            <span
+                                data-testid="teacher-submission-status-badge"
+                                className={`hidden rounded-full px-3 py-1 text-xs font-semibold lg:inline-flex ${statusBadgeClasses}`}
+                            >
                                 {statusLabel}
                             </span>
                             <button

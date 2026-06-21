@@ -155,6 +155,50 @@ describe("TeacherSubmissionPreview", () => {
         expect(screen.queryByTestId("question-grading-panel")).toBeNull();
         // no grading progress chips when the response is not gradeable
         expect(screen.queryByTestId("teacher-submission-grading-progress")).toBeNull();
+        // ESTADO reflects the in-progress branch with an amber (pending-tone) badge
+        const summary = screen.getByTestId("teacher-submission-preview-summary");
+        expect(within(summary).getByText("EN PROGRESO")).toBeTruthy();
+        expect(screen.getByTestId("teacher-submission-status-badge").className).toContain("amber");
+    });
+
+    it("shows SIN INICIAR with a neutral badge when the student has not started", async () => {
+        renderPreview({
+            detail: createSubmissionDetailResponse({
+                response_state: {
+                    status: "not_started",
+                    first_opened_at: null,
+                    last_autosaved_at: null,
+                    submitted_at: null,
+                    snapshot_id: null,
+                    snapshot_hash: null,
+                },
+            }),
+        });
+
+        const summary = await screen.findByTestId("teacher-submission-preview-summary");
+        expect(within(summary).getByText("SIN INICIAR")).toBeTruthy();
+        expect(screen.getByTestId("teacher-submission-status-badge").className).toContain("slate");
+    });
+
+    it("stays POR CALIFICAR until the grade rollup completes, even if response_state is graded", async () => {
+        renderPreview({
+            detail: createSubmissionDetailResponse({
+                response_state: {
+                    status: "graded",
+                    first_opened_at: "2026-06-02T12:00:00Z",
+                    last_autosaved_at: "2026-06-05T18:15:00Z",
+                    submitted_at: "2026-06-05T19:00:00Z",
+                    snapshot_id: "snapshot-1",
+                    snapshot_hash: "hash-123",
+                },
+                grade_summary: { status: null, score: null, max_score: 5, graded_at: null },
+            }),
+        });
+
+        const summary = await screen.findByTestId("teacher-submission-preview-summary");
+        // ESTADO keys "Calificado" off grade_summary.status, not response_state, so an
+        // unrolled-up summary still reads as pending.
+        expect(within(summary).getByText("POR CALIFICAR")).toBeTruthy();
     });
 
     it("shows live grading progress in the topbar (graded count + running points)", async () => {
@@ -283,6 +327,7 @@ describe("TeacherSubmissionPreview", () => {
         expect(within(summary).getByText("Borrador vigente")).toBeTruthy();
         expect(within(summary).getByText("CALIFICADO")).toBeTruthy();
         expect(within(summary).getByText(`${formatTeacherGradebookScore(4.5)} / ${formatTeacherGradebookScore(5)}`)).toBeTruthy();
+        expect(screen.getByTestId("teacher-submission-status-badge").className).toContain("emerald");
     });
 
     it("navigates back to the submissions list from the sidebar", async () => {
