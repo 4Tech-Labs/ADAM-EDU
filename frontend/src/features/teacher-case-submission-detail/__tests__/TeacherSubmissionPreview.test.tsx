@@ -122,11 +122,13 @@ describe("TeacherSubmissionPreview", () => {
 
         expect(within(sidebar).getByText("Ana Student")).toBeTruthy();
         expect(within(sidebar).getByText("Caso Plataforma")).toBeTruthy();
-        expect(within(summary).getByText("ENTREGADO")).toBeTruthy();
+        expect(within(summary).getByText("POR CALIFICAR")).toBeTruthy();
         expect(within(summary).getByText("Borrador vigente")).toBeTruthy();
         expect(within(summary).getByText("2/2")).toBeTruthy();
         expect(within(summary).getByText("Pendiente")).toBeTruthy();
-        expect(within(header).getByText("Caso Plataforma")).toBeTruthy();
+        // The case title now lives only in the sidebar; the topbar shows the course/student context line.
+        expect(within(header).queryByText("Caso Plataforma")).toBeNull();
+        expect(within(header).getByText(/ana\.student@example\.edu/)).toBeTruthy();
         // A submitted response is gradeable: the renderer receives renderQuestionFooter and a panel renders.
         const renderer = screen.getByTestId("case-content-renderer");
         expect(renderer.getAttribute("data-has-grading")).toBe("true");
@@ -153,6 +155,50 @@ describe("TeacherSubmissionPreview", () => {
         expect(screen.queryByTestId("question-grading-panel")).toBeNull();
         // no grading progress chips when the response is not gradeable
         expect(screen.queryByTestId("teacher-submission-grading-progress")).toBeNull();
+        // ESTADO reflects the in-progress branch with an amber (pending-tone) badge
+        const summary = screen.getByTestId("teacher-submission-preview-summary");
+        expect(within(summary).getByText("EN PROGRESO")).toBeTruthy();
+        expect(screen.getByTestId("teacher-submission-status-badge").className).toContain("amber");
+    });
+
+    it("shows SIN INICIAR with a neutral badge when the student has not started", async () => {
+        renderPreview({
+            detail: createSubmissionDetailResponse({
+                response_state: {
+                    status: "not_started",
+                    first_opened_at: null,
+                    last_autosaved_at: null,
+                    submitted_at: null,
+                    snapshot_id: null,
+                    snapshot_hash: null,
+                },
+            }),
+        });
+
+        const summary = await screen.findByTestId("teacher-submission-preview-summary");
+        expect(within(summary).getByText("SIN INICIAR")).toBeTruthy();
+        expect(screen.getByTestId("teacher-submission-status-badge").className).toContain("slate");
+    });
+
+    it("stays POR CALIFICAR until the grade rollup completes, even if response_state is graded", async () => {
+        renderPreview({
+            detail: createSubmissionDetailResponse({
+                response_state: {
+                    status: "graded",
+                    first_opened_at: "2026-06-02T12:00:00Z",
+                    last_autosaved_at: "2026-06-05T18:15:00Z",
+                    submitted_at: "2026-06-05T19:00:00Z",
+                    snapshot_id: "snapshot-1",
+                    snapshot_hash: "hash-123",
+                },
+                grade_summary: { status: null, score: null, max_score: 5, graded_at: null },
+            }),
+        });
+
+        const summary = await screen.findByTestId("teacher-submission-preview-summary");
+        // ESTADO keys "Calificado" off grade_summary.status, not response_state, so an
+        // unrolled-up summary still reads as pending.
+        expect(within(summary).getByText("POR CALIFICAR")).toBeTruthy();
     });
 
     it("shows live grading progress in the topbar (graded count + running points)", async () => {
@@ -191,8 +237,38 @@ describe("TeacherSubmissionPreview", () => {
 
         const progress = await screen.findByTestId("teacher-submission-grading-progress");
         expect(within(progress).getByTestId("grading-progress-count").textContent).toBe("2/3");
-        // 7 + 8,5 = 15,5 awarded out of 10 + 10 = 20 over the graded questions
-        expect(within(progress).getByTestId("grading-progress-points").textContent).toBe("15,5 / 20");
+        // 7 + 8,5 = 15,5 awarded; total = 10 + 10 (graded) + 10 (default for the ungraded M5-Q1) = 30
+        expect(within(progress).getByTestId("grading-progress-points").textContent).toBe("15,5 / 30");
+    });
+
+    it("totals max points across ALL questions (default 10 each; reflects per-question edits)", async () => {
+        renderPreview({
+            detail: createSubmissionDetailResponse({
+                modules: [
+                    {
+                        id: "M1",
+                        title: "Módulo 1",
+                        questions: [
+                            {
+                                id: "M1-Q1", order: 1, statement: "", context: null, expected_solution: "",
+                                student_answer: null, student_answer_chars: 0, is_answer_from_draft: false,
+                                // teacher raised this question's value to 20
+                                grade: { question_id: "M1-Q1", points_awarded: 4, max_points: 20, feedback: null, graded_at: "2026-06-06T18:00:00Z", graded_by_membership_id: "t" },
+                            },
+                            {
+                                id: "M1-Q2", order: 2, statement: "", context: null, expected_solution: "",
+                                student_answer: null, student_answer_chars: 0, is_answer_from_draft: false, grade: null,
+                            },
+                        ],
+                    },
+                ],
+            }),
+        });
+
+        const progress = await screen.findByTestId("teacher-submission-grading-progress");
+        expect(within(progress).getByTestId("grading-progress-count").textContent).toBe("1/2");
+        // 4 awarded; total = 20 (edited) + 10 (default for the ungraded question) = 30
+        expect(within(progress).getByTestId("grading-progress-points").textContent).toBe("4 / 30");
     });
 
     it("passes canonical output, answers and read-only flags to the renderer", async () => {
@@ -249,15 +325,36 @@ describe("TeacherSubmissionPreview", () => {
         const summary = await screen.findByTestId("teacher-submission-preview-summary");
 
         expect(within(summary).getByText("Borrador vigente")).toBeTruthy();
+        expect(within(summary).getByText("CALIFICADO")).toBeTruthy();
         expect(within(summary).getByText(`${formatTeacherGradebookScore(4.5)} / ${formatTeacherGradebookScore(5)}`)).toBeTruthy();
+        expect(screen.getByTestId("teacher-submission-status-badge").className).toContain("emerald");
     });
 
-    it("navigates back to the submissions list", async () => {
+    it("navigates back to the submissions list from the sidebar", async () => {
         renderPreview();
 
-        fireEvent.click(await screen.findByRole("button", { name: /Volver/i }));
+        const sidebar = await screen.findByTestId("teacher-submission-preview-sidebar");
+        fireEvent.click(within(sidebar).getByRole("button", { name: /Volver/i }));
 
         expect(await screen.findByTestId("submissions-list")).toBeTruthy();
+    });
+
+    it("navigates back from the mobile module bar", async () => {
+        renderPreview();
+
+        const mobileBar = await screen.findByTestId("teacher-submission-preview-mobile-modules");
+        fireEvent.click(within(mobileBar).getByRole("button", { name: /Volver/i }));
+
+        expect(await screen.findByTestId("submissions-list")).toBeTruthy();
+    });
+
+    it("labels the mobile module pills with readable names instead of raw ids", async () => {
+        renderPreview();
+
+        const mobileBar = await screen.findByTestId("teacher-submission-preview-mobile-modules");
+        // business + harvard_only => m1 renders as "Case Reader", not the raw "m1" id.
+        expect(within(mobileBar).getByRole("button", { name: "Case Reader" })).toBeTruthy();
+        expect(within(mobileBar).queryByRole("button", { name: "m1" })).toBeNull();
     });
 
     it("forwards the refresh action", async () => {

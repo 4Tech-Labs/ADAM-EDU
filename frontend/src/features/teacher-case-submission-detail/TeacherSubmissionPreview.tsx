@@ -12,7 +12,6 @@ import { useClearQuestionGrade, useSaveQuestionGrade } from "./useQuestionGradeM
 
 import {
     formatTeacherCourseTimestamp,
-    formatTeacherGradebookCellStatus,
     formatTeacherGradebookScore,
 } from "@/features/teacher-course/teacherCourseModel";
 import type {
@@ -67,6 +66,10 @@ function formatPoints(value: number): string {
     return POINTS_FORMATTER.format(value);
 }
 
+// Default points a question is worth until the teacher edits its "Valor de la pregunta".
+// Keep in sync with the QuestionGradingPanel `defaultMaxPoints` prop passed below.
+const DEFAULT_QUESTION_MAX_POINTS = 10;
+
 interface GradeProgress {
     graded: number;
     total: number;
@@ -84,10 +87,13 @@ function buildGradeProgress(detail: TeacherCaseSubmissionDetailResponse): GradeP
         for (const question of module.questions) {
             total += 1;
             const grade = question.grade;
+            // Denominator = the FULL points possible across every question: a graded question
+            // contributes its (teacher-editable) max_points, an ungraded one the default value the
+            // grading panel seeds. So editing a question's "Valor de la pregunta" moves the total.
+            max += grade ? grade.max_points : DEFAULT_QUESTION_MAX_POINTS;
             if (grade) {
                 graded += 1;
                 earned += grade.points_awarded;
-                max += grade.max_points;
             }
         }
     }
@@ -120,11 +126,36 @@ function getGradeSummary(detail: TeacherCaseSubmissionDetailResponse): string {
     return `${formatTeacherGradebookScore(detail.grade_summary.score)} / ${formatTeacherGradebookScore(detail.grade_summary.max_score)}`;
 }
 
-function getStatusBadgeClasses(status: string): string {
-    switch (status) {
-        case "submitted":
+type ReviewStatusTone = "graded" | "pending" | "in_progress" | "not_started";
+
+interface ReviewStatus {
+    label: string;
+    tone: ReviewStatusTone;
+}
+
+/**
+ * Status framed for the GRADING view: a submitted-but-ungraded entry reads "Por calificar" and a
+ * fully graded one "Calificado", so the teacher sees their own pending work at a glance. The raw
+ * submission state is still conveyed by the "Entrega" timestamp and "Versión" rows.
+ */
+function getReviewStatus(detail: TeacherCaseSubmissionDetailResponse): ReviewStatus {
+    if (detail.grade_summary.status === "graded") {
+        return { label: "Calificado", tone: "graded" };
+    }
+    if (detail.response_state.status === "submitted" || detail.response_state.status === "graded") {
+        return { label: "Por calificar", tone: "pending" };
+    }
+    if (detail.response_state.status === "in_progress") {
+        return { label: "En progreso", tone: "in_progress" };
+    }
+    return { label: "Sin iniciar", tone: "not_started" };
+}
+
+function getReviewStatusBadgeClasses(tone: ReviewStatusTone): string {
+    switch (tone) {
         case "graded":
             return "bg-emerald-100 text-emerald-800 ring-1 ring-inset ring-emerald-200";
+        case "pending":
         case "in_progress":
             return "bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-200";
         default:
@@ -146,6 +177,13 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
     const gradeMap = useMemo(() => buildGradeMap(detail), [detail]);
     const gradeProgress = useMemo(() => buildGradeProgress(detail), [detail]);
     const visibleModules = useMemo(() => getVisibleModules(detail), [detail]);
+    const moduleLabelById = useMemo(() => {
+        const labels: Partial<Record<ModuleId, string>> = {};
+        for (const module of getModuleConfig(canonicalOutput.studentProfile ?? "business", canonicalOutput.caseType)) {
+            labels[module.id] = module.name;
+        }
+        return labels;
+    }, [canonicalOutput]);
     const membershipId = detail.student.membership_id;
     const saveGrade = useSaveQuestionGrade(assignmentId, membershipId);
     const clearGrade = useClearQuestionGrade(assignmentId, membershipId);
@@ -157,7 +195,7 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
             <QuestionGradingPanel
                 questionId={args.questionId}
                 initialGrade={gradeMap[args.questionId] ?? null}
-                defaultMaxPoints={10}
+                defaultMaxPoints={DEFAULT_QUESTION_MAX_POINTS}
                 disabled={isRefreshing}
                 onSave={(payload) =>
                     saveGrade.mutateAsync({ questionId: args.questionId, payload }).then(() => undefined)
@@ -174,8 +212,9 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
     const totalQuestions = countSubmissionQuestions(detail);
     const refreshLabel = isRefreshing ? "Actualizando entrega" : "Actualizar entrega";
     const snapshotLabel = getSnapshotLabel(detail);
-    const statusLabel = formatTeacherGradebookCellStatus(detail.response_state.status).toUpperCase();
-    const statusBadgeClasses = getStatusBadgeClasses(detail.response_state.status);
+    const reviewStatus = getReviewStatus(detail);
+    const statusLabel = reviewStatus.label.toUpperCase();
+    const statusBadgeClasses = getReviewStatusBadgeClasses(reviewStatus.tone);
 
     useEffect(() => {
         if (visibleModules.length === 0) {
@@ -207,8 +246,19 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                     className="hidden h-full w-[280px] shrink-0 flex-col border-r border-slate-900/60 bg-slate-950 text-slate-100 md:flex"
                     data-testid="teacher-submission-preview-sidebar"
                 >
-                    <div className="shrink-0 border-b border-slate-800 px-5 py-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    <div className="shrink-0 px-3 pt-3">
+                        <button
+                            type="button"
+                            onClick={() => navigate(`/teacher/cases/${assignmentId}/entregas`)}
+                            className="inline-flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-300 transition hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                            Volver
+                        </button>
+                    </div>
+
+                    <div className="shrink-0 border-b border-slate-800 px-5 pt-2 pb-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
                             Revisión docente
                         </p>
                         <h1 className="mt-1.5 text-base font-semibold leading-snug text-white">{detail.student.full_name}</h1>
@@ -227,48 +277,40 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
 
                     <div className="shrink-0 border-t border-slate-800 px-5 py-3 text-xs text-slate-200">
                         <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5" data-testid="teacher-submission-preview-summary">
-                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Estado</dt>
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-400">Estado</dt>
                             <dd className="text-right text-[11px] font-semibold text-white">{statusLabel}</dd>
 
-                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Versión</dt>
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-400">Versión</dt>
                             <dd className="text-right text-[11px]">{snapshotLabel}</dd>
 
-                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Respondidas</dt>
-                            <dd className="text-right text-[11px]">{answeredQuestions}/{totalQuestions}</dd>
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-400">Respondidas</dt>
+                            <dd className="text-right text-[11px] tabular-nums">{answeredQuestions}/{totalQuestions}</dd>
 
-                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Calificación</dt>
-                            <dd className="text-right text-[11px]">{getGradeSummary(detail)}</dd>
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-400">Calificación</dt>
+                            <dd className="text-right text-[11px] tabular-nums">{getGradeSummary(detail)}</dd>
 
-                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Entrega</dt>
-                            <dd className="truncate text-right text-[11px]" title={formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}>
-                                {formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}
-                            </dd>
+                            <div className="col-span-2 flex items-baseline justify-between gap-3">
+                                <dt className="text-[10px] uppercase tracking-wider text-slate-400">Entrega</dt>
+                                <dd className="whitespace-nowrap text-right text-[11px] tabular-nums" title={formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}>
+                                    {formatTimestamp(detail.response_state.submitted_at, "Sin entrega")}
+                                </dd>
+                            </div>
                         </dl>
                     </div>
                 </aside>
 
                 <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
                     <header
-                        className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 md:px-6"
+                        className="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 md:px-6"
                         data-testid="teacher-submission-preview-header"
                     >
                         <div className="min-w-0">
-                            <div className="flex items-center gap-3">
-                                <button
-                                    type="button"
-                                    onClick={() => navigate(`/teacher/cases/${assignmentId}/entregas`)}
-                                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                                >
-                                    <ArrowLeft className="h-4 w-4" />
-                                    Volver
-                                </button>
-                                <div className="min-w-0">
-                                    <p className="truncate text-sm font-semibold text-slate-900">{detail.case.title}</p>
-                                    <p className="truncate text-xs text-slate-500">
-                                        {detail.case.course_code} · {detail.case.course_name} · {detail.student.email}
-                                    </p>
-                                </div>
-                            </div>
+                            <p
+                                className="truncate text-xs font-semibold text-slate-600"
+                                title={`${detail.case.course_code} · ${detail.case.course_name} · ${detail.student.email}`}
+                            >
+                                {detail.case.course_code} · {detail.case.course_name} · {detail.student.email}
+                            </p>
                         </div>
 
                         <div className="flex items-center gap-3">
@@ -278,40 +320,54 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                                     data-testid="teacher-submission-grading-progress"
                                 >
                                     <span
-                                        className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200"
+                                        className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200"
                                         title="Preguntas calificadas"
                                     >
                                         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Calificadas</span>
-                                        <span data-testid="grading-progress-count">{gradeProgress.graded}/{gradeProgress.total}</span>
+                                        <span data-testid="grading-progress-count" className="tabular-nums">{gradeProgress.graded}/{gradeProgress.total}</span>
                                     </span>
                                     <span
-                                        className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200"
-                                        title="Puntos otorgados sobre el total de las preguntas calificadas"
+                                        className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200"
+                                        title="Puntos otorgados sobre el total de puntos de todas las preguntas"
                                     >
                                         <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Puntos</span>
-                                        <span data-testid="grading-progress-points">
+                                        <span data-testid="grading-progress-points" className="whitespace-nowrap tabular-nums">
                                             {formatPoints(gradeProgress.earned)} / {formatPoints(gradeProgress.max)}
                                         </span>
                                     </span>
                                 </div>
                             ) : null}
-                            <span className={`hidden rounded-full px-3 py-1 text-xs font-semibold lg:inline-flex ${statusBadgeClasses}`}>
+                            <span
+                                data-testid="teacher-submission-status-badge"
+                                className={`hidden rounded-full px-3 py-1 text-xs font-semibold lg:inline-flex ${statusBadgeClasses}`}
+                            >
                                 {statusLabel}
                             </span>
                             <button
                                 type="button"
                                 onClick={onRefresh}
                                 disabled={isRefreshing}
-                                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
+                                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
                                 aria-label={refreshLabel}
+                                title={refreshLabel}
                             >
                                 <RefreshCcw className={`h-4 w-4${isRefreshing ? " animate-spin" : ""}`} />
-                                {refreshLabel}
+                                <span className="hidden sm:inline">Actualizar</span>
                             </button>
                         </div>
                     </header>
 
                     <div className="border-b border-slate-200 bg-white px-4 py-3 md:hidden" data-testid="teacher-submission-preview-mobile-modules">
+                        <div className="mb-2 flex items-center">
+                            <button
+                                type="button"
+                                onClick={() => navigate(`/teacher/cases/${assignmentId}/entregas`)}
+                                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                            >
+                                <ArrowLeft className="h-4 w-4" />
+                                Volver
+                            </button>
+                        </div>
                         <div className="flex gap-2 overflow-x-auto pb-1">
                             {visibleModules.map((moduleId) => (
                                 <button
@@ -319,11 +375,11 @@ export function TeacherSubmissionPreview({ assignmentId, detail, isRefreshing, o
                                     type="button"
                                     onClick={() => setActiveModule(moduleId)}
                                     className={moduleId === activeModule
-                                        ? "rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-white"
-                                        : "rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600"
+                                        ? "shrink-0 whitespace-nowrap rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white"
+                                        : "shrink-0 whitespace-nowrap rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600"
                                     }
                                 >
-                                    {moduleId}
+                                    {moduleLabelById[moduleId] ?? moduleId}
                                 </button>
                             ))}
                         </div>
