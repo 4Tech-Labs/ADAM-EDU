@@ -492,6 +492,46 @@ def _metrics_declares_intentional_modeling_skip(metrics_summary: dict[str, Any] 
     }
 
 
+def build_target_identity_warning(
+    metrics_summary: dict[str, Any] | None,
+    expected_target: str | None,
+) -> str | None:
+    """Return a target-identity quality warning for ml_ds+clf executed notebooks (#349).
+
+    Defense-in-depth anti-regression guard. The AUC gate (``build_m3_quality_warning``)
+    only knows AUC ∈ [0.55, 0.99] + marker presence; it does NOT know WHICH column the
+    notebook modeled, so a notebook that trains the wrong (but signal-bearing) column
+    passes silently. This cross-checks the modeled target (``metrics_summary["target_col"]``,
+    emitted by the executed ``metrics_summary_json`` cell) against the declared contract
+    target (``expected_target`` = ``_safe_contract_target_name(...)`` resolved by the graph).
+
+    The contract-first resolution (#348) + de-churn (#382) already make modeled == declared
+    in the happy path, so this only fires on a future double-fault. Returns ``None``
+    (degrade clean, never block) when:
+
+    * ``expected_target`` is empty — no contract / non-identifier name → #348's alias-first
+      path is the sanctioned fallback, there is no well-defined declared target to check.
+    * ``metrics_summary`` is missing — nothing modeled to compare.
+    * the run declares an intentional modeling skip — no model shipped on any column, so
+      target identity is moot (mirrors the ``m3_quality_auc_missing`` skip rule below).
+    * ``target_col`` is absent / not a non-empty string.
+    * modeled == declared.
+    """
+    if not expected_target or not metrics_summary:
+        return None
+    if _metrics_declares_intentional_modeling_skip(metrics_summary):
+        return None
+    modeled = metrics_summary.get("target_col")
+    if not isinstance(modeled, str) or not modeled:
+        return None
+    if modeled == expected_target:
+        return None
+    return (
+        f"m3_quality_target_mismatch: modeled target {modeled!r} "
+        f"!= contract target {expected_target!r}"
+    )
+
+
 def is_m3_quality_warning_blocking(
     quality_warning: str | None,
     metrics_summary: dict[str, Any] | None,
@@ -502,6 +542,8 @@ def is_m3_quality_warning_blocking(
         return False
     warning_kind = quality_warning.split(":", 1)[0]
     if warning_kind in {"m3_quality_marker_missing", "m3_quality_marker_invalid"}:
+        return True
+    if warning_kind == "m3_quality_target_mismatch":
         return True
     if warning_kind == "m3_quality_auc_missing":
         return not _metrics_declares_intentional_modeling_skip(metrics_summary)
