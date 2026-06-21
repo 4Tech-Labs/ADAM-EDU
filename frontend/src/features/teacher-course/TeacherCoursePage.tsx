@@ -4,6 +4,7 @@ import {
     AlertCircle,
     BookOpen,
     ChevronRight,
+    ClipboardList,
     Copy,
     LoaderCircle,
     Plus,
@@ -17,6 +18,7 @@ import {
 import "./teacherCoursePage.css";
 
 import { TeacherLayout } from "@/features/teacher-layout/TeacherLayout";
+import { TeacherCourseCasosTab } from "@/features/teacher-course/TeacherCourseCasosTab";
 import { TeacherCourseStudentsTab } from "@/features/teacher-course/TeacherCourseStudentsTab";
 import type {
     TeacherCourseDraft,
@@ -40,6 +42,7 @@ import {
     useRegenerateTeacherCourseAccessLink,
     useSaveTeacherCourseSyllabus,
     useTeacherCourseAccessLink,
+    useTeacherCourseCases,
     useTeacherCourseDetail,
     useTeacherCourseStudents,
     validateTeacherCourseDraft,
@@ -48,6 +51,7 @@ import { copyToClipboard } from "@/shared/clipboard";
 import { useToast } from "@/shared/toast-context";
 
 const SYLLABUS_TAB_ID = "teacher-course-tab-syllabus";
+const CASOS_TAB_ID = "teacher-course-tab-casos";
 const STUDENTS_TAB_ID = "teacher-course-tab-estudiantes";
 const CONFIG_TAB_ID = "teacher-course-tab-configuracion";
 
@@ -136,6 +140,7 @@ export function TeacherCoursePage() {
     const courseDetailQuery = useTeacherCourseDetail(courseId);
     const accessLinkQuery = useTeacherCourseAccessLink(courseId);
     const courseStudentsQuery = useTeacherCourseStudents(courseId, activeTab === "estudiantes");
+    const courseCasesQuery = useTeacherCourseCases(courseId);
     const regenerateAccessLinkMutation = useRegenerateTeacherCourseAccessLink(courseId);
     const saveSyllabusMutation = useSaveTeacherCourseSyllabus(courseId);
     const [draft, setDraft] = useState<TeacherCourseDraft>(
@@ -200,6 +205,12 @@ export function TeacherCoursePage() {
         ? getTeacherCourseStudentsErrorMessage(
               courseStudentsQuery.error,
               "No se pudo cargar el gradebook del curso. Intenta nuevamente.",
+          )
+        : null;
+    const casesErrorMessage = courseCasesQuery.error
+        ? getTeacherCoursePageErrorMessage(
+              courseCasesQuery.error,
+              "No se pudo cargar la lista de casos del curso. Intenta nuevamente.",
           )
         : null;
     const isRegeneratingAccessLink = regenerateAccessLinkMutation.isPending;
@@ -575,6 +586,22 @@ export function TeacherCoursePage() {
                             <span>Syllabus</span>
                             <span className="ml-auto rounded-full bg-amber-400/90 px-2 py-0.5 text-[11px] font-bold text-slate-900">
                                 R{revisionLabel}
+                            </span>
+                        </button>
+                        <button
+                            id={CASOS_TAB_ID}
+                            type="button"
+                            role="tab"
+                            aria-selected={activeTab === "casos"}
+                            aria-controls="teacher-course-casos-panel"
+                            tabIndex={activeTab === "casos" ? 0 : -1}
+                            className={`course-nav-item ${activeTab === "casos" ? "active" : ""}`}
+                            onClick={() => setTab("casos")}
+                        >
+                            <ClipboardList className="h-5 w-5" />
+                            <span>Casos</span>
+                            <span className="ml-auto rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-bold text-[#0144a0]">
+                                {courseCasesQuery.data?.total ?? 0}
                             </span>
                         </button>
                         <button
@@ -1378,6 +1405,16 @@ export function TeacherCoursePage() {
                                 </div>
                             </section>
                         </div>
+                    ) : activeTab === "casos" ? (
+                        <TeacherCourseCasosTab
+                            casesData={courseCasesQuery.data}
+                            isLoading={courseCasesQuery.isLoading}
+                            isError={courseCasesQuery.isError}
+                            errorMessage={casesErrorMessage}
+                            onRetry={() => {
+                                void courseCasesQuery.refetch();
+                            }}
+                        />
                     ) : activeTab === "estudiantes" ? (
                         <TeacherCourseStudentsTab
                             gradebook={courseStudentsQuery.data}

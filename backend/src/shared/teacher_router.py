@@ -30,6 +30,7 @@ from shared.teacher_reads import (
     get_teacher_case_submissions,
     get_teacher_case_submission_detail,
     list_teacher_active_cases,
+    list_teacher_course_cases,
     list_teacher_courses,
     resolve_assignment_schedule_values,
 )
@@ -111,6 +112,29 @@ def get_teacher_course_students(
     db: Session = Depends(get_db),
 ) -> TeacherCourseGradebookResponse:
     return get_teacher_course_gradebook(db, context, course_id)
+
+
+@router.get("/courses/{course_id}/cases", response_model=TeacherCasesResponse)
+def get_teacher_course_cases(
+    course_id: str,
+    context: Annotated[TeacherContext, Depends(require_teacher_context)],
+    db: Session = Depends(get_db),
+) -> TeacherCasesResponse:
+    now = datetime.now(timezone.utc)
+    cases = list_teacher_course_cases(db, context, course_id, now=now)
+    items = [
+        TeacherCaseItemResponse(
+            id=item.id,
+            title=item.title,
+            available_from=item.available_from,
+            deadline=item.deadline,
+            status=item.status,
+            course_codes=item.course_codes,
+            days_remaining=_days_remaining(item.deadline, now),
+        )
+        for item in cases
+    ]
+    return TeacherCasesResponse(cases=items, total=len(items))
 
 
 @router.get("/courses/{course_id}/access-link", response_model=TeacherCourseAccessLinkResponse)

@@ -1217,6 +1217,11 @@ export const api = {
                 `/teacher/courses/${courseId}/students`,
             );
         },
+        async getCourseCases(courseId: string): Promise<TeacherCasesResponse> {
+            return parseJsonResponse<TeacherCasesResponse>(
+                `/teacher/courses/${courseId}/cases`,
+            );
+        },
         async getCases(): Promise<TeacherCasesResponse> {
             return parseJsonResponse<TeacherCasesResponse>("/teacher/cases");
         },
