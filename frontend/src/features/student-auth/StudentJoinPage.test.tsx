@@ -293,7 +293,7 @@ describe("StudentJoinPage", () => {
         });
     });
 
-    it("shows an explicit sign-in message when the course access email already has an account", async () => {
+    it("auto-switches the course access flow to in-place sign-in when the email already has an account", async () => {
         vi.mocked(readActivationContext).mockReturnValue({
             flow: "student_join_course_access",
             token_kind: "course_access",
@@ -336,12 +336,411 @@ describe("StudentJoinPage", () => {
             fireEvent.submit(document.querySelector("form")!);
         });
 
+        // Auto-switch to the in-place sign-in sub-form (no dead-end "/" link).
         await waitFor(() => {
-            expect(screen.getByText(/ya existe una cuenta con este correo/i)).toBeTruthy();
+            expect(
+                screen.getByText(/ya tienes una cuenta\. ingresa tu contraseña para unirte/i),
+            ).toBeTruthy();
         });
+        // Email is preserved — no re-typing (the exact pain point).
         expect(
-            screen.getByRole("link", { name: /Iniciar sesión para continuar/i }),
-        ).toHaveAttribute("href", "/");
+            (screen.getByPlaceholderText("tu.correo@universidad.edu") as HTMLInputElement).value,
+        ).toBe("student@universidad.edu");
+        // Sign-in form: one password field only, no full name / confirm, no "/" link.
+        expect(screen.getByRole("button", { name: /Iniciar sesión/i })).toBeTruthy();
+        expect(screen.queryByText(/Nombre completo/i)).toBeNull();
+        expect(document.querySelectorAll("input[type=password]").length).toBe(1);
+        expect(
+            screen.queryByRole("link", { name: /Iniciar sesión para continuar/i }),
+        ).toBeNull();
+    });
+
+    it("offers an in-place sign-in toggle on the course access activation form and switches to email+password only", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-toggle",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+
+        renderPage();
+
+        await waitFor(() => {
+            expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "Inicia sesión" }));
+
+        expect(screen.getByRole("button", { name: /Iniciar sesión/i })).toBeTruthy();
+        expect(screen.queryByText(/Nombre completo/i)).toBeNull();
+        expect(document.querySelectorAll("input[type=password]").length).toBe(1);
+    });
+
+    it("signs in an existing student in-place and hands off to /auth/callback (no direct enroll)", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-signin",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+        const supabaseMock = makeSupabaseMock({ error: null });
+        vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
+
+        renderPage();
+
+        await waitFor(() => {
+            expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "Inicia sesión" }));
+
+        fireEvent.change(screen.getByPlaceholderText("tu.correo@universidad.edu"), {
+            target: { value: "ya@universidad.edu" },
+        });
+        fireEvent.change(document.querySelector("input[type=password]")!, {
+            target: { value: "RealPass123!" },
+        });
+
+        await act(async () => {
+            fireEvent.submit(document.querySelector("form")!);
+        });
+
+        await waitFor(() => {
+            expect(supabaseMock.auth.signInWithPassword).toHaveBeenCalledWith({
+                email: "ya@universidad.edu",
+                password: "RealPass123!",
+            });
+        });
+        expect(saveActivationContext).toHaveBeenCalledWith({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-signin",
+            auth_path: "password_sign_in",
+        });
+        await waitFor(() => {
+            expect(mockNavigate).toHaveBeenCalledWith("/auth/callback", { replace: true });
+        });
+        // Handoff owns enrollment; /join must not also POST /enroll.
+        expect(api.auth.enrollWithCourseAccess).not.toHaveBeenCalled();
+    });
+
+    it("shows a generic in-place sign-in error without revealing whether the email exists", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-badpass",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+        const supabaseMock = makeSupabaseMock({ error: { message: "Invalid login credentials" } });
+        vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
+
+        renderPage();
+
+        await waitFor(() => {
+            expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "Inicia sesión" }));
+        fireEvent.change(screen.getByPlaceholderText("tu.correo@universidad.edu"), {
+            target: { value: "ya@universidad.edu" },
+        });
+        fireEvent.change(document.querySelector("input[type=password]")!, {
+            target: { value: "wrongpass" },
+        });
+
+        await act(async () => {
+            fireEvent.submit(document.querySelector("form")!);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText(/credenciales incorrectas/i)).toBeTruthy();
+        });
+        expect(screen.queryByText(/invalid login credentials/i)).toBeNull();
+        expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    it("offers in-place sign-in when activation succeeds (201) but the auto sign-in fails", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-201",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+        vi.mocked(api.auth.activateCourseAccessPassword).mockResolvedValue({
+            status: "activated",
+            next_step: "sign_in",
+            email: "ya@universidad.edu",
+        });
+        const supabaseMock = makeSupabaseMock({ error: { message: "Invalid login credentials" } });
+        vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
+
+        renderPage();
+
+        await waitFor(() => {
+            expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
+        });
+
+        fireEvent.change(screen.getByPlaceholderText(/tu.correo@universidad.edu/i), {
+            target: { value: "ya@universidad.edu" },
+        });
+        fireEvent.change(screen.getByPlaceholderText(/Nombre completo/i), {
+            target: { value: "Estudiante Test" },
+        });
+        const passwordInputs = document.querySelectorAll("input[type=password]");
+        fireEvent.change(passwordInputs[0], { target: { value: "Password123!" } });
+        fireEvent.change(passwordInputs[1], { target: { value: "Password123!" } });
+
+        await act(async () => {
+            fireEvent.submit(document.querySelector("form")!);
+        });
+
+        await waitFor(() => {
+            expect(
+                screen.getByText(/no pudimos iniciar tu sesión automáticamente/i),
+            ).toBeTruthy();
+        });
+        expect(screen.getByRole("button", { name: /Iniciar sesión/i })).toBeTruthy();
+        expect(mockNavigate).not.toHaveBeenCalledWith("/student/dashboard", { replace: true });
+    });
+
+    it("arms the auto-enroll guard so an in-place sign-in does not also POST /enroll", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-guard",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-2",
+            course_title: "Finanzas II",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+        vi.mocked(api.auth.enrollWithCourseAccess).mockResolvedValue({ status: "enrolled" });
+        const supabaseMock = makeSupabaseMock({ error: null });
+        vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
+
+        const view = renderPage();
+
+        await waitFor(() => {
+            expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "Inicia sesión" }));
+        fireEvent.change(screen.getByPlaceholderText("tu.correo@universidad.edu"), {
+            target: { value: "ya@universidad.edu" },
+        });
+        fireEvent.change(document.querySelector("input[type=password]")!, {
+            target: { value: "RealPass123!" },
+        });
+
+        await act(async () => {
+            fireEvent.submit(document.querySelector("form")!);
+        });
+
+        // Settle the sign-in first: the ref is armed synchronously in
+        // handleSignInSubmit and the hook hands off to /auth/callback. Asserting
+        // this BEFORE simulating the session arrival makes the race deterministic.
+        await waitFor(() => {
+            expect(mockNavigate).toHaveBeenCalledWith("/auth/callback", { replace: true });
+        });
+
+        // The session/actor now land for the just-signed-in student. Without the
+        // pre-armed guard, the local auto-enroll effect would also POST /enroll.
+        vi.mocked(useAuth).mockReturnValue(authenticatedStudentAuth());
+        await act(async () => {
+            view.rerender(
+                <MemoryRouter>
+                    <StudentJoinPage />
+                </MemoryRouter>,
+            );
+        });
+
+        expect(api.auth.enrollWithCourseAccess).not.toHaveBeenCalled();
+    });
+
+    it("hands off to /auth/callback on in-place sign-in even if the stored context TTL lapsed", async () => {
+        // Simulate the sessionStorage entry already expired: the mount read still
+        // yields a context (joinContext lives in React state), but a later read
+        // (the hook's) returns whatever `stored` holds — null until restamped.
+        let stored: ReturnType<typeof readActivationContext> = null;
+        vi.mocked(readActivationContext)
+            .mockReturnValueOnce({
+                flow: "student_join_course_access",
+                token_kind: "course_access",
+                course_access_token: "course-tok-ttl",
+                expires_at: Date.now() + 300000,
+            })
+            .mockImplementation(() => stored);
+        vi.mocked(saveActivationContext).mockImplementation((ctx) => {
+            stored = { ...ctx, expires_at: Date.now() + 300000 } as never;
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+        const supabaseMock = makeSupabaseMock({ error: null });
+        vi.mocked(getSupabaseClient).mockReturnValue(supabaseMock as never);
+
+        renderPage();
+
+        await waitFor(() => {
+            expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "Inicia sesión" }));
+        fireEvent.change(screen.getByPlaceholderText("tu.correo@universidad.edu"), {
+            target: { value: "ya@universidad.edu" },
+        });
+        fireEvent.change(document.querySelector("input[type=password]")!, {
+            target: { value: "RealPass123!" },
+        });
+
+        await act(async () => {
+            fireEvent.submit(document.querySelector("form")!);
+        });
+
+        // The restamp in handleSignInSubmit repopulated the context, so the hook
+        // still finds a live course_access context and navigates. Without the
+        // restamp, `stored` would stay null and the hook would skip navigation.
+        await waitFor(() => {
+            expect(mockNavigate).toHaveBeenCalledWith("/auth/callback", { replace: true });
+        });
+    });
+
+    it("hides the in-place sign-in toggle when a session is already active", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            session: { access_token: "tok" } as never,
+            actor: {
+                auth_user_id: "user-teacher",
+                profile: { id: "profile-teacher", full_name: "Teacher Test" },
+                memberships: [
+                    {
+                        id: "mem-teacher",
+                        university_id: "univ-1",
+                        role: "teacher",
+                        status: "active",
+                        must_rotate_password: false,
+                    },
+                ],
+                must_rotate_password: false,
+                primary_role: "teacher",
+            },
+            loading: false,
+            error: null,
+            signOut: vi.fn(),
+            refreshActor: mockRefreshActor,
+        } as never);
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-authed",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+
+        renderPage();
+
+        // Activation form renders (no student membership → no auto-enroll), but the
+        // existing-account sign-in affordance must NOT be offered to a live session.
+        await screen.findByPlaceholderText("tu.correo@universidad.edu");
+        expect(screen.queryByRole("button", { name: "Inicia sesión" })).toBeNull();
+        expect(api.auth.enrollWithCourseAccess).not.toHaveBeenCalled();
+    });
+
+    it("toggling back to create-account restores the activation form and clears the password", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-toggleback",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+
+        renderPage();
+
+        await waitFor(() => {
+            expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
+        });
+
+        // Manual toggle to sign-in shows the default (non-409) prompt.
+        fireEvent.click(screen.getByRole("button", { name: "Inicia sesión" }));
+        expect(
+            screen.getByText(/inicia sesión para unirte a este curso/i),
+        ).toBeTruthy();
+        fireEvent.change(document.querySelector("input[type=password]")!, {
+            target: { value: "typed-in-signin" },
+        });
+
+        // Toggle back to create-account.
+        fireEvent.click(screen.getByRole("button", { name: "Crear cuenta" }));
+
+        // Activation form restored: full name + two password fields, both cleared.
+        expect(screen.getByPlaceholderText(/Nombre completo/i)).toBeTruthy();
+        const passwordInputs = document.querySelectorAll("input[type=password]");
+        expect(passwordInputs.length).toBe(2);
+        expect((passwordInputs[0] as HTMLInputElement).value).toBe("");
+        expect((passwordInputs[1] as HTMLInputElement).value).toBe("");
     });
 
     it("stores oauth intent for course-access Microsoft sign-in", async () => {

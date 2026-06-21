@@ -2074,3 +2074,35 @@ determinista (370A).
 check vive junto a los demás golden-eval diferidos, gateado por `RUN_LIVE_LLM_TESTS=1`.
 
 **Depends on / blocked by:** El PR de USD-only (#370) aterrizado; cableado del harness de golden-eval.
+
+---
+
+## TODO-JOIN-A: Retirar el flujo legacy `student_join_invite` (muerto)
+
+**What:** Eliminar la rama de invitación de ESTUDIANTE por `invite_token` (flujo `student_join_invite`),
+que ya no tiene camino de creación. Tocar: `frontend/src/features/student-auth/StudentJoinPage.tsx`
+(la rama `isInviteFlow`, el link condicional `submitError.includes("Inicia sesión") → "/"`),
+`frontend/src/features/auth-callback/AuthCallbackPage.tsx` (la rama `student_join_invite`),
+`frontend/src/shared/activationContext.ts` (el tipo + `normalizeActivationContext` de `student_join`/`student_join_invite`),
+los tipos en `frontend/src/shared/adam-types.ts`, la rama de activación de estudiante por invite en
+`backend/src/shared/app.py` (`POST /api/auth/activate/password` con `invite.role == "student"`), y sus tests.
+NO tocar la activación de DOCENTE (`teacher_activate`), que sigue usando invites de forma activa.
+
+**Why:** No existe ningún camino que cree invites de estudiante: el único `Invite(...)` del backend está en
+`admin_writes.py:391` con `role="teacher"`. Los estudiantes se onboardean exclusivamente vía
+`course_access` links. La rama `student_join_invite` es código muerto que añade superficie y branching
+(p. ej. el `isInviteFlow` que el PR del botón "Ya tengo cuenta" tuvo que dejar intacto). Quitarla simplifica
+`StudentJoinPage` a un componente solo-`course_access`.
+
+**Pros:** Menos superficie de auth, `StudentJoinPage` más simple (sin `isInviteFlow`), elimina un camino
+sin pruebas reales de uso. Pre-producción: no hay invites de estudiante pendientes que honrar.
+
+**Cons:** Toca auth compartido (`AuthCallbackPage`, `activationContext`, `app.py`) → requiere review
+cuidadosa y verificar que la activación de docente queda byte-idéntica. Es un refactor de borrado, no una
+feature.
+
+**Context:** Decidido en la plan-eng-review del botón "Ya tengo cuenta" (D6): el usuario prefirió retirar el
+legacy en vez de construirle paridad de "ya tengo cuenta". Se difirió a un PR aparte para mantener el diff
+de la feature aislado. Antes de borrar: confirmar 0 invites de estudiante pendientes en cualquier entorno.
+
+**Depends on / blocked by:** El PR del botón "Ya tengo cuenta" (in-place sign-in en `/join`) aterrizado primero.

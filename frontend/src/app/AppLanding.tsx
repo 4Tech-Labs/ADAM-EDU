@@ -1,7 +1,8 @@
 import { GraduationCap } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
+import { useEmailPasswordSignIn } from "@/app/auth/useEmailPasswordSignIn";
 import { readActivationContext, saveActivationContext } from "@/shared/activationContext";
 import { isMicrosoftLoginEnabled } from "@/shared/authConfig";
 import { getSupabaseClient } from "@/shared/supabaseClient";
@@ -29,11 +30,9 @@ import { getSupabaseClient } from "@/shared/supabaseClient";
  * - Password errors never reveal whether the email exists
  */
 export function AppLanding() {
-    const navigate = useNavigate();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
-    const [submitting, setSubmitting] = useState(false);
-    const [loginError, setLoginError] = useState<string | null>(null);
+    const { signIn, submitting, error: loginError } = useEmailPasswordSignIn();
 
     async function handleMicrosoftLogin() {
         const supabase = getSupabaseClient();
@@ -58,48 +57,9 @@ export function AppLanding() {
 
     async function handlePasswordSubmit(event: React.FormEvent) {
         event.preventDefault();
-        setLoginError(null);
-        setSubmitting(true);
-
-        try {
-            const supabase = getSupabaseClient();
-            if (!supabase) {
-                setLoginError("Credenciales incorrectas. Verifica tu correo y contraseña.");
-                return;
-            }
-
-            const { error } = await supabase.auth.signInWithPassword({
-                email,
-                password,
-            });
-
-            if (error) {
-                // Never reveal whether the email exists
-                setLoginError("Credenciales incorrectas. Verifica tu correo y contraseña.");
-                return;
-            }
-
-            // Course-access resume: finish enrollment in /auth/callback.
-            const activationContext = readActivationContext();
-            if (activationContext?.flow === "student_join_course_access") {
-                saveActivationContext({
-                    flow: "student_join_course_access",
-                    token_kind: "course_access",
-                    course_access_token: activationContext.course_access_token,
-                    auth_path: "password_sign_in",
-                });
-                navigate("/auth/callback", { replace: true });
-            }
-            // Normal case: no manual navigation — RootRedirect routes by
-            // primary_role once AuthContext resolves the actor.
-        } catch {
-            // Defensive: signInWithPassword resolves `{ error }` for auth
-            // failures, but guard against an unexpected throw (network/internal)
-            // so the user always gets feedback instead of a silent failure.
-            setLoginError("Credenciales incorrectas. Verifica tu correo y contraseña.");
-        } finally {
-            setSubmitting(false);
-        }
+        // Sign-in + non-enumeration error + course-access resume all live in the
+        // shared hook (single source of truth with StudentJoinPage's /join login).
+        await signIn(email, password);
     }
 
     return (
