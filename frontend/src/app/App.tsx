@@ -3,7 +3,6 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { SiteHeader } from "@/shared/SiteHeader";
 import { ToastProvider } from "@/shared/Toast";
 
-import { GuestOnlyRoute } from "./auth/GuestOnlyRoute";
 import { RequirePasswordRotation } from "./auth/RequirePasswordRotation";
 import { RequireRole } from "./auth/RequireRole";
 import { RootRedirect } from "./auth/RootRedirect";
@@ -61,11 +60,6 @@ const StudentDashboardPage = lazy(() =>
 const StudentCaseResolutionPage = lazy(() =>
     import("@/features/student-runtime/StudentCaseResolutionPage").then((module) => ({
         default: module.StudentCaseResolutionPage,
-    })),
-);
-const AdminLoginPage = lazy(() =>
-    import("@/features/admin-auth/AdminLoginPage").then((module) => ({
-        default: module.AdminLoginPage,
     })),
 );
 const AdminChangePasswordPage = lazy(() =>
@@ -184,14 +178,6 @@ function App() {
                         />
                         <Route path="/student" element={<Navigate to="/student/dashboard" replace />} />
 
-                        <Route
-                            path="/admin/login"
-                            element={
-                                <GuestOnlyRoute role="university_admin">
-                                    <AdminLoginPage />
-                                </GuestOnlyRoute>
-                            }
-                        />
                         <Route
                             path="/admin/change-password"
                             element={

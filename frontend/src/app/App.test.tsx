@@ -29,9 +29,6 @@ vi.mock("@/features/teacher-case-submission-detail/TeacherCaseSubmissionDetailPa
 vi.mock("@/features/admin-dashboard/AdminDashboardPage", () => ({
     AdminDashboardPage: () => <div data-testid="admin-dashboard-page">Dashboard admin</div>,
 }));
-vi.mock("@/features/admin-auth/AdminLoginPage", () => ({
-    AdminLoginPage: () => <div data-testid="admin-login-page">Admin login</div>,
-}));
 vi.mock("@/features/auth-callback/AuthCallbackPage", () => ({
     AuthCallbackPage: () => <div data-testid="auth-callback-page">Auth callback</div>,
 }));
@@ -147,14 +144,24 @@ describe("App admin shell layout", () => {
         expect(screen.queryByTestId("admin-dashboard-page")).toBeNull();
     });
 
-    it("redirects an anonymous user to the admin login route", async () => {
+    it("redirects an anonymous user from /admin/dashboard to the unified login", async () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
         renderWithProviders(<App />, {
             initialEntries: ["/admin/dashboard"],
         });
 
-        expect(await screen.findByTestId("admin-login-page")).toBeTruthy();
+        expect(await screen.findByTestId("app-landing")).toBeTruthy();
+    });
+
+    it("redirects the legacy /admin/login path to the unified login", async () => {
+        vi.mocked(useAuth).mockReturnValue(baseContext);
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/admin/login"],
+        });
+
+        expect(await screen.findByTestId("app-landing")).toBeTruthy();
     });
 
     it("redirects an anonymous user from /teacher/dashboard to the unified login", async () => {

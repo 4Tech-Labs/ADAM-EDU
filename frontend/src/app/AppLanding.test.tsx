@@ -75,12 +75,13 @@ describe("AppLanding (unified login)", () => {
         expect(screen.queryByText(/Ingresar como estudiante/i)).toBeNull();
     });
 
-    it("exposes a discreet admin entry pointing at /admin/login", () => {
+    it("no longer renders a separate admin portal entry (all roles use this form)", () => {
         renderPage();
 
         expect(
-            screen.getByRole("link", { name: /Portal administrador/i }),
-        ).toHaveAttribute("href", "/admin/login");
+            screen.queryByRole("link", { name: /Portal administrador/i }),
+        ).toBeNull();
+        expect(screen.queryByText(/Portal administrador/i)).toBeNull();
     });
 
     it("does not render the Microsoft button when Microsoft login is disabled", () => {
