@@ -1092,12 +1092,72 @@ las Secciones 1–3 ya existentes (NO agregues secciones nuevas):
   métricas. Refiérete a la decisión apoyada por el modelo, no a su matemática.
 """
 
+# Bloques para las PREGUNTAS de M4/M5 business+clasificación (Issue #329). Aditivos sobre el prompt
+# de preguntas GENÉRICO (NO sobre el prompt ml_ds), que es el que hoy reciben las preguntas business
+# (despacho de familia ml_ds-only en _resolve_family_prompt). Cierran la incoherencia con el arco de
+# contenido LR (#306/#319): las preguntas pasan de gerenciales-genéricas a clasificación-aware.
+# Igual que M4_CHART_LR_BUSINESS_BLOCK, NO nombran jerga DS (AUC/umbral/drift/reentrenamiento/A-B)
+# ni siquiera para prohibirla: steerean con framing gerencial positivo, de modo que el render sea
+# genuinamente libre de jerga (el test de ausencia de jerga corre sobre el prompt renderizado).
+# Texto ESTÁTICO: cero placeholders .format() y CERO llaves literales { } (el nodo hace
+# base+bloque .format(**context); una llave rompería el render).
+M4_QUESTIONS_LR_BUSINESS_BLOCK = """
+
+# Enfoque business+clasificación: preguntas alineadas a la lógica de priorización
+Este caso decide con un modelo que estima, por cliente u operación, una probabilidad de evento
+(abandono, impago, incumplimiento…), un número entre 0% y 100%. Las 3 preguntas deben razonar sobre
+esa lógica en lenguaje 100% gerencial, para un directivo (no un científico de datos). NO uses
+nombres de métricas internas ni vocabulario técnico del modelo; cuantifica el impacto en términos de
+negocio.
+- **Dónde se concentra el valor (P1):** lo que está en juego por cliente u operación es su
+  probabilidad de evento × el valor en riesgo de ese cliente u operación (ingreso, saldo o contrato
+  expuesto). El presupuesto de intervención se prioriza hacia los de mayor probabilidad × valor, no
+  por igual entre todos.
+- **El trade-off directivo (P2):** contrasta intervenir sobre quien no iba a tener el evento (falsa
+  alarma → gasto desperdiciado) con no intervenir sobre quien sí lo tiene (evento no evitado → valor
+  perdido); y el costo de intervenir frente al valor que se protege al evitar el evento.
+- **Riesgo de ejecución (P3):** si las relaciones halladas en el M2 no se sostienen, priorizar por
+  probabilidad puede dirigir el presupuesto al lugar equivocado; pide una mitigación concreta en
+  términos de negocio (a quién priorizar, con qué presupuesto, cómo confirmar el supuesto), no una
+  receta técnica del modelo.
+- **Honestidad:** usa únicamente cifras del caso (Exhibits, M2, M4). NO inventes probabilidades,
+  tasas ni valores nuevos; razona sobre la lógica de priorización, no sobre métricas del modelo.
+"""
+
+M5_QUESTIONS_LR_BUSINESS_BLOCK = """
+
+# Enfoque business+clasificación: memorándum apoyado en el ranking de riesgo del modelo
+La consigna de este caso se apoya en un modelo que ordena a los clientes u operaciones por su
+probabilidad de evento (abandono, incumplimiento, impago…). El memorándum se dirige a la
+Junta Directiva, en lenguaje gerencial (no técnico): NO uses nombres de métricas internas ni
+vocabulario del modelo.
+- **Cómo se prioriza la acción:** la recomendación atiende primero a quienes concentran mayor
+  probabilidad de evento × valor en riesgo; el modelo ordena la acción, no dicta una verdad.
+- **El trade-off directivo:** plantea la tensión entre falsas alarmas (intervenir sobre quien no iba
+  a tener el evento → gasto desperdiciado) y eventos no evitados (no intervenir sobre quien sí lo
+  tiene → valor perdido).
+- **Mitigación en términos de negocio:** la respuesta al riesgo principal pondera el costo de
+  intervenir contra el valor en riesgo que se protege; exprésala en lenguaje de negocio, con un
+  responsable y una señal de seguimiento, no en vocabulario técnico del modelo.
+- **Honestidad:** usa solo cifras del caso (M2, Exhibits, M4); NO inventes probabilidades ni
+  métricas. Refiérete a la decisión apoyada por el modelo, no a su matemática.
+"""
+
 # Variantes business+clasificación: aditivas sobre el base (ensambladas en import). El gate vive
 # en graph.py::_maybe_business_classification_prompt; aquí solo se declara la composición.
 M4_BUSINESS_PROMPT_CLASSIFICATION = M4_CONTENT_GENERATOR_PROMPT + M4_LR_BUSINESS_BLOCK
 M5_BUSINESS_PROMPT_CLASSIFICATION = M5_CONTENT_GENERATOR_PROMPT + M5_LR_BUSINESS_BLOCK
 # Issue #319 — variante de GRÁFICOS business+clasificación (aditiva sobre el chart prompt genérico).
 M4_CHART_BUSINESS_PROMPT_CLASSIFICATION = M4_CHART_GENERATOR_PROMPT + M4_CHART_LR_BUSINESS_BLOCK
+# Issue #329 — variantes de PREGUNTAS business+clasificación (aditivas sobre el prompt de preguntas
+# GENÉRICO; el gate ml_ds-only de _resolve_family_prompt deja a business en el genérico, así que el
+# swap business las alinea con el arco LR sin tocar ml_ds).
+M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION = (
+    M4_QUESTIONS_GENERATOR_PROMPT + M4_QUESTIONS_LR_BUSINESS_BLOCK
+)
+M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION = (
+    M5_QUESTIONS_GENERATOR_PROMPT + M5_QUESTIONS_LR_BUSINESS_BLOCK
+)
 
 # ── SCHEMA_DESIGNER_PROMPT_BY_FAMILY — dispatch table consumed by
 # graph.py::schema_designer.  Keys MUST match values returned by
@@ -2235,7 +2295,9 @@ __all__ = [
   "M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT",
   "M4_PROMPT_BY_FAMILY",
   "M4_PROMPT_CLASSIFICATION",
+  "M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION",
   "M4_QUESTIONS_GENERATOR_PROMPT",
+  "M4_QUESTIONS_LR_BUSINESS_BLOCK",
   "M4_QUESTIONS_PROMPT_CLASSIFICATION",
   "M4_QUESTIONS_PROMPT_BY_FAMILY",
   "M5_BUSINESS_PROMPT_CLASSIFICATION",
@@ -2247,7 +2309,9 @@ __all__ = [
   "M5_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT",
   "M5_PROMPT_BY_FAMILY",
   "M5_PROMPT_CLASSIFICATION",
+  "M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION",
   "M5_QUESTIONS_GENERATOR_PROMPT",
+  "M5_QUESTIONS_LR_BUSINESS_BLOCK",
   "M5_QUESTIONS_PROMPT_BY_FAMILY",
   "M5_QUESTIONS_PROMPT_CLASSIFICATION",
   "NOTEBOOK_BASE_TEMPLATE",

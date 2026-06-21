@@ -135,6 +135,7 @@ from case_generator.prompts import (
     M4_CONTENT_GENERATOR_PROMPT,
     M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
     M4_BUSINESS_PROMPT_CLASSIFICATION,
+    M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_GENERATOR_PROMPT,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHARTS_PROMPT_BY_FAMILY,
@@ -142,6 +143,7 @@ from case_generator.prompts import (
     M5_CONTENT_GENERATOR_PROMPT,
     M5_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
     M5_BUSINESS_PROMPT_CLASSIFICATION,
+    M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
     TEACHING_NOTE_PART1_PROMPT,
     TEACHING_NOTE_PART2_PROMPT,
     SCHEMA_DESIGNER_PROMPT,
@@ -4825,6 +4827,11 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         })
 
         prompt = _resolve_family_prompt(state, M4_QUESTIONS_PROMPT_BY_FAMILY, M4_QUESTIONS_GENERATOR_PROMPT)
+        # Issue #329 — business+clasificación: alinea las preguntas con el arco LR (#306/#319).
+        # No-op para ml_ds y para business no-clasificación (mismo gate que el contenido).
+        prompt = _maybe_business_classification_prompt(
+            state, prompt, M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
+        )
         resultado: GeneradorPreguntasOutput = llm.with_structured_output(
             GeneradorPreguntasOutput
         ).invoke(prompt.format(**context))
@@ -4883,6 +4890,11 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         )
         prompt_text = _resolve_family_prompt(
             state, M5_QUESTIONS_PROMPT_BY_FAMILY, M5_QUESTIONS_GENERATOR_PROMPT
+        )
+        # Issue #329 — business+clasificación: alinea el memorándum con el arco LR (#306/#319).
+        # No-op para ml_ds y para business no-clasificación (mismo gate que el contenido).
+        prompt_text = _maybe_business_classification_prompt(
+            state, prompt_text, M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
         )
         context.update({
             "m5_content": state.get("m5_content", ""),
