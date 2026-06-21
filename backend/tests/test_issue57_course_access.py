@@ -1252,3 +1252,218 @@ def test_issue57_course_access_audit_never_logs_raw_token(
     assert response.status_code == 200
     flattened = " ".join(str(item) for item in captured)
     assert token not in flattened
+
+
+def _assert_no_student_membership(db, *, user_id: str) -> None:
+    student_membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == user_id,
+            Membership.role == "student",
+        )
+    )
+    assert student_membership is None
+
+
+@pytest.mark.parametrize("staff_role", ["teacher", "university_admin"])
+def test_issue57_course_access_activate_complete_rejects_staff_account(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+    staff_role: str,
+) -> None:
+    # A staff account (teacher/admin) must not be able to take a student role via a
+    # course-access link. activate/complete is the real exploit hole: it mints a
+    # student membership for any verified identity.
+    university_id = str(uuid.uuid4())
+    course_owner = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="course.owner.staffblock@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    staff = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email=f"{staff_role}.staffblock@example.edu",
+        role=staff_role,
+        university_id=university_id,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=course_owner["membership"].id,
+        title="Curso Staff Block",
+        code=f"COURSE-ACCESS-STAFF-{staff_role[:4].upper()}",
+    )
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/activate/complete",
+        json=_resolve_payload(token),
+        headers=auth_headers_factory(
+            sub=staff["profile"].id,
+            email=f"{staff_role}.staffblock@example.edu",
+        ),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "staff_account_cannot_enroll_as_student"
+    _assert_no_student_membership(db, user_id=staff["profile"].id)
+
+
+def test_issue57_course_access_activate_complete_blocks_staff_globally(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    # GLOBAL scope: a teacher at university Y cannot enroll as a student in a course
+    # at university X either.
+    teacher_university_id = str(uuid.uuid4())
+    course_university_id = str(uuid.uuid4())
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.crossuniv@example.edu",
+        role="teacher",
+        university_id=teacher_university_id,
+    )
+    course_owner = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="owner.crossuniv@example.edu",
+        role="teacher",
+        university_id=course_university_id,
+    )
+    course = seed_course(
+        university_id=course_university_id,
+        teacher_membership_id=course_owner["membership"].id,
+        title="Curso Cross Univ",
+        code="COURSE-ACCESS-CROSSUNIV",
+    )
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/activate/complete",
+        json=_resolve_payload(token),
+        headers=auth_headers_factory(
+            sub=teacher["profile"].id,
+            email="teacher.crossuniv@example.edu",
+        ),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "staff_account_cannot_enroll_as_student"
+    _assert_no_student_membership(db, user_id=teacher["profile"].id)
+
+
+def test_issue57_course_access_activate_oauth_complete_rejects_staff_account(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    university_id = str(uuid.uuid4())
+    course_owner = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="owner.oauth.staffblock@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    teacher = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="teacher.oauth.staffblock@universidad.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    db.add(
+        UniversitySsoConfig(
+            university_id=university_id,
+            provider="azure",
+            azure_tenant_id="azure-tenant-staffblock",
+            client_id="client-id-staffblock",
+            enabled=True,
+        )
+    )
+    db.commit()
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=course_owner["membership"].id,
+        title="Curso OAuth Staff Block",
+        code="COURSE-ACCESS-OAUTH-STAFF",
+    )
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/activate/oauth/complete",
+        json=_resolve_payload(token),
+        headers=auth_headers_factory(
+            sub=teacher["profile"].id,
+            email="teacher.oauth.staffblock@universidad.edu",
+        ),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "staff_account_cannot_enroll_as_student"
+    _assert_no_student_membership(db, user_id=teacher["profile"].id)
+
+
+def test_issue57_course_access_enroll_rejects_dual_role_staff_account(
+    client,
+    db,
+    seed_identity,
+    seed_course,
+    seed_course_access_link,
+    auth_headers_factory,
+) -> None:
+    # Defense in depth for legacy dual-role data: an account that already holds BOTH
+    # a teacher and a student membership is still blocked from enrolling via the link.
+    university_id = str(uuid.uuid4())
+    owner = seed_identity(
+        user_id=str(uuid.uuid4()),
+        email="owner.dual@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    dual_user_id = str(uuid.uuid4())
+    seed_identity(
+        user_id=dual_user_id,
+        email="dual.role@example.edu",
+        role="teacher",
+        university_id=university_id,
+    )
+    dual_student = seed_identity(
+        user_id=dual_user_id,
+        email="dual.role@example.edu",
+        role="student",
+        university_id=university_id,
+        create_legacy_user=False,
+    )
+    course = seed_course(
+        university_id=university_id,
+        teacher_membership_id=owner["membership"].id,
+        title="Curso Dual Role",
+        code="COURSE-ACCESS-DUAL",
+    )
+    db.commit()
+    _, token = seed_course_access_link(course_id=course.id, status="active")
+
+    response = client.post(
+        "/api/course-access/enroll",
+        json=_resolve_payload(token),
+        headers=auth_headers_factory(sub=dual_user_id, email="dual.role@example.edu"),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "staff_account_cannot_enroll_as_student"
+    # The student membership existed before, but the link must not enroll it.
+    enrollment = db.scalar(
+        select(CourseMembership).where(
+            CourseMembership.course_id == course.id,
+            CourseMembership.membership_id == dual_student["membership"].id,
+        )
+    )
+    assert enrollment is None

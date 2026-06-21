@@ -97,11 +97,14 @@ function App() {
         location.pathname.startsWith("/student/dashboard") ||
         location.pathname.startsWith("/student/cases") ||
         location.pathname === "/student";
+    // Pantalla de activación docente: experiencia de marca autocontenida (panel
+    // de dos columnas), sin la barra azul global — igual que el login (landing).
+    const isTeacherActivateRoute = location.pathname === "/teacher/activate";
 
     return (
         <ToastProvider>
         <div className="flex min-h-screen flex-col bg-bg-page font-sans type-body">
-            {!isLandingRoute && !isAdminDashboardRoute && !isTeacherShellRoute && !isStudentShellRoute && <SiteHeader />}
+            {!isLandingRoute && !isAdminDashboardRoute && !isTeacherShellRoute && !isStudentShellRoute && !isTeacherActivateRoute && <SiteHeader />}
 
             <main className="flex-1">
                 <Suspense fallback={<RouteFallback />}>

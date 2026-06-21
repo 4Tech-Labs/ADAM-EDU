@@ -897,6 +897,15 @@ def _adam_metric_float(value):
 
 _metrics_summary = {{"notebook_variant": "lr_only"}}
 try:
+  # #349 — emit the modeled target so the executor can cross-check it against the
+  # declared contract target (defense-in-depth identity guard). target_col is a
+  # sanctioned cross-cell variable resolved CONTRACT-FIRST in dummy_baseline (#348).
+  try:
+    _adam_target_col = target_col
+  except NameError:
+    _adam_target_col = None
+  if isinstance(_adam_target_col, str) and _adam_target_col:
+    _metrics_summary["target_col"] = _adam_target_col
   try:
     _adam_modeling_status = modeling_status
   except NameError:
@@ -956,6 +965,15 @@ def _adam_metric_float(value):
 
 _metrics_summary = {{"notebook_variant": "rf_only"}}
 try:
+  # #349 — emit the modeled target so the executor can cross-check it against the
+  # declared contract target (defense-in-depth identity guard). target_col is a
+  # sanctioned cross-cell variable resolved CONTRACT-FIRST in dummy_baseline (#348).
+  try:
+    _adam_target_col = target_col
+  except NameError:
+    _adam_target_col = None
+  if isinstance(_adam_target_col, str) and _adam_target_col:
+    _metrics_summary["target_col"] = _adam_target_col
   try:
     _adam_modeling_status = modeling_status
   except NameError:
@@ -1015,6 +1033,15 @@ def _adam_metric_float(value):
 
 _metrics_summary = {{"notebook_variant": "lr_rf_contrast"}}
 try:
+  # #349 — emit the modeled target so the executor can cross-check it against the
+  # declared contract target (defense-in-depth identity guard). target_col is a
+  # sanctioned cross-cell variable resolved CONTRACT-FIRST in dummy_baseline (#348).
+  try:
+    _adam_target_col = target_col
+  except NameError:
+    _adam_target_col = None
+  if isinstance(_adam_target_col, str) and _adam_target_col:
+    _metrics_summary["target_col"] = _adam_target_col
   try:
     _adam_comparison = comparison
   except NameError:
