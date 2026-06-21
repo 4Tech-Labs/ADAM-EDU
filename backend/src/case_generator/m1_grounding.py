@@ -64,6 +64,59 @@ _NUMBER_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── USD-only currency enforcement (Issue #377) ────────────────────────────────
+# The product is USD-only (#370). `_CURRENCY` above mixes USD-compatible ($/US$/USD)
+# and forbidden tokens because it is built for PARSING magnitudes, not for deciding
+# allowed-vs-forbidden. `enforce_usd_currency` needs its OWN, dedicated NON-USD matcher
+# that NEVER touches $/US$/USD and rewrites only an UNAMBIGUOUS foreign currency token
+# decorating a figure. Doctrine (mirrors #372): ZERO false positives over zero false
+# negatives — a relabel of a conforming figure would corrupt every good case.
+#
+#   €1.200 → USD 1.200    1.200 EUR → 1.200 USD    500 euros → 500 USD    R$1.000 → USD 1.000
+#   $5,000 / US$5,000 / 5,000 USD → unchanged (sanctioned USD; bare ``$`` is NOT in the set)
+#
+# Precision rules — each closes a false-positive class found in the #377 adversarial review:
+#  * SYMBOLS (€ £ ¥ R$ …) are currency-only glyphs → may decorate ANY figure (bare too).
+#  * ISO CODES (EUR/COP/…) collide with acronyms, company names (NIO), years (COP 2024) and
+#    clinical ratios (INR 3). Accepted ONLY when they decorate a THOUSANDS-GROUPED figure (a
+#    real monetary amount: 1.200 / 5.000.000 / 1.200,50) AND are word-bounded on BOTH sides
+#    (``\b…\b`` — without the trailing ``\b`` ``EUR500X`` would corrupt to ``USD 500X``). A bare
+#    integer / year / ratio next to an ISO-shaped token is NOT money, so it is left untouched
+#    (mirrors the module's "bare structural integers are ignored" rule, lines 17-21).
+#  * WORDS: only the unambiguous ``euros`` (any figure, SUFFIX only — Spanish writes "500 euros")
+#    and the explicit phrase ``libras esterlinas``; bare ``libras`` is the WEIGHT unit (pounds),
+#    NOT relabeled. ``pesos``/``reales`` stay out (ambiguity + the ``de`` particle).
+#  * Gaps use NON-NEWLINE whitespace (``_NL``) so a figure on one line and an ISO-shaped
+#    identifier on the next (e.g. M3 notebook Python ``x = 42\nTRY = ...``) are never joined.
+#  * All quantifiers are BOUNDED (no unbounded ``+`` on a digit run) → LINEAR matching; a long
+#    contiguous numeric blob cannot trigger catastrophic backtracking (ReDoS).
+_NON_USD_SYMBOL = r"R\$|€|£|¥|₡|₲|₱|₩|₪|฿|₴|₦|₹"
+_NON_USD_ISO = (
+    r"EUR|GBP|JPY|CHF|CNY|CAD|AUD|"
+    r"COP|MXN|BRL|CLP|PEN|ARS|UYU|BOB|PYG|VES|CRC|GTQ|HNL|NIO|DOP|"
+    r"INR|RUB|ZAR|KRW|TRY"
+)
+_NON_USD_WORD = r"euros?|libras?\s+esterlinas?"
+
+# Bounded number grammars (no unbounded quantifier → no ReDoS, capped match length).
+_USD_GROUPED = r"\d{1,3}(?:[.,]\d{3}){1,9}(?:[.,]\d{1,2})?"          # 1.200 / 5.000.000 / 1.200,50
+_USD_ANY = _USD_GROUPED + r"|\d{1,18}(?:[.,]\d{1,9})?"               # grouped OR bare/decimal
+_NL = r"[^\S\n]"                                                     # whitespace, never a newline
+_MAG_TAIL = r"(?P<mag>" + _NL + r"*(?:" + _MAGNITUDE_SUFFIX + r")\b)?"
+
+# Four surgical passes, each with ONE ``num`` group → two shared replacement helpers.
+# Symbols & the ``euros`` word: any figure. ISO codes: GROUPED figure + double ``\b`` only.
+_RE_SYM_PREFIX = re.compile(r"(?:" + _NON_USD_SYMBOL + r")" + _NL + r"*(?P<num>" + _USD_ANY + r")")
+_RE_ISO_PREFIX = re.compile(r"\b(?:" + _NON_USD_ISO + r")\b" + _NL + r"*(?P<num>" + _USD_GROUPED + r")")
+_RE_SYMWORD_SUFFIX = re.compile(
+    r"(?P<num>(?<![\w])(?:" + _USD_ANY + r"))" + _MAG_TAIL + _NL + r"*"
+    r"(?:" + _NON_USD_SYMBOL + r"|\b(?i:" + _NON_USD_WORD + r")\b)"
+)
+_RE_ISO_SUFFIX = re.compile(
+    r"(?P<num>(?<![\w])(?:" + _USD_GROUPED + r"))" + _MAG_TAIL + _NL + r"*"
+    r"\b(?:" + _NON_USD_ISO + r")\b"
+)
+
 # ``(Exhibit 1)``, ``(ver Exhibit 1)``, ``(Exhibit 1, …)``, ``(Exhibit 1 y 2)``,
 # ``(Exhibits 1 y 2)``, ``(Exhibit 1 y Exhibit 2)`` — the second number may repeat the
 # (possibly plural) word ``Exhibit``; without that the second anexo would be lost and a
@@ -113,6 +166,45 @@ _COMPLETENESS_KEYWORD_RE = re.compile(
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
+def enforce_usd_currency(text: str) -> str:
+    """Deterministically relabel any non-USD currency token adjacent to a figure to USD.
+
+    USD-only product (#370 / #377): ``$`` / ``US$`` / ``USD`` are PASS (never matched), so a
+    conforming text is returned **byte-identical** — this is what keeps a compliant case
+    (business included) unchanged. Only an unambiguous foreign currency marker (``€`` / ``£`` /
+    ``EUR`` / ``COP`` / ``500 euros`` …) that decorates a number is rewritten, and ONLY the
+    currency token is swapped — the numeric **magnitude is preserved verbatim**, so this never
+    perturbs ``validate_*_exhibit_coherence``'s exact-match grounding (#360).
+
+    Honest limitation: a label swap cannot reverse an FX conversion (``5.000 COP`` → ``5.000
+    USD`` keeps a wrong magnitude if the model actually converted). The common failure is a
+    symbol slip (right USD magnitude, wrong glyph), which this fixes exactly; the FX case stays
+    on the prompt rule + the deferred live eval (TODO-USD-LIVE-EVAL-370B).
+
+    Pure (never imports graph), total, **best-effort**: any internal error returns the original
+    text unchanged, so a regex bug can never fail a job. All four passes use bounded quantifiers,
+    so the function is LINEAR in ``len(text)`` (no catastrophic backtracking).
+    """
+    if not text:
+        return text
+    try:
+        out = _RE_SYM_PREFIX.sub(_usd_prefix_repl, text)
+        out = _RE_ISO_PREFIX.sub(_usd_prefix_repl, out)
+        out = _RE_SYMWORD_SUFFIX.sub(_usd_suffix_repl, out)
+        out = _RE_ISO_SUFFIX.sub(_usd_suffix_repl, out)
+        return out
+    except Exception:  # best-effort — a detector bug must never corrupt/fail a case
+        return text
+
+
+def _usd_prefix_repl(match: re.Match[str]) -> str:
+    return "USD " + match.group("num")
+
+
+def _usd_suffix_repl(match: re.Match[str]) -> str:
+    return match.group("num") + (match.group("mag") or "") + " USD"
+
 
 def parse_exhibit_anchors(raw_anexo: str) -> list[float]:
     """Return every numeric anchor candidate found in an anexo's markdown table cells.

@@ -168,6 +168,7 @@ from case_generator.narrative_grounding import (
 )
 from case_generator.m1_grounding import (
     detect_exhibit2_completeness_row,
+    enforce_usd_currency,
     validate_exhibit2_event_rate,
     validate_narrative_exhibit_coherence,
     validate_questions_exhibit_coherence,
@@ -471,7 +472,15 @@ def sanitize_markdown(text: str) -> str:
     text = re.sub(r'\n?```\s*$', '', text)
     # 3. Normalizar separadores de tablas (prevenir más de 3 guiones que rompen el parser)
     text = re.sub(r'-{4,}', '---', text)
-    return text.strip()
+    text = text.strip()
+    # 4. Backstop USD-only (#377): reetiqueta cualquier moneda no-USD pegada a una cifra
+    #    (€/£/EUR/COP/MXN/R$/…) a USD. Punto DRY que cubre TODA la prosa downstream que pasa por
+    #    aquí (narrativa M1 del writer, EDA M2, narrativa M4/M5). Byte-idéntico para texto ya en
+    #    USD/$. Kill-switch CASE_USD_CURRENCY_ENFORCE. La FUENTE (campos del architect, structured
+    #    output) NO pasa por aquí → se enfuerza explícitamente en `case_architect` (#377 PUNTO 1).
+    if settings.case_usd_currency_enforce:
+        text = enforce_usd_currency(text)
+    return text
 
 
 def _extract_text(response) -> str:
@@ -1025,13 +1034,19 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             "current_agent": "case_architect",
             "titulo": result.titulo,
             "industria": result.industria,
-            "company_profile": result.company_profile,
-            "dilema_brief": result.dilema_brief,
-            "pregunta_eje": pregunta_eje,
-            "doc1_instrucciones": result.instrucciones_estudiante,
-            "doc1_anexo_financiero": result.anexo_financiero,
-            "doc1_anexo_operativo": anexo_operativo_final,
-            "doc1_anexo_stakeholders": result.anexo_stakeholders,
+            # Issue #377 — relabel any non-USD currency to USD at the source (structured-output
+            # fields bypass sanitize_markdown). Best-effort, magnitude-preserving, kill-switch
+            # gated; byte-identical when the field is already USD-only. anexo_operativo uses the
+            # POST-#372 value (anexo_operativo_final) so the F1 rate row is already settled.
+            "company_profile": _enforce_usd_currency_field(result.company_profile),
+            "dilema_brief": _enforce_usd_currency_field(result.dilema_brief),
+            "pregunta_eje": (
+                _enforce_usd_currency_field(pregunta_eje) if pregunta_eje else pregunta_eje
+            ),
+            "doc1_instrucciones": _enforce_usd_currency_field(result.instrucciones_estudiante),
+            "doc1_anexo_financiero": _enforce_usd_currency_field(result.anexo_financiero),
+            "doc1_anexo_operativo": _enforce_usd_currency_field(anexo_operativo_final),
+            "doc1_anexo_stakeholders": _enforce_usd_currency_field(result.anexo_stakeholders),
             # downstream nodes leen state["dataset_schema_required"] y degradan
             # gracefully al comportamiento previo si es None.
             "dataset_schema_required": contract_dict,
@@ -1324,6 +1339,21 @@ def _invoke_m1_exhibit2_coherence(
             extra={"node": "case_architect", "case_id": state.get("case_id")},
         )
         return anexo_operativo
+
+
+# ─────────────────────────────────────────────────────────
+# Issue #377 — USD-only currency backstop at the architect SOURCE
+# The architect emits structured output (CaseArchitectOutput) that BYPASSES sanitize_markdown
+# (where the same backstop runs for downstream prose, #377 PUNTO 2). So the source free-text
+# fields — the highest money-density surfaces (Exhibits + dilema) — must be relabeled to USD
+# explicitly here. Pure deterministic relabel; magnitudes preserved; kill-switch gated; never
+# raises (enforce_usd_currency is best-effort). Profile-agnostic. No prompt edit → SHA256 frozen.
+# ─────────────────────────────────────────────────────────
+def _enforce_usd_currency_field(text: str) -> str:
+    """Relabel non-USD currency → USD in one architect free-text field (kill-switch gated)."""
+    if not settings.case_usd_currency_enforce:
+        return text
+    return enforce_usd_currency(text)
 
 
 # ─────────────────────────────────────────────────────────
