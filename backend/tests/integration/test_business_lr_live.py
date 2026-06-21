@@ -12,6 +12,7 @@ Verifica el arco completo del cambio business+LR:
   * El dataset sintético tiene una correlación NPS↔churn REAL (no inventada).
 """
 
+import re
 import uuid
 
 import pandas as pd
@@ -98,5 +99,31 @@ async def test_business_lr_e2e() -> None:
     for nb in ("m3_notebook_code", "doc6_notebook"):
         if final_state.get(nb):
             errors.append(f"[FAIL] {nb} presente en business (solo ml_ds genera notebook)")
+
+    # 5. Issue #329 — las preguntas business de clasificación quedan jargon-free (coherencia con #306/#319).
+    # Tokens DS-específicos: NO bare "umbral" (un memo dice "umbral de rentabilidad") ni bare "roc"
+    # (falso positivo con "proceso"); roc/auc se chequean con frontera de palabra.
+    questions_jargon = (
+        "concept drift",
+        "drift",
+        "reentrena",
+        "monitoreo de auc",
+        "umbral de decisión",
+        "a/b testing",
+        "log-odds",
+        "odds ratio",
+    )
+    for key in ("m4_questions", "m5_questions"):
+        qs = final_state.get(key) or []
+        blob = " ".join(
+            f"{q.get('enunciado', '')} {q.get('solucion_esperada', '')}"
+            for q in qs
+            if isinstance(q, dict)
+        ).lower()
+        found = [t for t in questions_jargon if t in blob]
+        if re.search(r"\b(roc|auc)\b", blob):
+            found.append("roc/auc")
+        if found:
+            errors.append(f"[FAIL] {key} business expone jerga DS: {found}")
 
     assert not errors, "\n".join(errors)
