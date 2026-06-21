@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     # prior behavior byte-identically (instant env-only revert; no redeploy). churn / already-binary
     # cases are unaffected either way (the sibling passes them through unchanged).
     mlds_binary_target_coerce: bool = True
+    # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
+    # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
+    # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign
+    # currency reaches the student. Profile-agnostic; a conforming case ($/USD only) is byte-
+    # identical. Kill-switch: set CASE_USD_CURRENCY_ENFORCE=false to passthrough exactly (instant
+    # env-only revert; no redeploy). The currency LABEL of `business_cost_matrix` stays coerced by
+    # #370 regardless of this flag.
+    case_usd_currency_enforce: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

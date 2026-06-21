@@ -2026,7 +2026,15 @@ sugerida: el `dilema_brief` generado expone opciones A, B y C (y no solo A/B) pa
 **Depends on / blocked by:** Cableado del harness de golden-eval (diferido en #340/#361).
 
 
-## TODO-USD-EXHIBIT-GUARD-370A: Guardia determinista de moneda en los Exhibits
+## TODO-USD-EXHIBIT-GUARD-370A: Guardia determinista de moneda en los Exhibits — ✅ RESUELTO (#377)
+
+**Resolución (#377):** Implementado como un **relabel determinista** (no el reprompt-que-degrada que
+proponía este TODO). `enforce_usd_currency` en `m1_grounding.py` reescribe cualquier token de moneda
+no-USD pegado a una cifra → `USD`, **profile-agnostic** (no solo ml_ds+clf), aplicado en la fuente
+(`case_architect` return) + downstream (`sanitize_markdown`). Da garantía dura (ninguna moneda
+extranjera llega al estudiante) en cualquier caso, vs el reprompt que degradaba. Kill-switch
+`CASE_USD_CURRENCY_ENFORCE`. Ver la sección "Backstop determinista de moneda USD (Issue #377)" en
+`CLAUDE.md`/`AGENTS.md`. El detalle histórico de abajo queda como contexto del diseño original.
 
 **What:** Extender `m1_grounding.py` con un validador determinista, puro y best-effort (gate
 `_is_ml_ds_classification`, logger-only, reprompt-once-then-DEGRADE — el patrón de #360) que escanee
