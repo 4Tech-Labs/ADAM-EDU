@@ -173,6 +173,7 @@ from case_generator.m1_grounding import (
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
     _bounded_diagnostic,
+    build_target_identity_warning,
     execute_m3_notebook,
     format_execution_failure_for_prompt,
     is_m3_quality_warning_blocking,
@@ -6539,6 +6540,12 @@ def _run_m3_notebook_execution(
             "Job marcado como fallido para evitar shipping de notebook roto."
         )
 
+    # #349 — declared contract target for the defense-in-depth identity cross-check.
+    # Empty ("") when there is no contract / a non-identifier name → the guard no-ops.
+    # This is the SAME value injected into the notebook as {contract_target_name} (#348),
+    # so in the happy path the modeled target_col equals it.
+    expected_target = _safe_contract_target_name(state.get("dataset_schema_required"))
+
     code_was_corrected = False
     for attempt in (1, 2):
         try:
@@ -6551,24 +6558,45 @@ def _run_m3_notebook_execution(
                 notebook_code=notebook_code,
                 dataset_rows=cast(list[dict[str, Any]], dataset_rows),
             )
-            if is_m3_quality_warning_blocking(result.quality_warning, result.metrics_summary):
+            # #349 — cross-check the modeled target against the declared contract target.
+            # The mismatch warning (blocking) takes precedence over the non-blocking
+            # AUC-out-of-range warning; a missing/invalid marker leaves metrics None, so
+            # build_target_identity_warning returns None and the marker warning surfaces
+            # unchanged. The AUC gate stays non-blocking.
+            identity_warning = build_target_identity_warning(result.metrics_summary, expected_target)
+            combined_warning = identity_warning or result.quality_warning
+            if is_m3_quality_warning_blocking(combined_warning, result.metrics_summary):
                 raise M3NotebookExecutionError(
                     "M3 notebook quality gate failed.",
-                    diagnostics=result.quality_warning,
+                    diagnostics=combined_warning,
                     kind="quality_gate",
                 )
             logger.info(
                 "[m3_notebook_executor] attempt=%s success warning=%s",
                 attempt,
-                result.quality_warning,
+                combined_warning,
                 extra={"case_id": case_id, "family": family},
+            )
+            # #349 — strip the internal identity signal (`target_col`) before persisting so
+            # the M4/M5 grounding block (build_computed_metrics_block) stays byte-identical
+            # for all ml_ds+clf (churn included). It is an executor-internal cross-check
+            # input, not a computed metric. Non-mutating copy (never del the frozen
+            # dataclass's dict). The cross-check above already consumed it.
+            metrics_for_state = (
+                None
+                if result.metrics_summary is None
+                else {
+                    key: value
+                    for key, value in result.metrics_summary.items()
+                    if key != "target_col"
+                }
             )
             update: dict[str, Any] = {
                 "current_agent": "m3_notebook_executor",
-                "m3_metrics_summary": result.metrics_summary,
+                "m3_metrics_summary": metrics_for_state,
             }
-            if result.quality_warning:
-                update["m3_quality_warning"] = result.quality_warning
+            if combined_warning:
+                update["m3_quality_warning"] = combined_warning
             if code_was_corrected:
                 update["m3_notebook_code"] = notebook_code
             return update
