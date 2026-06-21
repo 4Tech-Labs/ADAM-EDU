@@ -502,7 +502,7 @@ describe("TeacherCoursePage", () => {
         renderTeacherCoursePage();
 
         await screen.findByRole("heading", { name: /Syllabus de la asignatura/i });
-        fireEvent.change(screen.getByLabelText("Departamento que la ofrece"), {
+        fireEvent.change(screen.getByLabelText(/Departamento que la ofrece/i), {
             target: { value: "Escuela de Negocios Digitales" },
         });
         fireEvent.click(screen.getAllByRole("button", { name: /Guardar cambios|Guardar y publicar/i })[0]);
@@ -533,7 +533,7 @@ describe("TeacherCoursePage", () => {
         renderTeacherCoursePage();
 
         await screen.findByRole("heading", { name: /Syllabus de la asignatura/i });
-        fireEvent.change(screen.getByLabelText("Departamento que la ofrece"), {
+        fireEvent.change(screen.getByLabelText(/Departamento que la ofrece/i), {
             target: { value: "" },
         });
         fireEvent.click(screen.getAllByRole("button", { name: /Guardar cambios|Guardar y publicar/i })[0]);
@@ -686,7 +686,7 @@ describe("TeacherCoursePage", () => {
         renderTeacherCoursePage();
 
         await screen.findByRole("heading", { name: /Syllabus de la asignatura/i });
-        fireEvent.change(screen.getByLabelText("Departamento que la ofrece"), {
+        fireEvent.change(screen.getByLabelText(/Departamento que la ofrece/i), {
             target: { value: "Departamento en borrador" },
         });
 
@@ -703,7 +703,7 @@ describe("TeacherCoursePage", () => {
 
         fireEvent.click(screen.getByRole("tab", { name: /Syllabus/i }));
 
-        expect(await screen.findByLabelText("Departamento que la ofrece")).toHaveValue(
+        expect(await screen.findByLabelText(/Departamento que la ofrece/i)).toHaveValue(
             "Departamento en borrador",
         );
     });

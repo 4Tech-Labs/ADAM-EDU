@@ -49,6 +49,7 @@ import {
 } from "@/features/teacher-course/teacherCourseModel";
 import { copyToClipboard } from "@/shared/clipboard";
 import { useToast } from "@/shared/toast-context";
+import { PORTAL_CONTENT_SHELL_CLASSNAME } from "@/shared/ui/layout";
 
 const SYLLABUS_TAB_ID = "teacher-course-tab-syllabus";
 const CASOS_TAB_ID = "teacher-course-tab-casos";
@@ -104,7 +105,7 @@ function TeacherCourseLoadingState() {
     return (
         <TeacherLayout
             testId="teacher-course-loading"
-            contentClassName="mx-auto max-w-[1440px] px-6 py-8"
+            contentClassName={`${PORTAL_CONTENT_SHELL_CLASSNAME} py-8`}
         >
             <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
                 <aside className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
@@ -482,7 +483,7 @@ export function TeacherCoursePage() {
         return (
             <TeacherLayout
                 testId="teacher-course-page"
-                contentClassName="mx-auto max-w-[1440px] px-6 py-8"
+                contentClassName={`${PORTAL_CONTENT_SHELL_CLASSNAME} py-8`}
             >
                 <section
                     className="rounded-[24px] border border-red-200 bg-white p-8 shadow-sm"
@@ -527,7 +528,7 @@ export function TeacherCoursePage() {
     return (
         <TeacherLayout
             testId="teacher-course-page"
-            contentClassName="mx-auto max-w-[1440px] px-6 py-8"
+            contentClassName={`${PORTAL_CONTENT_SHELL_CLASSNAME} py-8`}
         >
             <div className="teacher-course-page grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
                 <aside className="h-fit rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm lg:sticky lg:top-[104px]">
@@ -683,6 +684,10 @@ export function TeacherCoursePage() {
                                 </span>
                             </div>
 
+                            <p className="text-[12px] text-slate-500">
+                                <span className="text-red-500 font-semibold">*</span> Campos obligatorios
+                            </p>
+
                             {formError ? (
                                 <div className="alert-strip alert-warn" role="alert">
                                     <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
@@ -716,22 +721,26 @@ export function TeacherCoursePage() {
                                     </div>
                                     <div>
                                         <label className="form-label" htmlFor="syllabus-department">
-                                            Departamento que la ofrece
+                                            Departamento que la ofrece{" "}
+                                            <span className="text-red-500" aria-hidden="true">*</span>
                                         </label>
                                         <input
                                             id="syllabus-department"
                                             className="form-input"
+                                            aria-required="true"
                                             value={draft.department}
                                             onChange={(event) => updateDraft("department", event.target.value)}
                                         />
                                     </div>
                                     <div>
                                         <label className="form-label" htmlFor="syllabus-knowledge-area">
-                                            Área de conocimiento
+                                            Área de conocimiento{" "}
+                                            <span className="text-red-500" aria-hidden="true">*</span>
                                         </label>
                                         <input
                                             id="syllabus-knowledge-area"
                                             className="form-input"
+                                            aria-required="true"
                                             value={draft.knowledge_area}
                                             onChange={(event) =>
                                                 updateDraft("knowledge_area", event.target.value)
@@ -740,11 +749,13 @@ export function TeacherCoursePage() {
                                     </div>
                                     <div>
                                         <label className="form-label" htmlFor="syllabus-nbc">
-                                            Núcleo Básico del Conocimiento (NBC)
+                                            Núcleo Básico del Conocimiento (NBC){" "}
+                                            <span className="text-red-500" aria-hidden="true">*</span>
                                         </label>
                                         <input
                                             id="syllabus-nbc"
                                             className="form-input"
+                                            aria-required="true"
                                             value={draft.nbc}
                                             onChange={(event) => updateDraft("nbc", event.target.value)}
                                         />
@@ -834,11 +845,13 @@ export function TeacherCoursePage() {
                             <SectionCard step={3} title="Descripción de la Asignatura" highlightAdam>
                                 <div>
                                     <label className="form-label" htmlFor="syllabus-course-description">
-                                        Descripción
+                                        Descripción{" "}
+                                        <span className="text-red-500" aria-hidden="true">*</span>
                                     </label>
                                     <textarea
                                         id="syllabus-course-description"
                                         className="form-input min-h-[220px]"
+                                        aria-required="true"
                                         value={draft.course_description}
                                         onChange={(event) =>
                                             updateDraft("course_description", event.target.value)
@@ -851,11 +864,13 @@ export function TeacherCoursePage() {
                                 <div className="space-y-5">
                                     <div>
                                         <label className="form-label" htmlFor="syllabus-general-objective">
-                                            Objetivo general
+                                            Objetivo general{" "}
+                                            <span className="text-red-500" aria-hidden="true">*</span>
                                         </label>
                                         <textarea
                                             id="syllabus-general-objective"
                                             className="form-input min-h-[140px]"
+                                            aria-required="true"
                                             value={draft.general_objective}
                                             onChange={(event) =>
                                                 updateDraft("general_objective", event.target.value)
@@ -971,11 +986,13 @@ export function TeacherCoursePage() {
                                                 <div className="grid gap-5 md:grid-cols-2">
                                                     <div>
                                                         <label className="form-label" htmlFor={`module-title-${moduleIndex}`}>
-                                                            Título del módulo
+                                                            Título del módulo{" "}
+                                                            <span className="text-red-500" aria-hidden="true">*</span>
                                                         </label>
                                                         <input
                                                             id={`module-title-${moduleIndex}`}
                                                             className="form-input"
+                                                            aria-required="true"
                                                             value={module.module_title}
                                                             onChange={(event) =>
                                                                 updateModuleField(
@@ -1007,11 +1024,13 @@ export function TeacherCoursePage() {
 
                                                 <div>
                                                     <label className="form-label" htmlFor={`module-summary-${moduleIndex}`}>
-                                                        Resumen del módulo
+                                                        Resumen del módulo{" "}
+                                                        <span className="text-red-500" aria-hidden="true">*</span>
                                                     </label>
                                                     <textarea
                                                         id={`module-summary-${moduleIndex}`}
                                                         className="form-input min-h-[120px]"
+                                                        aria-required="true"
                                                         value={module.module_summary}
                                                         onChange={(event) =>
                                                             updateModuleField(
