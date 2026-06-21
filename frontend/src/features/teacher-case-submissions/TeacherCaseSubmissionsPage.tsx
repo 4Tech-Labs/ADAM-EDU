@@ -14,6 +14,7 @@ import {
 import "@/features/teacher-course/teacherCoursePage.css";
 
 import { TeacherLayout } from "@/features/teacher-layout/TeacherLayout";
+import { PORTAL_CONTENT_SHELL_CLASSNAME } from "@/shared/ui/layout";
 import {
     formatTeacherCourseTimestamp,
     formatTeacherGradebookCellStatus,
@@ -85,7 +86,7 @@ export function TeacherCaseSubmissionsPage() {
         : null;
 
     return (
-        <TeacherLayout contentClassName="teacher-course-page mx-auto w-full max-w-6xl px-6 py-9" testId="teacher-case-submissions-page">
+        <TeacherLayout contentClassName={`teacher-course-page ${PORTAL_CONTENT_SHELL_CLASSNAME} py-9`} testId="teacher-case-submissions-page">
             <div className="space-y-6">
                 <section className="rounded-[24px] border border-slate-200 bg-white p-6 shadow-sm md:p-8">
                     <div className="teacher-gradebook-header">

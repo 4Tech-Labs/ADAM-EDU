@@ -442,17 +442,12 @@ export function validateTeacherCourseDraft(draft: TeacherCourseDraft): string | 
     if (!payload.department) return "Completa el departamento que ofrece la asignatura.";
     if (!payload.knowledge_area) return "Completa el área de conocimiento.";
     if (!payload.nbc) return "Completa el núcleo básico del conocimiento.";
-    if (!payload.version_label) return "Completa la versión del syllabus antes de guardar.";
-    if (!payload.academic_load) return "Completa la carga académica y logística del curso.";
     if (!payload.course_description) return "Completa la descripción de la asignatura.";
     if (!payload.general_objective) return "Completa el objetivo general de aprendizaje.";
-    if (!payload.didactic_strategy.methodological_perspective) {
-        return "Completa la perspectiva metodológica.";
+
+    if (payload.modules.length === 0) {
+        return "Agrega al menos un módulo con título y resumen.";
     }
-    if (!payload.didactic_strategy.pedagogical_modality) {
-        return "Completa la modalidad pedagógica.";
-    }
-    if (!payload.integrative_project) return "Completa el proyecto integrador.";
 
     for (const [index, module] of payload.modules.entries()) {
         if (!module.module_title || !module.module_summary) {
