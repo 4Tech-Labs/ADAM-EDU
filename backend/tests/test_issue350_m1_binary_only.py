@@ -86,8 +86,8 @@ def test_anchor_pins_binary_int_and_prohibits_multiclass() -> None:
     # dtype int 0/1 pin (espeja el bloque business) + prohibición explícita de multiclase.
     assert "`dtype` DEBE ser `int` binario (valores 0/1)" in assembled
     assert "target multiclase (más de dos clases)" in assembled
-    # framing binario positivo conservado.
-    assert "evento binario" in assembled
+    # framing binario positivo conservado (cláusula completa → discriminante, falla en revert).
+    assert "evento binario (ocurre / no ocurre)" in assembled
 
 
 def test_anchor_pregunta_eje_is_binary_decision() -> None:
