@@ -428,6 +428,30 @@ def test_detail_returns_grade_per_question(
     assert by_id["M2-Q2"]["grade"] is None
 
 
+def test_detail_view_survives_grade_load_failure(
+    client, db, seed_identity, seed_course, seed_course_membership, auth_headers_factory, monkeypatch
+) -> None:
+    """If loading per-question grades fails (e.g. case_question_grades migration not yet applied),
+    the submission-detail view must still return 200 WITHOUT grades — never 500."""
+    fx = _setup(db, seed_identity, seed_course, seed_course_membership, auth_headers_factory,
+                university_id=str(uuid.uuid4()))
+    db.commit()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated: relation case_question_grades does not exist")
+
+    monkeypatch.setattr("shared.teacher_reads._load_question_grades_by_qid", _boom)
+
+    resp = client.get(
+        f"/api/teacher/cases/{fx.assignment.id}/submissions/{fx.membership_id}", headers=fx.headers
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    questions = [q for module in payload["modules"] for q in module["questions"]]
+    assert questions  # the core view still renders the questions
+    assert all(q["grade"] is None for q in questions)  # degraded cleanly: no grades, no 500
+
+
 # --------------------------------------------------------------------------- IDOR (H10)
 
 

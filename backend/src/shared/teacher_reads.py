@@ -1000,14 +1000,30 @@ def get_teacher_case_submission_detail(
             detail="case_canonical_output_invalid",
         )
 
-    # Attach per-question grades AFTER truncation so they never affect the size cap
-    # and are never part of the binary-search payload. Teacher path only.
-    grades_by_qid = _load_question_grades_by_qid(
-        db,
-        assignment_id=assignment.id,
-        membership_id=membership_id,
-    )
-    modules = _inject_question_grades_into_modules(modules, grades_by_qid)
+    # Attach per-question grades AFTER truncation so they never affect the size cap and are never
+    # part of the binary-search payload. Teacher path only.
+    #
+    # BEST-EFFORT: per-question grades are supplementary data; the submission-detail view is a core,
+    # pre-existing read that worked before grading existed. A failure here — the case_question_grades
+    # migration not yet applied on this DB (deploy that ships code before migrations), the H12
+    # owner-assert aborting the migration, or any transient DB error — must NEVER 500 the whole view.
+    # Degrade to "no grades" + a structured warning, rolling back the aborted transaction first; this
+    # self-heals once the migration lands. Mirrors the codebase's best-effort supplementary pattern
+    # (CostCallbackHandler, partial-preview writes: "swallows all errors and must never fail a job").
+    try:
+        grades_by_qid = _load_question_grades_by_qid(
+            db,
+            assignment_id=assignment.id,
+            membership_id=membership_id,
+        )
+        modules = _inject_question_grades_into_modules(modules, grades_by_qid)
+    except Exception:
+        db.rollback()
+        _logger.warning(
+            "teacher_case_submission_detail_grade_injection_failed",
+            extra={"assignment_id": assignment.id, "membership_id": membership_id},
+            exc_info=True,
+        )
 
     return TeacherCaseSubmissionDetailResponse(
         is_truncated=is_truncated,
