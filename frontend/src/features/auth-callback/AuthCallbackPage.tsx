@@ -25,6 +25,8 @@ function parseActivationError(err: ApiError): string {
         case "membership_required":
         case "student_membership_required":
             return "No tienes una membresía activa para este curso.";
+        case "staff_account_cannot_enroll_as_student":
+            return "Tu cuenta es de docente o administrador; no puede unirse a un curso como estudiante.";
         case "auth_method_not_allowed":
             return "Microsoft no está habilitado para este curso.";
         default:

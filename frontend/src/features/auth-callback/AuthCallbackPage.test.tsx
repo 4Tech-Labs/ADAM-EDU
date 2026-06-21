@@ -362,6 +362,51 @@ describe("AuthCallbackPage", () => {
         );
     });
 
+    it("shows a staff-account rejection when a teacher tries to enroll as a student", async () => {
+        const teacherActor: AuthMeActor = {
+            auth_user_id: "teacher-staffblock",
+            profile: { id: "teacher-staffblock", full_name: "Docente" },
+            memberships: [
+                {
+                    id: "m-teacher",
+                    university_id: "uni1",
+                    role: "teacher",
+                    status: "active",
+                    must_rotate_password: false,
+                },
+            ],
+            must_rotate_password: false,
+            primary_role: "teacher",
+        };
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-access-staffblock",
+            auth_path: "password_sign_in",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(useAuth).mockReturnValue({ ...baseCtx, actor: teacherActor });
+        vi.mocked(api.auth.activateCourseAccessComplete).mockRejectedValue(
+            Object.assign(new Error("staff_account_cannot_enroll_as_student"), {
+                detail: "staff_account_cannot_enroll_as_student",
+                status: 403,
+            }),
+        );
+
+        render(
+            <MemoryRouter>
+                <AuthCallbackPage />
+            </MemoryRouter>,
+        );
+
+        await waitFor(() =>
+            expect(api.auth.activateCourseAccessComplete).toHaveBeenCalledWith("course-access-staffblock"),
+        );
+        await waitFor(() =>
+            expect(screen.getByText(/docente o administrador/i)).toBeTruthy(),
+        );
+    });
+
     it("redirects a teacher actor without activation context to /teacher/dashboard", async () => {
         vi.mocked(useAuth).mockReturnValue({
             ...baseCtx,

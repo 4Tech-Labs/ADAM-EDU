@@ -198,6 +198,49 @@ def _get_student_membership_id(actor: CurrentActor, university_id: str) -> str:
     )
 
 
+def _assert_not_staff_account(
+    db: Session,
+    *,
+    auth_user_id: str,
+    context: CourseAccessContext,
+    event: str,
+    course_access_token: str,
+) -> None:
+    """Reject a staff account from taking a student role via a course-access link.
+
+    GLOBAL scope: an account that holds an ACTIVE teacher or university_admin
+    membership at ANY university can never be granted a student membership. A staff
+    account is not a student account; without this guard a teacher who signs in
+    through the join flow gets a fresh ``role="student"`` membership minted on their
+    teacher account (the ``Membership`` unique key is per ``(user, university, role)``,
+    so dual roles are otherwise allowed). No-op for non-staff accounts.
+    """
+    staff_membership_id = db.scalar(
+        select(Membership.id).where(
+            Membership.user_id == auth_user_id,
+            Membership.role.in_(("teacher", "university_admin")),
+            Membership.status == "active",
+        )
+    )
+    if staff_membership_id is None:
+        return
+    audit_log(
+        event,
+        "denied",
+        auth_user_id=auth_user_id,
+        university_id=context.course.university_id,
+        course_id=context.course.id,
+        link_id=context.link.id,
+        token_hash_prefix=_course_access_hash_prefix(course_access_token),
+        http_status=status.HTTP_403_FORBIDDEN,
+        reason="staff_account_cannot_enroll_as_student",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="staff_account_cannot_enroll_as_student",
+    )
+
+
 def _ensure_course_capacity_available(
     db: Session,
     *,
@@ -330,6 +373,13 @@ def enroll_with_course_access(
         )
 
     ensure_email_domain_allowed(db, context.course.university_id, actor.email)
+    _assert_not_staff_account(
+        db,
+        auth_user_id=actor.auth_user_id,
+        context=context,
+        event="course_access.enroll",
+        course_access_token=request.course_access_token,
+    )
     membership_id = _get_student_membership_id(actor, context.course.university_id)
     try:
         _ensure_course_capacity_available(
@@ -487,6 +537,19 @@ def activate_course_access_password(
         auth_user = created_user_result.user
         created_new_user = created_user_result.created
 
+    # Defense in depth: `find_user_by_email` returned None above (so the 409
+    # existing-account branch did not fire), but `get_or_create_user_by_email`
+    # reuses an existing Supabase user when the email already exists. Without this
+    # check a staff account whose lookup briefly mis-resolved could still have a
+    # student role minted onto it here. No-op for a genuinely new account.
+    _assert_not_staff_account(
+        db,
+        auth_user_id=auth_user.id,
+        context=context,
+        event="course_access.activate_password",
+        course_access_token=request.course_access_token,
+    )
+
     try:
         ensure_profile(
             db,
@@ -606,6 +669,13 @@ def _activate_course_access_authenticated(
         )
 
     ensure_email_domain_allowed(db, context.course.university_id, normalized_email)
+    _assert_not_staff_account(
+        db,
+        auth_user_id=identity.auth_user_id,
+        context=context,
+        event=event,
+        course_access_token=course_access_token,
+    )
     if _activation_state_exists_for_user(
         db,
         auth_user_id=identity.auth_user_id,
