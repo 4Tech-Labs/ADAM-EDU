@@ -6,8 +6,10 @@ import type { ReactNode } from "react";
 type Role = MembershipSnapshot["role"];
 
 const ROLE_LOGIN_PATH: Record<Role, string> = {
-    teacher: "/teacher/login",
-    student: "/student/login",
+    // Teacher and student share the unified login at "/". Admin keeps its
+    // separate, discreet entry.
+    teacher: "/",
+    student: "/",
     university_admin: "/admin/login",
 };
 
@@ -21,7 +23,7 @@ interface Props {
  *
  * Redirect precedence (non-negotiable per Issue #33):
  *  1. must_rotate_password=true  → /admin/change-password (always wins)
- *  2. no session                 → role-specific login page
+ *  2. no session                 → login entry (teacher/student → /, admin → /admin/login)
  *  3. no active membership       → root landing
  */
 export function RequireRole({ role, children }: Props) {

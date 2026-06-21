@@ -16,12 +16,28 @@ const baseContext = {
     refreshActor: vi.fn(),
 };
 
-const teacherActor: AuthMeActor = {
-    auth_user_id: "teacher-1",
-    profile: { id: "profile-1", full_name: "Carlos Ruiz" },
+const adminActor: AuthMeActor = {
+    auth_user_id: "admin-1",
+    profile: { id: "profile-1", full_name: "Laura Gomez" },
     memberships: [
         {
             id: "membership-1",
+            university_id: "uni-1",
+            role: "university_admin",
+            status: "active",
+            must_rotate_password: false,
+        },
+    ],
+    must_rotate_password: false,
+    primary_role: "university_admin",
+};
+
+const teacherActor: AuthMeActor = {
+    auth_user_id: "teacher-1",
+    profile: { id: "profile-2", full_name: "Carlos Ruiz" },
+    memberships: [
+        {
+            id: "membership-2",
             university_id: "uni-1",
             role: "teacher",
             status: "active",
@@ -32,58 +48,22 @@ const teacherActor: AuthMeActor = {
     primary_role: "teacher",
 };
 
-const studentActor: AuthMeActor = {
-    auth_user_id: "student-1",
-    profile: { id: "profile-2", full_name: "Mateo Vargas" },
-    memberships: [
-        {
-            id: "membership-2",
-            university_id: "uni-1",
-            role: "student",
-            status: "active",
-            must_rotate_password: false,
-        },
-    ],
-    must_rotate_password: false,
-    primary_role: "student",
-};
-
-function renderTeacherGuestRoute() {
+// GuestOnlyRoute is now consumed only by the separate admin login entry.
+function renderAdminGuestRoute() {
     return render(
-        <MemoryRouter initialEntries={["/teacher/login"]}>
+        <MemoryRouter initialEntries={["/admin/login"]}>
             <Routes>
                 <Route
-                    path="/teacher/login"
+                    path="/admin/login"
                     element={
-                        <GuestOnlyRoute role="teacher">
-                            <div data-testid="guest-content">Teacher login</div>
+                        <GuestOnlyRoute role="university_admin">
+                            <div data-testid="guest-content">Admin login</div>
                         </GuestOnlyRoute>
                     }
                 />
                 <Route
-                    path="/teacher/dashboard"
-                    element={<div data-testid="teacher-dashboard-destination" />}
-                />
-            </Routes>
-        </MemoryRouter>,
-    );
-}
-
-function renderStudentGuestRoute() {
-    return render(
-        <MemoryRouter initialEntries={["/student/login"]}>
-            <Routes>
-                <Route
-                    path="/student/login"
-                    element={
-                        <GuestOnlyRoute role="student">
-                            <div data-testid="student-guest-content">Student login</div>
-                        </GuestOnlyRoute>
-                    }
-                />
-                <Route
-                    path="/student/dashboard"
-                    element={<div data-testid="student-dashboard-destination" />}
+                    path="/admin/dashboard"
+                    element={<div data-testid="admin-dashboard-destination" />}
                 />
             </Routes>
         </MemoryRouter>,
@@ -98,38 +78,38 @@ describe("GuestOnlyRoute", () => {
     it("renders children when there is no session", () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
-        renderTeacherGuestRoute();
+        renderAdminGuestRoute();
 
         expect(screen.getByTestId("guest-content")).toBeTruthy();
     });
 
-    it("redirects an authenticated teacher to /teacher/dashboard", async () => {
+    it("redirects an authenticated admin to /admin/dashboard", async () => {
+        vi.mocked(useAuth).mockReturnValue({
+            ...baseContext,
+            session: { access_token: "jwt" } as never,
+            actor: adminActor,
+        });
+
+        renderAdminGuestRoute();
+
+        expect(
+            await screen.findByTestId("admin-dashboard-destination"),
+        ).toBeTruthy();
+        expect(screen.queryByTestId("guest-content")).toBeNull();
+    });
+
+    it("renders children for an authenticated non-admin (handled by AdminLoginPage)", () => {
         vi.mocked(useAuth).mockReturnValue({
             ...baseContext,
             session: { access_token: "jwt" } as never,
             actor: teacherActor,
         });
 
-        renderTeacherGuestRoute();
+        renderAdminGuestRoute();
 
-        expect(
-            await screen.findByTestId("teacher-dashboard-destination"),
-        ).toBeTruthy();
-        expect(screen.queryByTestId("guest-content")).toBeNull();
-    });
-
-    it("redirects an authenticated student to /student/dashboard", async () => {
-        vi.mocked(useAuth).mockReturnValue({
-            ...baseContext,
-            session: { access_token: "jwt" } as never,
-            actor: studentActor,
-        });
-
-        renderStudentGuestRoute();
-
-        expect(
-            await screen.findByTestId("student-dashboard-destination"),
-        ).toBeTruthy();
-        expect(screen.queryByTestId("student-guest-content")).toBeNull();
+        // A teacher who lands on the admin guest route is NOT redirected here;
+        // AdminLoginPage then signs them out (no role leak).
+        expect(screen.getByTestId("guest-content")).toBeTruthy();
+        expect(screen.queryByTestId("admin-dashboard-destination")).toBeNull();
     });
 });

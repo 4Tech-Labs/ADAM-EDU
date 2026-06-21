@@ -133,10 +133,10 @@ Nunca lleves `SUPABASE_SERVICE_ROLE_KEY` al browser ni a ejemplos frontend.
 
 - `GET /health` responde `200`
 - `GET /api/auth/me` sin bearer responde `401`
-- `http://localhost:5173/app/` sin sesion muestra la landing con 3 entrypoints por rol
+- `http://localhost:5173/app/` sin sesion muestra el login unificado (correo + contraseña; el portal administrador queda como enlace discreto)
 - `http://localhost:5173/app/teacher` redirige a `http://localhost:5173/app/teacher/case-designer`
-- `http://localhost:5173/app/teacher/dashboard` sin sesion redirige a `http://localhost:5173/app/teacher/login`
-- `http://localhost:5173/app/teacher/case-designer` sin sesion redirige a `http://localhost:5173/app/teacher/login`
+- `http://localhost:5173/app/teacher/dashboard` sin sesion redirige a `http://localhost:5173/app/` (login unificado)
+- `http://localhost:5173/app/teacher/case-designer` sin sesion redirige a `http://localhost:5173/app/` (login unificado)
 - `http://localhost:5173/app/auth/callback` muestra spinner de "Completando inicio de sesion"
 
 ## Prerequisito manual para produccion
