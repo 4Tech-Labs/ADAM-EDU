@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/app/auth/useAuth";
+import { useEmailPasswordSignIn } from "@/app/auth/useEmailPasswordSignIn";
 import { api, ApiError } from "@/shared/api";
 import {
     clearActivationContext,
@@ -104,6 +105,18 @@ export function StudentJoinPage() {
     const [confirmPassword, setConfirmPassword] = useState("");
     const [submitting, setSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState<string | null>(null);
+
+    // Existing-account sign-in path on /join (course_access only). Reuses the
+    // shared hook so the non-enumeration error + /auth/callback resume stay
+    // byte-identical with AppLanding.
+    const [authMode, setAuthMode] = useState<"activate" | "signin">("activate");
+    const [signInNotice, setSignInNotice] = useState<string | null>(null);
+    const {
+        signIn: signInExisting,
+        submitting: signInSubmitting,
+        error: signInError,
+        setError: setSignInError,
+    } = useEmailPasswordSignIn();
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
@@ -266,6 +279,52 @@ export function StudentJoinPage() {
         });
     }
 
+    // Switch the course_access flow into the existing-account sign-in sub-form.
+    // `notice` carries the contextual message for the 409/201 auto-switch; a
+    // manual toggle passes null (a default prompt is shown instead).
+    function goToSignIn(notice: string | null) {
+        setAuthMode("signin");
+        setPassword("");
+        setConfirmPassword("");
+        setSubmitError(null);
+        setSignInError(null);
+        setSignInNotice(notice);
+    }
+
+    function goToActivate() {
+        setAuthMode("activate");
+        // Symmetric with goToSignIn: clear the shared password fields and errors so
+        // a password typed in one mode never bleeds into the other form.
+        setPassword("");
+        setConfirmPassword("");
+        setSubmitError(null);
+        setSignInError(null);
+        setSignInNotice(null);
+    }
+
+    async function handleSignInSubmit(event: React.FormEvent) {
+        event.preventDefault();
+        if (!joinContext || joinContext.token_kind !== "course_access") return;
+        // Defensive: disarm the local auto-enroll effect before the session lands
+        // so it cannot also POST /enroll during the post-sign-in render race. The
+        // canonical resume reached via /auth/callback (inside the hook) owns the
+        // enroll-or-complete decision.
+        autoEnrollAttemptedTokenRef.current = joinContext.course_access_token;
+        // Restamp the activation context from React state (joinContext survives the
+        // 5-min sessionStorage TTL) so the hook ALWAYS finds a live course_access
+        // context and reliably hands off to /auth/callback — even if the page sat
+        // open long enough for the stored token to expire. Without this, an expired
+        // context would make the hook skip navigation while the armed guard above
+        // blocks the auto-enroll fallback, stranding the user signed-in-but-not-enrolled.
+        saveActivationContext({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: joinContext.course_access_token,
+            auth_path: "password_sign_in",
+        });
+        await signInExisting(email, password);
+    }
+
     async function handlePasswordSubmit(event: React.FormEvent) {
         event.preventDefault();
         setSubmitError(null);
@@ -311,6 +370,14 @@ export function StudentJoinPage() {
             });
 
             if (error) {
+                if (joinContext.token_kind === "course_access" && !session) {
+                    // Activation returned OK but the immediate sign-in failed: either
+                    // 201 already_activated (existing account) or a transient failure
+                    // for a brand-new account. We cannot tell the two apart here, so
+                    // use neutral copy and offer in-place sign-in instead of a dead-end.
+                    goToSignIn("No pudimos iniciar tu sesión automáticamente. Ingresa tu contraseña para continuar.");
+                    return;
+                }
                 setSubmitError("No se pudo iniciar sesión después de la activación. Intenta de nuevo.");
                 return;
             }
@@ -318,7 +385,18 @@ export function StudentJoinPage() {
             clearActivationContext();
             navigate("/student/dashboard", { replace: true });
         } catch (err: unknown) {
-            setSubmitError(resolveSubmitError(err as ApiError, joinContext.token_kind));
+            const apiErr = err as ApiError;
+            if (
+                joinContext.token_kind === "course_access"
+                && !session
+                && apiErr?.detail === "account_exists_sign_in_required"
+            ) {
+                // Existing account, no live session: switch in-place to sign-in (email
+                // kept) instead of the dead-end "/" link, closing the re-typing loop.
+                goToSignIn("Ya tienes una cuenta. Ingresa tu contraseña para unirte al curso.");
+                return;
+            }
+            setSubmitError(resolveSubmitError(apiErr, joinContext.token_kind));
         } finally {
             setSubmitting(false);
         }
@@ -388,112 +466,183 @@ export function StudentJoinPage() {
                     )}
                 </div>
 
-                <div className="space-y-2">
-                    <label className="text-sm font-medium">Correo electrónico</label>
-                    {isInviteFlow ? (
-                        <input
-                            type="email"
-                            value={resolvedInvite?.email_masked ?? ""}
-                            disabled
-                            className="w-full rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground"
-                        />
-                    ) : (
-                        <input
-                            type="email"
-                            value={email}
-                            onChange={(event) => setEmail(event.target.value)}
-                            placeholder="tu.correo@universidad.edu"
-                            required
-                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                        />
-                    )}
-                </div>
+                {authMode === "signin" && !isInviteFlow && !session ? (
+                    <>
+                        <p className="text-center text-sm text-muted-foreground">
+                            {signInNotice ?? "Inicia sesión para unirte a este curso."}
+                        </p>
 
-                {allowMicrosoft && (
-                    <div className="space-y-2">
-                        <p className="text-sm font-medium">Continuar con Microsoft</p>
-                        <button
-                            type="button"
-                            onClick={() => void handleMicrosoftJoin()}
-                            className="w-full rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-                        >
-                            Continuar con Microsoft
-                        </button>
-                    </div>
-                )}
-
-                {allowMicrosoft && (
-                    <div className="relative">
-                        <div className="absolute inset-0 flex items-center">
-                            <span className="w-full border-t border-border" />
-                        </div>
-                        <div className="relative flex justify-center">
-                            <span className="bg-background px-2 text-xs text-muted-foreground">
-                                o crea una contraseña
-                            </span>
-                        </div>
-                    </div>
-                )}
-
-                <form onSubmit={(event) => void handlePasswordSubmit(event)} className="space-y-4">
-                    <div className="space-y-2">
-                        <label className="text-sm font-medium">
-                            Nombre completo <span className="text-danger">*</span>
-                        </label>
-                        <input
-                            type="text"
-                            value={fullName}
-                            onChange={(event) => setFullName(event.target.value)}
-                            placeholder="Nombre completo"
-                            required
-                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                        />
-                    </div>
-
-                    <div className="space-y-2">
-                        <label className="text-sm font-medium">Contraseña</label>
-                        <input
-                            type="password"
-                            value={password}
-                            onChange={(event) => setPassword(event.target.value)}
-                            required
-                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                        />
-                    </div>
-
-                    <div className="space-y-2">
-                        <label className="text-sm font-medium">Confirmar contraseña</label>
-                        <input
-                            type="password"
-                            value={confirmPassword}
-                            onChange={(event) => setConfirmPassword(event.target.value)}
-                            required
-                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                        />
-                    </div>
-
-                    {submitError && (
                         <div className="space-y-2">
-                            <p className="text-sm text-danger">{submitError}</p>
-                            {submitError.includes("Inicia sesión") && (
-                                <Link
-                                    to="/"
-                                    className="inline-flex text-sm font-medium underline hover:opacity-80"
-                                >
-                                    Iniciar sesión para continuar
-                                </Link>
+                            <label className="text-sm font-medium">Correo electrónico</label>
+                            <input
+                                type="email"
+                                value={email}
+                                onChange={(event) => setEmail(event.target.value)}
+                                placeholder="tu.correo@universidad.edu"
+                                required
+                                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            />
+                        </div>
+
+                        <form onSubmit={(event) => void handleSignInSubmit(event)} className="space-y-4">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Contraseña</label>
+                                <input
+                                    type="password"
+                                    value={password}
+                                    onChange={(event) => setPassword(event.target.value)}
+                                    required
+                                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                                />
+                            </div>
+
+                            {signInError && (
+                                <p className="text-sm text-danger">{signInError}</p>
+                            )}
+
+                            <button
+                                type="submit"
+                                disabled={signInSubmitting}
+                                className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                            >
+                                {signInSubmitting ? "Iniciando sesión..." : "Iniciar sesión"}
+                            </button>
+                        </form>
+
+                        <p className="text-center text-sm text-muted-foreground">
+                            ¿Eres nuevo?{" "}
+                            <button
+                                type="button"
+                                onClick={goToActivate}
+                                className="font-medium underline hover:opacity-80"
+                            >
+                                Crear cuenta
+                            </button>
+                        </p>
+                    </>
+                ) : (
+                    <>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Correo electrónico</label>
+                            {isInviteFlow ? (
+                                <input
+                                    type="email"
+                                    value={resolvedInvite?.email_masked ?? ""}
+                                    disabled
+                                    className="w-full rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground"
+                                />
+                            ) : (
+                                <input
+                                    type="email"
+                                    value={email}
+                                    onChange={(event) => setEmail(event.target.value)}
+                                    placeholder="tu.correo@universidad.edu"
+                                    required
+                                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                                />
                             )}
                         </div>
-                    )}
 
-                    <button
-                        type="submit"
-                        disabled={submitting}
-                        className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                    >
-                        {submitting ? "Activando..." : "Activar cuenta"}
-                    </button>
-                </form>
+                        {allowMicrosoft && (
+                            <div className="space-y-2">
+                                <p className="text-sm font-medium">Continuar con Microsoft</p>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleMicrosoftJoin()}
+                                    className="w-full rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                                >
+                                    Continuar con Microsoft
+                                </button>
+                            </div>
+                        )}
+
+                        {allowMicrosoft && (
+                            <div className="relative">
+                                <div className="absolute inset-0 flex items-center">
+                                    <span className="w-full border-t border-border" />
+                                </div>
+                                <div className="relative flex justify-center">
+                                    <span className="bg-background px-2 text-xs text-muted-foreground">
+                                        o crea una contraseña
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+
+                        <form onSubmit={(event) => void handlePasswordSubmit(event)} className="space-y-4">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">
+                                    Nombre completo <span className="text-danger">*</span>
+                                </label>
+                                <input
+                                    type="text"
+                                    value={fullName}
+                                    onChange={(event) => setFullName(event.target.value)}
+                                    placeholder="Nombre completo"
+                                    required
+                                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                                />
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Contraseña</label>
+                                <input
+                                    type="password"
+                                    value={password}
+                                    onChange={(event) => setPassword(event.target.value)}
+                                    required
+                                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                                />
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Confirmar contraseña</label>
+                                <input
+                                    type="password"
+                                    value={confirmPassword}
+                                    onChange={(event) => setConfirmPassword(event.target.value)}
+                                    required
+                                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                                />
+                            </div>
+
+                            {submitError && (
+                                <div className="space-y-2">
+                                    <p className="text-sm text-danger">{submitError}</p>
+                                    {submitError.includes("Inicia sesión") && (
+                                        <Link
+                                            to="/"
+                                            className="inline-flex text-sm font-medium underline hover:opacity-80"
+                                        >
+                                            Iniciar sesión para continuar
+                                        </Link>
+                                    )}
+                                </div>
+                            )}
+
+                            <button
+                                type="submit"
+                                disabled={submitting}
+                                className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                            >
+                                {submitting ? "Activando..." : "Activar cuenta"}
+                            </button>
+                        </form>
+
+                        {!isInviteFlow && !session && (
+                            <p className="text-center text-sm text-muted-foreground">
+                                ¿Ya tienes una cuenta?{" "}
+                                <button
+                                    type="button"
+                                    onClick={() => goToSignIn(null)}
+                                    className="font-medium underline hover:opacity-80"
+                                >
+                                    Inicia sesión
+                                </button>
+                            </p>
+                        )}
+                    </>
+                )}
             </div>
         </div>
     );
