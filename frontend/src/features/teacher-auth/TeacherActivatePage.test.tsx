@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act, createEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { TeacherActivatePage } from "./TeacherActivatePage";
 
@@ -348,5 +348,183 @@ describe("TeacherActivatePage", () => {
         expect(screen.queryByText(/Continuar con Microsoft/i)).toBeNull();
         expect(screen.queryByText(/Activar con Microsoft/i)).toBeNull();
         expect(screen.queryByText(/o usa contraseña/i)).toBeNull();
+    });
+
+    // 11. Toggle "Mostrar" cambia el input de contraseña a texto visible
+    it("toggles password visibility when 'Mostrar' is clicked", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "teacher_activate",
+            token_kind: "invite",
+            invite_token: "tok-abc",
+            role: "teacher",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingResolveResponse);
+
+        renderPage();
+
+        await waitFor(() => screen.getByText(/Activar cuenta/i));
+
+        const pwInput = document.getElementById("activate-password") as HTMLInputElement;
+        expect(pwInput.type).toBe("password");
+
+        const toggles = screen.getAllByRole("button", { name: /Mostrar/i });
+        expect(toggles[0].getAttribute("aria-pressed")).toBe("false");
+        await act(async () => {
+            fireEvent.click(toggles[0]);
+        });
+        expect(pwInput.type).toBe("text");
+
+        // Toggle back to hidden — label flips to "Ocultar" and type returns to password
+        const ocultar = screen.getAllByRole("button", { name: /Ocultar/i })[0];
+        expect(ocultar.getAttribute("aria-pressed")).toBe("true");
+        await act(async () => {
+            fireEvent.click(ocultar);
+        });
+        expect(pwInput.type).toBe("password");
+    });
+
+    // 12. Indicador "Las contraseñas coinciden" cuando ambas coinciden
+    it("shows the match indicator when both passwords are equal", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "teacher_activate",
+            token_kind: "invite",
+            invite_token: "tok-abc",
+            role: "teacher",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingResolveResponse);
+
+        renderPage();
+
+        await waitFor(() => screen.getByText(/Activar cuenta/i));
+
+        const allInputs = document.querySelectorAll("input[type=password]");
+        fireEvent.change(allInputs[0], { target: { value: "Password123!" } });
+        fireEvent.change(allInputs[1], { target: { value: "Password123!" } });
+
+        expect(screen.getByText(/Las contraseñas coinciden/i)).toBeTruthy();
+    });
+
+    // 13. Badge "Verificado" visible junto al correo enmascarado
+    it("renders the 'Verificado' badge next to the masked email", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "teacher_activate",
+            token_kind: "invite",
+            invite_token: "tok-abc",
+            role: "teacher",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingResolveResponse);
+
+        renderPage();
+
+        await waitFor(() => screen.getByDisplayValue("d****@uni.edu"));
+        expect(screen.getByText("Verificado")).toBeTruthy();
+    });
+
+    // 14. Aviso de Bloq Mayús aparece al escribir con CapsLock y se limpia al salir del campo
+    it("shows the caps-lock notice while typing with CapsLock on, clears on blur", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "teacher_activate",
+            token_kind: "invite",
+            invite_token: "tok-abc",
+            role: "teacher",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingResolveResponse);
+
+        renderPage();
+
+        await waitFor(() => screen.getByText(/Activar cuenta/i));
+
+        const pwInput = document.getElementById("activate-password") as HTMLInputElement;
+        // The KeyboardEvent constructor ignores an unknown `getModifierState`
+        // init key, so build the event and patch the method directly — React's
+        // synthetic event delegates getModifierState to the native event.
+        const capsEvent = createEvent.keyDown(pwInput, { key: "a" });
+        Object.defineProperty(capsEvent, "getModifierState", { value: () => true });
+        await act(async () => {
+            fireEvent(pwInput, capsEvent);
+        });
+        expect(screen.getByText(/Bloq Mayús está activado/i)).toBeTruthy();
+
+        await act(async () => {
+            fireEvent.blur(pwInput);
+        });
+        expect(screen.queryByText(/Bloq Mayús está activado/i)).toBeNull();
+    });
+
+    // 15. El indicador "coinciden" NO aparece cuando las contraseñas difieren (control negativo)
+    it("does not show the match indicator when passwords differ", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "teacher_activate",
+            token_kind: "invite",
+            invite_token: "tok-abc",
+            role: "teacher",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingResolveResponse);
+
+        renderPage();
+
+        await waitFor(() => screen.getByText(/Activar cuenta/i));
+
+        const allInputs = document.querySelectorAll("input[type=password]");
+        fireEvent.change(allInputs[0], { target: { value: "Password123!" } });
+        fireEvent.change(allInputs[1], { target: { value: "Different456!" } });
+
+        expect(screen.queryByText(/Las contraseñas coinciden/i)).toBeNull();
+    });
+
+    // 16. El panel de marca muestra el curso de la invitación
+    it("renders the course title from the invite in the brand panel", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "teacher_activate",
+            token_kind: "invite",
+            invite_token: "tok-abc",
+            role: "teacher",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingResolveResponse);
+
+        renderPage();
+
+        await waitFor(() => screen.getByText(/Activar cuenta/i));
+        expect(screen.getByText(/Analítica de Datos/)).toBeTruthy();
+    });
+
+    // 17. Editar la contraseña limpia un error de submit previo (evita contradecir al indicador)
+    it("clears a prior submit error when the password is edited", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "teacher_activate",
+            token_kind: "invite",
+            invite_token: "tok-abc",
+            role: "teacher",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveInvite).mockResolvedValue(pendingResolveResponse);
+
+        renderPage();
+
+        await waitFor(() => screen.getByText(/Activar cuenta/i));
+
+        const allInputs = document.querySelectorAll("input[type=password]");
+        fireEvent.change(allInputs[0], { target: { value: "password123" } });
+        fireEvent.change(allInputs[1], { target: { value: "different456" } });
+
+        const form = document.querySelector("form")!;
+        await act(async () => {
+            fireEvent.submit(form);
+        });
+        expect(screen.getByText(/Las contraseñas no coinciden/i)).toBeTruthy();
+
+        // Al corregir la confirmación, el error previo se limpia y no coexiste
+        // con el indicador verde de coincidencia.
+        await act(async () => {
+            fireEvent.change(allInputs[1], { target: { value: "password123" } });
+        });
+        expect(screen.queryByText(/Las contraseñas no coinciden/i)).toBeNull();
+        expect(screen.getByText(/Las contraseñas coinciden/i)).toBeTruthy();
     });
 });
