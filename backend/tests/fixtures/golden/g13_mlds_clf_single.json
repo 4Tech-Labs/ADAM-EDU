@@ -1,0 +1,77 @@
+{
+  "columns": [
+    {
+      "name": "period",
+      "type": "str",
+      "description": "Período temporal",
+      "range_min": null,
+      "range_max": null,
+      "nullable": false,
+      "trend": null,
+      "dependency": null
+    },
+    {
+      "name": "revenue",
+      "type": "float",
+      "description": "Ingresos del período",
+      "range_min": 170000.0,
+      "range_max": 230000.0,
+      "nullable": false,
+      "trend": "up",
+      "dependency": null
+    },
+    {
+      "name": "costs",
+      "type": "float",
+      "description": "Costos del período",
+      "range_min": 120000.0,
+      "range_max": 176000.0,
+      "nullable": false,
+      "trend": "up",
+      "dependency": null
+    },
+    {
+      "name": "margin_pct",
+      "type": "float",
+      "description": "Margen operativo %",
+      "range_min": 10.0,
+      "range_max": 35.0,
+      "nullable": false,
+      "trend": null,
+      "dependency": null
+    },
+    {
+      "name": "default_60d",
+      "type": "int",
+      "description": "Etiqueta binaria de clasificación: 0=activo, 1=en riesgo de churn",
+      "range_min": 0,
+      "range_max": 1,
+      "nullable": false,
+      "trend": null,
+      "dependency": {
+        "depends_on": "debt_to_income_ratio",
+        "relationship": "linear",
+        "noise_factor": 0.15
+      },
+      "is_domain_target": true
+    },
+    {
+      "name": "debt_to_income_ratio",
+      "type": "float",
+      "description": "driver de dominio debt_to_income_ratio",
+      "range_min": 0.0,
+      "range_max": 1.0,
+      "nullable": false,
+      "trend": null,
+      "dependency": null
+    }
+  ],
+  "n_rows": 600,
+  "time_granularity": "monthly",
+  "constraints": {
+    "revenue_annual_total": 120000000.0,
+    "tolerance_pct": 0.05,
+    "revenue_column": "revenue"
+  },
+  "reasoning_summary": "Fallback schema — schema_designer falló"
+}
