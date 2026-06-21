@@ -502,15 +502,15 @@ export function StudentJoinPage() {
     const isSignIn = authMode === "signin" && !isInviteFlow && !session;
 
     return (
-        <JoinShell>
-            <div className="flex w-full max-w-[1040px] flex-col overflow-hidden rounded-[26px] border border-[rgba(12,32,72,0.07)] bg-white shadow-[0_40px_90px_-38px_rgba(12,32,72,0.30),_0_2px_10px_rgba(0,0,0,0.04)] md:flex-row">
-                <JoinHeroPanel
-                    universityName={universityName}
-                    courseTitle={courseTitle}
-                    teacherName={teacherName}
-                />
+        <div className="flex min-h-screen w-full flex-col bg-white font-['Plus_Jakarta_Sans'] antialiased lg:flex-row">
+            <JoinHeroPanel
+                universityName={universityName}
+                courseTitle={courseTitle}
+                teacherName={teacherName}
+            />
 
-                <div className="flex w-full flex-col p-[36px_28px_32px] md:w-auto md:min-w-[340px] md:flex-[1.18_1_420px] md:p-[48px_48px_40px]">
+            <div className="flex w-full flex-col p-[40px_28px_36px] lg:flex-1 lg:justify-center lg:p-[64px_72px]">
+                <div className="mx-auto w-full max-w-[440px]">
                     {isSignIn ? (
                         <>
                             <h1 className="mb-2 font-['Source_Serif_4'] text-[27px] font-semibold tracking-[-0.4px] text-[#16181D]">
@@ -749,6 +749,6 @@ export function StudentJoinPage() {
                     )}
                 </div>
             </div>
-        </JoinShell>
+        </div>
     );
 }
