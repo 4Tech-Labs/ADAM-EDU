@@ -62,7 +62,7 @@ function BrandPanel({
 }) {
     return (
         <aside
-            className="relative flex flex-col overflow-hidden px-7 py-9 text-white sm:px-9 sm:py-11 lg:px-11 lg:py-12"
+            className="relative flex flex-col overflow-hidden px-7 py-10 text-white sm:px-10 sm:py-12 lg:px-12 lg:py-14"
             style={{ background: BRAND_GRADIENT }}
         >
             <div
@@ -101,7 +101,7 @@ function BrandPanel({
                     </span>
                 </div>
 
-                <div className="mt-9 sm:mt-12">
+                <div className="mt-9 sm:mt-12 lg:mt-[clamp(2.5rem,8vh,5rem)]">
                     <h2
                         className="text-[1.8rem] leading-[1.15] tracking-[-0.01em] text-white sm:text-[2.1rem]"
                         style={{ fontFamily: SERIF }}
@@ -141,9 +141,11 @@ function BrandPanel({
 }
 
 /**
- * Tarjeta de dos paneles centrada (réplica del mockup). El panel de marca va a
- * la izquierda en desktop y arriba en móvil; el contenido del formulario/estado
- * llega como `children`.
+ * Layout de dos paneles a **pantalla completa** (sangre completa, sin tarjeta
+ * flotante), igual que el login `AppLanding`: el panel de marca ocupa su columna
+ * de borde a borde a la izquierda en desktop y arriba en móvil; el formulario/
+ * estado (`children`) se centra dentro de su columna. La grilla llena el alto del
+ * viewport (`min-h-screen`) y crece si el contenido es más alto.
  */
 function AuthShell({
     universityName,
@@ -155,13 +157,15 @@ function AuthShell({
     children: React.ReactNode;
 }) {
     return (
-        <div className="flex min-h-screen w-full items-center justify-center bg-[#eef3fb] px-4 py-8 sm:py-12">
-            <div
-                className="grid w-full max-w-[1040px] overflow-hidden rounded-[26px] bg-white shadow-[0_30px_80px_-40px_rgba(2,28,74,0.45)] ring-1 ring-[#e6ecf6] lg:grid-cols-[5fr_7fr]"
-                style={{ animation: "fadeInUp 0.5s ease both" }}
-            >
-                <BrandPanel universityName={universityName} courseTitle={courseTitle} />
-                <div className="px-6 py-8 sm:px-10 sm:py-10 lg:px-12 lg:py-12">{children}</div>
+        <div className="grid min-h-screen w-full bg-white text-[#16181d] lg:grid-cols-[5fr_7fr]">
+            <BrandPanel universityName={universityName} courseTitle={courseTitle} />
+            <div className="flex items-center justify-center px-6 py-12 sm:px-10 lg:px-14">
+                <div
+                    className="w-full max-w-[460px]"
+                    style={{ animation: "fadeInUp 0.5s ease both" }}
+                >
+                    {children}
+                </div>
             </div>
         </div>
     );
