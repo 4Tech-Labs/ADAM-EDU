@@ -502,21 +502,21 @@ export function StudentJoinPage() {
     const isSignIn = authMode === "signin" && !isInviteFlow && !session;
 
     return (
-        <div className="flex min-h-screen w-full flex-col bg-white font-['Plus_Jakarta_Sans'] antialiased lg:flex-row">
+        <div className="flex min-h-screen w-full flex-col bg-white font-['Plus_Jakarta_Sans'] antialiased lg:h-screen lg:flex-row lg:overflow-hidden">
             <JoinHeroPanel
                 universityName={universityName}
                 courseTitle={courseTitle}
                 teacherName={teacherName}
             />
 
-            <div className="flex w-full flex-col p-[40px_28px_36px] lg:flex-1 lg:justify-center lg:p-[64px_72px]">
-                <div className="mx-auto w-full max-w-[440px]">
+            <div className="flex w-full flex-col p-[40px_28px_36px] lg:h-screen lg:flex-1 lg:overflow-y-auto lg:px-[72px] lg:py-[44px]">
+                <div className="mx-auto w-full max-w-[440px] lg:my-auto">
                     {isSignIn ? (
                         <>
                             <h1 className="mb-2 font-['Source_Serif_4'] text-[27px] font-semibold tracking-[-0.4px] text-[#16181D]">
                                 Inicia sesión
                             </h1>
-                            <p className="mb-7 text-[14.5px] leading-[1.5] text-[#667085]">
+                            <p className="mb-6 text-[14.5px] leading-[1.5] text-[#667085]">
                                 {signInNotice ?? "Inicia sesión para unirte a este curso."}
                             </p>
 
@@ -580,7 +580,7 @@ export function StudentJoinPage() {
                                 </button>
                             </form>
 
-                            <div className="mt-[22px] border-t border-[#EAEDF2] pt-[22px] text-center text-[13.5px] text-[#667085]">
+                            <div className="mt-[18px] border-t border-[#EAEDF2] pt-[18px] text-center text-[13.5px] text-[#667085]">
                                 ¿Eres nuevo?{" "}
                                 <button
                                     type="button"
@@ -596,7 +596,7 @@ export function StudentJoinPage() {
                             <h1 className="mb-2 font-['Source_Serif_4'] text-[27px] font-semibold tracking-[-0.4px] text-[#16181D]">
                                 Activa tu cuenta
                             </h1>
-                            <p className="mb-7 text-[14.5px] leading-[1.5] text-[#667085]">
+                            <p className="mb-6 text-[14.5px] leading-[1.5] text-[#667085]">
                                 Completa tus datos para unirte al curso. Solo te tomará un momento.
                             </p>
 
@@ -682,7 +682,7 @@ export function StudentJoinPage() {
                                     />
                                 </div>
 
-                                <div className="mb-[26px]">
+                                <div className="mb-[22px]">
                                     <PasswordField
                                         id="join-confirm"
                                         name="confirm_password"
@@ -734,7 +734,7 @@ export function StudentJoinPage() {
                             </form>
 
                             {!isInviteFlow && !session && (
-                                <div className="mt-[22px] border-t border-[#EAEDF2] pt-[22px] text-center text-[13.5px] text-[#667085]">
+                                <div className="mt-[18px] border-t border-[#EAEDF2] pt-[18px] text-center text-[13.5px] text-[#667085]">
                                     ¿Ya tienes una cuenta?{" "}
                                     <button
                                         type="button"
