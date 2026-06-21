@@ -187,6 +187,58 @@ describe("[8] inline table expansion", () => {
     });
 });
 
+// ── [9] HTML <br> row separators (issue #356) ──────────────────────────────────
+
+describe("[9] HTML <br> row separators", () => {
+    // The architect emits the whole table on a single line with literal <br> as row
+    // separators and zero real newlines — this is the exact shape from issue #356.
+    const ISSUE_EVIDENCE =
+        "### Exhibit 1 — Datos Financieros<br><br>" +
+        "| Métrica | Año N-1 | Año N |<br>" +
+        "|---|---|---|<br>" +
+        "| Ingresos | $40,000,000 | $45,000,000 |<br>" +
+        "| Costos | $30,000,000 | $33,000,000 |<br>" +
+        "| EBITDA | $10,000,000 | $12,000,000 |";
+
+    it("turns the issue-evidence single-line <br> table into a renderable GFM table", () => {
+        const result = sanitizeExhibitMarkdown(ISSUE_EVIDENCE);
+
+        expect(isRenderableAsTable(result)).toBe(true);
+        // heading separated from the table by a blank line, header row on its own line
+        expect(result).toContain(
+            "### Exhibit 1 — Datos Financieros\n\n| Métrica | Año N-1 | Año N |",
+        );
+        // header + separator + 3 data rows, each on its own line
+        expect(tableLines(result)).toHaveLength(5);
+        // no literal <br> survives
+        expect(result).not.toMatch(/<br/i);
+    });
+
+    it.each(["<br>", "<br/>", "<br />", "<BR>", "<br >", "<BR/>"])(
+        "normalizes the %s variant into a renderable table",
+        (br) => {
+            const input =
+                `| A | B |${br}|---|---|${br}| 1 | 2 |${br}| 3 | 4 |`;
+            const result = sanitizeExhibitMarkdown(input);
+
+            expect(isRenderableAsTable(result)).toBe(true);
+            expect(tableLines(result)).toHaveLength(4);
+            expect(result).not.toMatch(/<br/i);
+        },
+    );
+
+    it("is a no-op (byte-identical) for a well-formed table with no <br>", () => {
+        const input = [
+            "| Métrica | Valor |",
+            "|---|---|",
+            "| Ingresos | $25M |",
+            "| EBITDA | $7M |",
+        ].join("\n");
+
+        expect(sanitizeExhibitMarkdown(input)).toBe(input);
+    });
+});
+
 // ── Regression guards ──────────────────────────────────────────────────────────
 
 describe("regression: blank lines that must be preserved", () => {

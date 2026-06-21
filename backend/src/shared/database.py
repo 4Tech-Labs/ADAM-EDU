@@ -73,6 +73,15 @@ class Settings(BaseSettings):
     # env-only revert; no redeploy). The currency LABEL of `business_cost_matrix` stays coerced by
     # #370 regardless of this flag.
     case_usd_currency_enforce: bool = True
+    # Normalize M1 Exhibit tables that the architect emits with literal `<br>` row separators
+    # and zero real newlines (Issue #356). When true, `normalize_exhibit_markdown` converts
+    # `<br>`/`<br/>`/`<br />` → real newlines on the three `doc1_anexo_*` fields at the
+    # `case_architect` return, so the persisted canonical_output is a real multi-line GFM table
+    # (frontend renders it; `m1_grounding.splitlines()` parses it). Byte-identical for any exhibit
+    # without `<br>`. Kill-switch: set M1_EXHIBIT_NORMALIZE=false to passthrough exactly (instant
+    # env-only revert; no redeploy). The frontend `sanitizeExhibitMarkdown` repairs existing cases
+    # regardless of this flag.
+    m1_exhibit_normalize: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

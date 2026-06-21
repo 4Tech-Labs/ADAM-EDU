@@ -483,6 +483,35 @@ def sanitize_markdown(text: str) -> str:
     return text
 
 
+_EXHIBIT_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+
+
+def normalize_exhibit_markdown(text: str) -> str:
+    """Convert literal ``<br>`` row separators to real newlines in M1 Exhibit tables (#356).
+
+    The architect emits ``CaseArchitectOutput`` as *structured output*, where multi-line
+    markdown is frequently written with literal ``<br>`` as row separators and ZERO real
+    newlines (a well-known LLM quirk for string fields). That breaks BOTH the frontend GFM
+    table parser (it collapses to one line → renders raw) and the backend ``.splitlines()``
+    anchor parser in ``m1_grounding``. This pure, deterministic relabel converts ``<br>`` /
+    ``<br/>`` / ``<br />`` (any case, optional inner spaces) to ``\\n``. Scoped to the three
+    ``doc1_anexo_*`` fields only — NOT the shared ``sanitize_markdown`` blast radius. A string
+    without ``<br>`` is byte-identical.
+    """
+    if not text:
+        return ""
+    normalized = _EXHIBIT_BR_RE.sub("\n", text)
+    if normalized == text:
+        # No <br> present → return the original verbatim. Strictly additive: this helper
+        # never touches an exhibit that already uses real newlines.
+        return text
+    # Only when a <br> was actually converted: collapse the 3+ newline runs a <br><br><br>…
+    # heading gap can produce (matches the repo's sanitize_untrusted_text newline-collapse
+    # convention). A single blank line between a heading and the table (\n\n) is the
+    # GFM-correct shape and is preserved.
+    return re.sub(r"\n{3,}", "\n\n", normalized)
+
+
 def _extract_text(response) -> str:
     """Extrae texto limpio del response de Gemini 2.5 o 3.x.
 
@@ -1044,9 +1073,18 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
                 _enforce_usd_currency_field(pregunta_eje) if pregunta_eje else pregunta_eje
             ),
             "doc1_instrucciones": _enforce_usd_currency_field(result.instrucciones_estudiante),
-            "doc1_anexo_financiero": _enforce_usd_currency_field(result.anexo_financiero),
-            "doc1_anexo_operativo": _enforce_usd_currency_field(anexo_operativo_final),
-            "doc1_anexo_stakeholders": _enforce_usd_currency_field(result.anexo_stakeholders),
+            # #356 — normalize <br> row separators → real newlines BEFORE the USD relabel,
+            # so both the frontend GFM parser and the backend .splitlines() anchor parser see
+            # a real multi-line table (the architect structured output bypasses sanitize_markdown).
+            "doc1_anexo_financiero": _enforce_usd_currency_field(
+                _normalize_exhibit_field(result.anexo_financiero)
+            ),
+            "doc1_anexo_operativo": _enforce_usd_currency_field(
+                _normalize_exhibit_field(anexo_operativo_final)
+            ),
+            "doc1_anexo_stakeholders": _enforce_usd_currency_field(
+                _normalize_exhibit_field(result.anexo_stakeholders)
+            ),
             # downstream nodes leen state["dataset_schema_required"] y degradan
             # gracefully al comportamiento previo si es None.
             "dataset_schema_required": contract_dict,
@@ -1354,6 +1392,13 @@ def _enforce_usd_currency_field(text: str) -> str:
     if not settings.case_usd_currency_enforce:
         return text
     return enforce_usd_currency(text)
+
+
+def _normalize_exhibit_field(text: str) -> str:
+    """Normalize ``<br>`` → real newlines in one M1 exhibit field (kill-switch gated, #356)."""
+    if not settings.m1_exhibit_normalize:
+        return text
+    return normalize_exhibit_markdown(text)
 
 
 # ─────────────────────────────────────────────────────────
