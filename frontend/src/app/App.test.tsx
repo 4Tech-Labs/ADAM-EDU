@@ -178,10 +178,21 @@ describe("App admin shell layout", () => {
         vi.mocked(useAuth).mockReturnValue(baseContext);
 
         renderWithProviders(<App />, {
-            initialEntries: ["/join"],
+            initialEntries: ["/auth/callback"],
         });
 
         expect(screen.getByTestId("site-header")).toBeTruthy();
+    });
+
+    it("does not render the global SiteHeader on /join (full-bleed course invitation)", async () => {
+        vi.mocked(useAuth).mockReturnValue(baseContext);
+
+        renderWithProviders(<App />, {
+            initialEntries: ["/join"],
+        });
+
+        expect(await screen.findByTestId("student-join-page")).toBeTruthy();
+        expect(screen.queryByTestId("site-header")).toBeNull();
     });
 
     it("does not render the global SiteHeader on the public landing route", async () => {
