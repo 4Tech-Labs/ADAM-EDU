@@ -49,6 +49,7 @@ import {
 } from "@/features/teacher-course/teacherCourseModel";
 import { copyToClipboard } from "@/shared/clipboard";
 import { useToast } from "@/shared/toast-context";
+import { PORTAL_CONTENT_SHELL_CLASSNAME } from "@/shared/ui/layout";
 
 const SYLLABUS_TAB_ID = "teacher-course-tab-syllabus";
 const CASOS_TAB_ID = "teacher-course-tab-casos";
@@ -104,7 +105,7 @@ function TeacherCourseLoadingState() {
     return (
         <TeacherLayout
             testId="teacher-course-loading"
-            contentClassName="mx-auto max-w-[1440px] px-6 py-8"
+            contentClassName={`${PORTAL_CONTENT_SHELL_CLASSNAME} py-8`}
         >
             <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
                 <aside className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
@@ -482,7 +483,7 @@ export function TeacherCoursePage() {
         return (
             <TeacherLayout
                 testId="teacher-course-page"
-                contentClassName="mx-auto max-w-[1440px] px-6 py-8"
+                contentClassName={`${PORTAL_CONTENT_SHELL_CLASSNAME} py-8`}
             >
                 <section
                     className="rounded-[24px] border border-red-200 bg-white p-8 shadow-sm"
@@ -527,7 +528,7 @@ export function TeacherCoursePage() {
     return (
         <TeacherLayout
             testId="teacher-course-page"
-            contentClassName="mx-auto max-w-[1440px] px-6 py-8"
+            contentClassName={`${PORTAL_CONTENT_SHELL_CLASSNAME} py-8`}
         >
             <div className="teacher-course-page grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
                 <aside className="h-fit rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm lg:sticky lg:top-[104px]">
