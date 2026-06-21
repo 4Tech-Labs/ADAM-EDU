@@ -638,15 +638,17 @@ _M4_QUESTIONS_CONTEXT: dict[str, object] = {
 }
 
 # Jerga DS que una audiencia gerencial NO debe ver en el render de las preguntas.
-_QUESTIONS_DS_JARGON = (
-    "auc",
+# Multi-char (substring seguro) vs corto-palabra: 'auc'/'umbral'/'roc' como substring crudo
+# darían falso positivo con cauce/penumbral/proceso, así que se chequean con frontera de palabra
+# (igual que el `\b(roc|auc)\b` del test live).
+_QUESTIONS_DS_JARGON_SUBSTR = (
     "drift",
     "reentrena",
-    "umbral",
     "a/b testing",
     "architect engineer",
     "log-odds",
 )
+_QUESTIONS_DS_JARGON_WORD = ("auc", "umbral", "roc")
 
 
 def _normalize_ws(text: str) -> str:
@@ -659,10 +661,9 @@ def test_m4_questions_business_prompt_no_ds_jargon() -> None:
     rendered = _normalize_ws(
         M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION.format(**_M4_QUESTIONS_CONTEXT).lower()
     )
-    leaked = [t for t in _QUESTIONS_DS_JARGON if t in rendered]
+    leaked = [t for t in _QUESTIONS_DS_JARGON_SUBSTR if t in rendered]
+    leaked += [t for t in _QUESTIONS_DS_JARGON_WORD if _re.search(rf"\b{t}\b", rendered)]
     assert not leaked, f"business questions render leaked DS jargon: {leaked}"
-    # 'roc' vía word-boundary: el substring crudo daría falso positivo con 'proceso'/'producto'.
-    assert not _re.search(r"\broc\b", rendered), "business questions render leaked 'roc'"
 
 
 def test_m4_questions_business_prompt_keeps_priorization_framing() -> None:

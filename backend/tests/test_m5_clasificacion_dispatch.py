@@ -414,15 +414,16 @@ _M5_QUESTIONS_CONTEXT: dict[str, object] = {
     "output_language": "Spanish",
 }
 
-_QUESTIONS_DS_JARGON = (
-    "auc",
+# Multi-char (substring seguro) vs corto-palabra: 'auc'/'umbral'/'roc' como substring crudo
+# darían falso positivo con cauce/penumbral/proceso → frontera de palabra (igual que el live).
+_QUESTIONS_DS_JARGON_SUBSTR = (
     "drift",
     "reentrena",
-    "umbral",
     "a/b testing",
     "architect engineer",
     "log-odds",
 )
+_QUESTIONS_DS_JARGON_WORD = ("auc", "umbral", "roc")
 
 
 def _normalize_ws(text: str) -> str:
@@ -509,9 +510,9 @@ def test_m5_questions_business_prompt_no_ds_jargon() -> None:
     rendered = _normalize_ws(
         M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION.format(**_M5_QUESTIONS_CONTEXT).lower()
     )
-    leaked = [t for t in _QUESTIONS_DS_JARGON if t in rendered]
+    leaked = [t for t in _QUESTIONS_DS_JARGON_SUBSTR if t in rendered]
+    leaked += [t for t in _QUESTIONS_DS_JARGON_WORD if _re.search(rf"\b{t}\b", rendered)]
     assert not leaked, f"business M5 questions render leaked DS jargon: {leaked}"
-    assert not _re.search(r"\broc\b", rendered), "business M5 questions render leaked 'roc'"
 
 
 def test_m5_questions_business_prompt_keeps_priorization_framing() -> None:
