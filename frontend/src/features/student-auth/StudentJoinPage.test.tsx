@@ -262,7 +262,7 @@ describe("StudentJoinPage", () => {
         fireEvent.change(screen.getByPlaceholderText(/tu.correo@universidad.edu/i), {
             target: { value: "student@universidad.edu" },
         });
-        fireEvent.change(screen.getByPlaceholderText(/Nombre completo/i), {
+        fireEvent.change(screen.getByPlaceholderText(/Nombre y apellidos/i), {
             target: { value: "Estudiante Test" },
         });
         const passwordInputs = document.querySelectorAll("input[type=password]");
@@ -325,7 +325,7 @@ describe("StudentJoinPage", () => {
         fireEvent.change(screen.getByPlaceholderText(/tu.correo@universidad.edu/i), {
             target: { value: "student@universidad.edu" },
         });
-        fireEvent.change(screen.getByPlaceholderText(/Nombre completo/i), {
+        fireEvent.change(screen.getByPlaceholderText(/Nombre y apellidos/i), {
             target: { value: "Estudiante Test" },
         });
         const passwordInputs = document.querySelectorAll("input[type=password]");
@@ -519,7 +519,7 @@ describe("StudentJoinPage", () => {
         fireEvent.change(screen.getByPlaceholderText(/tu.correo@universidad.edu/i), {
             target: { value: "ya@universidad.edu" },
         });
-        fireEvent.change(screen.getByPlaceholderText(/Nombre completo/i), {
+        fireEvent.change(screen.getByPlaceholderText(/Nombre y apellidos/i), {
             target: { value: "Estudiante Test" },
         });
         const passwordInputs = document.querySelectorAll("input[type=password]");
@@ -736,7 +736,7 @@ describe("StudentJoinPage", () => {
         fireEvent.click(screen.getByRole("button", { name: "Crear cuenta" }));
 
         // Activation form restored: full name + two password fields, both cleared.
-        expect(screen.getByPlaceholderText(/Nombre completo/i)).toBeTruthy();
+        expect(screen.getByPlaceholderText(/Nombre y apellidos/i)).toBeTruthy();
         const passwordInputs = document.querySelectorAll("input[type=password]");
         expect(passwordInputs.length).toBe(2);
         expect((passwordInputs[0] as HTMLInputElement).value).toBe("");
@@ -884,5 +884,99 @@ describe("StudentJoinPage", () => {
 
         await screen.findByPlaceholderText("tu.correo@universidad.edu");
         expect(api.auth.enrollWithCourseAccess).not.toHaveBeenCalled();
+    });
+
+    it("renders the course details in the invitation hero panel", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-hero",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+
+        renderPage();
+
+        await waitFor(() => {
+            expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
+        });
+        expect(screen.getByText("Universidad Demo")).toBeTruthy();
+        expect(screen.getByText("Gerencia Estrategica")).toBeTruthy();
+        expect(screen.getByText("Julio Paz")).toBeTruthy();
+        expect(screen.getByText(/invitación al curso/i)).toBeTruthy();
+    });
+
+    it("keeps both password fields hidden by default and reveals one on toggle", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-toggle-pw",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+
+        renderPage();
+
+        await waitFor(() => {
+            expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
+        });
+
+        // Default: both password fields hidden (type=password); toggles are buttons.
+        expect(document.querySelectorAll("input[type=password]").length).toBe(2);
+
+        const [firstToggle] = screen.getAllByRole("button", { name: /mostrar contraseña/i });
+        fireEvent.click(firstToggle);
+
+        // One field revealed (type=text) → only the confirm stays type=password.
+        expect(document.querySelectorAll("input[type=password]").length).toBe(1);
+        expect(screen.getAllByRole("button", { name: /ocultar contraseña/i }).length).toBe(1);
+    });
+
+    it("shows the password strength meter only after the user types", async () => {
+        vi.mocked(readActivationContext).mockReturnValue({
+            flow: "student_join_course_access",
+            token_kind: "course_access",
+            course_access_token: "course-tok-strength",
+            expires_at: Date.now() + 300000,
+        });
+        vi.mocked(api.auth.resolveCourseAccess).mockResolvedValue({
+            course_id: "course-1",
+            course_title: "Gerencia Estrategica",
+            university_name: "Universidad Demo",
+            teacher_display_name: "Julio Paz",
+            course_status: "active",
+            link_status: "active",
+            allowed_auth_methods: ["password"],
+        });
+
+        renderPage();
+
+        await waitFor(() => {
+            expect(screen.getByText(/Activar cuenta/i)).toBeTruthy();
+        });
+
+        expect(screen.queryByText(/^(Débil|Aceptable|Buena|Fuerte)$/)).toBeNull();
+
+        fireEvent.change(document.querySelectorAll("input[type=password]")[0], {
+            target: { value: "Str0ng!Pass99" },
+        });
+
+        expect(screen.getByText("Fuerte")).toBeTruthy();
     });
 });

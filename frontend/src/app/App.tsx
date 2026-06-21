@@ -100,11 +100,14 @@ function App() {
     // Pantalla de activación docente: experiencia de marca autocontenida (panel
     // de dos columnas), sin la barra azul global — igual que el login (landing).
     const isTeacherActivateRoute = location.pathname === "/teacher/activate";
+    // /join se renderiza a sangre completa (tarjeta de invitación con su propio fondo
+    // degradado), igual que la landing pública: sin la barra azul global.
+    const isJoinRoute = location.pathname === "/join";
 
     return (
         <ToastProvider>
         <div className="flex min-h-screen flex-col bg-bg-page font-sans type-body">
-            {!isLandingRoute && !isAdminDashboardRoute && !isTeacherShellRoute && !isStudentShellRoute && !isTeacherActivateRoute && <SiteHeader />}
+            {!isLandingRoute && !isAdminDashboardRoute && !isTeacherShellRoute && !isStudentShellRoute && !isTeacherActivateRoute && !isJoinRoute && <SiteHeader />}
 
             <main className="flex-1">
                 <Suspense fallback={<RouteFallback />}>
