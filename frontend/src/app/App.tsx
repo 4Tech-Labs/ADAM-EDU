@@ -43,19 +43,9 @@ const AuthCallbackPage = lazy(() =>
         default: module.AuthCallbackPage,
     })),
 );
-const TeacherLoginPage = lazy(() =>
-    import("@/features/teacher-auth/TeacherLoginPage").then((module) => ({
-        default: module.TeacherLoginPage,
-    })),
-);
 const TeacherActivatePage = lazy(() =>
     import("@/features/teacher-auth/TeacherActivatePage").then((module) => ({
         default: module.TeacherActivatePage,
-    })),
-);
-const StudentLoginPage = lazy(() =>
-    import("@/features/student-auth/StudentLoginPage").then((module) => ({
-        default: module.StudentLoginPage,
     })),
 );
 const StudentJoinPage = lazy(() =>
@@ -124,14 +114,6 @@ function App() {
                     <Routes>
                         <Route path="/" element={<RootRedirect />} />
 
-                        <Route
-                            path="/teacher/login"
-                            element={
-                                <GuestOnlyRoute role="teacher">
-                                    <TeacherLoginPage />
-                                </GuestOnlyRoute>
-                            }
-                        />
                         <Route path="/teacher/activate" element={<TeacherActivatePage />} />
                         <Route
                             path="/teacher/dashboard"
@@ -183,14 +165,6 @@ function App() {
                             }
                         />
 
-                        <Route
-                            path="/student/login"
-                            element={
-                                <GuestOnlyRoute role="student">
-                                    <StudentLoginPage />
-                                </GuestOnlyRoute>
-                            }
-                        />
                         <Route path="/join" element={<StudentJoinPage />} />
                         <Route
                             path="/student/dashboard"
