@@ -15,13 +15,13 @@ export function JoinHeroPanel({ universityName, courseTitle, teacherName }: Join
     const teacherInitial = teacherName?.trim().charAt(0).toUpperCase() ?? "";
 
     return (
-        <div className="relative flex w-full flex-col overflow-hidden p-[36px_28px] text-[#EDE7D6] bg-[linear-gradient(158deg,#0B57B8_0%,#023C88_55%,#04275C_100%)] md:w-auto md:min-w-[320px] md:flex-[1_1_380px] md:p-[48px_46px]">
+        <div className="relative flex w-full flex-col overflow-hidden p-[40px_32px] text-[#EDE7D6] bg-[linear-gradient(158deg,#0B57B8_0%,#023C88_55%,#04275C_100%)] lg:w-[44%] lg:min-w-[400px] lg:max-w-[600px] lg:p-[60px_56px]">
             {/* Decorative gold rings + glow */}
             <div aria-hidden className="pointer-events-none absolute -right-[90px] -top-[90px] h-[280px] w-[280px] rounded-full border border-[rgba(216,184,115,0.22)]" />
             <div aria-hidden className="pointer-events-none absolute -right-[50px] -top-[50px] h-[180px] w-[180px] rounded-full border border-[rgba(216,184,115,0.14)]" />
             <div aria-hidden className="pointer-events-none absolute -bottom-[120px] -left-[80px] h-[300px] w-[300px] rounded-full bg-[radial-gradient(circle,rgba(216,184,115,0.08)_0%,rgba(216,184,115,0)_70%)]" />
 
-            <div className="relative flex flex-1 flex-col md:min-h-[440px]">
+            <div className="relative flex flex-1 flex-col gap-10 md:min-h-[440px] lg:gap-0">
                 <div className="flex items-center gap-3">
                     <div className="flex h-[42px] w-[42px] items-center justify-center rounded-[12px] border border-[rgba(216,184,115,0.3)] bg-[rgba(216,184,115,0.14)]">
                         <GradCapIcon />
