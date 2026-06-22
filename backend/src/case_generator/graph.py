@@ -1147,6 +1147,17 @@ _M1_QUESTIONS_OPTION_REPROMPT_HEADER = (
     "NUNCA recomiendes una opción inexistente ni ausente del enunciado. Incoherencias "
     "detectadas:\n"
 )
+_M4_QUESTIONS_OPTION_REPROMPT_HEADER = (
+    "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE OPCIONES (Módulo 4)\n"
+    "Algunas preguntas recomiendan en `solucion_esperada` una opción estratégica que NO "
+    "existe en el caso, o que el propio enunciado de esa pregunta no presenta al estudiante. "
+    "El caso define un conjunto cerrado de opciones (A, B, C). Regenera EXACTAMENTE 3 "
+    "preguntas con el MISMO schema y los MISMOS `numero` (1, 2, 3): el enunciado de cada "
+    "pregunta de decisión DEBE presentar las opciones (A/B/C) entre las que el estudiante "
+    "elige, y `solucion_esperada` SOLO puede recomendar una de las opciones presentadas en "
+    "su enunciado, nombrándola por su letra. NUNCA recomiendes una opción inexistente ni "
+    "ausente del enunciado. Incoherencias detectadas:\n"
+)
 
 
 def _build_m1_exhibit_anexos(state: ADAMState) -> dict[str, str]:
@@ -1339,6 +1350,106 @@ def _apply_m1_questions_option_coherence(
             "[case_questions] validador coherencia de opciones M1 falló (best-effort): %s",
             exc,
             extra={"node": "case_questions", "case_id": state.get("case_id")},
+        )
+        return preguntas_dict
+
+
+# ─────────────────────────────────────────────────────────
+# M4 (Impacto) question option coherence — reuses the M1 validator with the FLOOR
+# universe {A,B,C} (M4 has no dilema_brief). See m1_grounding.validate_question_option_coherence.
+# ─────────────────────────────────────────────────────────
+_M4_VIOLATION_CODES = (
+    ("OPTION_NONEXISTENT", "option_nonexistent"),
+    ("OPTION_NOT_PRESENTED", "option_not_presented"),
+)
+
+
+def _m4_violation_types(violations: list[str]) -> list[str]:
+    """Enumerated short codes for structured logging — never the raw message (no PII)."""
+    codes: list[str] = []
+    for violation in violations:
+        for prefix, code in _M4_VIOLATION_CODES:
+            if violation.startswith(prefix) and code not in codes:
+                codes.append(code)
+    return codes
+
+
+def _apply_m4_questions_option_coherence(
+    *, llm: Any, prompt: str, state: ADAMState, preguntas_dict: list[dict]
+) -> list[dict]:
+    """Validate + reprompt-once-then-DEGRADE the M4 (Impacto) question option coherence.
+
+    Reuses the M1 option validator with the FLOOR universe (M4 has no ``dilema_brief``): a
+    ``solucion_esperada`` may only recommend an option the case defines (A/B/C) and that its
+    own ``enunciado`` presents. Gated to the classification family for BOTH profiles
+    (business + ml_ds) behind the ``m4_question_coherence`` kill-switch; a byte-identical
+    no-op otherwise. On a violation it reprompts ONCE (one Flash call); the corrected set is
+    accepted ONLY if it preserves the question count AND the ``numero`` sequence (the grading
+    key ``M4-Q{numero}`` in shared.student_reads/teacher_reads) AND is now coherent —
+    otherwise it degrades to the pass-1 questions. ``GeneradorPreguntasOutput`` (unlike M1's
+    schema) does NOT enforce count/numbering, so the identity guard is load-bearing.
+    Best-effort: ANY throw (including a reprompt ``RuntimeError``) degrades to pass-1. Never
+    raises, so the job always completes.
+
+    Known coverage limit (same trade-off as M1, zero false positives): only A/B/C LETTER
+    options are checked. Options named as models/prose ("desplegar Random Forest") or an
+    enunciado that names a single option are not flagged; the M4 questions prompt boundary
+    nudges the LLM to the letter form so the validator covers the reported defect.
+    """
+    log_extra = {"node": "m4_questions_generator", "case_id": state.get("case_id")}
+    try:
+        if not settings.m4_question_coherence or not _is_classification_family(state):
+            return preguntas_dict
+        violations = validate_question_option_coherence(preguntas_dict, "")
+        if not violations:
+            return preguntas_dict
+        logger.info(
+            "[m4_questions] reprompt de coherencia de opciones M4 disparado",
+            extra={
+                **log_extra,
+                "violation_count": len(violations),
+                "violation_types": _m4_violation_types(violations),
+            },
+        )
+        bullet_list = "\n".join(f"- {violation}" for violation in violations)
+        reprompt = prompt + _M4_QUESTIONS_OPTION_REPROMPT_HEADER + bullet_list
+        try:
+            resultado: GeneradorPreguntasOutput = llm.with_structured_output(
+                GeneradorPreguntasOutput
+            ).invoke(reprompt)
+            corrected = [p.model_dump() for p in resultado.preguntas]
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[m4_questions] reprompt coherencia de opciones M4 inválido — degrada a pass-1: %s",
+                exc,
+                extra=log_extra,
+            )
+            return preguntas_dict
+        # Identity guard: a reprompt that drops/adds/renumbers a question would corrupt the
+        # ``M4-Q{numero}`` grading key (shared.student_reads) — reject it, keep pass-1.
+        if [q.get("numero") for q in corrected] != [q.get("numero") for q in preguntas_dict]:
+            logger.warning(
+                "[m4_questions] reprompt M4 alteró conteo/numero — degrada a pass-1",
+                extra=log_extra,
+            )
+            return preguntas_dict
+        residual = validate_question_option_coherence(corrected, "")
+        if not residual:
+            logger.info(
+                "[m4_questions] coherencia de opciones M4 corregida por reprompt",
+                extra={**log_extra, "degraded": False},
+            )
+            return corrected
+        logger.warning(
+            "[m4_questions] coherencia de opciones M4 degradada tras reprompt",
+            extra={**log_extra, "violation_types": _m4_violation_types(residual), "degraded": True},
+        )
+        return preguntas_dict
+    except Exception as exc:  # best-effort — a coherence pass must never fail the job
+        logger.warning(
+            "[m4_questions] validador coherencia de opciones M4 falló (best-effort): %s",
+            exc,
+            extra=log_extra,
         )
         return preguntas_dict
 
@@ -5144,12 +5255,20 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         prompt = _maybe_business_classification_prompt(
             state, prompt, M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
         )
+        # Render once; the coherence reprompt below reuses this verbatim so it re-grounds on
+        # the SAME text the model first saw (mirrors the M1/M2 single-render pattern).
+        rendered_prompt = prompt.format(**context)
         resultado: GeneradorPreguntasOutput = llm.with_structured_output(
             GeneradorPreguntasOutput
-        ).invoke(prompt.format(**context))
+        ).invoke(rendered_prompt)
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
         print(f"[m4_questions_generator] {len(preguntas)} preguntas")
+        # Option coherence (clasificación, both profiles) — best-effort, reprompt-once-then-
+        # degrade. The wrapper concatenates onto the rendered prompt (never re-.format, cifras `{}`).
+        preguntas = _apply_m4_questions_option_coherence(
+            llm=llm, prompt=rendered_prompt, state=state, preguntas_dict=preguntas
+        )
         return {"m4_questions": preguntas, "current_agent": "m4_questions_generator"}
     except Exception as e:
         logger.error("[m4_questions_generator] ERROR: %s", e, exc_info=True)
