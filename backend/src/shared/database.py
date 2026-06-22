@@ -108,6 +108,15 @@ class Settings(BaseSettings):
     # business/other-family/non-clf cases are unaffected. Kill-switch: set
     # M3_QUESTION_COHERENCE=false to passthrough exactly (instant env-only revert; no redeploy).
     m3_question_coherence: bool = True
+    # Internal coherence of the M5 memorándum question (clasificación, both profiles).
+    # When true, `validate_m5_questions_coherence` checks that the memorándum does not name the
+    # unselected model (ml_ds single-model), does not cite a model metric absent from the executed
+    # M3 metrics (ml_ds), and does not recommend a strategic option (A/B/C) that does not exist in
+    # the case (both profiles); `m5_questions_generator` reprompts once then degrades to the pass-1
+    # memo. Best-effort + gated to the classification family, so business/other-family/non-clf cases
+    # are unaffected. Kill-switch: set M5_QUESTION_COHERENCE=false to passthrough exactly (instant
+    # env-only revert; no redeploy).
+    m5_question_coherence: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

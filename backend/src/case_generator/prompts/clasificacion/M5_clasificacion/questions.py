@@ -127,6 +127,9 @@ Párrafo 5 — Criterio académico: relaciona la postura con un framework recono
   "M3_METRICS_SUMMARY_AUSENTE", NO cites métricas ejecutadas — usa hallazgos
   cualitativos del M3/M4 en su lugar.
 - solucion_esperada: NUNCA menciones fuentes externas inventadas. Solo frameworks reconocidos.
+- Si el modo es "single", el memorándum (enunciado y solucion_esperada) NO debe nombrar ningún
+  modelo de clasificación distinto al seleccionado en {algoritmos}: no introduzcas un modelo
+  alternativo. La opción recomendada debe ser una de las opciones reales del caso (A/B/C).
 - **Idioma de salida: {output_language}**
 
 # Modo de algoritmo: {algorithm_mode}
