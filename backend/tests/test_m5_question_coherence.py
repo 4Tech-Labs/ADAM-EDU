@@ -221,6 +221,16 @@ class TestValidatorRobustness:
         )
         assert out == []
 
+    def test_none_metrics_block_is_total(self) -> None:
+        # Defensive: a None metrics_block must no-op Check B, not raise (validator stays total).
+        out = validate_m5_questions_coherence(
+            [_q(solucion="con un AUC 0.99 (opción A)")],
+            variant=CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
+            metrics_block=None,  # type: ignore[arg-type]
+            dilema_brief="",
+        )
+        assert out == []
+
     def test_non_mapping_item_skipped(self) -> None:
         assert validate_m5_questions_coherence(
             [None, 42],  # type: ignore[list-item]

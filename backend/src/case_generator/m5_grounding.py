@@ -83,6 +83,10 @@ def validate_m5_questions_coherence(
     """
     if not isinstance(preguntas, list):
         return []
+    # Defensive: keep the validator genuinely total. Production always passes a str from
+    # `build_computed_metrics_block`, but a None here (e.g. a test oracle) must no-op Check B,
+    # not raise inside `has_metric_anchors`'s substring test.
+    metrics_block = metrics_block or ""
     violations: list[str] = []
     metrics_available = has_metric_anchors(metrics_block)
     for index, pregunta in enumerate(preguntas):
