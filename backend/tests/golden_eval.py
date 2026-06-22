@@ -70,6 +70,12 @@ class NodeEvalInputs:
     # enunciado). True (n/a) for non-classification jobs. Computed via
     # ``check_m4_question_option_coherence`` (reuses the production validator).
     m4_questions_coherence_ok: bool = True
+    # M5 memorándum coherence: every classification golden job's M5 memo must be coherent (does not
+    # name the unselected model; cites no model metric absent from the executed M3 metrics; does not
+    # recommend a strategic option that does not exist in the case). True (n/a) for non-classification
+    # jobs. Computed via ``check_m5_questions_coherence`` (reuses the production validator). Wired into
+    # the gate so a future m5_questions_generator Pro→Flash downgrade that induced incoherence is blocked.
+    m5_questions_coherence_ok: bool = True
 
 
 @dataclass
@@ -102,6 +108,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M3 question coherence failure: section_ref or unselected-model leak")
     if not r.m4_questions_coherence_ok:
         reasons.append("M4 question option coherence failure: nonexistent or unpresented option")
+    if not r.m5_questions_coherence_ok:
+        reasons.append(
+            "M5 memorándum coherence failure: unselected-model leak, unanchored metric, or "
+            "nonexistent option"
+        )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -187,6 +198,24 @@ def check_m4_question_option_coherence(preguntas: list[dict]) -> bool:
     from case_generator.m1_grounding import validate_question_option_coherence
 
     return not validate_question_option_coherence(preguntas, "")
+
+
+def check_m5_questions_coherence(
+    preguntas: list[dict], *, variant: str | None, metrics_block: str, dilema_brief: str
+) -> bool:
+    """Pure oracle: is the M5 memorándum coherent (no unselected-model leak / unanchored metric /
+    nonexistent option)?
+
+    Reuses the production validator ``m5_grounding.validate_m5_questions_coherence`` (single source
+    of truth), so a future M5-prompt or m5_questions_generator downgrade regression that reintroduces
+    an unselected-model leak, a fabricated metric, or an invented option fails the golden gate.
+    Function-level import keeps this support module lightweight.
+    """
+    from case_generator.m5_grounding import validate_m5_questions_coherence
+
+    return not validate_m5_questions_coherence(
+        preguntas, variant=variant, metrics_block=metrics_block, dilema_brief=dilema_brief
+    )
 
 
 # ── frozen golden set ────────────────────────────────────

@@ -177,6 +177,64 @@ def validate_narrative_grounding(prose: str, metrics_block: str) -> list[str]:
     return violations
 
 
+def detect_unanchored_adjacent_metrics(prose: str, metrics_block: str) -> list[str]:
+    """Return ``UNANCHORED: <number>`` for model-metric numbers not anchored to *metrics_block*,
+    using ONLY the high-precision adjacency pass.
+
+    Strict sibling of :func:`validate_narrative_grounding`'s numeric check, but it runs ONLY
+    the adjacency pass (a metric keyword IMMEDIATELY followed by its value — ``AUC 0.78`` /
+    ``recall=0.71`` / ``precisión: 72%``) and deliberately DROPS the clause-level generic pass
+    (``_NUMBER_RE`` + :func:`_is_model_metric_number`) AND the ``CITA:`` citation arm.
+
+    Why (Issue: M5 memo coherence): the generic pass classifies as a model metric ANY number
+    sharing a boundary-free clause with a metric keyword. The M5 memorándum prompt MANDATES
+    co-locating business figures and model metrics in the same prose paragraphs, so the generic
+    pass would false-positive on legitimate business numbers (``"la precisión justifica un ROI
+    del 35%"`` would flag ``35``). The adjacency pass fires only on the exact citation format the
+    prompt requires, keeping false positives rare on memo prose. Dropping ``CITA:`` avoids flagging
+    the ``Porter (1985)`` framework citation the M5 prompt explicitly permits.
+
+    Residual false positive (accepted, degrade-safe): a BUSINESS quantity written with a
+    model-metric keyword IMMEDIATELY adjacent and no connector (``"exactitud 92% operativa"``) is
+    flagged — there is no deterministic way to tell it from a model metric (same tokens, same [0,100]
+    range). The prompt's natural ``del``/``de`` phrasing (``"exactitud del 92%"``) avoids it, and a
+    rare hit only triggers the reprompt-once-then-degrade path (never a job failure).
+
+    Pure and total (never raises). Returns ``[]`` when ``metrics_block`` is the fallback marker
+    (grounding disabled). Callers MUST additionally gate on :func:`has_metric_anchors` to skip an
+    anchorless (but non-fallback) block, otherwise every metric number would be flagged.
+    Documented false negative (accepted, zero-FP doctrine): a metric whose value is detached from
+    its keyword (``"el AUC es notable, alcanzando 0.99"``) is not caught.
+    """
+    if _FALLBACK_MARKER in metrics_block:
+        return []
+    anchors = _extract_anchor_numbers(metrics_block)
+    modeling_was_skipped = _metrics_block_declares_modeling_skipped(metrics_block)
+    seen: set[str] = set()
+    violations: list[str] = []
+    for match in _ADJACENT_MODEL_METRIC_NUMBER_RE.finditer(prose):
+        raw_group = match.group("value")
+        if _is_thousands_formatted(raw_group):
+            continue  # thousands-separator integer — not a model metric
+        raw_number = raw_group.replace(",", ".")
+        float_value = float(raw_number)
+        if float_value > 200:
+            continue  # business volume — not a model metric
+        if (
+            modeling_was_skipped
+            and _allows_skipped_zero_placeholder(match.group(0))
+            and math.isclose(float_value, 0.0, abs_tol=1e-12)
+        ):
+            continue
+        if any(_within_tolerance(float_value, anchor) for anchor in anchors):
+            continue
+        if raw_number in seen:
+            continue
+        seen.add(raw_number)
+        violations.append(f"UNANCHORED: {raw_number}")
+    return violations
+
+
 def contextualize_grounding_violations(prose: str, violations: list[str]) -> list[str]:
     """Attach prior-output fragments to grounding violations for reprompts."""
     contextualized: list[str] = []

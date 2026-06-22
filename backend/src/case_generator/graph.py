@@ -179,6 +179,7 @@ from case_generator.m3_grounding import (
     allowed_sections_for,
     validate_m3_questions_coherence,
 )
+from case_generator.m5_grounding import validate_m5_questions_coherence
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
     _bounded_diagnostic,
@@ -5275,6 +5276,164 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
 
 # ─────────────────────────────────────────────────────────
+# M5 memorándum coherence (sibling of M1 #412 / M2 #414 / M3 #415)
+# ─────────────────────────────────────────────────────────
+
+_M5_VIOLATION_CODES = (
+    ("MODELO_NO_SELECCIONADO", "unselected_model"),
+    ("METRICA_NO_ANCLADA", "unanchored_metric"),
+    ("OPTION_NONEXISTENT", "option_nonexistent"),
+)
+
+
+def _m5_violation_types(violations: list[str]) -> list[str]:
+    """Enumerated short codes for structured logging — never the raw message (no PII)."""
+    codes: list[str] = []
+    for violation in violations:
+        for prefix, code in _M5_VIOLATION_CODES:
+            if violation.startswith(prefix) and code not in codes:
+                codes.append(code)
+    return codes
+
+
+def _build_m5_coherence_reprompt(
+    violations: list[str],
+    *,
+    variant: str | None,
+    metrics_block: str,
+    numeros: list[Any],
+) -> str:
+    """Focused reprompt (CONCATENATED, never ``.format`` — the formatted prompt and the
+    memorándum both carry ``{}`` from the JSON schema). Carries the concrete fix (the forbidden
+    model when single-model, the verified-metrics rule, the option universe) and demands the SAME
+    single memorándum with ``numero == 1`` so the downstream ``M5-Q{numero}`` grading key holds.
+    """
+    bullet_list = "\n".join(f"- {violation}" for violation in violations)
+    forbidden_line = ""
+    if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY:
+        forbidden_line = "NO menciones Random Forest (el modelo seleccionado es Logistic Regression).\n"
+    elif variant == CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY:
+        forbidden_line = "NO menciones Logistic Regression (el modelo seleccionado es Random Forest).\n"
+    metrics_line = ""
+    if has_metric_anchors(metrics_block):
+        metrics_line = (
+            "Cita SOLO métricas del modelo (AUC/F1/precision/recall) que figuren en las métricas "
+            "verificadas del M3; no inventes valores.\n"
+        )
+    numeros_str = ", ".join(str(numero) for numero in numeros)
+    return (
+        "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA (Módulo 5)\n"
+        "El memorándum nombra un modelo no seleccionado, cita una métrica no verificada o "
+        "recomienda una opción inexistente en el caso. "
+        f"Regenera EXACTAMENTE {len(numeros)} consigna(s) con el MISMO schema y el MISMO "
+        f"`numero` ({numeros_str}). La opción recomendada debe ser una de las opciones reales "
+        "del caso (A/B/C).\n"
+        f"{forbidden_line}"
+        f"{metrics_line}"
+        "Incoherencias detectadas:\n" + bullet_list
+    )
+
+
+def _apply_m5_questions_coherence(
+    *,
+    llm: Any,
+    prompt: str,
+    state: ADAMState,
+    preguntas_dict: list[dict],
+    variant: str | None,
+    metrics_block: str,
+    dilema_brief: str,
+) -> list[dict]:
+    """Validate + reprompt-once-then-DEGRADE the M5 memorándum coherence.
+
+    Gated to the classification family for BOTH profiles (business + ml_ds) via
+    ``_is_classification_family`` (the SAME gate M1/M2/M3 use) behind the
+    ``m5_question_coherence`` kill-switch; a byte-identical no-op otherwise. On a violation it
+    reprompts ONCE with the concrete fix; the corrected memo is accepted ONLY if it preserves the
+    question count AND the ``numero`` sequence (the ``M5-Q{numero}`` grading key) AND is now
+    coherent — otherwise it degrades to the pass-1 memo. Best-effort: ANY throw (including a
+    reprompt ``RuntimeError``, which the node would otherwise re-raise via ``except RuntimeError:
+    raise`` and FAIL the job) degrades to pass-1. Never raises.
+
+    ``prompt`` is the ALREADY-formatted string; the reprompt is built by CONCATENATION (never
+    re-``.format``). ``variant`` is the RESOLVED notebook variant (never ``algorithm_mode``);
+    ``metrics_block`` / ``dilema_brief`` feed the three checks. ``state`` is read ONLY for the gate
+    and ``case_id`` logging.
+    """
+    log_extra = {"node": "m5_questions_generator", "case_id": state.get("case_id")}
+    try:
+        if not settings.m5_question_coherence or not _is_classification_family(state):
+            return preguntas_dict
+        violations = validate_m5_questions_coherence(
+            preguntas_dict,
+            variant=variant,
+            metrics_block=metrics_block,
+            dilema_brief=dilema_brief,
+        )
+        if not violations:
+            return preguntas_dict
+        numeros = [q.get("numero") for q in preguntas_dict]
+        logger.info(
+            "[m5_questions] reprompt de coherencia M5 disparado",
+            extra={
+                **log_extra,
+                "violation_count": len(violations),
+                "violation_types": _m5_violation_types(violations),
+            },
+        )
+        reprompt = prompt + _build_m5_coherence_reprompt(
+            violations, variant=variant, metrics_block=metrics_block, numeros=numeros
+        )
+        try:
+            resultado: GeneradorPreguntasM5Output = llm.with_structured_output(
+                GeneradorPreguntasM5Output
+            ).invoke(reprompt)
+            corrected = [p.model_dump() for p in resultado.preguntas]
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[m5_questions] reprompt de coherencia M5 inválido — degrada a pass-1: %s",
+                exc,
+                extra=log_extra,
+            )
+            return preguntas_dict
+        # Identity guard: a reprompt that drops/adds/renumbers the memo would corrupt the
+        # `M5-Q{numero}` grading key — reject it. `GeneradorPreguntasM5Output` already bounds this
+        # to exactly 1 question with numero==1, so this is belt-and-suspenders (list equality =
+        # count + order + values).
+        if [q.get("numero") for q in corrected] != numeros:
+            logger.warning(
+                "[m5_questions] reprompt M5 alteró conteo/numero — degrada a pass-1",
+                extra=log_extra,
+            )
+            return preguntas_dict
+        residual = validate_m5_questions_coherence(
+            corrected, variant=variant, metrics_block=metrics_block, dilema_brief=dilema_brief
+        )
+        if not residual:
+            logger.info(
+                "[m5_questions] coherencia M5 corregida por reprompt",
+                extra={**log_extra, "degraded": False},
+            )
+            return corrected
+        logger.warning(
+            "[m5_questions] coherencia M5 degradada tras reprompt",
+            extra={
+                **log_extra,
+                "violation_types": _m5_violation_types(residual),
+                "degraded": True,
+            },
+        )
+        return preguntas_dict
+    except Exception as exc:  # best-effort — a coherence pass must never fail the job
+        logger.warning(
+            "[m5_questions] validador de coherencia M5 falló (best-effort): %s",
+            exc,
+            extra=log_extra,
+        )
+        return preguntas_dict
+
+
+# ─────────────────────────────────────────────────────────
 # v7 — NODO: M5 QUESTIONS GENERATOR (Módulo Recomendación)
 # ─────────────────────────────────────────────────────────
 def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
@@ -5315,9 +5474,31 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             complex_q = all_q[-3:]
 
         context = _build_base_context(state)
-        _, family = _resolve_generation_focus(
+        profile, family = _resolve_generation_focus(
             state, default_unresolved_ml_ds_to_classification=True
         )
+        # `resolved_variant` is None for every cohort EXCEPT ml_ds+clf (set below); the M5
+        # coherence wrapper passes it to the unselected-model guard (no-op when None), so
+        # business / ml_ds-non-clf never enter Check A. This is the RESOLVED notebook variant
+        # (lr_only/rf_only/lr_rf_contrast), NEVER `algorithm_mode` — passing the mode would
+        # silently disable the guard.
+        resolved_variant: str | None = None
+        if profile == "ml_ds" and family == "clasificacion":
+            _algoritmos_raw = _extract_state_algoritmos(state)
+            _algorithm_mode = _extract_state_algorithm_mode(state)
+            _variant, _q_variant_warning = _resolve_classification_notebook_variant(
+                algorithm_mode=_algorithm_mode,
+                algoritmos=_algoritmos_raw,
+            )
+            if _q_variant_warning:
+                logger.warning(
+                    "[m5_questions_generator] question variant fallback — "
+                    "variant=%s algoritmos=%r reason: %s",
+                    _variant,
+                    _algoritmos_raw,
+                    _q_variant_warning,
+                )
+            resolved_variant = _variant
         prompt_text = _resolve_family_prompt(
             state, M5_QUESTIONS_PROMPT_BY_FAMILY, M5_QUESTIONS_GENERATOR_PROMPT
         )
@@ -5326,23 +5507,36 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         prompt_text = _maybe_business_classification_prompt(
             state, prompt_text, M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
         )
+        computed_metrics_block = (
+            build_computed_metrics_block(state.get("m3_metrics_summary"))
+            if family == "clasificacion"
+            else ""
+        )
         context.update({
             "m5_content": state.get("m5_content", ""),
             "doc1_preguntas_complejas": json.dumps(complex_q[:3], ensure_ascii=False),
             # main_risk_from_m3_m4 e implementation_timeframe vienen de _build_base_context
             "algorithm_mode": _extract_state_algorithm_mode(state) or "single",
-            "computed_metrics_block": (
-                build_computed_metrics_block(state.get("m3_metrics_summary"))
-                if family == "clasificacion"
-                else ""
-            ),
+            "computed_metrics_block": computed_metrics_block,
         })
 
+        # Capture the formatted prompt so the coherence wrapper can CONCATENATE its correction
+        # suffix onto it (never a second `.format()` — JSON schema + memorándum braces).
+        formatted = prompt_text.format(**context)
         resultado: GeneradorPreguntasM5Output = llm.with_structured_output(
             GeneradorPreguntasM5Output
-        ).invoke(prompt_text.format(**context))
+        ).invoke(formatted)
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
+        preguntas = _apply_m5_questions_coherence(
+            llm=llm,
+            prompt=formatted,
+            state=state,
+            preguntas_dict=preguntas,
+            variant=resolved_variant,
+            metrics_block=computed_metrics_block,
+            dilema_brief=str(state.get("dilema_brief") or ""),
+        )
         print(f"[m5_questions_generator] {len(preguntas)} memorándum final")
         return {"m5_questions": preguntas, "current_agent": "m5_questions_generator"}
     except RuntimeError:
