@@ -99,6 +99,15 @@ class Settings(BaseSettings):
     # are unaffected. Kill-switch: set M2_QUESTION_COHERENCE=false to passthrough exactly
     # (instant env-only revert; no redeploy).
     m2_question_coherence: bool = True
+    # Internal coherence of the M3 socratic questions (clasificación, both profiles).
+    # When true, `validate_m3_questions_coherence` checks that each question's
+    # `m3_section_ref` exists in the section taxonomy for its profile (business → 3.1–3.5;
+    # ml_ds → exp.*) and that single-model questions (lr_only / rf_only) do not name the
+    # unselected model; `m3_questions_generator` reprompts once then degrades to the
+    # pass-1 questions. Best-effort + gated to the classification family, so
+    # business/other-family/non-clf cases are unaffected. Kill-switch: set
+    # M3_QUESTION_COHERENCE=false to passthrough exactly (instant env-only revert; no redeploy).
+    m3_question_coherence: bool = True
     # Internal coherence of the M4 (Impacto) decision-question options (clasificación, both
     # profiles). When true, `validate_question_option_coherence` (reused from m1_grounding with
     # the floor universe A/B/C — M4 has no `dilema_brief`) checks that each `solucion_esperada`
