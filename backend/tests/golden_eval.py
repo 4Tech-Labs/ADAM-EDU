@@ -58,6 +58,11 @@ class NodeEvalInputs:
     # prevalence). True (n/a) for non-classification jobs. Computed via
     # ``check_eda_questions_coherence`` (reuses the production validator).
     eda_questions_coherence_ok: bool = True
+    # M4 (Impacto) question option coherence: every classification golden job's M4 questions must be
+    # coherent (no `solucion_esperada` recommending an option absent from / nonexistent in its own
+    # enunciado). True (n/a) for non-classification jobs. Computed via
+    # ``check_m4_question_option_coherence`` (reuses the production validator).
+    m4_questions_coherence_ok: bool = True
 
 
 @dataclass
@@ -86,6 +91,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("domain coherence failure: churn-coupled target on ml_ds non-churn job")
     if not r.eda_questions_coherence_ok:
         reasons.append("M2 EDA question coherence failure: chart_ref or event-rate mismatch")
+    if not r.m4_questions_coherence_ok:
+        reasons.append("M4 question option coherence failure: nonexistent or unpresented option")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -143,6 +150,19 @@ def check_eda_questions_coherence(
     from case_generator.m2_grounding import validate_eda_questions_coherence
 
     return not validate_eda_questions_coherence(preguntas, chart_ids, target_event_rate)
+
+
+def check_m4_question_option_coherence(preguntas: list[dict]) -> bool:
+    """Pure oracle: are the M4 questions coherent (no nonexistent / unpresented option)?
+
+    Reuses the production validator ``m1_grounding.validate_question_option_coherence`` with an
+    empty ``dilema_brief`` (M4 has no case-options authority → floor universe A/B/C), so a future
+    M4-prompt regression that lets ``solucion_esperada`` recommend an option absent from its own
+    enunciado fails the golden gate. Function-level import keeps this support module lightweight.
+    """
+    from case_generator.m1_grounding import validate_question_option_coherence
+
+    return not validate_question_option_coherence(preguntas, "")
 
 
 # ── frozen golden set ────────────────────────────────────

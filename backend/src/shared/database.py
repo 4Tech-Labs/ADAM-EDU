@@ -99,6 +99,15 @@ class Settings(BaseSettings):
     # are unaffected. Kill-switch: set M2_QUESTION_COHERENCE=false to passthrough exactly
     # (instant env-only revert; no redeploy).
     m2_question_coherence: bool = True
+    # Internal coherence of the M4 (Impacto) decision-question options (clasificación, both
+    # profiles). When true, `validate_question_option_coherence` (reused from m1_grounding with
+    # the floor universe A/B/C — M4 has no `dilema_brief`) checks that each `solucion_esperada`
+    # only recommends an option the case defines (A/B/C) and that its own `enunciado` presents;
+    # `m4_questions_generator` reprompts once then degrades to the pass-1 questions (identity-
+    # guarded on `numero`). Best-effort + gated to the classification family, so
+    # business/other-family/non-clf cases are unaffected. Kill-switch: set
+    # M4_QUESTION_COHERENCE=false to passthrough exactly (instant env-only revert; no redeploy).
+    m4_question_coherence: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 
