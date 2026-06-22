@@ -279,6 +279,15 @@ class TestWrapper:
         assert fake.calls == 1
         assert out == _BAD
 
+    def test_degrade_when_reprompt_raises_runtime_error(self) -> None:
+        # A non-(Validation/Parser/Value)Error from the reprompt (e.g. an LLM RuntimeError
+        # on rate-limit/timeout) must hit the OUTER except Exception → degrade to pass-1,
+        # never propagate (the job must not fail).
+        fake = _FakeStructuredLLM([RuntimeError("llm exploded")])
+        out = _invoke(fake, _state(), _BAD)
+        assert fake.calls == 1
+        assert out == _BAD
+
     def test_degrade_on_count_drift(self) -> None:
         # A coherent but SHORTER reprompt (2 questions) must be rejected (identity guard).
         fake = _FakeStructuredLLM([_SHORTER_RESULT])

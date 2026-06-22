@@ -5250,17 +5250,19 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         prompt = _maybe_business_classification_prompt(
             state, prompt, M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
         )
+        # Render once; the coherence reprompt below reuses this verbatim so it re-grounds on
+        # the SAME text the model first saw (mirrors the M1/M2 single-render pattern).
+        rendered_prompt = prompt.format(**context)
         resultado: GeneradorPreguntasOutput = llm.with_structured_output(
             GeneradorPreguntasOutput
-        ).invoke(prompt.format(**context))
+        ).invoke(rendered_prompt)
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
         print(f"[m4_questions_generator] {len(preguntas)} preguntas")
         # Option coherence (clasificación, both profiles) — best-effort, reprompt-once-then-
-        # degrade. Pass the RENDERED prompt (the node inlines .format above) so the reprompt
-        # re-grounds on the same text; the wrapper concatenates (never re-.format, cifras `{}`).
+        # degrade. The wrapper concatenates onto the rendered prompt (never re-.format, cifras `{}`).
         preguntas = _apply_m4_questions_option_coherence(
-            llm=llm, prompt=prompt.format(**context), state=state, preguntas_dict=preguntas
+            llm=llm, prompt=rendered_prompt, state=state, preguntas_dict=preguntas
         )
         return {"m4_questions": preguntas, "current_agent": "m4_questions_generator"}
     except Exception as e:
