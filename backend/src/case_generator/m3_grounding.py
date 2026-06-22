@@ -133,13 +133,15 @@ def validate_m3_questions_coherence(
             )
 
         # ── Check B — single-model question must not name the unselected model ───
-        # EXCEPTION: the P3 synthesis/discard question (`exp.descarte`) is SKIPPED — its
-        # lr_only/rf_only prompt explicitly asks the student to "propón una alternativa"
-        # after discarding the selected model, so naming an alternative model there is
-        # prompt-sanctioned, not a leak. Check B stays active for P1 (`exp.hipotesis`) and
-        # P2 (`exp.sesgo`), where the question is squarely about the selected model and the
-        # other model's name IS an incoherent leak. Each leak is question-numbered (mirrors
-        # Check A / M2) so cross-question mentions never collapse into indistinguishable dupes.
+        # EXCEPTION (token-driven): a question is exempted ONLY when its `m3_section_ref`
+        # tokenizes to `exp.descarte` (the P3 synthesis/discard question). Its lr_only/rf_only
+        # prompt explicitly asks the student to "propón una alternativa" after discarding the
+        # selected model, so naming an alternative model there is prompt-sanctioned, not a leak.
+        # Check B stays active for P1 (`exp.hipotesis`) and P2 (`exp.sesgo`), AND for any P3
+        # whose ref is a sentinel/blank/garbage (no `exp.descarte` token) — that still gets the
+        # model-leak scan, which is the safe direction (the only cost is a rare reprompt on a
+        # mislabeled synthesis question, never a shipped leak). Each leak is question-numbered
+        # (mirrors Check A / M2) so cross-question mentions never collapse into indistinguishable dupes.
         if _SECTION_DESCARTE not in tokens:
             prose = "\n".join(
                 str(pregunta.get(key, "")) for key in ("titulo", "enunciado", "solucion_esperada")

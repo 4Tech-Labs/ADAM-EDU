@@ -186,6 +186,24 @@ class TestUnselectedModelLeak:
         assert "pregunta 1" in out[0] and "pregunta 2" in out[1]
         assert out[0] != out[1]  # distinct, not collapsed duplicates
 
+    @pytest.mark.parametrize("benign", ["evaluar el performance del perfil", "surf de datos", "rendimiento del bosque local"])
+    def test_word_boundary_benign_prose_no_false_positive(self, benign: str) -> None:
+        # M3-layer zero-FP lock for the word-boundary class the docstring claims: benign Spanish
+        # prose that merely contains substrings of model names must NOT trigger Check B.
+        q = _q(section="exp.hipotesis", enunciado=benign)
+        assert validate_m3_questions_coherence([q], profile="ml_ds", variant=CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY) == []
+
+    def test_bare_acronym_is_documented_honest_fn(self) -> None:
+        # Documented honest FN (zero-FP cost): the bare acronym 'RF' is intentionally NOT matched.
+        q = _q(section="exp.hipotesis", enunciado="usa RF en su lugar")
+        assert validate_m3_questions_coherence([q], profile="ml_ds", variant=CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY) == []
+
+    def test_p1_mislabeled_descarte_leak_documented_fn(self) -> None:
+        # The exp.descarte exemption is token-driven: a P1 leak mislabeled exp.descarte bypasses
+        # Check B (documented defense-in-depth FN; #233/#337 are the primary leak guards).
+        q = _q(numero=1, section="exp.descarte", enunciado="¿y Random Forest?")
+        assert validate_m3_questions_coherence([q], profile="ml_ds", variant=CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY) == []
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Malformed inputs — never raise
@@ -366,6 +384,62 @@ class TestWrapperReprompt:
         out = _invoke(fake, _state(), pass1, variant=CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY)
         assert fake.calls == 1
         assert validate_m3_questions_coherence(out, profile="ml_ds", variant=CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY) == []
+
+    def test_reprompt_corrects_model_leak_rf_only(self) -> None:
+        # rf_only pass-1 leaks Logistic Regression; reprompt removes it (exercises the rf_only branch).
+        pass1 = [
+            _q(numero=1, section="exp.hipotesis", enunciado="¿y la Regresión Logística?"),
+            _q(numero=2, section="exp.sesgo"),
+            _q(numero=3, section="exp.descarte"),
+        ]
+        corrected = _result(
+            _pm(1, section="exp.hipotesis", enunciado="Random Forest favorece la clase mayoritaria"),
+            _pm(2, section="exp.sesgo"),
+            _pm(3, section="exp.descarte"),
+        )
+        fake = _FakeStructuredLLM([corrected])
+        out = _invoke(
+            fake, _state(algoritmos=["Random Forest"]), pass1, variant=CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY
+        )
+        assert fake.calls == 1
+        assert validate_m3_questions_coherence(out, profile="ml_ds", variant=CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY) == []
+
+
+class TestRepromptBuilderAndCodes:
+    def test_reprompt_includes_profile_sections_and_numeros(self) -> None:
+        rp = graph_module._build_m3_coherence_reprompt(
+            ["M3_SECTION_REF_NONEXISTENT: x"], profile="ml_ds", variant=None, numeros=[1, 2, 3]
+        )
+        for section in ("exp.hipotesis", "exp.sesgo", "exp.validacion", "exp.descarte"):
+            assert section in rp
+        assert "1, 2, 3" in rp
+
+    def test_reprompt_business_sections(self) -> None:
+        rp = graph_module._build_m3_coherence_reprompt([], profile="business", variant=None, numeros=[1])
+        assert "3.1" in rp and "3.5" in rp
+        assert "exp.hipotesis" not in rp
+
+    def test_reprompt_lr_only_forbids_random_forest(self) -> None:
+        rp = graph_module._build_m3_coherence_reprompt(
+            [], profile="ml_ds", variant=CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY, numeros=[1]
+        )
+        assert "NO menciones Random Forest" in rp
+
+    def test_reprompt_rf_only_forbids_logistic_regression(self) -> None:
+        rp = graph_module._build_m3_coherence_reprompt(
+            [], profile="ml_ds", variant=CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY, numeros=[1]
+        )
+        assert "NO menciones Logistic Regression" in rp
+
+    def test_violation_types_maps_both_prefixes_deduped(self) -> None:
+        codes = graph_module._m3_violation_types(
+            [
+                "M3_SECTION_REF_NONEXISTENT: a",
+                "M3_SECTION_REF_NONEXISTENT: b",
+                "MODELO_NO_SELECCIONADO: la pregunta 1 nombra el modelo no seleccionado (Random Forest)",
+            ]
+        )
+        assert codes == ["section_ref", "unselected_model"]
 
 
 class TestWrapperIdentityGuard:
