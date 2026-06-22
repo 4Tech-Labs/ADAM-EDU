@@ -53,6 +53,11 @@ class NodeEvalInputs:
     # produce a domain-coherent schema (no churn/SaaS template, domain-driven target). True (n/a) for
     # business / non-classification jobs. Computed deterministically via ``check_domain_coherence``.
     domain_coherence_ok: bool = True
+    # M2 (EDA) question coherence: every classification golden job's EDA questions must be coherent
+    # (chart_ref exists; the event rate in each solución matches its enunciado and the dataset
+    # prevalence). True (n/a) for non-classification jobs. Computed via
+    # ``check_eda_questions_coherence`` (reuses the production validator).
+    eda_questions_coherence_ok: bool = True
 
 
 @dataclass
@@ -79,6 +84,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("AUC distribution degraded toward the 0.55 floor")
     if not r.domain_coherence_ok:
         reasons.append("domain coherence failure: churn-coupled target on ml_ds non-churn job")
+    if not r.eda_questions_coherence_ok:
+        reasons.append("M2 EDA question coherence failure: chart_ref or event-rate mismatch")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -122,6 +129,20 @@ def check_domain_coherence(schema: dict) -> bool:
         (t.get("dependency") or {}).get("depends_on") not in (None, "churn_rate")
         for t in domain_targets
     )
+
+
+def check_eda_questions_coherence(
+    preguntas: list[dict], chart_ids: set[str], target_event_rate: float | None
+) -> bool:
+    """Pure oracle: are the M2 EDA questions coherent (no chart_ref / event-rate mismatch)?
+
+    Reuses the production validator ``m2_grounding.validate_eda_questions_coherence`` (single
+    source of truth), so a future M2-prompt regression that reintroduces the example-number leak
+    fails the golden gate. Function-level import keeps this support module lightweight.
+    """
+    from case_generator.m2_grounding import validate_eda_questions_coherence
+
+    return not validate_eda_questions_coherence(preguntas, chart_ids, target_event_rate)
 
 
 # ── frozen golden set ────────────────────────────────────

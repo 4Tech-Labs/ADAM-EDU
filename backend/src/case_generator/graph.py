@@ -174,6 +174,7 @@ from case_generator.m1_grounding import (
     validate_question_option_coherence,
     validate_questions_exhibit_coherence,
 )
+from case_generator.m2_grounding import validate_eda_questions_coherence
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
     _bounded_diagnostic,
@@ -2303,6 +2304,146 @@ def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
 # ─────────────────────────────────────────────────────────
 # NODO 5 — EDA QUESTIONS GENERATOR (Flash, contexto optimizado)
 # ─────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
+# M2 EDA question coherence (clasificación, business + ml_ds)
+# Deterministic sibling of the M1 option-coherence guard (#412). Runs INSIDE
+# `eda_questions_generator`. Reprompt-once-then-DEGRADE; best-effort; never raises.
+# Zero LLM cost on the happy path (deterministic validation); one Flash reprompt only
+# on a violation. See m2_grounding.py for the pure validator.
+# ─────────────────────────────────────────────────────────
+_M2_VIOLATION_CODES = (
+    ("CHART_REF_NONEXISTENT", "chart_ref"),
+    ("EVENT_RATE_INCOHERENT", "rate_internal"),
+    ("EVENT_RATE_VS_CONTRACT", "rate_contract"),
+)
+
+
+def _m2_violation_types(violations: list[str]) -> list[str]:
+    """Enumerated short codes for structured logging — never the raw message (no PII)."""
+    codes: list[str] = []
+    for violation in violations:
+        for prefix, code in _M2_VIOLATION_CODES:
+            if violation.startswith(prefix) and code not in codes:
+                codes.append(code)
+    return codes
+
+
+def _build_m2_coherence_reprompt(
+    chart_ids: set[str], rate_pct: float | None, violations: list[str]
+) -> str:
+    """Focused reprompt (CONCATENATED, never ``.format`` — prose may carry ``{}``).
+
+    Carries the CONCRETE fix (valid chart ids + the real event rate) so the model
+    corrects the specific figures, and demands the SAME 2 questions with the SAME
+    ``numero`` (1 and 2) so the downstream ``M2-Q{numero}`` answer/grading key is preserved.
+    """
+    bullet_list = "\n".join(f"- {violation}" for violation in violations)
+    valid_charts = ", ".join(sorted(chart_ids)) if chart_ids else "ninguna"
+    rate_line = (
+        f"La tasa real del evento del dataset es {rate_pct:g}% — cítala textualmente.\n"
+        if rate_pct is not None
+        else ""
+    )
+    return (
+        "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA (Módulo 2)\n"
+        "Algunas preguntas citan una gráfica inexistente o una tasa del evento en "
+        "`solucion_esperada` que NO coincide con su propio `enunciado` ni con el dataset. "
+        "Regenera EXACTAMENTE 2 preguntas con el MISMO schema y los MISMOS `numero` (1 y 2): "
+        "cada `chart_ref` debe ser uno de los ids válidos del manifest (o null), y toda cifra "
+        "de la tasa del evento en `solucion_esperada` debe ser EXACTAMENTE la de su enunciado.\n"
+        f"Gráficas válidas (ids): {valid_charts}.\n"
+        f"{rate_line}"
+        "Incoherencias detectadas:\n" + bullet_list
+    )
+
+
+def _apply_eda_questions_coherence(
+    *,
+    llm: Any,
+    prompt: str,
+    state: ADAMState,
+    preguntas_dict: list[dict],
+    chart_ids: set[str],
+) -> list[dict]:
+    """Validate + reprompt-once-then-DEGRADE the M2 EDA question coherence.
+
+    Gated to the classification family for BOTH profiles (business + ml_ds) behind the
+    ``m2_question_coherence`` kill-switch; a byte-identical no-op otherwise. On a violation
+    it reprompts ONCE (one Flash call) with the concrete fix; the corrected set is accepted
+    ONLY if it preserves the question count AND the ``numero`` sequence (the answer/grading
+    key ``M2-Q{numero}``) AND is now coherent — otherwise it degrades to the pass-1 questions.
+    Best-effort: ANY throw (including a reprompt ``RuntimeError``, which the node would
+    otherwise re-raise and fail the job) degrades to pass-1. Never raises.
+    """
+    log_extra = {"node": "eda_questions_generator", "case_id": state.get("case_id")}
+    try:
+        if not settings.m2_question_coherence or not _is_classification_family(state):
+            return preguntas_dict
+        contract = state.get("dataset_schema_required")
+        raw_rate = contract.get("target_event_rate") if isinstance(contract, dict) else None
+        rate: float | None = (
+            float(raw_rate)
+            if isinstance(raw_rate, (int, float)) and not isinstance(raw_rate, bool)
+            else None
+        )
+        violations = validate_eda_questions_coherence(preguntas_dict, chart_ids, rate)
+        if not violations:
+            return preguntas_dict
+        logger.info(
+            "[eda_questions] reprompt de coherencia M2 disparado",
+            extra={
+                **log_extra,
+                "violation_count": len(violations),
+                "violation_types": _m2_violation_types(violations),
+            },
+        )
+        rate_pct = rate * 100.0 if rate is not None and 0.0 < rate <= 1.0 else None
+        reprompt = prompt + _build_m2_coherence_reprompt(chart_ids, rate_pct, violations)
+        try:
+            resultado: EDAQuestionsOutput = llm.with_structured_output(
+                EDAQuestionsOutput
+            ).invoke(reprompt)
+            corrected = [p.model_dump() for p in resultado.preguntas]
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[eda_questions] reprompt de coherencia M2 inválido — degrada a pass-1: %s",
+                exc,
+                extra=log_extra,
+            )
+            return preguntas_dict
+        # Identity guard: a reprompt that drops/adds/renumbers a question would corrupt the
+        # ``M2-Q{numero}`` answer/grading key (shared.teacher_reads) — reject it, keep pass-1.
+        if [q.get("numero") for q in corrected] != [q.get("numero") for q in preguntas_dict]:
+            logger.warning(
+                "[eda_questions] reprompt M2 alteró conteo/numero — degrada a pass-1",
+                extra=log_extra,
+            )
+            return preguntas_dict
+        residual = validate_eda_questions_coherence(corrected, chart_ids, rate)
+        if not residual:
+            logger.info(
+                "[eda_questions] coherencia M2 corregida por reprompt",
+                extra={**log_extra, "degraded": False},
+            )
+            return corrected
+        logger.warning(
+            "[eda_questions] coherencia M2 degradada tras reprompt",
+            extra={
+                **log_extra,
+                "violation_types": _m2_violation_types(residual),
+                "degraded": True,
+            },
+        )
+        return preguntas_dict
+    except Exception as exc:  # best-effort — a coherence pass must never fail the job
+        logger.warning(
+            "[eda_questions] validador de coherencia M2 falló (best-effort): %s",
+            exc,
+            extra=log_extra,
+        )
+        return preguntas_dict
+
+
 def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """Genera EXACTAMENTE 2 preguntas socráticas EDA (Sesgo + Correlación vs Causalidad).
 
@@ -2340,6 +2481,19 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
         preguntas_eda_dict = [p.model_dump() for p in resultado.preguntas]
         print(f"[eda_questions_generator] {len(preguntas_eda_dict)} preguntas socráticas generadas")
+
+        # M2 coherence: chart_ref must exist + the event rate in each solución must match
+        # its enunciado (and the real prevalence for ml_ds). `chart_ids` MUST use the SAME
+        # `c.get("id", f"chart_{i}")` fallback as the manifest the LLM saw (line above), or a
+        # valid ref to an id-less chart would false-positive. Best-effort, never raises.
+        chart_ids = {str(c.get("id", f"chart_{i}")) for i, c in enumerate(charts)}
+        preguntas_eda_dict = _apply_eda_questions_coherence(
+            llm=llm,
+            prompt=prompt,
+            state=state,
+            preguntas_dict=preguntas_eda_dict,
+            chart_ids=chart_ids,
+        )
 
         return {
             "doc2_preguntas_eda": preguntas_eda_dict,
