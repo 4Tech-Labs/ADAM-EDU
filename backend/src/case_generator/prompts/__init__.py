@@ -1120,6 +1120,10 @@ negocio.
   probabilidad puede dirigir el presupuesto al lugar equivocado; pide una mitigación concreta en
   términos de negocio (a quién priorizar, con qué presupuesto, cómo confirmar el supuesto), no una
   receta técnica del modelo.
+- **Coherencia opción↔solución:** si una pregunta plantea opciones, enúncialas con letras
+  (A/B/C) y en `solucion_esperada` recomienda SOLO una de las letras presentadas en ese mismo
+  enunciado, nombrándola por su letra; nunca una opción ausente del enunciado ni una letra fuera
+  de A/B/C.
 - **Honestidad:** usa únicamente cifras del caso (Exhibits, M2, M4). NO inventes probabilidades,
   tasas ni valores nuevos; razona sobre la lógica de priorización, no sobre métricas del modelo.
 """

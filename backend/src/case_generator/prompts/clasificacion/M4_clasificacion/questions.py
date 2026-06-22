@@ -62,6 +62,10 @@ riesgos de producción específicos de modelos de clasificación.
 # Your Boundaries
 - Solo JSON schema. Las preguntas DEBEN citar métricas numéricas del M4 y del
   bloque de métricas verificadas (si disponibles), y opciones A/B/C.
+- COHERENCIA OPCIÓN↔SOLUCIÓN: cuando una pregunta presente opciones, el enunciado DEBE
+  listarlas con sus letras (A/B/C) y `solucion_esperada` SOLO puede recomendar una de esas
+  letras presentadas en ese mismo enunciado, nombrándola por su letra. NUNCA recomiendes una
+  opción que el enunciado no presenta, ni una letra fuera de A/B/C.
 - Citar SOLO números que aparezcan en {m4_content} o en {computed_metrics_block}.
   No fabricar métricas que no figuren en esas fuentes.
 - **Idioma de salida: {output_language}**
