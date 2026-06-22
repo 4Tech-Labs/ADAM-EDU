@@ -90,6 +90,15 @@ class Settings(BaseSettings):
     # so business/other-family/non-clf cases are unaffected. Kill-switch: set
     # M1_OPTION_COHERENCE=false to passthrough exactly (instant env-only revert; no redeploy).
     m1_option_coherence: bool = True
+    # Internal coherence of the M2 (EDA) Socratic questions (clasificación, both profiles).
+    # When true, `validate_eda_questions_coherence` checks that each question's `chart_ref`
+    # exists in the M2 chart manifest and that the event rate cited in `solucion_esperada`
+    # matches its own `enunciado` (and the real dataset prevalence for ml_ds);
+    # `eda_questions_generator` reprompts once then degrades to the pass-1 questions.
+    # Best-effort + gated to the classification family, so business/other-family/non-clf cases
+    # are unaffected. Kill-switch: set M2_QUESTION_COHERENCE=false to passthrough exactly
+    # (instant env-only revert; no redeploy).
+    m2_question_coherence: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

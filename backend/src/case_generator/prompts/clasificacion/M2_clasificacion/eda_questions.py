@@ -90,6 +90,10 @@ correlación/causalidad, sino los específicos de clasificación binaria:
 - Las referencias a gráficos: `chart_ref` contiene SOLO el `id` del chart (string exacto del
   manifest). Usa el `title` únicamente para identificar cuál chart seleccionar — nunca lo
   incluyas en el valor de `chart_ref`.
+- COHERENCIA NUMÉRICA OBLIGATORIA: toda cifra de la tasa del evento en `solucion_esperada` DEBE ser
+  EXACTAMENTE la misma que cita su propio `enunciado`, y ambas deben ser la tasa REAL de {eda_context}.
+  Los símbolos Y, X y T de los ejemplos de abajo son placeholders — sustitúyelos por los valores reales
+  del caso; está PROHIBIDO copiar los números de los ejemplos.
 - PROHIBIDO usar "sesgo de confirmación" o "correlación vs causalidad" como tema principal
   de P1 o P2 — esos pertenecen al prompt genérico para otras familias.
 - P1 es SIEMPRE accuracy_paradox (bloom: "analysis"), P2 es SIEMPRE precision_recall
@@ -121,12 +125,12 @@ de estructura (sustituir X e Y con los valores reales del caso):
    poder predictivo sobre los casos que sí presentan el evento? ¿Por qué el accuracy es una métrica
    engañosa en este contexto y qué alternativas debería usar el equipo para evaluar el modelo?"
 
-solucion_esperada: (párrafo único, ej:)
-  "Con una tasa del evento del 8%, un modelo que siempre predice 'sin evento' logra 92% de accuracy
+solucion_esperada: (párrafo único; sustituye Y por la tasa REAL del evento de {eda_context}, NUNCA un número de ejemplo:)
+  "Con una tasa del evento del Y%, un modelo que siempre predice 'sin evento' logra (100−Y)% de accuracy
   sin capturar ni un solo caso positivo real — eso es el accuracy paradox. Usar threshold=0.5 en
-  un dataset 92/8 implica que LR o RF 'funcionan' en accuracy pero el equipo pierde 40-60%
-  de los casos positivos reales y el presupuesto de la acción correctiva se dirige al segmento
-  equivocado. La alternativa es evaluar con recall, F-beta (beta>1) o AUC-ROC."
+  un dataset tan desbalanceado implica que LR o RF 'funcionan' en accuracy pero el equipo pierde
+  una porción grande de los casos positivos reales y el presupuesto de la acción correctiva se dirige
+  al segmento equivocado. La alternativa es evaluar con recall, F-beta (beta>1) o AUC-ROC."
 
 chart_ref: id del chart de distribución de clases/target de {chart_manifest}
 exhibit_ref: "Dataset"
@@ -141,12 +145,12 @@ de estructura:
    Proponga un umbral concreto (distinto de 0.5) y justifique su elección usando F-beta con
    beta>1 o AUC-ROC. ¿Cómo afecta esta decisión la elección entre los modelos disponibles?"
 
-solucion_esperada: (párrafo único, ej:)
-  "Bajar el threshold de 0.5 a 0.3 aumenta el recall capturando más casos positivos a costa de más
-  falsos positivos — ese es el precision-recall trade-off. Con una tasa del evento del 8%, threshold=0.5
-  puede dar recall ~40%; bajarlo a 0.3 sube el recall a ~70% con +15pp de falsos positivos.
-  La decisión depende del ratio costo_acción / valor_perdido por caso: si perder un caso positivo
-  cuesta más que actuar sobre un caso negativo, F-beta con beta>1 es la métrica correcta
+solucion_esperada: (párrafo único; sustituye Y por la tasa REAL del evento y T por el umbral concreto que propongas, NUNCA números de ejemplo:)
+  "Bajar el threshold de 0.5 a un umbral T menor aumenta el recall capturando más casos positivos a costa
+  de más falsos positivos — ese es el precision-recall trade-off. Con la tasa del evento real del Y%,
+  threshold=0.5 deja escapar muchos casos positivos; bajarlo a T sube el recall a cambio de más falsos
+  positivos. La decisión depende del ratio costo_acción / valor_perdido por caso: si perder un caso
+  positivo cuesta más que actuar sobre un caso negativo, F-beta con beta>1 es la métrica correcta
   sobre AUC-ROC."
 
 chart_ref: id del chart de correlación o scatter de {chart_manifest}, o null si no hay relevante
