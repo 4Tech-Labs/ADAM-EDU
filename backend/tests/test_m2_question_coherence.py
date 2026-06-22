@@ -95,16 +95,43 @@ class TestExtractEventRate:
     def test_no_rate_returns_none(self, text: str) -> None:
         assert extract_first_event_rate(text) is None
 
-    def test_metric_after_anchor_is_skipped_first_rate_wins(self) -> None:
-        # The first %-figure after the anchor is "92% de accuracy" → skipped (metric word);
-        # the real rate "8%" in the same clause is returned.
-        text = "la tasa del evento, comparada con el 92% de accuracy, es del 8%"
-        assert extract_first_event_rate(text) == 8.0
+    def test_metric_after_anchor_is_skipped(self) -> None:
+        # A %-figure right after the anchor that is a model metric ("95% de exactitud")
+        # is skipped (metric word trails the figure).
+        assert extract_first_event_rate("la tasa del evento: 95% de exactitud") is None
 
     def test_accuracy_in_same_sentence_not_taken(self) -> None:
         # "tasa del evento del 8%" then "92% de accuracy" later → only 8 is the rate.
         text = "Con una tasa del evento del 8%, un modelo logra 92% de accuracy sin valor."
         assert extract_first_event_rate(text) == 8.0
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "tasa del evento: recall del 70% reportado",
+            "Interprete la tasa del evento y la sensibilidad del 65% del clasificador",
+            "Discuta la tasa del evento donde el AUC del 88% indica buen ajuste",
+            "La tasa del evento y la especificidad del 90% se relacionan",
+            "tasa del evento mientras la exactitud llega al 95%",
+            "tasa del evento con un lift del 15% sobre la base",
+            "tasa del evento con precisión del 80%",
+        ],
+    )
+    def test_metric_before_figure_not_read_as_rate(self, text: str) -> None:
+        # Regression (adversarial workflow finding): a model metric stated as "<metric> del N%"
+        # before the figure — or beyond the anchor bind — must NOT be read as the event rate.
+        assert extract_first_event_rate(text) is None
+
+    def test_real_rate_then_metric_first_wins(self) -> None:
+        # The real rate sits right after the anchor; a later metric % does not override it.
+        text = "Con una tasa del evento del 8%, el recall del 70% mejora con threshold bajo"
+        assert extract_first_event_rate(text) == 8.0
+
+    def test_far_rate_behind_metric_clause_not_bound(self) -> None:
+        # Contrived phrasing with the real rate FAR (> _RATE_NEAR) behind a leading metric
+        # clause → conservatively not extracted (safe false-negative, never a false positive).
+        text = "la tasa del evento, comparada con el 92% de accuracy, es del 8%"
+        assert extract_first_event_rate(text) is None
 
     def test_non_string_safe(self) -> None:
         assert extract_first_event_rate(None) is None  # type: ignore[arg-type]
@@ -276,6 +303,15 @@ class TestFalsePositiveControls:
         )
         out = validate_eda_questions_coherence([q], set(), 0.08)
         assert out == [], f"keyword anchoring regressed to a naive number-matcher: {out}"
+
+    def test_solucion_comentions_a_metric_no_false_positive(self) -> None:
+        # Adversarial workflow finding: a solución that co-mentions the correct prevalence and
+        # a model metric ("la sensibilidad del 65%") must NOT flag the metric as the event rate.
+        q = _q(
+            enunciado="La tasa del evento del 8% domina el análisis.",
+            solucion="Se contrasta la tasa del evento con la sensibilidad del 65% obtenida.",
+        )
+        assert validate_eda_questions_coherence([q], set(), 0.08) == []
 
     def test_positive_control_real_drift_is_flagged(self) -> None:
         # Same shape, but the anchored event rate in the solución genuinely drifts to 12%.

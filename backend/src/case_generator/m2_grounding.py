@@ -83,17 +83,27 @@ _PCT_NUM_RE = re.compile(r"(\d{1,3}(?:[.,]\d{1,4})?)\s*%")
 # NOT a decimal point (not sitting between two digits). Commas are NOT boundaries
 # (they sit inside enumerations and decimals).
 _SENT_BOUNDARY_RE = re.compile(r"[;\n]|(?<!\d)\.(?!\d)")
-# A metric word immediately AFTER a ``%`` figure means that figure is a model metric
-# (accuracy/recall/precision/…), not the event rate → skip it.
-_METRIC_AFTER_RE = re.compile(
-    r"\s*(?:de\s+|en\s+|del\s+)?"
-    r"(?:accuracy|exactitud|recall|sensibilidad|precisi[oó]n|especificidad|"
-    r"f1|f-?beta|auc(?:-?roc)?|lift)",
-    re.IGNORECASE,
+# Model-metric vocabulary (accuracy/recall/precision/…). A ``%`` figure decorated by one of
+# these — whether the metric word TRAILS the figure ("8% de accuracy") OR PRECEDES it
+# ("recall del 70%", "sensibilidad del 65%", "AUC del 88%") — is a model metric, NOT the
+# event rate, so it is skipped. The before-guard closes the FP class the after-guard alone
+# missed (a metric stated as "<metric> del N%" before the figure).
+_METRIC_WORDS = (
+    r"accuracy|exactitud|recall|sensibilidad|precisi[oó]n|especificidad|"
+    r"f1|f-?beta|auc(?:-?roc)?|lift"
 )
-# Chars to scan past the anchor for the rate. The production prompt puts the figure
-# immediately after the phrase ("… del evento del 8%"); 80 chars is generous slack.
+_METRIC_AFTER_RE = re.compile(
+    r"\s*(?:de\s+|en\s+|del\s+)?(?:" + _METRIC_WORDS + r")", re.IGNORECASE
+)
+_METRIC_BEFORE_RE = re.compile(
+    r"(?:" + _METRIC_WORDS + r")\s*(?:de\s+la|del|de|al|en|:)?\s*$", re.IGNORECASE
+)
+# Window after the anchor to scan (clause), and the tight bind for the rate itself. In
+# production the event rate sits right after the phrase ("… del evento del 8%"); a metric
+# stated later in the same clause ("… mientras la exactitud llega al 95%") is beyond
+# ``_RATE_NEAR`` and is conservatively ignored (a SAFE false-negative, never a false positive).
 _RATE_WINDOW = 80
+_RATE_NEAR = 25
 
 
 # ── Public API ──────────────────────────────────────────────────────────────────
@@ -102,9 +112,11 @@ def extract_first_event_rate(text: str) -> float | None:
     """Return the first event-rate percentage anchored to a prevalence phrase, or None.
 
     Pure and total: non-string / empty → ``None``; never raises. Only ``%``-suffixed
-    figures bound to "tasa/prevalencia/… de(l) evento" count, and a figure trailed by a
-    metric word (``92% de accuracy``) is skipped, so accuracy/recall/threshold/lift are
-    never returned. The first valid figure per anchor wins (deterministic).
+    figures bound to "tasa/prevalencia/… de(l) evento" count. A figure is rejected when a
+    metric word trails it (``92% de accuracy``) OR precedes it (``recall del 70%``), and a
+    figure beyond ``_RATE_NEAR`` chars of the anchor (a metric stated later in the clause)
+    is ignored — so accuracy/recall/precision/AUC/threshold/lift are never returned. The
+    first valid figure per anchor wins (deterministic).
     """
     if not isinstance(text, str) or not text:
         return None
@@ -114,8 +126,12 @@ def extract_first_event_rate(text: str) -> float | None:
         if boundary is not None:
             window = window[: boundary.start()]
         for match in _PCT_NUM_RE.finditer(window):
+            if match.start() > _RATE_NEAR:
+                break  # too far from the anchor to be the rate (a metric stated later)
+            if _METRIC_BEFORE_RE.search(window[: match.start()]):
+                continue  # "recall del 70%" — metric word precedes the figure
             if _METRIC_AFTER_RE.match(window[match.end() :]):
-                continue
+                continue  # "92% de accuracy" — metric word trails the figure
             rate = _parse_rate_pct(match.group(1))
             if rate is not None:
                 return rate
