@@ -175,6 +175,10 @@ from case_generator.m1_grounding import (
     validate_questions_exhibit_coherence,
 )
 from case_generator.m2_grounding import validate_eda_questions_coherence
+from case_generator.m3_grounding import (
+    allowed_sections_for,
+    validate_m3_questions_coherence,
+)
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
     _bounded_diagnostic,
@@ -6048,6 +6052,151 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
 
 # Issue 4.3 — M3 QUESTIONS GENERATOR
+# ─────────────────────────────────────────────────────────
+# M3 question coherence — reprompt-once-then-DEGRADE (M3 sibling of #412/#413).
+# Mirrors `_apply_eda_questions_coherence`. The pure validator lives in m3_grounding.py;
+# this gates it to the classification family for BOTH profiles behind the
+# `m3_question_coherence` kill-switch and reprompts once on a violation.
+# ─────────────────────────────────────────────────────────
+
+_M3_VIOLATION_CODES = (
+    ("M3_SECTION_REF_NONEXISTENT", "section_ref"),
+    ("MODELO_NO_SELECCIONADO", "unselected_model"),
+)
+
+
+def _m3_violation_types(violations: list[str]) -> list[str]:
+    """Enumerated short codes for structured logging — never the raw message (no PII)."""
+    codes: list[str] = []
+    for violation in violations:
+        for prefix, code in _M3_VIOLATION_CODES:
+            if violation.startswith(prefix) and code not in codes:
+                codes.append(code)
+    return codes
+
+
+def _build_m3_coherence_reprompt(
+    violations: list[str], *, profile: str, variant: str | None, numeros: list[Any]
+) -> str:
+    """Focused reprompt (CONCATENATED, never ``.format`` — the already-formatted prompt and
+    this suffix both carry ``{}`` from the JSON schema). Carries the concrete fix (the valid
+    section tokens for the profile + the forbidden model when single-model) and demands the
+    SAME questions with the SAME ``numero`` so the downstream ``M3-Q{numero}`` answer/grading
+    key is preserved — load-bearing because ``GeneradorPreguntasOutput`` does NOT bound length.
+    """
+    bullet_list = "\n".join(f"- {violation}" for violation in violations)
+    valid_sections = ", ".join(sorted(allowed_sections_for(profile)))
+    forbidden_line = ""
+    if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY:
+        forbidden_line = "NO menciones Random Forest (el modelo seleccionado es Logistic Regression).\n"
+    elif variant == CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY:
+        forbidden_line = "NO menciones Logistic Regression (el modelo seleccionado es Random Forest).\n"
+    numeros_str = ", ".join(str(numero) for numero in numeros)
+    return (
+        "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA (Módulo 3)\n"
+        "Algunas preguntas citan una sección inexistente en `m3_section_ref` o nombran un "
+        "modelo no seleccionado. "
+        f"Regenera EXACTAMENTE {len(numeros)} preguntas con el MISMO schema y los MISMOS "
+        f"`numero` ({numeros_str}): cada `m3_section_ref` debe ser una sección válida del "
+        "Módulo 3 y ninguna pregunta debe nombrar el modelo no seleccionado.\n"
+        f"Secciones válidas: {valid_sections}.\n"
+        f"{forbidden_line}"
+        "Incoherencias detectadas:\n" + bullet_list
+    )
+
+
+def _apply_m3_questions_coherence(
+    *,
+    llm: Any,
+    prompt: str,
+    state: ADAMState,
+    preguntas_dict: list[dict],
+    profile: str,
+    variant: str | None,
+) -> list[dict]:
+    """Validate + reprompt-once-then-DEGRADE the M3 question coherence.
+
+    Gated to the classification family for BOTH profiles (business + ml_ds) via
+    ``_is_classification_family`` (the SAME gate M1/M2 use) behind the
+    ``m3_question_coherence`` kill-switch; a byte-identical no-op otherwise. On a violation
+    it reprompts ONCE (one Flash call) with the concrete fix; the corrected set is accepted
+    ONLY if it preserves the question count AND the ``numero`` sequence (the answer/grading
+    key ``M3-Q{numero}``) AND is now coherent — otherwise it degrades to the pass-1 questions.
+    Best-effort: ANY throw (including a reprompt ``RuntimeError``, which the node would
+    otherwise re-raise and fail the job) degrades to pass-1. Never raises.
+
+    ``prompt`` is the ALREADY-formatted string; the reprompt is built by CONCATENATION (never
+    re-``.format``). ``profile``/``variant`` are resolved by the caller and feed the two checks.
+    ``state`` is read ONLY for the gate and ``case_id`` logging — never ``m3_content`` /
+    ``m3_metrics_summary`` / the notebook branch — so the parallel notebook fan-out stays independent.
+    """
+    log_extra = {"node": "m3_questions_generator", "case_id": state.get("case_id")}
+    try:
+        if not settings.m3_question_coherence or not _is_classification_family(state):
+            return preguntas_dict
+        violations = validate_m3_questions_coherence(
+            preguntas_dict, profile=profile, variant=variant
+        )
+        if not violations:
+            return preguntas_dict
+        numeros = [q.get("numero") for q in preguntas_dict]
+        logger.info(
+            "[m3_questions] reprompt de coherencia M3 disparado",
+            extra={
+                **log_extra,
+                "violation_count": len(violations),
+                "violation_types": _m3_violation_types(violations),
+            },
+        )
+        reprompt = prompt + _build_m3_coherence_reprompt(
+            violations, profile=profile, variant=variant, numeros=numeros
+        )
+        try:
+            resultado: GeneradorPreguntasOutput = llm.with_structured_output(
+                GeneradorPreguntasOutput
+            ).invoke(reprompt)
+            corrected = [p.model_dump() for p in resultado.preguntas]
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[m3_questions] reprompt de coherencia M3 inválido — degrada a pass-1: %s",
+                exc,
+                extra=log_extra,
+            )
+            return preguntas_dict
+        # Identity guard: a reprompt that drops/adds/renumbers a question would corrupt the
+        # `M3-Q{numero}` answer/grading key — reject it. List equality = count + order + values,
+        # and is the ONLY count protection because `GeneradorPreguntasOutput` is unbounded.
+        if [q.get("numero") for q in corrected] != numeros:
+            logger.warning(
+                "[m3_questions] reprompt M3 alteró conteo/numero — degrada a pass-1",
+                extra=log_extra,
+            )
+            return preguntas_dict
+        residual = validate_m3_questions_coherence(corrected, profile=profile, variant=variant)
+        if not residual:
+            logger.info(
+                "[m3_questions] coherencia M3 corregida por reprompt",
+                extra={**log_extra, "degraded": False},
+            )
+            return corrected
+        logger.warning(
+            "[m3_questions] coherencia M3 degradada tras reprompt",
+            extra={
+                **log_extra,
+                "violation_types": _m3_violation_types(residual),
+                "degraded": True,
+            },
+        )
+        return preguntas_dict
+    except Exception as exc:  # best-effort — a coherence pass must never fail the job
+        logger.warning(
+            "[m3_questions] validador de coherencia M3 falló (best-effort): %s",
+            exc,
+            extra=log_extra,
+        )
+        return preguntas_dict
+
+
 def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """Genera preguntas de M3 bifurcadas por perfil:
     - business: M3_AUDIT_QUESTIONS_PROMPT    (3 preguntas, refs 3.1–3.5, auditoría de evidencia)
@@ -6064,6 +6213,11 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         })
 
         profile, family = _resolve_generation_focus(state)
+        # `resolved_variant` is None for every cohort EXCEPT ml_ds+clf (set below); the M3
+        # coherence wrapper passes it to the unselected-model guard (no-op when None), so
+        # business / ml_ds-non-clf never enter Check B. Initialized here so the call site
+        # below always has it defined (no NameError on the else branches).
+        resolved_variant: str | None = None
         if profile == "ml_ds":
             if family == "clasificacion":
                 _algoritmos_raw = _extract_state_algoritmos(state)
@@ -6080,6 +6234,7 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
                         _algoritmos_raw,
                         _q_variant_warning,
                     )
+                resolved_variant = _variant
                 prompt = M3_CLASSIFICATION_QUESTIONS_BY_VARIANT.get(
                     _variant,
                     M3_CLASSIFICATION_QUESTIONS_BY_VARIANT["lr_rf_contrast"],
@@ -6092,11 +6247,22 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             prompt = M3_AUDIT_QUESTIONS_PROMPT
             tag = "m3_audit_questions"
 
+        # Capture the formatted prompt so the coherence wrapper can CONCATENATE its
+        # correction suffix onto it (never a second `.format()` — JSON schema braces).
+        formatted = prompt.format(**context)
         resultado: GeneradorPreguntasOutput = llm.with_structured_output(
             GeneradorPreguntasOutput
-        ).invoke(prompt.format(**context))
+        ).invoke(formatted)
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
+        preguntas = _apply_m3_questions_coherence(
+            llm=llm,
+            prompt=formatted,
+            state=state,
+            preguntas_dict=preguntas,
+            profile=profile,
+            variant=resolved_variant,
+        )
         print(f"[{tag}] {len(preguntas)} preguntas")
         return {"m3_questions": preguntas, "current_agent": "m3_questions_generator"}
     except RuntimeError:

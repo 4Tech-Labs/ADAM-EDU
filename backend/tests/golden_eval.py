@@ -58,6 +58,13 @@ class NodeEvalInputs:
     # prevalence). True (n/a) for non-classification jobs. Computed via
     # ``check_eda_questions_coherence`` (reuses the production validator).
     eda_questions_coherence_ok: bool = True
+    # M3 question coherence: every classification golden job's M3 questions must be coherent
+    # (m3_section_ref exists in the profile's taxonomy; single-model questions do not name the
+    # unselected model). True (n/a) for non-classification jobs. Computed via
+    # ``check_m3_questions_coherence`` (reuses the production validator). The M3 questions prompt
+    # embeds ``{m3_content}``, so a future m3_content_generator Pro→Flash downgrade that induced
+    # incoherent questions is blocked here (anti-regression invariant, like the M2 oracle).
+    m3_questions_coherence_ok: bool = True
 
 
 @dataclass
@@ -86,6 +93,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("domain coherence failure: churn-coupled target on ml_ds non-churn job")
     if not r.eda_questions_coherence_ok:
         reasons.append("M2 EDA question coherence failure: chart_ref or event-rate mismatch")
+    if not r.m3_questions_coherence_ok:
+        reasons.append("M3 question coherence failure: section_ref or unselected-model leak")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -143,6 +152,21 @@ def check_eda_questions_coherence(
     from case_generator.m2_grounding import validate_eda_questions_coherence
 
     return not validate_eda_questions_coherence(preguntas, chart_ids, target_event_rate)
+
+
+def check_m3_questions_coherence(
+    preguntas: list[dict], *, profile: str, variant: str | None
+) -> bool:
+    """Pure oracle: are the M3 questions coherent (no nonexistent section_ref / model leak)?
+
+    Reuses the production validator ``m3_grounding.validate_m3_questions_coherence`` (single
+    source of truth), so a future M3-prompt or m3_content downgrade regression that reintroduces
+    an out-of-taxonomy ``m3_section_ref`` or an unselected-model leak fails the golden gate.
+    Function-level import keeps this support module lightweight.
+    """
+    from case_generator.m3_grounding import validate_m3_questions_coherence
+
+    return not validate_m3_questions_coherence(preguntas, profile=profile, variant=variant)
 
 
 # ── frozen golden set ────────────────────────────────────
