@@ -149,6 +149,15 @@ class Settings(BaseSettings):
     # M2_MI_EXCLUDE_INDEX=false to restore the prior behavior byte-identically (all columns
     # except the target enter the ranking; instant env-only revert, no redeploy).
     m2_mi_exclude_index: bool = True
+    # M6 Teaching Note as a concise per-module teacher guide. When true, `teaching_note_part1`
+    # emits §1 "Resumen para el Docente" + a Python-OWNED §2 "Recorrido por Módulo"
+    # (`build_module_guide_block` — module set/numbering/labels correct by construction,
+    # mirroring `getModuleConfig`; the LLM only fills one ≤22-word anchor per module) and
+    # `teaching_note_part2` emits §3 "Plan de Clase y Dónde se Traban" (the 1.000-word §4
+    # "Análisis del Caso" is deleted). When false, both nodes run the byte-identical legacy
+    # bodies (`_legacy_teaching_note_part1/part2`). Kill-switch: set TEACHING_NOTE_MODULE_GUIDE=
+    # false to restore the prior behavior exactly (instant env-only revert; no redeploy).
+    teaching_note_module_guide: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 
