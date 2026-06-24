@@ -69,6 +69,11 @@ from case_generator.prompts.clasificacion import (
     build_cost_matrix_block,
     select_eda_text_blocks,
 )
+from case_generator.prompts.teaching_note import (
+    build_module_guide_block,
+    build_roster_allowlist,
+    module_guide_roster_ids,
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MÓDULO 2 — ANÁLISIS DE DATOS (Insight Analyst / Data Analyst)
@@ -1331,7 +1336,8 @@ Reglas ESTRICTAS:
 # TEACHING NOTE — PARTE 1: Sinopsis + Objetivos Bloom + Plan de Clase
 # ══════════════════════════════════════════════════════════════════════════════
 
-TEACHING_NOTE_PART1_PROMPT = """\
+# Legacy (kill-switch OFF). Byte-identical previous behavior — do NOT edit.
+TEACHING_NOTE_PART1_PROMPT_LEGACY = """\
 # Role
 Experto en diseño pedagógico (Método del Caso). Tu misión es crear un "Manual de Vuelo"
 para que el docente prepare su sesión en 10 minutos.
@@ -1362,6 +1368,45 @@ Estructura la sesión en bloques de tiempo reales para {course_level}:
 - EDA (resumen): {eda_section}
 - Perfil: {student_profile} | Nivel: {course_level}
 """
+
+
+# Active (kill-switch ON). Structured output (TeachingNoteIntroOutput): §1 Resumen + anclajes de §2.
+# Python ensambla §2 "Recorrido por Módulo" de forma determinista (build_module_guide_block);
+# el LLM SOLO escribe la sinopsis, el público, 3 objetivos y una frase de anclaje por módulo.
+TEACHING_NOTE_PART1_PROMPT = """\
+# Role
+Experto en diseño pedagógico (Método del Caso). Preparas una guía para que el docente
+entienda el caso en pocos minutos.
+
+# Task
+Usando el esquema estructurado provisto, genera el material introductorio de la Teaching Note
+(Módulo 6, exclusiva del docente). Idioma: {output_language}.
+
+Produce exactamente estos campos:
+- resumen_markdown: sinopsis ejecutiva del dilema central y la tensión principal (≤90 palabras,
+  prosa continua, SIN encabezados ni viñetas).
+- publico_objetivo: una sola línea sobre para qué perfil ({student_profile}) y nivel
+  ({course_level}) está pensado el caso.
+- objetivos: exactamente 3 objetivos de aprendizaje con verbos de acción (Diagnosticar, Evaluar,
+  Justificar…). Solo pueden referirse a los módulos del allowlist de abajo.
+- anclajes: por CADA módulo del allowlist y SOLO esos, una frase (≤22 palabras) que conecte ese
+  módulo con el dilema, la empresa o el sector REALES de la narrativa. Usa el modulo_id exacto
+  del allowlist (m1, m2, …).
+
+# Reglas estrictas
+- NO inventes, agregues, elimines, renombres ni renumeres módulos.
+- NO menciones módulos fuera del allowlist (p. ej. M2/M3 o un notebook si no aparecen ahí).
+- NO describas el Módulo 6.
+- Cada anclaje debe ser específico de ESTE caso, nunca genérico.
+
+# Módulos de ESTE caso (allowlist — úsalos tal cual)
+{modulos_disponibles}
+
+# Contexto del caso
+- Narrativa: {case_context}
+- EDA (resumen): {eda_section}
+- Perfil: {student_profile} | Nivel: {course_level}
+"""
  
  
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1369,7 +1414,8 @@ Estructura la sesión en bloques de tiempo reales para {course_level}:
 # Contexto ligero: sinopsis de Part1 + perfil + industria + preguntas
 # ══════════════════════════════════════════════════════════════════════════════
 
-TEACHING_NOTE_PART2_PROMPT = """\
+# Legacy (kill-switch OFF). Byte-identical previous behavior — do NOT edit.
+TEACHING_NOTE_PART2_PROMPT_LEGACY = """\
 # Role
 Consultor estratégico senior. Tu foco es el rigor del análisis y la profundidad de la industria.
 
@@ -1393,6 +1439,46 @@ Formato: Markdown, H4. Sin introducciones ni texto de relleno.
 - Sinopsis previa: {teaching_note_part1_synopsis}
 - Perfil: {student_profile} | Nivel: {course_level}
 - Datos de preguntas (referencia): {question_full_data}
+- Datos M5 (referencia): {m5_questions_data}
+"""
+
+
+# Active (kill-switch ON). §3 únicamente: plan de clase comprimido + "dónde se traban".
+# El §4 "Análisis del Caso" (Tensiones/FCE/Benchmarks) se eliminó. Sin {teaching_note_part1_synopsis}.
+TEACHING_NOTE_PART2_PROMPT = """\
+# Role
+Docente experto en el Método del Caso. Cierras la guía con un plan de sesión accionable.
+
+# Task
+Genera ÚNICAMENTE la sección final de la Teaching Note (Módulo 6). Idioma: {output_language}.
+Formato: Markdown limpio. Sin introducciones ni texto de relleno. Empieza directamente con el
+encabezado de nivel 2 indicado.
+
+# Output Structure (EXACTAMENTE este encabezado y orden)
+
+## Plan de Clase y Dónde se Traban
+
+**Plan de sesión (90–120 min):**
+- **Apertura (15%):** pregunta rompehielo y encuadre del conflicto (una línea).
+- **Debate central (70%):** 2–3 preguntas provocadoras basadas en los datos del caso (una línea).
+- **Cierre (15%):** takeaway principal y lección transferible (una línea).
+
+**Dónde se traban los estudiantes:**
+- 2 a 3 viñetas, cada una de ≤30 palabras, ancladas al dilema, a los Exhibits o a las opciones
+  A/B/C de ESTE caso (no generalidades).
+
+# Reglas estrictas
+- Usa SOLO los módulos del allowlist; NO menciones módulos fuera de esa lista.
+- NO añadas otras secciones (sin Sinopsis, sin Objetivos, sin Análisis del Caso, sin Benchmarks).
+- NO uses encabezados de nivel 3 o 4 (### / ####); los subtítulos van en **negrita**.
+
+# Módulos de ESTE caso (allowlist — úsalos tal cual)
+{modulos_disponibles}
+
+# Contexto
+- Título del Caso: {titulo}
+- Industria: {industria}
+- Preguntas del caso (referencia): {question_full_data}
 - Datos M5 (referencia): {m5_questions_data}
 """
 
@@ -2331,5 +2417,10 @@ __all__ = [
   "SCHEMA_DESIGNER_PROMPT_BY_FAMILY",
   "SCHEMA_DESIGNER_PROMPT_CLASSIFICATION",
   "TEACHING_NOTE_PART1_PROMPT",
+  "TEACHING_NOTE_PART1_PROMPT_LEGACY",
   "TEACHING_NOTE_PART2_PROMPT",
+  "TEACHING_NOTE_PART2_PROMPT_LEGACY",
+  "build_module_guide_block",
+  "build_roster_allowlist",
+  "module_guide_roster_ids",
 ]

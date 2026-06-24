@@ -76,6 +76,12 @@ class NodeEvalInputs:
     # jobs. Computed via ``check_m5_questions_coherence`` (reuses the production validator). Wired into
     # the gate so a future m5_questions_generator Pro→Flash downgrade that induced incoherence is blocked.
     m5_questions_coherence_ok: bool = True
+    # M6 Teaching-Note module coherence: every golden job's teacher note must NOT describe a module
+    # the case does not have (e.g. the EDA module or a notebook in a harvard_only case). True (n/a)
+    # when coherent. Computed via ``check_m6_module_coherence`` (reuses ``m6_grounding``). Anti-
+    # regression invariant against a future teaching_note_part1 prompt/tier change that reintroduces
+    # phantom-module prose.
+    m6_module_coherence_ok: bool = True
 
 
 @dataclass
@@ -113,6 +119,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             "M5 memorándum coherence failure: unselected-model leak, unanchored metric, or "
             "nonexistent option"
         )
+    if not r.m6_module_coherence_ok:
+        reasons.append("M6 teaching-note coherence failure: prose describes a module absent from the case")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -170,6 +178,20 @@ def check_eda_questions_coherence(
     from case_generator.m2_grounding import validate_eda_questions_coherence
 
     return not validate_eda_questions_coherence(preguntas, chart_ids, target_event_rate)
+
+
+def check_m6_module_coherence(
+    note_markdown: str, roster_ids: list[str] | tuple[str, ...]
+) -> bool:
+    """Pure oracle: does the M6 teacher note avoid describing modules absent from the case?
+
+    Reuses the production guard ``m6_grounding.validate_m6_module_coherence`` (single source of
+    truth), so a future teaching_note prompt/tier regression that reintroduces phantom-module prose
+    fails the golden gate. Function-level import keeps this support module lightweight.
+    """
+    from case_generator.m6_grounding import validate_m6_module_coherence
+
+    return not validate_m6_module_coherence(note_markdown, roster_ids)
 
 
 def check_m3_questions_coherence(
