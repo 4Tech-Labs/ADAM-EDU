@@ -2122,6 +2122,8 @@ def _annotate_validate_emit(
     state: ADAMState,
     config: RunnableConfig,
     annotate_prompt: str,
+    *,
+    deterministic_text_ids: frozenset[str] = frozenset(),
 ) -> dict | None:
     """Cola compartida de los paths EDA Python-deterministas (clasif + business).
 
@@ -2131,6 +2133,12 @@ def _annotate_validate_emit(
     validó. El boundary del LLM nunca tumba el panel: si la anotación falla, se
     sirven los charts sin texto LLM (preservando los `notes` del builder, p. ej.
     el aviso anti-overclaim del chart de drivers).
+
+    ``deterministic_text_ids`` son los charts cuyo `description`/`notes` los escribe
+    el builder de forma determinista (p. ej. `missingness_heatmap`): se EXCLUYEN de
+    la petición al LLM y se descartan de sus anotaciones, de modo que el texto del
+    builder se conserva (el merge ya prefiere el texto del builder cuando el id no
+    está en `ann_by_id`). Default vacío → no-op byte-idéntico (path business).
     """
     # Cap defensivo: el contrato son ≤5 charts.
     if len(charts) > 5:
@@ -2147,6 +2155,7 @@ def _annotate_validate_emit(
                 "chart_type": c.get("chart_type", ""),
             }
             for c in charts
+            if c.get("id", "") not in deterministic_text_ids
         ]
         prompt = annotate_prompt.format(
             charts_context_json=json.dumps(charts_context, ensure_ascii=False),
@@ -2172,6 +2181,12 @@ def _annotate_validate_emit(
             ann_err,
         )
         ann_by_id = {}
+
+    # Charts con texto determinista: descartar cualquier anotación LLM (incl. una
+    # que un modelo díscolo devuelva sin habérsela pedido) para preservar el texto
+    # honesto del builder en el merge de abajo.
+    for _det_id in deterministic_text_ids:
+        ann_by_id.pop(_det_id, None)
 
     # Merge defensivo: solo description/notes; preservamos data_source y los
     # `notes` factuales del builder (p. ej. el caveat anti-overclaim). El caveat va
@@ -2237,15 +2252,30 @@ def _eda_classification_python_path(
             )
             return None
 
-        charts = generate_classification_eda_charts(df, target_col, contract)
+        # Kill-switch `m2_missingness_honest_text` (default true): el builder escribe
+        # texto determinista y honesto para `missingness_heatmap` (que el LLM no debe
+        # pisar). Off → texto vacío + el LLM lo anota (comportamiento previo).
+        honest_text = settings.m2_missingness_honest_text
+        charts = generate_classification_eda_charts(
+            df, target_col, contract, honest_text=honest_text
+        )
         if not charts:
             logger.warning(
                 "[eda_chart_generator/py] builder devolvió 0 charts — fallback a path LLM"
             )
             return None
 
+        # El id está acoplado al builder (`_build_missingness_heatmap`); el test E2E
+        # de coherencia de texto lo bloquea contra un rename silencioso.
+        deterministic_text_ids = (
+            frozenset({"missingness_heatmap"}) if honest_text else frozenset()
+        )
         return _annotate_validate_emit(
-            charts, state, config, EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION
+            charts,
+            state,
+            config,
+            EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
+            deterministic_text_ids=deterministic_text_ids,
         )
     except Exception as e:  # noqa: BLE001
         logger.error(
