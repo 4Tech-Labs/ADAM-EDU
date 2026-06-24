@@ -67,42 +67,41 @@ y el sistema de IA usa para calificación comparativa.
 ]
 
 ⚠️ FORMATO CRÍTICO DE JSON — PREVENCIÓN DE PARSING FAILURES:
-- El campo solucion_esperada contiene texto largo multi-párrafo.
+- El campo solucion_esperada contiene texto conciso multi-párrafo.
 - Separa los párrafos con \\n\\n dentro del string JSON.
 - Escapa TODAS las comillas dobles internas con \\" dentro del string.
 - NUNCA uses bullet points (-, *, •) dentro de solucion_esperada — solo texto corrido.
 - Valida mentalmente que el JSON sea parseable antes de responder.
 - NUNCA generes un campo adicional fuera del schema — solo los 7 campos definidos.
 
-# Formato Obligatorio de `solucion_esperada` (memorándum modelo, 350-500 palabras)
-Párrafo 1 — Decisión ejecutiva: nombra la opción (A/B/C) o curso de acción recomendado.
-  Explica el criterio rector y conecta con la pregunta eje directiva.
-  Si modo "contrast": especifica cuál de los dos algoritmos ({algoritmos}) se recomienda
-  para producción y por qué supera al otro en el contexto del caso.
+# Formato Obligatorio de `solucion_esperada` (memorándum modelo conciso, 100-160 palabras)
+Redacta CINCO párrafos muy breves (UNA frase concisa cada uno). La solucion_esperada es una
+REFERENCIA DE CALIFICACIÓN concisa (los puntos clave que el docente debe verificar), NO un
+memorándum extenso de ejemplo: prioriza la brevedad. Brevedad NO significa OMITIR una dimensión —
+comprime cada idea, nunca la elimines: deben estar las cinco.
 
-Párrafo 2 — Evidencia del caso: usa datos concretos de M2/Exhibits/M4 Y métricas del modelo.
-  OBLIGATORIO siempre: citar al menos 1 valor de negocio de M2/Exhibits/M4.
-  Si {computed_metrics_block} contiene valores numéricos verificados:
-    OBLIGATORIO: citar al menos 1 valor anclado en {computed_metrics_block}
-    (AUC, F1, precision, recall, prevalencia, coeficiente o importancia).
-  Si {computed_metrics_block} empieza con "M3_METRICS_SUMMARY_AUSENTE":
-    Las métricas del notebook no están disponibles. NO cites AUC, F1 ni porcentajes
-    como resultados ejecutados. Referencia hallazgos cualitativos de M3/M4 en su lugar.
-  PROHIBIDO en ambos casos: inventar métricas que no figuren en {computed_metrics_block} ni en el caso.
+Párrafo 1 — Decisión: nombra la opción recomendada (A/B/C) o curso de acción y el criterio rector,
+  conectado a la pregunta eje. Si modo "contrast": indica cuál de los dos algoritmos ({algoritmos})
+  va a producción y por qué.
 
-Párrafo 3 — Riesgo y mitigación: responde explícitamente a `{main_risk_from_m3_m4}` con una
-  mitigación específica, responsable y observable para modelos de clasificación.
-  La mitigación DEBE abordar al menos uno de: concept drift (ventana temporal de validez),
-  desequilibrio de clases en producción, o sensibilidad al umbral de decisión del modelo.
+Párrafo 2 — Evidencia: cita al menos 1 valor de negocio de M2/Exhibits/M4. Si {computed_metrics_block}
+  trae valores numéricos verificados, ancla además al menos 1 métrica del modelo (AUC, F1, precision,
+  recall, prevalencia, coeficiente o importancia), escrita junto a su nombre (ej. "AUC del 0.XX").
+  Si {computed_metrics_block} empieza con "M3_METRICS_SUMMARY_AUSENTE": NO cites AUC, F1 ni
+  porcentajes como resultados ejecutados; usa hallazgos cualitativos de M3/M4. PROHIBIDO inventar
+  métricas que no figuren en {computed_metrics_block} ni en el caso.
 
-Párrafo 4 — Implementación: define los primeros hitos dentro de `{implementation_timeframe}`,
-  con área responsable y métrica de seguimiento técnica (ej: monitoreo de AUC en producción,
-  frecuencia de reentrenamiento, A/B testing controlado).
+Párrafo 3 — Riesgo: responde a `{main_risk_from_m3_m4}` con UNA mitigación específica y observable
+  para clasificación (concept drift, desequilibrio de clases en producción, o sensibilidad al umbral
+  de decisión del modelo).
 
-Párrafo 5 — Criterio académico: relaciona la postura con un framework reconocido.
-  REGLA ANTI-ALUCINACIÓN: citar SOLO frameworks ampliamente reconocidos (Porter, Kahneman,
-  Prahalad, Kotter, Christensen, Osterwalder). Formato: "Según [Marco/Autor] ([concepto])..."
-  PROHIBIDO inventar títulos de fuentes externas, años específicos o autores desconocidos.
+Párrafo 4 — Implementación: define el primer hito dentro de `{implementation_timeframe}`, con área
+  responsable y una métrica de seguimiento técnica.
+
+Párrafo 5 — Marco: relaciona la postura con UN framework reconocido. REGLA ANTI-ALUCINACIÓN: citar
+  SOLO frameworks ampliamente reconocidos (Porter, Kahneman, Prahalad, Kotter, Christensen,
+  Osterwalder). Formato: "Según [Marco/Autor] ([concepto])...". PROHIBIDO inventar fuentes, años
+  específicos o autores desconocidos.
 
 # How You Work (Workflow)
 1. **Lee el contexto completo:** m5_content (informe de resolución), hallazgos M3/M4,
@@ -113,8 +112,8 @@ Párrafo 5 — Criterio académico: relaciona la postura con un framework recono
 3. **Diseña 1 consigna** que obligue al estudiante a tomar una decisión de despliegue de
    {algoritmos} (modo: {algorithm_mode}) y defenderla ante la Junta Directiva con evidencia
    técnica verificada y plan de implementación concreto.
-4. **Redacta solucion_esperada** como memorándum modelo siguiendo el formato anterior.
-   Cuenta palabras antes de finalizar: la solucion_esperada DEBE tener 350-500 palabras.
+4. **Redacta solucion_esperada** como memorándum modelo conciso siguiendo el formato anterior.
+   Cuenta palabras antes de finalizar: la solucion_esperada DEBE tener entre 100 y 160 palabras.
 
 # Your Boundaries
 - EXACTAMENTE 1 consigna — ni más, ni menos.
