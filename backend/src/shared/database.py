@@ -137,6 +137,18 @@ class Settings(BaseSettings):
     # builder text + LLM annotates the chart; instant env-only revert, no redeploy). The
     # frontend colorbar fix (constant-matrix range) applies regardless of this flag.
     m2_missingness_honest_text: bool = True
+    # Model-ready feature filter for the M2 "Top features por Mutual Information" chart
+    # (ml_ds + clasificación). When true, `_build_mutual_info_top8` excludes columns that
+    # inflate Mutual Information through high-cardinality discrete encoding — the temporal
+    # index `period` ("2023-01", always all-unique → MI≈H(Y) memorization artifact), IDs,
+    # free-text and other high-cardinality categoricals, plus constants and >50%-null
+    # columns — mirroring the M3 notebook's modeled feature universe. Continuous numerics
+    # (incl. the financial base revenue/costs/margin_pct and the real driver) are kept:
+    # the k-NN MI estimator does not inflate with cardinality. Scoped to the classification
+    # python path; business/other-family/non-clf cases are unaffected. Kill-switch: set
+    # M2_MI_EXCLUDE_INDEX=false to restore the prior behavior byte-identically (all columns
+    # except the target enter the ranking; instant env-only revert, no redeploy).
+    m2_mi_exclude_index: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 
