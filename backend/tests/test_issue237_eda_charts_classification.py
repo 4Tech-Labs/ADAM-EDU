@@ -64,7 +64,8 @@ CONTRACT = {"case_id": "test_case_237"}
 
 def test_happy_path_invariants(df_binary: pd.DataFrame) -> None:
     """El happy path emite EXACTAMENTE 3 charts en el orden esperado, todos
-    con `data_source=python_builder` y descriptions/notes vacías (anti-LLM).
+    con `data_source=python_builder`. Solo `missingness_heatmap` lleva texto
+    determinista del builder (honest_text); los otros dos siguen vacíos (anti-LLM).
     """
     charts = generate_classification_eda_charts(df_binary, "churn", CONTRACT)
     assert len(charts) == 3
@@ -77,10 +78,17 @@ def test_happy_path_invariants(df_binary: pd.DataFrame) -> None:
     for c in charts:
         assert c["library"] == "plotly"
         assert c["data_source"] == "python_builder"
-        # Anti-LLM-fabricated: el builder NO escribe textos pedagógicos.
-        assert c["description"] == ""
-        assert c["notes"] == ""
         assert c["source"].startswith("Dataset ADAM")
+        if c["id"] == "missingness_heatmap":
+            # Texto determinista y honesto del builder (no LLM): df_binary no tiene
+            # nulos → describe completitud, no deja que el LLM invente un MNAR.
+            assert "faltantes" in c["subtitle"]
+            assert c["description"] != ""
+            assert c["notes"] != ""
+        else:
+            # Anti-LLM-fabricated: los demás builders NO escriben textos pedagógicos.
+            assert c["description"] == ""
+            assert c["notes"] == ""
 
 
 def test_target_multiclass(df_multiclass: pd.DataFrame) -> None:
@@ -146,6 +154,59 @@ def test_snapshot_mutual_info_top8_features(df_binary: pd.DataFrame) -> None:
 
 
 # ─────────────────────────────────────────────────────────
+# Texto honesto del mapa de valores faltantes (Cambio 1)
+# ─────────────────────────────────────────────────────────
+
+
+def test_missingness_text_complete_dataset(df_binary: pd.DataFrame) -> None:
+    """Dataset sin nulos (caso de-churned ml_ds+clf): el chart de missingness DICE
+    que el dataset está completo y trae una annotation de estado vacío — NO inventa
+    un patrón MNAR inexistente."""
+    charts = generate_classification_eda_charts(df_binary, "churn", CONTRACT)
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+    assert "sin valores faltantes" in mh["subtitle"]
+    assert "COMPLETO" in mh["description"]
+    # El texto del estado-completo no afirma que hay missingness concentrada.
+    assert "concentradas" not in mh["description"]
+    anns = mh["layout"].get("annotations") or []
+    assert any("Sin valores faltantes" in (a.get("text", "") or "") for a in anns)
+
+
+def test_missingness_text_with_real_nulls() -> None:
+    """Dataset CON nulos (caso churn/retención): describe el conteo real + pregunta
+    MNAR legítima y NO añade la annotation de estado vacío."""
+    rng = np.random.default_rng(7)
+    n = 120
+    df = pd.DataFrame(
+        {
+            "age": rng.integers(18, 70, size=n).astype(float),
+            "income": rng.normal(50_000, 15_000, size=n),
+            "churn": rng.choice([0, 1], size=n, p=[0.7, 0.3]),
+        }
+    )
+    df.loc[:9, "age"] = np.nan  # 10 celdas faltantes en una columna feature
+    charts = generate_classification_eda_charts(df, "churn", CONTRACT)
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+    assert "celdas faltantes" in mh["subtitle"]
+    assert "age" in mh["description"]
+    assert "MNAR" in mh["notes"]
+    assert "annotations" not in mh["layout"]
+
+
+def test_missingness_honest_text_off_is_byte_identical(df_binary: pd.DataFrame) -> None:
+    """Kill-switch OFF (`honest_text=False`): comportamiento previo byte-idéntico —
+    description/notes vacías, sin annotation, subtitle base."""
+    charts = generate_classification_eda_charts(
+        df_binary, "churn", CONTRACT, honest_text=False
+    )
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+    assert mh["description"] == ""
+    assert mh["notes"] == ""
+    assert mh["subtitle"] == "Muestra aleatoria de 200 filas (random_state=42)"
+    assert "annotations" not in mh["layout"]
+
+
+# ─────────────────────────────────────────────────────────
 # Boundary del LLM stub (annotate-only path)
 # ─────────────────────────────────────────────────────────
 
@@ -198,6 +259,12 @@ def test_boundary_llm_cannot_alter_traces(df_binary: pd.DataFrame) -> None:
         .tolist()
     ]
     assert cd["data_source"] == "python_builder"
+    # El chart de missingness CONSERVA el texto determinista del builder: el stub
+    # LLM ("d2"/"n2") se descarta por `deterministic_text_ids` (Cambio 2).
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+    assert mh["description"] != "d2"
+    assert mh["notes"] != "n2"
+    assert "faltantes" in mh["subtitle"]
 
 
 def test_llm_ghost_chart_id_is_silently_dropped(df_binary: pd.DataFrame) -> None:

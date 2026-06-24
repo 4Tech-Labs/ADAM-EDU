@@ -126,6 +126,17 @@ class Settings(BaseSettings):
     # are unaffected. Kill-switch: set M5_QUESTION_COHERENCE=false to passthrough exactly (instant
     # env-only revert; no redeploy).
     m5_question_coherence: bool = True
+    # Honest, deterministic text for the M2 "Mapa de valores faltantes" chart (ml_ds +
+    # clasificación). When true, `_build_missingness_heatmap` writes the real missingness
+    # summary into `subtitle`/`description`/`notes` (and a centered empty-state annotation
+    # when the sample has 0 nulls), and `_eda_classification_python_path` excludes the chart
+    # from LLM annotation so the LLM can no longer invent an MNAR pattern the de-churned
+    # dataset (#382) never has. Best-effort + scoped to the classification python path, so
+    # business/other-family/non-clf cases are unaffected. Kill-switch: set
+    # M2_MISSINGNESS_HONEST_TEXT=false to restore the prior behavior byte-identically (empty
+    # builder text + LLM annotates the chart; instant env-only revert, no redeploy). The
+    # frontend colorbar fix (constant-matrix range) applies regardless of this flag.
+    m2_missingness_honest_text: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 
