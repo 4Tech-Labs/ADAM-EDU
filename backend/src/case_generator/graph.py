@@ -2256,8 +2256,12 @@ def _eda_classification_python_path(
         # texto determinista y honesto para `missingness_heatmap` (que el LLM no debe
         # pisar). Off → texto vacío + el LLM lo anota (comportamiento previo).
         honest_text = settings.m2_missingness_honest_text
+        # Kill-switch `m2_mi_exclude_index` (default true): filtra del chart de MI las
+        # columnas que inflan la métrica por alta cardinalidad discreta (period/IDs/texto).
+        # Off → todas las columnas salvo el target (comportamiento legacy byte-idéntico).
+        exclude_index = settings.m2_mi_exclude_index
         charts = generate_classification_eda_charts(
-            df, target_col, contract, honest_text=honest_text
+            df, target_col, contract, honest_text=honest_text, exclude_index=exclude_index
         )
         if not charts:
             logger.warning(
