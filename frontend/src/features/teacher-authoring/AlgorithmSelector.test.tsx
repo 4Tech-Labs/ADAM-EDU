@@ -4,12 +4,13 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "@/shared/test-utils";
 import { server } from "@/shared/testing/msw/server";
 
 import { AlgorithmSelector, type AlgorithmSelectorProps } from "./AlgorithmSelector";
+import { algorithmFeatureFlags } from "./algorithmContrastGate";
 
 function defaultProps(overrides: Partial<AlgorithmSelectorProps> = {}): AlgorithmSelectorProps {
     return {
@@ -59,7 +60,16 @@ describe("AlgorithmSelector (Issue #230)", () => {
         vi.restoreAllMocks();
     });
 
+    afterEach(() => {
+        // Reset the temporary ml_ds contrast gate between tests so a flag flip
+        // in one contrast test cannot leak into the next.
+        algorithmFeatureFlags.mlDsContrastEnabled = false;
+    });
+
     it("renders the suggest button and the mode toggle in single mode", async () => {
+        // The toggle only renders when contrast is available: a non-gated profile
+        // whose catalog exposes challengers. ml_ds with the flag on qualifies.
+        algorithmFeatureFlags.mlDsContrastEnabled = true;
         server.use(http.get("/api/authoring/algorithm-catalog", () => HttpResponse.json(fullCatalog)));
 
         renderWithProviders(<AlgorithmSelector {...defaultProps()} />);
@@ -67,12 +77,14 @@ describe("AlgorithmSelector (Issue #230)", () => {
         expect(
             await screen.findByRole("button", { name: /sugerir algoritmos con adam/i }),
         ).toBeInTheDocument();
-        const radios = screen.getAllByRole("radio");
+        // Toggle appears after the catalog resolves (challengers present).
+        const radios = await screen.findAllByRole("radio");
         expect(radios).toHaveLength(2);
         expect(radios[0]).toHaveAttribute("aria-checked", "true");
     });
 
     it("renders both baseline and challenger selects in contrast mode", async () => {
+        algorithmFeatureFlags.mlDsContrastEnabled = true; // exercise the dormant contrast UI
         server.use(http.get("/api/authoring/algorithm-catalog", () => HttpResponse.json(fullCatalog)));
 
         renderWithProviders(<AlgorithmSelector {...defaultProps({ mode: "contrast" })} />);
@@ -81,15 +93,15 @@ describe("AlgorithmSelector (Issue #230)", () => {
         expect(screen.getByLabelText(/challenger \(alta capacidad\)/i)).toBeInTheDocument();
     });
 
-    it("disables the contrast option when the catalog has no challengers", async () => {
+    it("hides the contrast option when the catalog has no challengers (business)", async () => {
         server.use(http.get("/api/authoring/algorithm-catalog", () => HttpResponse.json(businessCatalog)));
 
         renderWithProviders(<AlgorithmSelector {...defaultProps({ profile: "business" })} />);
 
-        await waitFor(() => {
-            const radios = screen.getAllByRole("radio");
-            expect(radios[1]).toBeDisabled();
-        });
+        // Single picker present, but the mode toggle and "2 algoritmos" card are gone.
+        expect(await screen.findByLabelText(/algoritmo principal/i)).toBeInTheDocument();
+        expect(screen.queryByRole("radio")).toBeNull();
+        expect(screen.queryByText(/2 algoritmos/i)).toBeNull();
     });
 
     it("invokes onSuggest when the suggest button is clicked", async () => {
@@ -105,6 +117,7 @@ describe("AlgorithmSelector (Issue #230)", () => {
     });
 
     it("shows an inline error when baseline equals challenger in contrast mode", async () => {
+        algorithmFeatureFlags.mlDsContrastEnabled = true; // exercise the dormant contrast UI
         server.use(http.get("/api/authoring/algorithm-catalog", () => HttpResponse.json(fullCatalog)));
 
         renderWithProviders(
@@ -160,6 +173,7 @@ describe("AlgorithmSelector (Issue #230)", () => {
     });
 
     it("filters challengers to the same family as the selected baseline", async () => {
+        algorithmFeatureFlags.mlDsContrastEnabled = true; // exercise the dormant contrast UI
         server.use(http.get("/api/authoring/algorithm-catalog", () => HttpResponse.json(fullCatalog)));
 
         renderWithProviders(
@@ -179,6 +193,7 @@ describe("AlgorithmSelector (Issue #230)", () => {
         server.use(http.get("/api/authoring/algorithm-catalog", () => HttpResponse.json(fullCatalog)));
         const onChange = vi.fn();
 
+        algorithmFeatureFlags.mlDsContrastEnabled = true; // exercise the dormant contrast UI
         // Baseline = Regresión Lineal (regresion family); Challenger = XGBoost
         // (clasificacion family) is now invalid — the effect should clear it.
         renderWithProviders(
@@ -206,5 +221,43 @@ describe("AlgorithmSelector (Issue #230)", () => {
 
         const button = await screen.findByRole("button", { name: /sugerir algoritmos con adam/i });
         expect(button).toBeDisabled();
+    });
+
+    it("hides the 2-algorithm mode toggle for ml_ds and shows only the single picker", async () => {
+        server.use(http.get("/api/authoring/algorithm-catalog", () => HttpResponse.json(fullCatalog)));
+
+        renderWithProviders(<AlgorithmSelector {...defaultProps({ profile: "ml_ds" })} />);
+
+        // Single picker present...
+        expect(await screen.findByLabelText(/algoritmo principal/i)).toBeInTheDocument();
+        // ...but the mode toggle and the "2 algoritmos" card are gone.
+        expect(screen.queryByRole("radio")).toBeNull();
+        expect(screen.queryByText(/2 algoritmos/i)).toBeNull();
+        expect(screen.queryByLabelText(/challenger \(alta capacidad\)/i)).toBeNull();
+    });
+
+    it("coerces a hydrated ml_ds contrast preset to single (no challenger UI)", async () => {
+        server.use(http.get("/api/authoring/algorithm-catalog", () => HttpResponse.json(fullCatalog)));
+        const onChange = vi.fn();
+
+        renderWithProviders(
+            <AlgorithmSelector
+                {...defaultProps({
+                    profile: "ml_ds",
+                    mode: "contrast",
+                    primary: "Árboles de decisión",
+                    challenger: "XGBoost",
+                    onChange,
+                })}
+            />,
+        );
+
+        await waitFor(() => {
+            expect(onChange).toHaveBeenCalledWith(
+                expect.objectContaining({ mode: "single", challenger: null }),
+            );
+        });
+        expect(screen.queryByRole("radio")).toBeNull();
+        expect(screen.queryByLabelText(/challenger \(alta capacidad\)/i)).toBeNull();
     });
 });
