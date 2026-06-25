@@ -1,4 +1,4 @@
-import { Bell, GraduationCap } from "lucide-react";
+import { GraduationCap } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { useAuth } from "@/app/auth/useAuth";
@@ -49,19 +49,6 @@ export function StudentUserHeader() {
                 </div>
 
                 <div className="flex items-center gap-2 sm:gap-4">
-                    <button
-                        type="button"
-                        aria-label="Notificaciones"
-                        title="Notificaciones"
-                        className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 text-white transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-                    >
-                        <Bell className="h-5 w-5" />
-                        <span
-                            aria-hidden
-                            className="absolute -right-0.5 -top-0.5 h-[9px] w-[9px] rounded-full border-2 border-white bg-red-500"
-                        />
-                    </button>
-                    <div className="h-8 w-px bg-white/20" />
                     <div className="flex min-w-0 items-center gap-3">
                         <div
                             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/20 text-[15px] font-extrabold text-white"
