@@ -20,6 +20,8 @@ import type {
     StudentProfile,
 } from "@/shared/adam-types";
 
+import { isContrastHiddenForProfile } from "./algorithmContrastGate";
+
 /**
  * Issue #230 — Algorithm selector for the teacher authoring form.
  *
@@ -139,6 +141,14 @@ export function AlgorithmSelector({
     const baselineItems = useMemo(() => items.filter((it) => it.tier === "baseline"), [items]);
     const challengerItems = useMemo(() => items.filter((it) => it.tier === "challenger"), [items]);
     const contrastDisabled = challengerItems.length === 0;
+    // Hide the contrast mode ENTIRELY (not just grey it out) when it is gated off
+    // for the profile (ml_ds — temporary flag) OR when the catalog exposes no
+    // challengers (business — there is nothing to contrast against, permanent).
+    // `effectiveMode` keeps every render branch on "single" even if the parent
+    // state still holds a hydrated "contrast" before the coercion effect runs.
+    const contrastHiddenForProfile = isContrastHiddenForProfile(profile);
+    const contrastHidden = contrastHiddenForProfile || contrastDisabled;
+    const effectiveMode: AlgorithmMode = contrastHidden ? "single" : mode;
 
     const primaryItem = primary ? byName.get(primary.toLowerCase()) ?? null : null;
 
@@ -175,7 +185,7 @@ export function AlgorithmSelector({
             }
         }
 
-        if (mode === "contrast" && contrastDisabled) {
+        if (mode === "contrast" && contrastHidden) {
             nextMode = "single";
             nextChallenger = null;
         } else if (mode === "contrast" && nextChallenger) {
@@ -199,15 +209,15 @@ export function AlgorithmSelector({
 
     const sameAlgoError = useMemo(
         () =>
-            mode === "contrast"
+            effectiveMode === "contrast"
             && !!primary
             && !!challenger
             && primary.toLowerCase() === challenger.toLowerCase(),
-        [mode, primary, challenger],
+        [effectiveMode, primary, challenger],
     );
 
     const setMode = (nextMode: AlgorithmMode) => {
-        if (nextMode === "contrast" && contrastDisabled) return;
+        if (nextMode === "contrast" && contrastHidden) return;
         // When entering contrast, the baseline slot only accepts baseline-tier
         // items. If the user had picked a challenger-tier item in single mode,
         // clear it (and the challenger) so the backend validator does not
@@ -291,28 +301,23 @@ export function AlgorithmSelector({
                 </button>
             </div>
 
-            {/* Mode toggle */}
+            {/* Mode toggle — hidden entirely when contrast is unavailable: ml_ds (temporary
+                gate) or any profile whose catalog exposes no challengers (business). */}
+            {!contrastHidden && (
             <div role="radiogroup" aria-label="Modo de selección de algoritmos" className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                 {(["single", "contrast"] as AlgorithmMode[]).map((m) => {
+                    // The whole toggle is hidden when contrast is unavailable
+                    // (contrastDisabled ⊆ contrastHidden), so both cards are
+                    // always enabled when this block renders.
                     const active = mode === m;
-                    const disabled = m === "contrast" && contrastDisabled;
                     return (
                         <button
                             key={m}
                             type="button"
                             role="radio"
                             aria-checked={active}
-                            aria-disabled={disabled}
-                            disabled={disabled}
                             onClick={() => setMode(m)}
-                            title={
-                                disabled
-                                    ? "El catálogo de este perfil no expone challengers; usa el modo de 1 algoritmo."
-                                    : undefined
-                            }
-                            className={`scope-card p-3 select-none text-left ${active ? "active" : ""} ${
-                                disabled ? "opacity-50 cursor-not-allowed" : ""
-                            }`}
+                            className={`scope-card p-3 select-none text-left ${active ? "active" : ""}`}
                         >
                             <p className={`text-sm font-bold transition-colors ${active ? "text-[#0144a0]" : "text-slate-600"}`}>
                                 {MODE_LABELS[m]}
@@ -326,6 +331,7 @@ export function AlgorithmSelector({
                     );
                 })}
             </div>
+            )}
 
             {/* Catalog loading / error */}
             {catalogQuery.isLoading && (
@@ -346,10 +352,10 @@ export function AlgorithmSelector({
 
             {/* Selectors */}
             {!catalogQuery.isLoading && !catalogQuery.error && catalog && (
-                <div className={`grid gap-4 ${mode === "contrast" ? "md:grid-cols-2" : "md:grid-cols-1"}`}>
+                <div className={`grid gap-4 ${effectiveMode === "contrast" ? "md:grid-cols-2" : "md:grid-cols-1"}`}>
                     <div>
                         <label htmlFor="algorithm-primary" className="block text-xs font-semibold text-slate-600 mb-1.5">
-                            {mode === "contrast" ? "Baseline (interpretable)" : "Algoritmo principal"}
+                            {effectiveMode === "contrast" ? "Baseline (interpretable)" : "Algoritmo principal"}
                         </label>
                         <Select value={primary ?? ""} onValueChange={setPrimary}>
                             <SelectTrigger
@@ -359,7 +365,7 @@ export function AlgorithmSelector({
                                 <SelectValue placeholder="Selecciona un algoritmo..." />
                             </SelectTrigger>
                             <SelectContent>
-                                {(mode === "contrast" ? contrastBaselineGroups : singleGroups).map((group) => (
+                                {(effectiveMode === "contrast" ? contrastBaselineGroups : singleGroups).map((group) => (
                                     <SelectGroup key={group.family}>
                                         <SelectLabel className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
                                             {group.family_label}
@@ -370,7 +376,7 @@ export function AlgorithmSelector({
                             </SelectContent>
                         </Select>
                     </div>
-                    {mode === "contrast" && (
+                    {effectiveMode === "contrast" && (
                         <div>
                             <label htmlFor="algorithm-challenger" className="block text-xs font-semibold text-slate-600 mb-1.5">
                                 Challenger (alta capacidad){primaryItem ? ` · ${primaryItem.family_label}` : ""}
@@ -421,13 +427,13 @@ export function AlgorithmSelector({
                     El baseline y el challenger no pueden ser el mismo algoritmo.
                 </p>
             )}
-            {hasError && !sameAlgoError && (!primary || (mode === "contrast" && !challenger)) && (
+            {hasError && !sameAlgoError && (!primary || (effectiveMode === "contrast" && !challenger)) && (
                 <p role="alert" className="mt-2 text-xs text-red-500 font-medium">
-                    Debes seleccionar {mode === "contrast" ? "baseline y challenger" : "un algoritmo"}.
+                    Debes seleccionar {effectiveMode === "contrast" ? "baseline y challenger" : "un algoritmo"}.
                 </p>
             )}
             <p className="field-hint mt-1.5">
-                {mode === "single"
+                {effectiveMode === "single"
                     ? "ADAM construirá el dataset y la solución alrededor de este algoritmo."
                     : "ADAM construirá un caso comparativo entre el baseline y el challenger de la misma familia."}
             </p>
