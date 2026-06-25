@@ -186,6 +186,7 @@ from case_generator.m3_grounding import (
 )
 from case_generator.m5_grounding import validate_m5_questions_coherence
 from case_generator.m6_grounding import log_out_of_roster_mentions
+from case_generator.m4_grounding import log_duplicate_deployment_sections
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
     _bounded_diagnostic,
@@ -7780,6 +7781,14 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             variant=variant,
         )
         print(f"[m4_content_generator] {len(m4)} chars")
+        # Logger-only backstop (M4_DEPLOYMENT_DEDUP): flag a residual duplicate deployment
+        # recommendation that survived the prompt fix. ``variant`` is non-None only for
+        # ml_ds + clasificación, so this is a byte-identical no-op elsewhere. Best-effort —
+        # never raises, never reprompts, never mutates ``m4`` (does not fail the job).
+        if settings.m4_deployment_dedup:
+            log_duplicate_deployment_sections(
+                m4, variant=variant, case_id=state.get("case_id")
+            )
         return {
             "m4_content": m4,
             "current_agent": "m4_content_generator",

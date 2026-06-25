@@ -82,6 +82,13 @@ class NodeEvalInputs:
     # regression invariant against a future teaching_note_part1 prompt/tier change that reintroduces
     # phantom-module prose.
     m6_module_coherence_ok: bool = True
+    # M4 deployment-recommendation uniqueness (ml_ds + clasificación): the M4 impact narrative must
+    # contain a SINGLE deployment recommendation (§4.5), not the retired additive duplicate sections.
+    # True (n/a) for business / non-classification jobs. Computed via
+    # ``check_m4_deployment_section_unique`` (reuses the production ``m4_grounding`` detector), so a
+    # future M4-narrative prompt or m4_content tier regression that reintroduces a second deployment
+    # heading fails the golden gate (this is the DETERMINISTIC guarantee behind the logger-only backstop).
+    m4_deployment_section_unique_ok: bool = True
 
 
 @dataclass
@@ -121,6 +128,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         )
     if not r.m6_module_coherence_ok:
         reasons.append("M6 teaching-note coherence failure: prose describes a module absent from the case")
+    if not r.m4_deployment_section_unique_ok:
+        reasons.append("M4 narrative coherence failure: duplicate deployment recommendation section")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -220,6 +229,21 @@ def check_m4_question_option_coherence(preguntas: list[dict]) -> bool:
     from case_generator.m1_grounding import validate_question_option_coherence
 
     return not validate_question_option_coherence(preguntas, "")
+
+
+def check_m4_deployment_section_unique(m4_content: str) -> bool:
+    """Pure oracle: does the M4 narrative carry a SINGLE deployment recommendation (§4.5)?
+
+    Reuses the production detector ``m4_grounding.detect_duplicate_deployment_sections`` (single
+    source of truth), so a future M4-narrative prompt or m4_content tier regression that reintroduces
+    a second deployment heading ("Recomendación de despliegue (un solo modelo)" / "Modelo recomendado
+    para la decisión") fails the golden gate. Function-level import keeps this support module
+    lightweight. Scope: ml_ds + clasificación narratives; business / non-clf content has no second
+    deployment heading by construction → trivially True.
+    """
+    from case_generator.m4_grounding import detect_duplicate_deployment_sections
+
+    return not detect_duplicate_deployment_sections(m4_content)
 
 
 def check_m5_questions_coherence(

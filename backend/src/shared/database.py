@@ -158,6 +158,17 @@ class Settings(BaseSettings):
     # bodies (`_legacy_teaching_note_part1/part2`). Kill-switch: set TEACHING_NOTE_MODULE_GUIDE=
     # false to restore the prior behavior exactly (instant env-only revert; no redeploy).
     teaching_note_module_guide: bool = True
+    # Logger-only backstop for the M4 deployment-recommendation de-duplication (ml_ds +
+    # clasificación). The prompt fix (M4_clasificacion/narrative.py) removes the additive
+    # duplicate deployment sections; when true, `m4_content_generator` runs the pure
+    # `detect_duplicate_deployment_sections` over the generated narrative and emits a structured
+    # `logger.warning` if a residual second deployment heading slips through. It NEVER reprompts,
+    # mutates, or fails a job (observation only; the deterministic guarantee on the frozen golden
+    # set lives in `tests/golden_eval.check_m4_deployment_section_unique`). No-op for business and
+    # the non-classification families (gated on the resolved ml_ds+clf narrative variant).
+    # Kill-switch: set M4_DEPLOYMENT_DEDUP=false to skip the detector entirely (no log, no cost;
+    # instant env-only revert, no redeploy).
+    m4_deployment_dedup: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 
