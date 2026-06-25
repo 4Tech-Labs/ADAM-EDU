@@ -76,3 +76,20 @@ describe("M3AuditSection — graceful degradation", () => {
         expect(screen.queryByText("Notebook no disponible")).toBeNull();
     });
 });
+
+describe("M3AuditSection — profile-aware heading", () => {
+    it("uses the ml_ds title when isMLDS", () => {
+        renderSection({ m3NotebookDegraded: true }, { isMLDS: true });
+
+        expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Diseño del Experimento");
+        // Regression lock: the old hardcoded English title must be gone for both profiles.
+        expect(screen.queryByText("Experiment Validator")).toBeNull();
+    });
+
+    it("uses the business title when not ml_ds", () => {
+        renderSection({ m3NotebookDegraded: true }, { isMLDS: false });
+
+        expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Auditoría de la Evidencia");
+        expect(screen.queryByText("Experiment Validator")).toBeNull();
+    });
+});

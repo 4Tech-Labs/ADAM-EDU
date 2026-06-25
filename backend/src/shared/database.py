@@ -178,6 +178,15 @@ class Settings(BaseSettings):
     # the prior 3-chart behavior byte-identically — the node selects the *_LEGACY 3-chart prompts and
     # skips the backstop (instant env-only revert, no redeploy).
     m4_chart_drop_sensitivity: bool = True
+    # M4 financial charts: deterministic grounding guard (ml_ds+clf and business+clf). When true
+    # (default), `m4_chart_generator` validates each chart's prose against the verified M3 metrics
+    # block, the unselected-model leak guard (#337), and a benchmark-fabrication tell; on a violation
+    # it reprompts ONCE and DROPS any chart that still cites an unverified model metric (e.g. an AUC
+    # not in the executed metrics) or an invented "benchmark" figure — never fails the job, never
+    # shows false data. Set M4_CHART_GROUNDING=false to disable the runtime guard (charts ship exactly
+    # as the LLM produced them); the prompt hardening is a separate one-way improvement not behind this
+    # switch (instant env-only revert of the guard, no redeploy).
+    m4_chart_grounding: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

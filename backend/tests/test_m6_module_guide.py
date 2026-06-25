@@ -32,18 +32,18 @@ _FRONTEND_CONFIG = (
 )
 
 _BUSINESS_NAMES = [
-    "Case Reader", "Comprensión Gerencial",
-    "Insight Analyst", "Interpretación Visual",
-    "Decision Evidence Reviewer", "Evaluación de Evidencia",
-    "Business Impact Evaluator", "Impacto Comercial",
-    "Executive Recommendation Writer", "Recomendación Ejecutiva",
+    "El Caso y el Dilema", "Comprende la situación gerencial",
+    "Lectura de los Datos", "Interpreta la evidencia visual",
+    "Auditoría de la Evidencia", "Evalúa qué tan sólida es la evidencia",
+    "Impacto en el Negocio", "Cuantifica el valor y los trade-offs",
+    "Recomendación Ejecutiva", "Redacta el memorándum a la junta",
 ]
 _MLDS_NAMES = [
-    "Problem Framer", "Formulación Analítica",
-    "Data Analyst", "Exploración de Datos",
-    "Experiment Validator", "Validación Experimental",
-    "Value & Impact Translator", "Traducción a Valor",
-    "Technical-Executive Writer", "Informe Técnico-Ejecutivo",
+    "Planteamiento del Problema", "Traduce el reto a un problema de datos",
+    "Exploración de Datos", "Analiza el dataset y sus patrones",
+    "Diseño del Experimento", "Valida el modelo con rigor experimental",
+    "Impacto y Valor", "Convierte el modelo en valor de negocio",
+    "Decisión Ejecutiva", "Redacta el memorándum final a la dirección",
 ]
 
 
@@ -72,18 +72,18 @@ def test_roster_ids_harvard_only_renumber():
     # No EDA: M2/M3 absent, M4→Módulo 2, M5→Módulo 3.
     assert module_guide_roster_ids(False, "harvard_only") == ["m1", "m4", "m5"]
     block = _block(case_type="harvard_only", notebook_present=False)
-    assert "Módulo 2 · Value & Impact Translator" in block
-    assert "Módulo 3 · Technical-Executive Writer" in block
-    for absent in ("Data Analyst", "Experiment Validator", "Exploración de Datos", "notebook"):
+    assert "Módulo 2 · Impacto y Valor" in block
+    assert "Módulo 3 · Decisión Ejecutiva" in block
+    for absent in ("Exploración de Datos", "Diseño del Experimento", "notebook"):
         assert absent not in block
 
 
 def test_labels_business_vs_mlds():
     b = _block(is_business=True)
     m = _block(is_business=False)
-    assert "Problem Framer — Formulación Analítica" in m
-    assert "Case Reader — Comprensión Gerencial" in b
-    assert "Case Reader" not in m and "Problem Framer" not in b
+    assert "Planteamiento del Problema — Traduce el reto a un problema de datos" in m
+    assert "El Caso y el Dilema — Comprende la situación gerencial" in b
+    assert "El Caso y el Dilema" not in m and "Planteamiento del Problema" not in b
 
 
 def test_unknown_caseType_defaults_to_three_modules():

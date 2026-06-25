@@ -14,10 +14,10 @@ export function M3AuditSection({ result, content, md, isMLDS, renderPreguntas, o
         <>
             <div className="mb-8">
                 <p className="running-header mb-2">
-                    Módulo 3 · {isMLDS ? "Experiment Validator" : "Decision Evidence Reviewer"} · Auditoría de Evidencia
+                    Módulo 3 · {isMLDS ? "Diseño del Experimento" : "Auditoría de la Evidencia"} · {isMLDS ? "Validación Experimental" : "Evaluación de Evidencia"}
                 </p>
                 <h1 className="type-h1 text-slate-900 mb-2">
-                    Experiment Validator
+                    {isMLDS ? "Diseño del Experimento" : "Auditoría de la Evidencia"}
                 </h1>
                 <hr style={{ border: "none", height: "1.5px", background: "linear-gradient(to right, #cbd5e1, transparent)", margin: "1.5rem 0" }} />
             </div>

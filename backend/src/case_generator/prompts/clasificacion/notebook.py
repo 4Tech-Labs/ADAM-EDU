@@ -270,7 +270,7 @@ M. **PEDAGOGÍA HARVARD ml_ds — bloque comparativo OBLIGATORIO.**
    Antes del bloque per-algoritmo, emite la **Sección 3.0.5** descrita más
    abajo en "Estructura OBLIGATORIA". Esa sección contiene NUEVE celdas con
    sentinelas contractuales que el validador post-LLM verifica:
-     - `# === SECTION:dummy_baseline ===`     → bootstrap (target_col, y, feature_cols, X_raw, is_binary) + DummyClassifier (most_frequent + stratified)
+     - `# === SECTION:dummy_baseline ===`     → bootstrap (target_col, y, feature_cols, X_raw, is_binary) + DummyClassifier (most_frequent)
      - `# === SECTION:pipeline_lr ===`        → Pipeline(ColumnTransformer + LogisticRegression)
      - `# === SECTION:pipeline_rf ===`        → Pipeline(ColumnTransformer + RandomForestClassifier)
      - `# === SECTION:cv_scores ===`          → StratifiedKFold(5) + cross_val_score (fallback cv=3 si la minoritaria es escasa)
@@ -399,12 +399,9 @@ try:
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import f1_score as _f1_dummy
 
-    # 1) Resolver target_col CONTRACT-FIRST (#348). La celda ejecutada respeta
-    #    el target del contrato ANTES que cualquier alias: si el contrato declara
-    #    un target y está en df.columns, ESE es el target entrenado. Si el
-    #    contrato declara un target AUSENTE del dataset, NO se entrena otra
-    #    columna en silencio (REQUISITO FALTANTE → skip). Sin contrato, cae al
-    #    alias-first heredado (label_aliases → churn_aliases → último categórico).
+    # PASO 1 — ¿Qué queremos predecir? Usamos la columna objetivo que define el
+    #          caso; si esa columna no está en el archivo, avisamos y no
+    #          entrenamos otra en su lugar.
     _contract_target = "{contract_target_name}".strip()
     if _contract_target and _contract_target in df.columns:
         target_col = _contract_target
@@ -421,9 +418,9 @@ try:
             _cat_cols_boot = df.select_dtypes(include=["object", "category"]).columns.tolist()
             target_col = _cat_cols_boot[-1] if _cat_cols_boot else None
 
-    # 2) Construir feature_cols con la receta K-bis (sin target, sin IDs, sin
-    #    constantes, sin >50%% nulos). NO usamos pd.get_dummies aquí —
-    #    el ColumnTransformer del Pipeline se encarga del encoding sin fuga.
+    # PASO 2 — ¿Qué columnas sirven de pista? Nos quedamos con las que aportan
+    #          información y descartamos identificadores, columnas casi vacías o
+    #          de un solo valor.
     _num_cols_boot = df.select_dtypes(include=np.number).columns.tolist()
     _cat_cols_boot = [c for c in df.select_dtypes(include=["object", "category"]).columns
                       if df[c].nunique(dropna=True) <= 20]
@@ -437,8 +434,9 @@ try:
         and df[c].isna().mean() <= 0.5
     ]
 
-    # 3) Derivar y, X_raw, is_binary y can_model_binary. is_binary confirma
-    #    2 clases; can_model_binary exige soporte mínimo para train/test/CV.
+    # PASO 3 — Preparamos las banderas que leen las demás celdas: la columna a
+    #          predecir, las columnas de pista, y si hay datos suficientes para
+    #          entrenar con dos clases.
     y = df[target_col] if target_col is not None else None
     X_raw = df[feature_cols] if feature_cols else None
     is_binary = bool(target_col is not None and y is not None and y.nunique(dropna=True) == 2)
@@ -462,15 +460,15 @@ try:
             X_raw, y, test_size=0.2, random_state=42,
             stratify=y if y.value_counts().min() >= 2 else None,
         )
-        # DummyClassifier necesita features numéricas/binarias ⇒ get_dummies SOLO
-        # para esta celda (no contaminamos el pipeline real, que vive aparte).
+        # El baseline solo necesita columnas numéricas, así que aquí convertimos
+        # las categorías a números de forma rápida (los modelos reales usan su
+        # propia preparación más adelante).
         _Xtr_dummy = pd.get_dummies(X_tr_d, drop_first=True, dummy_na=False)
         _Xte_dummy = pd.get_dummies(X_te_d, drop_first=True, dummy_na=False).reindex(columns=_Xtr_dummy.columns, fill_value=0)
         dummy_mf = DummyClassifier(strategy="most_frequent", random_state=42).fit(_Xtr_dummy, y_tr_d)
-        dummy_st = DummyClassifier(strategy="stratified",     random_state=42).fit(_Xtr_dummy, y_tr_d)
-        print("Dummy most_frequent → F1 macro:", _f1_dummy(y_te_d, dummy_mf.predict(_Xte_dummy), average="macro", zero_division=0))
-        print("Dummy stratified    → F1 macro:", _f1_dummy(y_te_d, dummy_st.predict(_Xte_dummy), average="macro", zero_division=0))
+        print("Baseline ingenuo (siempre la clase más común) → F1 macro:", _f1_dummy(y_te_d, dummy_mf.predict(_Xte_dummy), average="macro", zero_division=0))
         print("Distribución y_train:", y_tr_d.value_counts(normalize=True).round(3).to_dict())
+        print("Cualquier modelo útil debe superar este número con claridad.")
     else:
         print(f"Bloque comparativo omitido: {{modeling_skip_reason}}")
 except Exception as e:
@@ -484,10 +482,13 @@ except Exception as e:
 
 # %% [markdown]
 # #### 3.0.5.2 Pipeline reproducible — Logistic Regression
-# Entrena la Regresión Logística dentro de un flujo reproducible que primero
-# prepara las columnas (numéricas y de categorías) y luego ajusta el modelo, todo
-# en un mismo paso. Hacerlo así evita que el preprocesamiento "vea" los datos de
-# validación, para que las métricas sean honestas.
+# La Regresión Logística aprende un peso para cada variable: un peso positivo
+# empuja la predicción hacia que el evento ocurra y uno negativo en contra; luego
+# suma esos empujes y los convierte en una probabilidad entre 0 y 1. Aquí la
+# entrenamos dentro de un flujo reproducible que primero prepara las columnas
+# (numéricas y de categorías) y después ajusta el modelo en un mismo paso, para
+# que el preprocesamiento no "vea" los datos de validación y las métricas sean
+# honestas.
 
 # %%
 # === SECTION:pipeline_lr ===
@@ -539,14 +540,18 @@ try:
     ).sort_values("odds_ratio", ascending=False)
     print("Top odds ratios (LR):")
     print(or_df.head(10).to_string(index=False))
+    print("Lectura: un odds ratio > 1 vuelve más probable el evento; < 1 lo hace menos probable.")
 except Exception as e:
     print(f"⚠️ Pipeline LR falló: {{e}}")
 
 # %% [markdown]
 # #### 3.0.5.3 Pipeline reproducible — Random Forest
-# Entrena el Random Forest dentro del mismo flujo reproducible: primero prepara
-# las columnas y luego ajusta el modelo en un solo paso, sin que el preprocesamiento
-# "vea" los datos de validación. Así la comparación es justa.
+# El Random Forest combina muchos árboles de decisión y promedia sus votos: cada
+# árbol parte los datos con preguntas simples sobre las variables y, al juntarlos,
+# captura relaciones no lineales que un modelo lineal pasaría por alto. Aquí lo
+# entrenamos dentro del mismo flujo reproducible: primero prepara las columnas y
+# luego ajusta el modelo en un solo paso, sin que el preprocesamiento "vea" los
+# datos de validación, para que la comparación sea justa.
 
 # %%
 # === SECTION:pipeline_rf ===
@@ -599,6 +604,7 @@ try:
     ).sort_values("importance_mean", ascending=False)
     print("Top feature importances (RF):")
     print(perm_df.head(10).to_string(index=False))
+    print("Lectura: la importancia indica cuánto influye la variable en el modelo, no la dirección del efecto.")
 except Exception as e:
     print(f"⚠️ Pipeline RF falló: {{e}}")
 
