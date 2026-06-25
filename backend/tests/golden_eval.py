@@ -96,6 +96,13 @@ class NodeEvalInputs:
     # that reintroduces the tornado fails the golden gate (DETERMINISTIC guarantee behind the
     # logger-only runtime backstop).
     m4_charts_no_sensitivity_ok: bool = True
+    # M4 charts avoid the benchmark-fabrication disclaimer ("estimaciones basadas en benchmarks" /
+    # "benchmarks del sector/industria"), for both profiles. True (n/a) when a job carries no M4
+    # charts. Computed via ``check_m4_charts_no_fabrication`` (reuses the production
+    # ``m4_grounding.detect_benchmark_fabrication``), so a future M4-chart prompt regression that
+    # re-invites benchmark estimates fails the golden gate. (The metric-anchoring + unselected-model
+    # guarantees are unit-tested — they require per-job metrics/variant fixtures the golden set lacks.)
+    m4_charts_no_fabrication_ok: bool = True
 
 
 @dataclass
@@ -139,6 +146,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M4 narrative coherence failure: duplicate deployment recommendation section")
     if not r.m4_charts_no_sensitivity_ok:
         reasons.append("M4 chart coherence failure: retired sensitivity/tornado chart emitted")
+    if not r.m4_charts_no_fabrication_ok:
+        reasons.append("M4 chart coherence failure: invented benchmark figure in chart prose")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -266,6 +275,20 @@ def check_m4_charts_no_sensitivity(charts: list[dict]) -> bool:
     from case_generator.m4_grounding import is_sensitivity_chart
 
     return not any(is_sensitivity_chart(c) for c in charts or [])
+
+
+def check_m4_charts_no_fabrication(charts: list[dict]) -> bool:
+    """Pure oracle: do the M4 financial charts avoid the benchmark-fabrication disclaimer?
+
+    Reuses the production detector ``m4_grounding.detect_benchmark_fabrication`` over each chart's
+    prose blob (single source of truth), so a future M4-chart prompt regression that re-invites
+    "estimaciones basadas en benchmarks" fails the golden gate. Scope: every job with M4 charts (both
+    profiles); empty/absent is trivially True (n/a). The metric-anchoring + unselected-model
+    guarantees are unit-tested (they need per-job metrics/variant fixtures the golden set lacks).
+    """
+    from case_generator.m4_grounding import _chart_prose_blob, detect_benchmark_fabrication
+
+    return not any(detect_benchmark_fabrication(_chart_prose_blob(c)) for c in charts or [])
 
 
 def check_m5_questions_coherence(

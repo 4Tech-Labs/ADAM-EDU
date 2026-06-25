@@ -26,6 +26,15 @@ import logging
 import re
 import unicodedata
 
+from case_generator.narrative_grounding import (
+    _FALLBACK_MARKER,
+    _extract_anchor_numbers,
+    _is_thousands_formatted,
+    _within_tolerance,
+    detect_unselected_model_mentions,
+    has_metric_anchors,
+)
+
 logger = logging.getLogger(__name__)
 
 # ATX markdown heading (# .. ######): up to 3 leading spaces (4+ is a code block, correctly NOT a
@@ -164,3 +173,181 @@ def drop_sensitivity_charts(charts: list[dict]) -> tuple[list[dict], int]:
     """
     kept = [c for c in charts if not is_sensitivity_chart(c)]
     return kept, len(charts) - len(kept)
+
+
+# ── M4 chart grounding (ml_ds+clf · business+clf) ─────────────────────────────────────────────────
+# Deterministic, pure validator so the M4 financial charts can NEVER ship a false/unverified model
+# metric or an invented "benchmark" figure. It closes the gap the repo documents verbatim ("los
+# charts no pasan por los guards de #243/#337"): the chart node injects ``computed_metrics_block`` but
+# never validated the output, and the prompts sanctioned fabrication ("Valores estimados basados en
+# benchmarks de {industria}"). Three independent checks per chart, each REUSING a hardened primitive:
+#   • model metric anchored to the executed M3 block  → ``detect_unanchored_adjacent_metrics`` (only
+#     when anchors exist, i.e. ml_ds+clf with executed metrics; no-op for business / degraded runs);
+#   • unselected-model leak in single-model prose      → ``detect_unselected_model_mentions`` (#337,
+#     no-op for ``lr_rf_contrast`` / business where variant is None);
+#   • benchmark-fabrication disclaimer                 → ``detect_benchmark_fabrication`` (NEW, below).
+# Plotted data (``traces``/``layout``) is deliberately NOT metric-checked — business bar values are
+# legitimately derived; fabricated model metrics live in the prose fields. Pure, total, never raises.
+#
+# High-precision benchmark detector: matches ONLY the fabrication-disclaimer family (the prompt's
+# retired "estimaciones … benchmarks" and "benchmarks del sector/industria/externos"). Bounded
+# quantifier (``[\\s\\S]{0,40}``) → linear, no ReDoS. A grounded "benchmark interno (Exhibit 1)" has
+# neither an "estimad…" verb nor a sector/industria/externo qualifier near it → never flagged
+# (zero-FP doctrine: prefer a rare FN over an FP that drops a legitimate chart).
+_BENCHMARK_FABRICATION_RE = re.compile(
+    r"estimad\w*[\s\S]{0,40}benchmark"
+    r"|benchmark\w*[\s\S]{0,40}(?:sector|industria|extern[oa])"
+)
+
+# The chart text fields where a fabricated model metric / benchmark disclaimer would appear (the
+# frontend renders all of these). ``source`` is a deterministic template; data arrays are excluded.
+_CHART_PROSE_FIELDS = ("title", "subtitle", "description", "notes", "academic_rationale")
+
+# Chart-specific model-metric matcher. WIDER than ``narrative_grounding``'s strict-adjacency regex on
+# the separator (it ALSO accepts the Spanish connectors "de"/"del") because the FLAGSHIP chart bug is
+# literally "el AUC de 0.8637" — strict adjacency misses it (the "de" detaches keyword from value, a
+# documented FN of the M5 detector). Crucially it stays keyword-anchored: it fires ONLY when one of
+# these model-metric tokens IMMEDIATELY precedes the value (with `=`/`:`/`(`/`de`/`del`/space), so a
+# co-located BUSINESS number ("…intervenir solo en el 15% de mayor riesgo", "ROI del 22.2%") is NEVER
+# matched — its preceding token is not a metric keyword. The keyword set is the unambiguous
+# model-metric subset (business-overloaded `baseline`/`feature`/`variable`/`dummy` are excluded). This
+# is a chart-local sibling of ``detect_unanchored_adjacent_metrics`` (NOT a change to the shared M5
+# detector). Bounded → linear, no ReDoS.
+_CHART_MODEL_METRIC_RE = re.compile(
+    r"(?i)(?<![A-Za-z_])"
+    r"(?:auc|roc|f1|accuracy|exactitud|precision|precisión|recall|sensibilidad|"
+    r"especificidad|prevalencia|prevalence|coeficiente|coefficient|importancia|importance|"
+    r"shap|permutation)"
+    r"(?:\s*[=:(]\s*|\s+(?:del?\s+)?)"
+    r"(?P<value>[+-]?\d+(?:[.,]\d+)?)\s*%?"
+)
+
+
+def detect_unanchored_chart_metrics(prose: str, metrics_block: str) -> list[str]:
+    """Return ``["METRICA_NO_ANCLADA: <n>", …]`` for model-metric numbers in *prose* not anchored to
+    *metrics_block* (the executed-M3 metrics).
+
+    Chart-local sibling of ``narrative_grounding.detect_unanchored_adjacent_metrics`` that REUSES its
+    hardened anchoring primitives (``_extract_anchor_numbers`` / ``_within_tolerance`` / the thousands
+    + ``>200`` magnitude guards / the fallback gate) but with the wider keyword→value matcher above so
+    "AUC de 0.8637" is caught. Returns ``[]`` when *metrics_block* is the fallback marker (no executed
+    metrics → grounding disabled; the business / degraded-ml_ds no-op). Pure, total, never raises.
+    """
+    if _FALLBACK_MARKER in metrics_block:
+        return []
+    anchors = _extract_anchor_numbers(metrics_block)
+    seen: set[str] = set()
+    violations: list[str] = []
+    for match in _CHART_MODEL_METRIC_RE.finditer(prose):
+        raw_group = match.group("value")
+        if _is_thousands_formatted(raw_group):
+            continue  # thousands-separator integer — a business volume, not a metric
+        raw_number = raw_group.replace(",", ".")
+        float_value = float(raw_number)
+        if float_value > 200:
+            continue  # business volume — not a model metric
+        if any(_within_tolerance(float_value, anchor) for anchor in anchors):
+            continue
+        if raw_number in seen:
+            continue
+        seen.add(raw_number)
+        violations.append(f"METRICA_NO_ANCLADA: {raw_number}")
+    return violations
+
+
+def detect_benchmark_fabrication(prose: str | None) -> list[str]:
+    """Return ``["BENCHMARK_FABRICACION: benchmark"]`` when *prose* invents a benchmark figure.
+
+    Pure and total: any non-str / None / internal error degrades to ``[]`` (never raises). The match
+    is accent-insensitive (``_normalize_chart_text``) so "benchmarks de Logística" / "estimaciones"
+    are caught regardless of accents.
+    """
+    if not prose:
+        return []
+    try:
+        if _BENCHMARK_FABRICATION_RE.search(_normalize_chart_text(prose)):
+            return ["BENCHMARK_FABRICACION: benchmark"]
+        return []
+    except Exception:  # pragma: no cover - defensive; never fail a job
+        return []
+
+
+def _chart_prose_blob(chart: object) -> str:
+    """Join a chart's str prose fields (title/subtitle/description/notes/academic_rationale).
+
+    Non-dict input or missing/non-str fields → empty string. Never raises.
+    """
+    if not isinstance(chart, dict):
+        return ""
+    parts = [chart.get(field) for field in _CHART_PROSE_FIELDS]
+    return "\n".join(p for p in parts if isinstance(p, str))
+
+
+def validate_m4_chart_grounding(
+    charts: list[dict], *, metrics_block: str, variant: str | None
+) -> list[tuple[int, list[str]]]:
+    """Return ``[(chart_index, violations), …]`` for charts that cite unverified data.
+
+    Three checks per non-sensitivity chart (sensitivity/tornado charts are owned by the existing
+    backstop / are the intentional legacy chart — never reprompted here):
+      • model metric NOT anchored to *metrics_block* (only when ``has_metric_anchors`` — ml_ds+clf
+        with executed metrics; the no-anchor business / degraded case is a deliberate no-op, mirroring
+        ``validate_narrative_grounding`` which disables when no metrics exist);
+      • unselected-model leak (``variant`` is the RESOLVED notebook variant, None for business/contrast);
+      • benchmark-fabrication disclaimer.
+    Pure and total — a malformed chart degrades to "skip that chart", never raises.
+    """
+    results: list[tuple[int, list[str]]] = []
+    anchors_present = has_metric_anchors(metrics_block)
+    for index, chart in enumerate(charts):
+        try:
+            if is_sensitivity_chart(chart):
+                continue
+            blob = _chart_prose_blob(chart)
+            if not blob:
+                continue
+            violations: list[str] = []
+            if anchors_present:
+                violations.extend(detect_unanchored_chart_metrics(blob, metrics_block))
+            violations.extend(detect_unselected_model_mentions(blob, variant))
+            violations.extend(detect_benchmark_fabrication(blob))
+            if violations:
+                results.append((index, violations))
+        except Exception:  # pragma: no cover - defensive; one bad chart must not break the pass
+            continue
+    return results
+
+
+def build_m4_chart_grounding_reprompt(
+    violations_per_chart: list[tuple[int, list[str]]], *, metrics_block: str
+) -> str:
+    """Build the CONCATENATION correction suffix for the chart-grounding reprompt.
+
+    Concatenated onto the ALREADY-formatted chart prompt (never re-``.format`` — chart/JSON braces).
+    Lists the distinct detected problems and restates the hard rules; re-includes *metrics_block* as
+    the single valid source for model metrics.
+    """
+    seen: set[str] = set()
+    lines: list[str] = []
+    for _index, violations in violations_per_chart:
+        for violation in violations:
+            if violation not in seen:
+                seen.add(violation)
+                lines.append(f"- {violation}")
+    bullet_block = "\n".join(lines)
+    return (
+        "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE GRÁFICOS\n"
+        "Tu salida anterior incluyó cifras no verificadas o lenguaje de fabricación en uno o más "
+        "gráficos. Reescribe la salida COMPLETA (todos los gráficos) respetando estas reglas:\n"
+        "- Cita una métrica del modelo (AUC, F1, precisión, recall) SOLO si aparece EXACTAMENTE en el "
+        "bloque «Métricas verificadas del modelo (M3 ejecutado)» de abajo; si no aparece (o el bloque "
+        "declara que no hay métricas), NO la menciones.\n"
+        "- ELIMINA toda 'estimación basada en benchmarks', cifra de 'benchmarks del sector/industria' "
+        "o cualquier valor externo no presente en el caso.\n"
+        "- Usa SOLO cifras presentes en el análisis M4 o en el Exhibit 1, o derivadas aritméticamente "
+        "de ellas. NO inventes valores.\n"
+        "- No nombres un modelo que no fue seleccionado en este caso.\n"
+        f"\nProblemas detectados a corregir:\n{bullet_block}\n"
+        "\nMétricas verificadas del modelo (única fuente válida para métricas del modelo):\n"
+        f"{metrics_block}\n"
+    )
