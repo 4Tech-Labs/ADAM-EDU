@@ -126,6 +126,58 @@ class Settings(BaseSettings):
     # are unaffected. Kill-switch: set M5_QUESTION_COHERENCE=false to passthrough exactly (instant
     # env-only revert; no redeploy).
     m5_question_coherence: bool = True
+    # Honest, deterministic text for the M2 "Mapa de valores faltantes" chart (ml_ds +
+    # clasificación). When true, `_build_missingness_heatmap` writes the real missingness
+    # summary into `subtitle`/`description`/`notes` (and a centered empty-state annotation
+    # when the sample has 0 nulls), and `_eda_classification_python_path` excludes the chart
+    # from LLM annotation so the LLM can no longer invent an MNAR pattern the de-churned
+    # dataset (#382) never has. Best-effort + scoped to the classification python path, so
+    # business/other-family/non-clf cases are unaffected. Kill-switch: set
+    # M2_MISSINGNESS_HONEST_TEXT=false to restore the prior behavior byte-identically (empty
+    # builder text + LLM annotates the chart; instant env-only revert, no redeploy). The
+    # frontend colorbar fix (constant-matrix range) applies regardless of this flag.
+    m2_missingness_honest_text: bool = True
+    # Model-ready feature filter for the M2 "Top features por Mutual Information" chart
+    # (ml_ds + clasificación). When true, `_build_mutual_info_top8` excludes columns that
+    # inflate Mutual Information through high-cardinality discrete encoding — the temporal
+    # index `period` ("2023-01", always all-unique → MI≈H(Y) memorization artifact), IDs,
+    # free-text and other high-cardinality categoricals, plus constants and >50%-null
+    # columns — mirroring the M3 notebook's modeled feature universe. Continuous numerics
+    # (incl. the financial base revenue/costs/margin_pct and the real driver) are kept:
+    # the k-NN MI estimator does not inflate with cardinality. Scoped to the classification
+    # python path; business/other-family/non-clf cases are unaffected. Kill-switch: set
+    # M2_MI_EXCLUDE_INDEX=false to restore the prior behavior byte-identically (all columns
+    # except the target enter the ranking; instant env-only revert, no redeploy).
+    m2_mi_exclude_index: bool = True
+    # M6 Teaching Note as a concise per-module teacher guide. When true, `teaching_note_part1`
+    # emits §1 "Resumen para el Docente" + a Python-OWNED §2 "Recorrido por Módulo"
+    # (`build_module_guide_block` — module set/numbering/labels correct by construction,
+    # mirroring `getModuleConfig`; the LLM only fills one ≤22-word anchor per module) and
+    # `teaching_note_part2` emits §3 "Plan de Clase y Dónde se Traban" (the 1.000-word §4
+    # "Análisis del Caso" is deleted). When false, both nodes run the byte-identical legacy
+    # bodies (`_legacy_teaching_note_part1/part2`). Kill-switch: set TEACHING_NOTE_MODULE_GUIDE=
+    # false to restore the prior behavior exactly (instant env-only revert; no redeploy).
+    teaching_note_module_guide: bool = True
+    # Logger-only backstop for the M4 deployment-recommendation de-duplication (ml_ds +
+    # clasificación). The prompt fix (M4_clasificacion/narrative.py) removes the additive
+    # duplicate deployment sections; when true, `m4_content_generator` runs the pure
+    # `detect_duplicate_deployment_sections` over the generated narrative and emits a structured
+    # `logger.warning` if a residual second deployment heading slips through. It NEVER reprompts,
+    # mutates, or fails a job (observation only; the deterministic guarantee on the frozen golden
+    # set lives in `tests/golden_eval.check_m4_deployment_section_unique`). No-op for business and
+    # the non-classification families (gated on the resolved ml_ds+clf narrative variant).
+    # Kill-switch: set M4_DEPLOYMENT_DEDUP=false to skip the detector entirely (no log, no cost;
+    # instant env-only revert, no redeploy).
+    m4_deployment_dedup: bool = True
+    # M4 financial charts: drop the Sensitivity/Tornado chart, leaving 2 charts (Payback +
+    # Comparativa A/B/C). When true (default), `m4_chart_generator` uses the 2-chart prompts AND
+    # runs the deterministic `drop_sensitivity_charts` backstop over the generated charts (removes a
+    # residual sensitivity chart the LLM might emit anyway). The tornado was an orphan chart (no §4.x
+    # narrative section / no M4 question), the highest fabrication risk (ungrounded ±20% swings), and
+    # redundant with the Payback chart. Kill-switch: set M4_CHART_DROP_SENSITIVITY=false to restore
+    # the prior 3-chart behavior byte-identically — the node selects the *_LEGACY 3-chart prompts and
+    # skips the backstop (instant env-only revert, no redeploy).
+    m4_chart_drop_sensitivity: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

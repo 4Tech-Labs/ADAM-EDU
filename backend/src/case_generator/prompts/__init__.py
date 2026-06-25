@@ -51,6 +51,7 @@ from case_generator.prompts.clasificacion import (
     M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST,
     M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY,
     M4_CHART_PROMPT_CLASSIFICATION,
+    M4_CHART_PROMPT_CLASSIFICATION_LEGACY,
     M4_NARRATIVE_PROMPT_CLASSIFICATION,
     M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
     M4_NARRATIVE_PROMPT_CLASSIFICATION_LR_ONLY,
@@ -68,6 +69,11 @@ from case_generator.prompts.clasificacion import (
     ClassificationNotebookVariant,
     build_cost_matrix_block,
     select_eda_text_blocks,
+)
+from case_generator.prompts.teaching_note import (
+    build_module_guide_block,
+    build_roster_allowlist,
+    module_guide_roster_ids,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -806,7 +812,7 @@ M3_QUESTIONS_GENERATOR_PROMPT = M3_AUDIT_QUESTIONS_PROMPT
 # Se activa SIEMPRE que m4_content se haya generado.
 # ══════════════════════════════════════════════════════════════════════════════
  
-M4_CHART_GENERATOR_PROMPT = """\
+M4_CHART_GENERATOR_PROMPT_LEGACY = """\
 # Your Identity
 Eres el Visualizador Financiero de ADAM, un analista que traduce proyecciones
 de impacto en gráficos ejecutivos de calidad boardroom.
@@ -900,6 +906,91 @@ Análisis de impacto M4: {m4_content}
 Exhibit 1 (financiero): {anexo_financiero}
 Industria: {industria}
  
+# Metadatos del sistema
+case_id: {case_id} | student_profile: {student_profile} | output_language: {output_language}
+"""
+
+# Issue M4-chart-trim — versión vigente: 2 gráficos (Payback + Comparativa A/B/C). El Gráfico de
+# Sensibilidad (Tornado) se retiró por ser huérfano (sin §4.x ni pregunta que lo ancle), el de mayor
+# riesgo de fabricación (swings ±20% sin grounding) y redundante. La variante 3-gráficos previa se
+# conserva verbatim en M4_CHART_GENERATOR_PROMPT_LEGACY y se reactiva con M4_CHART_DROP_SENSITIVITY=false.
+M4_CHART_GENERATOR_PROMPT = """\
+# Your Identity
+Eres el Visualizador Financiero de ADAM, un analista que traduce proyecciones
+de impacto en gráficos ejecutivos de calidad boardroom.
+
+# Your Mission
+Generar EXACTAMENTE 2 gráficos financieros Plotly.js para el Módulo 4.
+Estos gráficos permiten al estudiante (y al profesor) VER el impacto
+cuantitativo de las opciones A, B y C del caso.
+
+# How You Work (Workflow)
+1. **Lee M4 Content:** Extrae las proyecciones numéricas de cada opción del {m4_content}.
+2. **Lee Exhibits:** Usa los datos base del {anexo_financiero} como punto de partida.
+3. **Construye 2 gráficos** siguiendo la estructura obligatoria (ver abajo).
+4. **Verifica:** Los números de los gráficos DEBEN coincidir con los del texto M4.
+
+# Estructura OBLIGATORIA de los 2 gráficos
+
+## Gráfico 1: Flujo de Caja y Punto de Equilibrio (Payback)
+- **chart_type:** `"waterfall"` (business) o `"bar"` + `"line"` composed (ml_ds)
+- **Concepto:** Mostrar inversión inicial (negativa) → flujos netos por período → punto
+  donde el acumulado cruza cero ("Valle de la Muerte").
+- **Traces:**
+  - business: waterfall con measure ["absolute", "relative", ...,"total"]
+  - ml_ds: bar (flujo neto por período) + line (acumulado)
+- **Datos:** Extraer inversión de Exhibit 1, proyectar flujos netos según la opción
+  recomendada en M4 content. Usar el horizonte temporal del caso.
+- **academic_rationale:** "El payback period visualiza cuándo la inversión se recupera,
+  dato crítico para la decisión del comité directivo."
+
+## Gráfico 2: Comparativa de Escenarios (A vs B vs C)
+- **chart_type:** `"bar"` agrupado
+- **Concepto:** Comparar las 3 opciones (A, B, C) en 3-4 métricas clave:
+  ROI (%), NPV ($), Período de Recupero (años/meses), y opcionalmente Riesgo (1-5).
+- **Traces:** 3 traces (Opción A, B, C), una barra por métrica.
+- **Categories:** ["ROI (%)", "NPV (normalizado)", "Payback (meses)", "Score de Riesgo"]
+  Normalizar NPV a escala 0-100 para que sea comparable visualmente con ROI%.
+- **academic_rationale:** "La comparativa permite al estudiante ver en una sola vista
+  qué opción domina en qué dimensión, reforzando que no existe solución perfecta."
+
+# Your Boundaries
+- Los números de los gráficos DEBEN coincidir con las proyecciones del {m4_content}.
+  Si M4 dice "Opción A genera ROI del 35%", el gráfico DEBE mostrar 35% para Opción A.
+- Si {m4_content} no tiene números suficientes para los 2 gráficos (ej: harvard_only
+  sin datos cuantitativos), generar gráficos con estimaciones conservadoras y documentar
+  en `notes`: "Valores estimados basados en benchmarks de {industria}."
+- `library`: siempre `"plotly"`.
+- `source`: `"Análisis Financiero — {case_id}"`.
+- **Idioma de títulos y etiquetas: {output_language}**
+
+# JSON Schema (idéntico a M2 — campos OBLIGATORIOS):
+{{
+  "id": "m4_chart_01",
+  "title": "string (orientado al insight financiero)",
+  "subtitle": "string",
+  "library": "plotly",
+  "chart_type": "waterfall|bar|line",
+  "traces": [{{ "type": "...", "x": [...], "y": [...], "name": "..." }}],
+  "layout": {{ "xaxis": {{"title": "..."}}, "yaxis": {{"title": "..."}}, "showlegend": true, "template": "plotly_white" }},
+  "source": "Análisis Financiero — {case_id}",
+  "notes": "string (insight + método de cálculo)",
+  "academic_rationale": "string"
+}}
+
+# Perfil del estudiante: {student_profile}
+- Si es "business":
+  Títulos en lenguaje ejecutivo ("Punto de Equilibrio: Mes 14").
+  Sin jerga técnica de modelos.
+- Si es "ml_ds":
+  Gráfico 1 puede incluir costo de infraestructura ML (cloud, GPUs) en los flujos.
+  Títulos técnico-financieros ("ROI del Pipeline ML vs Inversión en Infra").
+
+# Context
+Análisis de impacto M4: {m4_content}
+Exhibit 1 (financiero): {anexo_financiero}
+Industria: {industria}
+
 # Metadatos del sistema
 case_id: {case_id} | student_profile: {student_profile} | output_language: {output_language}
 """
@@ -999,6 +1090,14 @@ M4_CHARTS_PROMPT_BY_FAMILY: dict[str, str] = {
     "clustering": M4_CHART_GENERATOR_PROMPT,
     "serie_temporal": M4_CHART_GENERATOR_PROMPT,
 }
+# Tabla LEGACY (3 gráficos, incl. Sensibilidad/Tornado). Solo la usa m4_chart_generator cuando el
+# kill-switch M4_CHART_DROP_SENSITIVITY=false → revert byte-idéntico al comportamiento previo.
+M4_CHARTS_PROMPT_BY_FAMILY_LEGACY: dict[str, str] = {
+    "clasificacion": M4_CHART_PROMPT_CLASSIFICATION_LEGACY,
+    "regresion": M4_CHART_GENERATOR_PROMPT_LEGACY,
+    "clustering": M4_CHART_GENERATOR_PROMPT_LEGACY,
+    "serie_temporal": M4_CHART_GENERATOR_PROMPT_LEGACY,
+}
 
 M5_PROMPT_BY_FAMILY: dict[str, str] = {
     "clasificacion": M5_PROMPT_CLASSIFICATION,
@@ -1051,7 +1150,7 @@ nuevas):
 # recall) ni siquiera para prohibirla: steerea con framing gerencial positivo, de modo que el render
 # sea genuinamente libre de jerga (el test de ausencia de jerga corre sobre el prompt renderizado).
 # Texto ESTÁTICO (cero placeholders .format()); reusa los chart_type del genérico (waterfall/bar).
-M4_CHART_LR_BUSINESS_BLOCK = """
+M4_CHART_LR_BUSINESS_BLOCK_LEGACY = """
 
 # Enfoque business+clasificación: gráficos alineados a la lógica de priorización
 Este caso decide con un modelo que estima, por cliente u operación, una probabilidad de evento
@@ -1066,6 +1165,29 @@ internas del modelo.
   valor en riesgo por cliente, costo de intervenir, cobertura del presupuesto, efectividad de la
   acción—, nunca parámetros internos del modelo.
 - Gráfico 3 (comparativa A/B/C): reorienta hacia "a quién priorizar y con qué presupuesto". Cada
+  escenario es una política de cobertura (intervenir, por ejemplo, al 10%, 25% o 50% de mayor
+  probabilidad de evento × valor en riesgo). Compara valor protegido esperado, costo total de
+  intervención, falsas alarmas (intervenir sin que ocurra el evento) y eventos no evitados.
+- Honestidad: usa solo cifras del caso (Exhibits, M2, M4). NO inventes probabilidades, tasas ni
+  valores; razona sobre la lógica de priorización (probabilidad de evento × valor en riesgo), no
+  sobre métricas del modelo.
+"""
+
+# Versión vigente: 2 gráficos (Payback + Comparativa A/B/C). El bullet del Gráfico de Sensibilidad
+# (Tornado) se retiró junto con el del prompt genérico; la variante 3-gráficos sigue en
+# M4_CHART_LR_BUSINESS_BLOCK_LEGACY (reactivable con M4_CHART_DROP_SENSITIVITY=false).
+M4_CHART_LR_BUSINESS_BLOCK = """
+
+# Enfoque business+clasificación: gráficos alineados a la lógica de priorización
+Este caso decide con un modelo que estima, por cliente u operación, una probabilidad de evento
+(abandono, impago, incumplimiento…). Reorienta el CONTENIDO de los 2 gráficos ya definidos arriba
+hacia esa lógica, en lenguaje gerencial. NO añadas ni quites gráficos: mantén EXACTAMENTE 2, con
+los mismos chart_type del perfil business (Gráfico 1 = waterfall; Gráfico 2 = bar). Escribe
+para un directivo: usa lenguaje de negocio y evita la jerga técnica y los nombres de métricas
+internas del modelo.
+- Gráfico 1 (flujo / punto de equilibrio): el costo de poner en marcha la intervención priorizada
+  frente al valor que se protege período a período hasta recuperar la inversión.
+- Gráfico 2 (comparativa A/B/C): reorienta hacia "a quién priorizar y con qué presupuesto". Cada
   escenario es una política de cobertura (intervenir, por ejemplo, al 10%, 25% o 50% de mayor
   probabilidad de evento × valor en riesgo). Compara valor protegido esperado, costo total de
   intervención, falsas alarmas (intervenir sin que ocurra el evento) y eventos no evitados.
@@ -1153,6 +1275,10 @@ M4_BUSINESS_PROMPT_CLASSIFICATION = M4_CONTENT_GENERATOR_PROMPT + M4_LR_BUSINESS
 M5_BUSINESS_PROMPT_CLASSIFICATION = M5_CONTENT_GENERATOR_PROMPT + M5_LR_BUSINESS_BLOCK
 # Issue #319 — variante de GRÁFICOS business+clasificación (aditiva sobre el chart prompt genérico).
 M4_CHART_BUSINESS_PROMPT_CLASSIFICATION = M4_CHART_GENERATOR_PROMPT + M4_CHART_LR_BUSINESS_BLOCK
+# Variante LEGACY (3 gráficos) — revert byte-idéntico vía M4_CHART_DROP_SENSITIVITY=false.
+M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY = (
+    M4_CHART_GENERATOR_PROMPT_LEGACY + M4_CHART_LR_BUSINESS_BLOCK_LEGACY
+)
 # Issue #329 — variantes de PREGUNTAS business+clasificación (aditivas sobre el prompt de preguntas
 # GENÉRICO; el gate ml_ds-only de _resolve_family_prompt deja a business en el genérico, así que el
 # swap business las alinea con el arco LR sin tocar ml_ds).
@@ -1331,7 +1457,8 @@ Reglas ESTRICTAS:
 # TEACHING NOTE — PARTE 1: Sinopsis + Objetivos Bloom + Plan de Clase
 # ══════════════════════════════════════════════════════════════════════════════
 
-TEACHING_NOTE_PART1_PROMPT = """\
+# Legacy (kill-switch OFF). Byte-identical previous behavior — do NOT edit.
+TEACHING_NOTE_PART1_PROMPT_LEGACY = """\
 # Role
 Experto en diseño pedagógico (Método del Caso). Tu misión es crear un "Manual de Vuelo"
 para que el docente prepare su sesión en 10 minutos.
@@ -1362,6 +1489,45 @@ Estructura la sesión en bloques de tiempo reales para {course_level}:
 - EDA (resumen): {eda_section}
 - Perfil: {student_profile} | Nivel: {course_level}
 """
+
+
+# Active (kill-switch ON). Structured output (TeachingNoteIntroOutput): §1 Resumen + anclajes de §2.
+# Python ensambla §2 "Recorrido por Módulo" de forma determinista (build_module_guide_block);
+# el LLM SOLO escribe la sinopsis, el público, 3 objetivos y una frase de anclaje por módulo.
+TEACHING_NOTE_PART1_PROMPT = """\
+# Role
+Experto en diseño pedagógico (Método del Caso). Preparas una guía para que el docente
+entienda el caso en pocos minutos.
+
+# Task
+Usando el esquema estructurado provisto, genera el material introductorio de la Teaching Note
+(Módulo 6, exclusiva del docente). Idioma: {output_language}.
+
+Produce exactamente estos campos:
+- resumen_markdown: sinopsis ejecutiva del dilema central y la tensión principal (≤90 palabras,
+  prosa continua, SIN encabezados ni viñetas).
+- publico_objetivo: una sola línea sobre para qué perfil ({student_profile}) y nivel
+  ({course_level}) está pensado el caso.
+- objetivos: exactamente 3 objetivos de aprendizaje con verbos de acción (Diagnosticar, Evaluar,
+  Justificar…). Solo pueden referirse a los módulos del allowlist de abajo.
+- anclajes: por CADA módulo del allowlist y SOLO esos, una frase (≤22 palabras) que conecte ese
+  módulo con el dilema, la empresa o el sector REALES de la narrativa. Usa el modulo_id exacto
+  del allowlist (m1, m2, …).
+
+# Reglas estrictas
+- NO inventes, agregues, elimines, renombres ni renumeres módulos.
+- NO menciones módulos fuera del allowlist (p. ej. M2/M3 o un notebook si no aparecen ahí).
+- NO describas el Módulo 6.
+- Cada anclaje debe ser específico de ESTE caso, nunca genérico.
+
+# Módulos de ESTE caso (allowlist — úsalos tal cual)
+{modulos_disponibles}
+
+# Contexto del caso
+- Narrativa: {case_context}
+- EDA (resumen): {eda_section}
+- Perfil: {student_profile} | Nivel: {course_level}
+"""
  
  
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1369,7 +1535,8 @@ Estructura la sesión en bloques de tiempo reales para {course_level}:
 # Contexto ligero: sinopsis de Part1 + perfil + industria + preguntas
 # ══════════════════════════════════════════════════════════════════════════════
 
-TEACHING_NOTE_PART2_PROMPT = """\
+# Legacy (kill-switch OFF). Byte-identical previous behavior — do NOT edit.
+TEACHING_NOTE_PART2_PROMPT_LEGACY = """\
 # Role
 Consultor estratégico senior. Tu foco es el rigor del análisis y la profundidad de la industria.
 
@@ -1393,6 +1560,46 @@ Formato: Markdown, H4. Sin introducciones ni texto de relleno.
 - Sinopsis previa: {teaching_note_part1_synopsis}
 - Perfil: {student_profile} | Nivel: {course_level}
 - Datos de preguntas (referencia): {question_full_data}
+- Datos M5 (referencia): {m5_questions_data}
+"""
+
+
+# Active (kill-switch ON). §3 únicamente: plan de clase comprimido + "dónde se traban".
+# El §4 "Análisis del Caso" (Tensiones/FCE/Benchmarks) se eliminó. Sin {teaching_note_part1_synopsis}.
+TEACHING_NOTE_PART2_PROMPT = """\
+# Role
+Docente experto en el Método del Caso. Cierras la guía con un plan de sesión accionable.
+
+# Task
+Genera ÚNICAMENTE la sección final de la Teaching Note (Módulo 6). Idioma: {output_language}.
+Formato: Markdown limpio. Sin introducciones ni texto de relleno. Empieza directamente con el
+encabezado de nivel 2 indicado.
+
+# Output Structure (EXACTAMENTE este encabezado y orden)
+
+## Plan de Clase y Dónde se Traban
+
+**Plan de sesión (90–120 min):**
+- **Apertura (15%):** pregunta rompehielo y encuadre del conflicto (una línea).
+- **Debate central (70%):** 2–3 preguntas provocadoras basadas en los datos del caso (una línea).
+- **Cierre (15%):** takeaway principal y lección transferible (una línea).
+
+**Dónde se traban los estudiantes:**
+- 2 a 3 viñetas, cada una de ≤30 palabras, ancladas al dilema, a los Exhibits o a las opciones
+  A/B/C de ESTE caso (no generalidades).
+
+# Reglas estrictas
+- Usa SOLO los módulos del allowlist; NO menciones módulos fuera de esa lista.
+- NO añadas otras secciones (sin Sinopsis, sin Objetivos, sin Análisis del Caso, sin Benchmarks).
+- NO uses encabezados de nivel 3 o 4 (### / ####); los subtítulos van en **negrita**.
+
+# Módulos de ESTE caso (allowlist — úsalos tal cual)
+{modulos_disponibles}
+
+# Contexto
+- Título del Caso: {titulo}
+- Industria: {industria}
+- Preguntas del caso (referencia): {question_full_data}
 - Datos M5 (referencia): {m5_questions_data}
 """
 
@@ -1551,6 +1758,8 @@ rating_aliases = ["rating", "score", "afinidad", "preferencia", "relevancia"]
 
 # %% [markdown]
 # ## Sección 1: Carga del Dataset
+# Aquí subes el archivo de datos del caso y confirmas cuántas filas y columnas
+# tiene. Es el primer chequeo de que trabajas con el dataset real y completo.
 
 # %%
 try:
@@ -1570,6 +1779,8 @@ safe_display(df)
 
 # %% [markdown]
 # ## Sección 2: Inspección y Calidad de Datos
+# Revisa el tipo de cada columna, cuántos valores faltan y un resumen básico.
+# Da una primera lectura de la salud de los datos antes de modelar.
 
 # %%
 print("=== Tipos de datos ===")
@@ -1586,6 +1797,9 @@ except Exception:
 
 # %% [markdown]
 # ## Sección 2.1: Detección asistida de columnas
+# Sugiere qué columna podría ser la categoría a predecir, la fecha o el texto, a
+# partir de sus nombres. Es una guía para orientarte; tú validas que la elección
+# sea la correcta.
 
 # %%
 text_candidates = find_columns_containing(df.columns, ["ticket", "queja", "coment", "mensaje", "texto", "descripcion", "detalle", "observacion", "motivo", "pqrs"])
@@ -2287,10 +2501,15 @@ __all__ = [
   "M3_QUESTIONS_GENERATOR_PROMPT",
   "M4_BUSINESS_PROMPT_CLASSIFICATION",
   "M4_CHART_BUSINESS_PROMPT_CLASSIFICATION",
+  "M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY",
   "M4_CHART_GENERATOR_PROMPT",
+  "M4_CHART_GENERATOR_PROMPT_LEGACY",
   "M4_CHART_LR_BUSINESS_BLOCK",
+  "M4_CHART_LR_BUSINESS_BLOCK_LEGACY",
   "M4_CHART_PROMPT_CLASSIFICATION",
+  "M4_CHART_PROMPT_CLASSIFICATION_LEGACY",
   "M4_CHARTS_PROMPT_BY_FAMILY",
+  "M4_CHARTS_PROMPT_BY_FAMILY_LEGACY",
   "M4_CONTENT_GENERATOR_PROMPT",
   "M4_LR_BUSINESS_BLOCK",
   "M4_NARRATIVE_PROMPT_CLASSIFICATION",
@@ -2331,5 +2550,10 @@ __all__ = [
   "SCHEMA_DESIGNER_PROMPT_BY_FAMILY",
   "SCHEMA_DESIGNER_PROMPT_CLASSIFICATION",
   "TEACHING_NOTE_PART1_PROMPT",
+  "TEACHING_NOTE_PART1_PROMPT_LEGACY",
   "TEACHING_NOTE_PART2_PROMPT",
+  "TEACHING_NOTE_PART2_PROMPT_LEGACY",
+  "build_module_guide_block",
+  "build_roster_allowlist",
+  "module_guide_roster_ids",
 ]

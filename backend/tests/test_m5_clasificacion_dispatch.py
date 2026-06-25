@@ -12,7 +12,7 @@ Covers:
 6.  Questions prompt contract: {computed_metrics_block} placeholder present.
 7.  Questions prompt contract: {algoritmos} placeholder present.
 8.  Questions prompt contract: {algorithm_mode} placeholder present.
-9.  Questions prompt contract: solucion_esperada word-count contract present ("350").
+9.  Questions prompt contract: solucion_esperada concise word-count contract ("100-160").
 10. Narrative prompt: decision-matrix sentinels ("| acción | KPI esperado |") present.
 11. Narrative prompt: {computed_metrics_block} placeholder present (grounding block).
 12. Node source inspection: m5_questions_generator injects computed_metrics_block
@@ -137,15 +137,115 @@ def test_m5_questions_prompt_has_algorithm_mode_placeholder() -> None:
     )
 
 
-# ── 9. Questions prompt word-count contract ───────────────────────────────────
+# ── 9. Questions prompt concise word-count contract ───────────────────────────
+
+
+_WORD_COUNT_HEADER_PHRASE = "100-160 palabras"
+_WORD_COUNT_WORKFLOW_PHRASE = "entre 100 y 160 palabras"
 
 
 def test_m5_questions_prompt_mentions_word_count_contract() -> None:
-    """Prompt must state the 350-500 word contract for solucion_esperada."""
-    assert "350" in M5_QUESTIONS_PROMPT_CLASSIFICATION, (
-        "M5_QUESTIONS_PROMPT_CLASSIFICATION must mention the 350-word lower bound "
-        "for solucion_esperada to match the generic prompt contract."
+    """Prompt must state the concise 100-160 word contract for solucion_esperada.
+
+    Asserts BOTH exact phrasings (header + workflow line) so a partial drift — e.g. the
+    header silently changed to 100-200 while the workflow stays 100-160 — fails the lock.
+    """
+    assert (
+        _WORD_COUNT_HEADER_PHRASE in M5_QUESTIONS_PROMPT_CLASSIFICATION
+        and _WORD_COUNT_WORKFLOW_PHRASE in M5_QUESTIONS_PROMPT_CLASSIFICATION
+        and "350-500" not in M5_QUESTIONS_PROMPT_CLASSIFICATION
+    ), (
+        "M5_QUESTIONS_PROMPT_CLASSIFICATION must state the concise 100-160 word "
+        "contract (header + workflow) for solucion_esperada and drop the legacy 350-500."
     )
+
+
+def test_m5_questions_generic_prompt_mentions_word_count_contract() -> None:
+    """The generic M5 questions prompt must carry the same concise 100-160 contract."""
+    assert (
+        _WORD_COUNT_HEADER_PHRASE in M5_QUESTIONS_GENERATOR_PROMPT
+        and _WORD_COUNT_WORKFLOW_PHRASE in M5_QUESTIONS_GENERATOR_PROMPT
+        and "350-500" not in M5_QUESTIONS_GENERATOR_PROMPT
+    ), (
+        "M5_QUESTIONS_GENERATOR_PROMPT must state the concise 100-160 word contract "
+        "(header + workflow, drop the legacy 350-500) so all M5 cohorts stay consistent."
+    )
+
+
+# ── 9b. Concise-memo format lock (regression guard for the shortened contract) ──
+
+_M5_DIMENSION_LABELS = (
+    "Párrafo 1 — Decisión",
+    "Párrafo 2 — Evidencia",
+    "Párrafo 3 — Riesgo",
+    "Párrafo 4 — Implementación",
+    "Párrafo 5 — Marco",
+)
+
+
+def test_m5_questions_prompts_keep_all_five_dimension_labels() -> None:
+    """Both M5 questions prompts must keep the five labeled dimensions of the memo.
+
+    The concise rewrite (100-160 palabras) compresses each dimension to one sentence; it
+    must never DROP a dimension. Locks decision / evidence / risk / implementation / framework.
+    """
+    for prompt_name, prompt in (
+        ("M5_QUESTIONS_PROMPT_CLASSIFICATION", M5_QUESTIONS_PROMPT_CLASSIFICATION),
+        ("M5_QUESTIONS_GENERATOR_PROMPT", M5_QUESTIONS_GENERATOR_PROMPT),
+    ):
+        missing = [lbl for lbl in _M5_DIMENSION_LABELS if lbl not in prompt]
+        assert not missing, f"{prompt_name} dropped memo dimension labels: {missing}"
+
+
+def test_m5_questions_prompts_keep_no_bullets_json_rule() -> None:
+    """The JSON-safety no-bullets rule must survive the concise rewrite (both prompts)."""
+    for prompt in (M5_QUESTIONS_PROMPT_CLASSIFICATION, M5_QUESTIONS_GENERATOR_PROMPT):
+        assert "NUNCA uses bullet points" in prompt
+
+
+def test_m5_questions_classification_keeps_load_bearing_tokens() -> None:
+    """The concise classification memo must keep every coherence/quality mandate."""
+    for token in (
+        "{main_risk_from_m3_m4}",
+        "{implementation_timeframe}",
+        "M3_METRICS_SUMMARY_AUSENTE",
+        "PROHIBIDO inventar",
+    ):
+        assert token in M5_QUESTIONS_PROMPT_CLASSIFICATION, (
+            f"M5_QUESTIONS_PROMPT_CLASSIFICATION must keep load-bearing token {token!r} "
+            "after the concise rewrite."
+        )
+
+
+def test_m5_questions_classification_prompt_format_smoke() -> None:
+    """`.format(**ctx)` over the concise classification prompt must not raise.
+
+    The node renders ``prompt_text.format(**context)`` (graph.py); a stray unescaped
+    brace introduced by the rewrite would be a HARD per-job failure (KeyError/ValueError),
+    not a graceful degrade. Build the context from the prompt's own placeholders so the
+    smoke covers exactly the keys it references (algoritmos / algorithm_mode /
+    computed_metrics_block included).
+    """
+    ctx = {key: "x" for key in _placeholders(M5_QUESTIONS_PROMPT_CLASSIFICATION)}
+    # Renders without KeyError/ValueError (a stray single brace would raise); the JSON-schema
+    # block legitimately keeps literal braces via {{ }}, so we assert non-empty, not brace-free.
+    assert M5_QUESTIONS_PROMPT_CLASSIFICATION.format(**ctx)
+    # No real placeholder left unsubstituted.
+    assert "{algoritmos}" not in M5_QUESTIONS_PROMPT_CLASSIFICATION.format(**ctx)
+
+
+def test_m5_questions_generic_prompt_format_smoke() -> None:
+    """`.format(**ctx)` over the concise GENERIC prompt must not raise.
+
+    The generic prompt is rendered directly for regresion/clustering/serie_temporal and is
+    the base of the business+clf variant. Today only the business variant has a format smoke
+    (business == generic + additive block); this direct smoke removes the dependency on that
+    substring coupling, so a future refactor of the business prompt can't silently drop the
+    generic's only brace coverage.
+    """
+    ctx = {key: "x" for key in _placeholders(M5_QUESTIONS_GENERATOR_PROMPT)}
+    assert M5_QUESTIONS_GENERATOR_PROMPT.format(**ctx)
+    assert "{main_risk_from_m3_m4}" not in M5_QUESTIONS_GENERATOR_PROMPT.format(**ctx)
 
 
 # ── 10. Narrative: decision-matrix sentinels ──────────────────────────────────

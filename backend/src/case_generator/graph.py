@@ -137,15 +137,23 @@ from case_generator.prompts import (
     M4_BUSINESS_PROMPT_CLASSIFICATION,
     M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_GENERATOR_PROMPT,
+    M4_CHART_GENERATOR_PROMPT_LEGACY,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION,
+    M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY,
     M4_CHARTS_PROMPT_BY_FAMILY,
+    M4_CHARTS_PROMPT_BY_FAMILY_LEGACY,
     M5_PROMPT_BY_FAMILY,
     M5_CONTENT_GENERATOR_PROMPT,
     M5_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
     M5_BUSINESS_PROMPT_CLASSIFICATION,
     M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
     TEACHING_NOTE_PART1_PROMPT,
+    TEACHING_NOTE_PART1_PROMPT_LEGACY,
     TEACHING_NOTE_PART2_PROMPT,
+    TEACHING_NOTE_PART2_PROMPT_LEGACY,
+    build_module_guide_block,
+    build_roster_allowlist,
+    module_guide_roster_ids,
     SCHEMA_DESIGNER_PROMPT,
     SCHEMA_DESIGNER_PROMPT_BY_FAMILY,
 )
@@ -180,6 +188,11 @@ from case_generator.m3_grounding import (
     validate_m3_questions_coherence,
 )
 from case_generator.m5_grounding import validate_m5_questions_coherence
+from case_generator.m6_grounding import log_out_of_roster_mentions
+from case_generator.m4_grounding import (
+    drop_sensitivity_charts,
+    log_duplicate_deployment_sections,
+)
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
     _bounded_diagnostic,
@@ -199,6 +212,7 @@ from case_generator.tools_and_schemas import (
     GeneradorPreguntasM5Output,
     EDAQuestionsOutput,
     DatasetSchema,
+    TeachingNoteIntroOutput,
 )
 from case_generator.datagen.eda_charts_business import (
     generate_business_eda_charts,
@@ -2122,6 +2136,8 @@ def _annotate_validate_emit(
     state: ADAMState,
     config: RunnableConfig,
     annotate_prompt: str,
+    *,
+    deterministic_text_ids: frozenset[str] = frozenset(),
 ) -> dict | None:
     """Cola compartida de los paths EDA Python-deterministas (clasif + business).
 
@@ -2131,6 +2147,12 @@ def _annotate_validate_emit(
     validó. El boundary del LLM nunca tumba el panel: si la anotación falla, se
     sirven los charts sin texto LLM (preservando los `notes` del builder, p. ej.
     el aviso anti-overclaim del chart de drivers).
+
+    ``deterministic_text_ids`` son los charts cuyo `description`/`notes` los escribe
+    el builder de forma determinista (p. ej. `missingness_heatmap`): se EXCLUYEN de
+    la petición al LLM y se descartan de sus anotaciones, de modo que el texto del
+    builder se conserva (el merge ya prefiere el texto del builder cuando el id no
+    está en `ann_by_id`). Default vacío → no-op byte-idéntico (path business).
     """
     # Cap defensivo: el contrato son ≤5 charts.
     if len(charts) > 5:
@@ -2147,6 +2169,7 @@ def _annotate_validate_emit(
                 "chart_type": c.get("chart_type", ""),
             }
             for c in charts
+            if c.get("id", "") not in deterministic_text_ids
         ]
         prompt = annotate_prompt.format(
             charts_context_json=json.dumps(charts_context, ensure_ascii=False),
@@ -2172,6 +2195,12 @@ def _annotate_validate_emit(
             ann_err,
         )
         ann_by_id = {}
+
+    # Charts con texto determinista: descartar cualquier anotación LLM (incl. una
+    # que un modelo díscolo devuelva sin habérsela pedido) para preservar el texto
+    # honesto del builder en el merge de abajo.
+    for _det_id in deterministic_text_ids:
+        ann_by_id.pop(_det_id, None)
 
     # Merge defensivo: solo description/notes; preservamos data_source y los
     # `notes` factuales del builder (p. ej. el caveat anti-overclaim). El caveat va
@@ -2237,15 +2266,34 @@ def _eda_classification_python_path(
             )
             return None
 
-        charts = generate_classification_eda_charts(df, target_col, contract)
+        # Kill-switch `m2_missingness_honest_text` (default true): el builder escribe
+        # texto determinista y honesto para `missingness_heatmap` (que el LLM no debe
+        # pisar). Off → texto vacío + el LLM lo anota (comportamiento previo).
+        honest_text = settings.m2_missingness_honest_text
+        # Kill-switch `m2_mi_exclude_index` (default true): filtra del chart de MI las
+        # columnas que inflan la métrica por alta cardinalidad discreta (period/IDs/texto).
+        # Off → todas las columnas salvo el target (comportamiento legacy byte-idéntico).
+        exclude_index = settings.m2_mi_exclude_index
+        charts = generate_classification_eda_charts(
+            df, target_col, contract, honest_text=honest_text, exclude_index=exclude_index
+        )
         if not charts:
             logger.warning(
                 "[eda_chart_generator/py] builder devolvió 0 charts — fallback a path LLM"
             )
             return None
 
+        # El id está acoplado al builder (`_build_missingness_heatmap`); el test E2E
+        # de coherencia de texto lo bloquea contra un rename silencioso.
+        deterministic_text_ids = (
+            frozenset({"missingness_heatmap"}) if honest_text else frozenset()
+        )
         return _annotate_validate_emit(
-            charts, state, config, EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION
+            charts,
+            state,
+            config,
+            EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
+            deterministic_text_ids=deterministic_text_ids,
         )
     except Exception as e:  # noqa: BLE001
         logger.error(
@@ -5159,12 +5207,15 @@ def _route_dataset_validation(state: ADAMState) -> str:
 
 
 # ─────────────────────────────────────────────────────────
-# v8 — NODO: TEACHING NOTE PART 1 (§1 Sinopsis, §2 Guía, §3 Pauta)
+# TEACHING NOTE (M6) — Guía del Docente por módulo
+# Kill-switch TEACHING_NOTE_MODULE_GUIDE (default true):
+#   ON  → guía concisa de 3 secciones; §2 "Recorrido por Módulo" lo ENSAMBLA Python
+#         (build_module_guide_block) → módulos correctos por construcción; el LLM solo
+#         escribe la sinopsis, el público, 3 objetivos y una frase de anclaje por módulo.
+#   OFF → _legacy_teaching_note_part1/part2: cuerpos verbatim previos, byte-idéntico.
 # ─────────────────────────────────────────────────────────
-def teaching_note_part1(state: ADAMState, config: RunnableConfig) -> dict:
-    """Genera §1 Sinopsis y Público Objetivo, §2 Objetivos Bloom, §3 Plan de Clase.
-    Corre en fan-out paralelo de synthesis_flow (no necesita m5_content).
-    """
+def _legacy_teaching_note_part1(state: ADAMState, config: RunnableConfig) -> dict:
+    """Kill-switch OFF: comportamiento previo byte-idéntico (§1 Sinopsis, §2 Bloom, §3 Pauta)."""
     try:
         cfg = Configuration.from_runnable_config(config)
         llm = _get_writer_llm(cfg.writer_model, temperature=0.6, thinking_level="medium")
@@ -5176,7 +5227,7 @@ def teaching_note_part1(state: ADAMState, config: RunnableConfig) -> dict:
             # ~4000 chars ≈ ~1000 tokens. EDA completo ~10000 chars → 40%.
             "eda_section": state.get("doc2_eda", "")[:4000] if state.get("doc2_eda") else "",
         })
-        response = llm.invoke(TEACHING_NOTE_PART1_PROMPT.format(**context))
+        response = llm.invoke(TEACHING_NOTE_PART1_PROMPT_LEGACY.format(**context))
         part1 = sanitize_markdown(_extract_text(response))
         print(f"[teaching_note_part1] {len(part1)} chars")
         return {"doc3_teaching_note_part1": part1, "current_agent": "teaching_note_part1"}
@@ -5185,13 +5236,8 @@ def teaching_note_part1(state: ADAMState, config: RunnableConfig) -> dict:
         return {"doc3_teaching_note_part1": "⚠️ Error generando Teaching Note (parte 1)."}
 
 
-# ─────────────────────────────────────────────────────────
-# v8 — NODO: TEACHING NOTE PART 2 (§4 Rúbrica, §5 Benchmarks, §6 Notas)
-# ─────────────────────────────────────────────────────────
-def teaching_note_part2(state: ADAMState, config: RunnableConfig) -> dict:
-    """Genera §4 Análisis del Caso (Tensiones Ocultas, FCE, Benchmarks del Sector).
-    Corre secuencialmente después de m5_questions_generator (post sync1).
-    """
+def _legacy_teaching_note_part2(state: ADAMState, config: RunnableConfig) -> dict:
+    """Kill-switch OFF: comportamiento previo byte-idéntico (§4 Análisis del Caso)."""
     try:
         cfg = Configuration.from_runnable_config(config)
         llm = _get_writer_llm(cfg.writer_model, temperature=0.6, thinking_level="medium")
@@ -5220,13 +5266,160 @@ def teaching_note_part2(state: ADAMState, config: RunnableConfig) -> dict:
             "question_full_data": json.dumps(all_questions[:16], ensure_ascii=False),
             "m5_questions_data": m5_questions_data,
         })
-        response = llm.invoke(TEACHING_NOTE_PART2_PROMPT.format(**context))
+        response = llm.invoke(TEACHING_NOTE_PART2_PROMPT_LEGACY.format(**context))
         part2 = sanitize_markdown(_extract_text(response))
         print(f"[teaching_note_part2] {len(part2)} chars, m5_qs={'yes' if m5_questions else 'no'}")
         return {"doc3_teaching_note_part2": part2, "current_agent": "teaching_note_part2"}
     except Exception as e:
         logger.error("[teaching_note_part2] ERROR: %s", e, exc_info=True)
         return {"doc3_teaching_note_part2": "⚠️ Error generando Teaching Note (parte 2).", "current_agent": "teaching_note_part2"}
+
+
+def _m6_render_section1(resultado: TeachingNoteIntroOutput) -> str:
+    """Render §1 "Resumen para el Docente" from the structured intro output."""
+    lines = ["## Resumen para el Docente", ""]
+    sinopsis = (resultado.resumen_markdown or "").strip()
+    lines.append(sinopsis if sinopsis else "_Sinopsis no disponible._")
+    publico = (resultado.publico_objetivo or "").strip()
+    if publico:
+        lines.extend(["", f"**Público objetivo:** {publico}"])
+    objetivos = [o.strip() for o in (resultado.objetivos or []) if o and o.strip()]
+    if objetivos:
+        lines.extend(["", "**Objetivos de aprendizaje:**"])
+        lines.extend(f"- {o}" for o in objetivos)
+    return "\n".join(lines).rstrip()
+
+
+def _m6_fallback_section1(state: ADAMState) -> str:
+    """Degrade §1 from the narrative when the structured intro call fails (never raises)."""
+    narrativa = (state.get("doc1_narrativa") or "").strip()
+    words = narrativa.split()
+    sinopsis = " ".join(words[:90]) + ("…" if len(words) > 90 else "") if words else ""
+    lines = ["## Resumen para el Docente", ""]
+    lines.append(sinopsis if sinopsis else "_Sinopsis no disponible._")
+    return "\n".join(lines)
+
+
+def teaching_note_part1(state: ADAMState, config: RunnableConfig) -> dict:
+    """M6 §1 Resumen + §2 Recorrido por Módulo (Python-owned roster + LLM anchors).
+
+    Corre en fan-out paralelo de synthesis_flow (no necesita m5_content). El bloque
+    determinista §2 se construye SIEMPRE (incluso si la llamada estructurada falla), por lo
+    que un fallo del LLM degrada a esqueleto + §1 de respaldo en vez de perder la guía.
+    """
+    if not settings.teaching_note_module_guide:
+        return _legacy_teaching_note_part1(state, config)
+
+    try:
+        is_business = state.get("studentProfile") == "business"
+        case_type = state.get("caseType", "harvard_only")
+        context = _build_base_context(state)
+        family = context.get("primary_family")
+        # Estado REALIZADO: el notebook M3 (generator family-agnóstico) sí se emitió y no está
+        # degradado. Espeja lo que el estudiante realmente recibe (no la mera intención).
+        notebook_present = bool(state.get("m3_notebook_code")) and not bool(
+            state.get("m3_notebook_degraded")
+        )
+        roster_ids = module_guide_roster_ids(is_business, case_type)
+
+        # §2 esqueleto (sin anclajes) — baseline que SIEMPRE existe.
+        section2 = build_module_guide_block(
+            is_business=is_business,
+            case_type=case_type,
+            family=family,
+            notebook_present=notebook_present,
+            anchors=None,
+        )
+        section1 = _m6_fallback_section1(state)
+
+        try:
+            cfg = Configuration.from_runnable_config(config)
+            llm = _get_writer_llm(cfg.writer_model, temperature=0.6, thinking_level="medium")
+            context.update({
+                "case_context": state.get("doc1_narrativa", "")[:6000],
+                "eda_section": state.get("doc2_eda", "")[:4000] if state.get("doc2_eda") else "",
+                "modulos_disponibles": build_roster_allowlist(is_business, case_type),
+            })
+            resultado: TeachingNoteIntroOutput = llm.with_structured_output(
+                TeachingNoteIntroOutput
+            ).invoke(TEACHING_NOTE_PART1_PROMPT.format(**context))
+            # Intersecta los anclajes con el roster real (ids desconocidos se descartan).
+            anchors = {
+                a.modulo_id.strip().lower(): a.frase
+                for a in (resultado.anclajes or [])
+                if a.modulo_id and a.modulo_id.strip().lower() in roster_ids and a.frase
+            }
+            section1 = _m6_render_section1(resultado)
+            section2 = build_module_guide_block(
+                is_business=is_business,
+                case_type=case_type,
+                family=family,
+                notebook_present=notebook_present,
+                anchors=anchors,
+            )
+        except Exception as e:
+            logger.warning(
+                "[teaching_note_part1] intro estructurada falló — esqueleto + §1 de respaldo: %s",
+                e,
+            )
+
+        note = sanitize_markdown(f"{section1}\n\n{section2}")
+        log_out_of_roster_mentions(
+            note, roster_ids, case_id=state.get("case_id", "unknown"), node="teaching_note_part1"
+        )
+        print(f"[teaching_note_part1] {len(note)} chars (module guide)")
+        return {"doc3_teaching_note_part1": note, "current_agent": "teaching_note_part1"}
+    except Exception as e:
+        logger.error("[teaching_note_part1] ERROR: %s", e, exc_info=True)
+        # Centinela `[..._ERROR]` para que el resume RECALCULE (no congele la nota degradada).
+        return {
+            "doc3_teaching_note_part1": "[TEACHING_NOTE_PART1_ERROR] ⚠️ Error generando Teaching Note (parte 1).",
+            "current_agent": "teaching_note_part1",
+        }
+
+
+def teaching_note_part2(state: ADAMState, config: RunnableConfig) -> dict:
+    """M6 §3 "Plan de Clase y Dónde se Traban" (corre post sync1; tiene preguntas + M5)."""
+    if not settings.teaching_note_module_guide:
+        return _legacy_teaching_note_part2(state, config)
+
+    try:
+        cfg = Configuration.from_runnable_config(config)
+        llm = _get_writer_llm(cfg.writer_model, temperature=0.6, thinking_level="medium")
+
+        # Consolidar preguntas de todos los módulos como referencia para "dónde se traban".
+        all_questions: list[dict[str, Any]] = []
+        for key in ["doc1_preguntas", "doc2_preguntas_eda", "m3_questions", "m4_questions"]:
+            qs = cast(list[dict[str, Any]], state.get(key, []))
+            if qs:
+                all_questions.extend(qs)
+
+        m5_questions = cast(list[dict[str, Any]], state.get("m5_questions", []))
+        m5_questions_data = json.dumps(m5_questions, ensure_ascii=False) if m5_questions else "[]"
+
+        is_business = state.get("studentProfile") == "business"
+        case_type = state.get("caseType", "harvard_only")
+        roster_ids = module_guide_roster_ids(is_business, case_type)
+
+        context = _build_base_context(state)
+        context.update({
+            "question_full_data": json.dumps(all_questions[:16], ensure_ascii=False),
+            "m5_questions_data": m5_questions_data,
+            "modulos_disponibles": build_roster_allowlist(is_business, case_type),
+        })
+        response = llm.invoke(TEACHING_NOTE_PART2_PROMPT.format(**context))
+        part2 = sanitize_markdown(_extract_text(response))
+        log_out_of_roster_mentions(
+            part2, roster_ids, case_id=state.get("case_id", "unknown"), node="teaching_note_part2"
+        )
+        print(f"[teaching_note_part2] {len(part2)} chars, m5_qs={'yes' if m5_questions else 'no'}")
+        return {"doc3_teaching_note_part2": part2, "current_agent": "teaching_note_part2"}
+    except Exception as e:
+        logger.error("[teaching_note_part2] ERROR: %s", e, exc_info=True)
+        return {
+            "doc3_teaching_note_part2": "[TEACHING_NOTE_PART2_ERROR] ⚠️ Error generando Teaching Note (parte 2).",
+            "current_agent": "teaching_note_part2",
+        }
 
 
 
@@ -7594,6 +7787,14 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             variant=variant,
         )
         print(f"[m4_content_generator] {len(m4)} chars")
+        # Logger-only backstop (M4_DEPLOYMENT_DEDUP): flag a residual duplicate deployment
+        # recommendation that survived the prompt fix. ``variant`` is non-None only for
+        # ml_ds + clasificación, so this is a byte-identical no-op elsewhere. Best-effort —
+        # never raises, never reprompts, never mutates ``m4`` (does not fail the job).
+        if settings.m4_deployment_dedup:
+            log_duplicate_deployment_sections(
+                m4, variant=variant, case_id=state.get("case_id")
+            )
         return {
             "m4_content": m4,
             "current_agent": "m4_content_generator",
@@ -7622,16 +7823,45 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "computed_metrics_block": build_computed_metrics_block(state.get("m3_metrics_summary")),
         })
 
-        prompt = _resolve_family_prompt(state, M4_CHARTS_PROMPT_BY_FAMILY, M4_CHART_GENERATOR_PROMPT)
+        # M4-chart-trim: versión vigente = 2 gráficos (Payback + Comparativa A/B/C); el Gráfico de
+        # Sensibilidad (Tornado) se retiró. El kill-switch M4_CHART_DROP_SENSITIVITY=false revierte a
+        # los prompts LEGACY (3 gráficos) Y desactiva el backstop → comportamiento byte-idéntico al
+        # previo, sin redeploy.
+        use_legacy_charts = not settings.m4_chart_drop_sensitivity
+        charts_by_family = (
+            M4_CHARTS_PROMPT_BY_FAMILY_LEGACY if use_legacy_charts else M4_CHARTS_PROMPT_BY_FAMILY
+        )
+        default_chart_prompt = (
+            M4_CHART_GENERATOR_PROMPT_LEGACY if use_legacy_charts else M4_CHART_GENERATOR_PROMPT
+        )
+        business_chart_prompt = (
+            M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY
+            if use_legacy_charts
+            else M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
+        )
+
+        prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
         # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
         # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
-        prompt = _maybe_business_classification_prompt(
-            state, prompt, M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
-        )
+        prompt = _maybe_business_classification_prompt(state, prompt, business_chart_prompt)
         result: EDAChartGeneratorOutput = llm.with_structured_output(
             EDAChartGeneratorOutput
         ).invoke(prompt.format(**context))
         charts = [c.model_dump() for c in result.charts]
+        # Backstop determinista (solo en el camino vigente): elimina cualquier gráfico de
+        # sensibilidad/tornado residual que el LLM emita pese al prompt de 2 gráficos. INNER try para
+        # que un fallo del backstop NUNCA vacíe los charts ni caiga al except externo (que devuelve []).
+        if not use_legacy_charts:
+            try:
+                charts, dropped = drop_sensitivity_charts(charts)
+                if dropped:
+                    logger.warning(
+                        "[m4_chart_generator] dropped %d residual sensitivity chart(s)",
+                        dropped,
+                        extra={"node": "m4_chart_generator", "dropped": dropped},
+                    )
+            except Exception:  # pragma: no cover - defensive; never fail/empty a job
+                logger.exception("[m4_chart_generator] sensitivity-drop backstop failed")
         print(f"[m4_chart_generator] {len(charts)} charts generados")
         return {"m4_charts": charts, "current_agent": "m4_chart_generator"}
     except Exception as e:
@@ -7704,12 +7934,19 @@ def synthesis_phase1_sync(state: ADAMState) -> dict:
     return {}
 
 
+# Resume sentinel prefix (e.g. "[TEACHING_NOTE_PART1_ERROR] ") makes _is_resumable_state_value
+# recompute a catastrophically-failed part on resume. It must stay in the per-part state keys but
+# NEVER reach the teacher-facing doc3_teaching_note — strip it from the COMPOSED note only. No-op
+# (byte-identical) for the legacy and happy paths, which carry no sentinel.
+_TEACHING_NOTE_ERROR_SENTINEL_RE = re.compile(r"^\[[A-Z0-9_]+_ERROR\]\s*")
+
+
 def synthesis_phase2_sync(state: ADAMState) -> dict:
     """Fan-in 2: teaching_note_part2 + consigna M5 listos.
     Concatena las 2 partes de la Teaching Note en doc3_teaching_note.
     """
-    part1 = state.get("doc3_teaching_note_part1", "")
-    part2 = state.get("doc3_teaching_note_part2", "")
+    part1 = _TEACHING_NOTE_ERROR_SENTINEL_RE.sub("", state.get("doc3_teaching_note_part1", ""))
+    part2 = _TEACHING_NOTE_ERROR_SENTINEL_RE.sub("", state.get("doc3_teaching_note_part2", ""))
     full_note = f"{part1}\n\n{part2}".strip()
     print(f"[synthesis_phase2_sync] Teaching Note completa: {len(full_note)} chars")
     return {"doc3_teaching_note": full_note}
