@@ -1758,6 +1758,8 @@ rating_aliases = ["rating", "score", "afinidad", "preferencia", "relevancia"]
 
 # %% [markdown]
 # ## Sección 1: Carga del Dataset
+# Aquí subes el archivo de datos del caso y confirmas cuántas filas y columnas
+# tiene. Es el primer chequeo de que trabajas con el dataset real y completo.
 
 # %%
 try:
@@ -1777,6 +1779,8 @@ safe_display(df)
 
 # %% [markdown]
 # ## Sección 2: Inspección y Calidad de Datos
+# Revisa el tipo de cada columna, cuántos valores faltan y un resumen básico.
+# Da una primera lectura de la salud de los datos antes de modelar.
 
 # %%
 print("=== Tipos de datos ===")
@@ -1793,6 +1797,9 @@ except Exception:
 
 # %% [markdown]
 # ## Sección 2.1: Detección asistida de columnas
+# Sugiere qué columna podría ser la categoría a predecir, la fecha o el texto, a
+# partir de sus nombres. Es una guía para orientarte; tú validas que la elección
+# sea la correcta.
 
 # %%
 text_candidates = find_columns_containing(df.columns, ["ticket", "queja", "coment", "mensaje", "texto", "descripcion", "detalle", "observacion", "motivo", "pqrs"])

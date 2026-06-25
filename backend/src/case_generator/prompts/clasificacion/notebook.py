@@ -55,6 +55,10 @@ Genera SOLO la continuación del notebook, empezando después de la Sección 3 d
   `eval(...)`, `exec(...)`. Si necesitas saber si una variable existe, usa SIEMPRE
   `try/except NameError` explícito, por ejemplo:
   `try: X_train` → `except NameError: recrear X_train/X_test/y_train/y_test`.
+9. Cada celda de código de la Sección 3 va precedida de una celda markdown con una
+  descripción conceptual de 1-2 frases en lenguaje sencillo (qué hace y para qué
+  sirve, sin nombres de clases ni de variables internas); emítela tal como aparece
+  en la plantilla, sin parafrasear, resumir ni omitir.
 
 # Reglas de API ESTABLE (anti-alucinación de librerías)
 A. Usa SOLO API documentada y estable de scikit-learn ≥ 1.0:
@@ -323,7 +327,10 @@ M. **PEDAGOGÍA HARVARD ml_ds — bloque comparativo OBLIGATORIO.**
 ## NO un H2 nuevo, para no duplicar la jerarquía.
 # %% [markdown]
 # ### 3.0 EDA Express
-# Antes de entrenar, validamos calidad y forma del dataset (regla K).
+# Antes de entrenar, exploramos el dataset: qué categoría conviene predecir, qué
+# tan equilibradas están sus clases, qué columnas tienen más datos faltantes y
+# dónde hay valores atípicos. Sirve para anticipar problemas que afectarían a los
+# modelos.
 
 # %%
 try:
@@ -379,10 +386,11 @@ except Exception as e:
 
 # %% [markdown]
 # #### 3.0.5.1 Baseline trivial (DummyClassifier) + bootstrap de variables
-# Sin baseline, una AUC de 0.7 no significa nada. Comparamos siempre contra
-# la estrategia más tonta posible: predecir la clase mayoritaria. Esta celda
-# además resuelve `target_col`, `y`, `feature_cols`, `X_raw` e `is_binary`
-# que reutilizan las 6 celdas siguientes.
+# Define el punto de comparación mínimo: un modelo "ingenuo" que siempre predice
+# la clase más frecuente. Sin este baseline, una AUC de 0.7 no significa nada;
+# cualquier modelo posterior debe superarlo con claridad para ser útil. Esta celda
+# también deja preparada la variable que se quiere predecir y las columnas que
+# usarán los modelos siguientes.
 
 # %%
 # === SECTION:dummy_baseline ===
@@ -476,9 +484,10 @@ except Exception as e:
 
 # %% [markdown]
 # #### 3.0.5.2 Pipeline reproducible — Logistic Regression
-# `ColumnTransformer` aplica `StandardScaler` a numéricas y `OneHotEncoder`
-# a categóricas dentro del Pipeline, así el CV no filtra estadísticos del fold
-# de validación al de entrenamiento.
+# Entrena la Regresión Logística dentro de un flujo reproducible que primero
+# prepara las columnas (numéricas y de categorías) y luego ajusta el modelo, todo
+# en un mismo paso. Hacerlo así evita que el preprocesamiento "vea" los datos de
+# validación, para que las métricas sean honestas.
 
 # %%
 # === SECTION:pipeline_lr ===
@@ -535,6 +544,9 @@ except Exception as e:
 
 # %% [markdown]
 # #### 3.0.5.3 Pipeline reproducible — Random Forest
+# Entrena el Random Forest dentro del mismo flujo reproducible: primero prepara
+# las columnas y luego ajusta el modelo en un solo paso, sin que el preprocesamiento
+# "vea" los datos de validación. Así la comparación es justa.
 
 # %%
 # === SECTION:pipeline_rf ===
