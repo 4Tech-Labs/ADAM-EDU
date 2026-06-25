@@ -29,16 +29,14 @@ _ABSENT_MODULE_MARKERS: dict[str, tuple[str, ...]] = {
         "EDA",
         "Análisis Exploratorio",
         "Exploración de Datos",
-        "Data Analyst",
-        "Insight Analyst",
+        "Lectura de los Datos",
     ),
     "m3": (
         "notebook",
-        "Experiment Validator",
+        "Diseño del Experimento",
         "Validación Experimental",
-        "Decision Evidence Reviewer",
+        "Auditoría de la Evidencia",
         "Evaluación de Evidencia",
-        "Auditor de Evidencia",
     ),
 }
 
