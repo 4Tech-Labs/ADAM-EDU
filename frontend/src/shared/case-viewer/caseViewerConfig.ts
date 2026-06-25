@@ -17,16 +17,16 @@ export function getModuleConfig(studentProfile: string, caseType: string): Modul
         {
             id: "m1",
             number: 1,
-            name: isBusiness ? "Case Reader" : "Problem Framer",
-            subLabel: isBusiness ? "Comprensión Gerencial" : "Formulación Analítica",
+            name: isBusiness ? "El Caso y el Dilema" : "Planteamiento del Problema",
+            subLabel: isBusiness ? "Comprende la situación gerencial" : "Traduce el reto a un problema de datos",
             iconColor: "#3b82f6",
         },
         ...(isEDA
             ? [{
                 id: "m2" as ModuleId,
                 number: 2,
-                name: isBusiness ? "Insight Analyst" : "Data Analyst",
-                subLabel: isBusiness ? "Interpretación Visual" : "Exploración de Datos",
+                name: isBusiness ? "Lectura de los Datos" : "Exploración de Datos",
+                subLabel: isBusiness ? "Interpreta la evidencia visual" : "Analiza el dataset y sus patrones",
                 iconColor: "#8b5cf6",
             }]
             : []),
@@ -34,23 +34,23 @@ export function getModuleConfig(studentProfile: string, caseType: string): Modul
             ? [{
                 id: "m3" as ModuleId,
                 number: 3,
-                name: isBusiness ? "Decision Evidence Reviewer" : "Experiment Validator",
-                subLabel: isBusiness ? "Evaluación de Evidencia" : "Validación Experimental",
+                name: isBusiness ? "Auditoría de la Evidencia" : "Diseño del Experimento",
+                subLabel: isBusiness ? "Evalúa qué tan sólida es la evidencia" : "Valida el modelo con rigor experimental",
                 iconColor: "#ec4899",
             }]
             : []),
         {
             id: "m4",
             number: isEDA ? 4 : 2,
-            name: isBusiness ? "Business Impact Evaluator" : "Value & Impact Translator",
-            subLabel: isBusiness ? "Impacto Comercial" : "Traducción a Valor",
+            name: isBusiness ? "Impacto en el Negocio" : "Impacto y Valor",
+            subLabel: isBusiness ? "Cuantifica el valor y los trade-offs" : "Convierte el modelo en valor de negocio",
             iconColor: "#f59e0b",
         },
         {
             id: "m5",
             number: isEDA ? 5 : 3,
-            name: isBusiness ? "Executive Recommendation Writer" : "Technical-Executive Writer",
-            subLabel: isBusiness ? "Recomendación Ejecutiva" : "Informe Técnico-Ejecutivo",
+            name: isBusiness ? "Recomendación Ejecutiva" : "Decisión Ejecutiva",
+            subLabel: isBusiness ? "Redacta el memorándum a la junta" : "Redacta el memorándum final a la dirección",
             iconColor: "#10b981",
         },
         {

@@ -190,8 +190,10 @@ from case_generator.m3_grounding import (
 from case_generator.m5_grounding import validate_m5_questions_coherence
 from case_generator.m6_grounding import log_out_of_roster_mentions
 from case_generator.m4_grounding import (
+    build_m4_chart_grounding_reprompt,
     drop_sensitivity_charts,
     log_duplicate_deployment_sections,
+    validate_m4_chart_grounding,
 )
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
@@ -7808,6 +7810,106 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
 
 # Issue 4.5 — M4 CHART GENERATOR (ambos perfiles)
+def _m4_chart_violation_types(violations_per_chart: list[tuple[int, list[str]]]) -> list[str]:
+    """Enumerated, deduplicated violation prefixes (no raw chart text/PII) for structured logs."""
+    types: set[str] = set()
+    for _index, violations in violations_per_chart:
+        for violation in violations:
+            types.add(violation.split(":", 1)[0])
+    return sorted(types)
+
+
+def _apply_m4_chart_grounding(
+    *,
+    llm: Any,
+    formatted_prompt: str,
+    state: ADAMState,
+    charts: list[dict],
+    variant: str | None,
+    metrics_block: str,
+) -> list[dict]:
+    """Validate + reprompt-once-then-DROP the M4 financial-chart coherence.
+
+    Gated to the classification family for BOTH profiles (business + ml_ds) via
+    ``_is_classification_family`` (the SAME gate M1/M2/M5 use) behind the ``m4_chart_grounding``
+    kill-switch; a byte-identical no-op otherwise. On a violation it reprompts ONCE with the concrete
+    fix; any chart that STILL cites an unverified model metric, an unselected-model leak, or an
+    invented "benchmark" figure after the reprompt is DROPPED (never shipped). It NEVER fails a job
+    and NEVER shows false data — the chart-node philosophy (mirrors ``drop_sensitivity_charts``).
+
+    ``formatted_prompt`` is the ALREADY-formatted chart prompt; the reprompt is built by CONCATENATION
+    (never re-``.format`` — chart/JSON braces). ``variant`` is the RESOLVED notebook variant (None for
+    business / contrast → the leak guard is a no-op). The wrapper mutates only the returned list — no
+    shared-state write, so there is no LangGraph fan-out merge hazard with ``m4_questions_generator``.
+    Best-effort: ANY throw degrades to the input ``charts``. Never raises.
+    """
+    log_extra = {"node": "m4_chart_generator", "case_id": state.get("case_id")}
+    try:
+        if not settings.m4_chart_grounding or not _is_classification_family(state):
+            return charts
+        violations = validate_m4_chart_grounding(
+            charts, metrics_block=metrics_block, variant=variant
+        )
+        if not violations:
+            return charts
+        logger.info(
+            "[m4_chart_generator] reprompt de coherencia de gráficos disparado",
+            extra={
+                **log_extra,
+                "violation_count": sum(len(v) for _i, v in violations),
+                "violation_types": _m4_chart_violation_types(violations),
+            },
+        )
+        reprompt = formatted_prompt + build_m4_chart_grounding_reprompt(
+            violations, metrics_block=metrics_block
+        )
+        try:
+            result: EDAChartGeneratorOutput = llm.with_structured_output(
+                EDAChartGeneratorOutput
+            ).invoke(reprompt)
+            candidate = [c.model_dump() for c in result.charts]
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[m4_chart_generator] reprompt de coherencia inválido — degrada a pass-1: %s",
+                exc,
+                extra=log_extra,
+            )
+            candidate = charts
+        # Residual = DROP, by RE-VALIDATION (the reprompt regenerates the whole set, so the pass-1
+        # indices are meaningless). Keep only the charts that are now clean; if that empties the set,
+        # fall back to pass-1 minus its violators (never ship a violation, never needlessly empty).
+        candidate_bad = {i for i, _v in validate_m4_chart_grounding(
+            candidate, metrics_block=metrics_block, variant=variant
+        )}
+        survivors = [c for i, c in enumerate(candidate) if i not in candidate_bad]
+        if survivors:
+            base_len = len(candidate)
+        else:
+            pass1_bad = {i for i, _v in violations}
+            survivors = [c for i, c in enumerate(charts) if i not in pass1_bad]
+            base_len = len(charts)
+        dropped = base_len - len(survivors)
+        if dropped > 0:
+            logger.warning(
+                "[m4_chart_generator] coherencia de gráficos: %d gráfico(s) descartado(s) tras reprompt",
+                dropped,
+                extra={**log_extra, "dropped_count": dropped, "degraded": True},
+            )
+        else:
+            logger.info(
+                "[m4_chart_generator] coherencia de gráficos corregida por reprompt",
+                extra={**log_extra, "degraded": False},
+            )
+        return survivors
+    except Exception as exc:  # best-effort — a coherence pass must never fail the job
+        logger.warning(
+            "[m4_chart_generator] validador de coherencia de gráficos falló (best-effort): %s",
+            exc,
+            extra=log_extra,
+        )
+        return charts
+
+
 def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """Gráficos financieros para M4. Ambos perfiles."""
     try:
@@ -7844,10 +7946,33 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
         # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
         prompt = _maybe_business_classification_prompt(state, prompt, business_chart_prompt)
+        formatted_prompt = prompt.format(**context)
         result: EDAChartGeneratorOutput = llm.with_structured_output(
             EDAChartGeneratorOutput
-        ).invoke(prompt.format(**context))
+        ).invoke(formatted_prompt)
         charts = [c.model_dump() for c in result.charts]
+
+        # Grounding de coherencia de gráficos (ml_ds+clf y business+clf): reprompt-once-then-DROP de
+        # cualquier gráfico que cite una métrica del modelo no verificada (anclada al M3 ejecutado),
+        # nombre un modelo no seleccionado, o inflija lenguaje de fabricación ("benchmarks"). Cierra
+        # el gap "los charts no pasan por los guards de #243/#337". Best-effort, gateado por
+        # M4_CHART_GROUNDING; no-op byte-idéntico para no-clasificación. La variante de notebook
+        # RESUELTA (None salvo ml_ds+clf, espeja m5_questions_generator) alimenta el guard de fuga.
+        _chart_variant: str | None = None
+        if _is_ml_ds_classification(state, default_unresolved_ml_ds_to_classification=True):
+            _chart_variant, _ = _resolve_classification_notebook_variant(
+                algorithm_mode=_extract_state_algorithm_mode(state),
+                algoritmos=_extract_state_algoritmos(state),
+            )
+        charts = _apply_m4_chart_grounding(
+            llm=llm,
+            formatted_prompt=formatted_prompt,
+            state=state,
+            charts=charts,
+            variant=_chart_variant,
+            metrics_block=context["computed_metrics_block"],
+        )
+
         # Backstop determinista (solo en el camino vigente): elimina cualquier gráfico de
         # sensibilidad/tornado residual que el LLM emita pese al prompt de 2 gráficos. INNER try para
         # que un fallo del backstop NUNCA vacíe los charts ni caiga al except externo (que devuelve []).

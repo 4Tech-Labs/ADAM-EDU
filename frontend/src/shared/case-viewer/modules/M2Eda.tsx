@@ -8,7 +8,7 @@ export function M2Eda({ result, content, md, isMLDS, renderPreguntas }: CaseModu
     return (
         <>
             <div className="mb-8">
-                <p className="running-header mb-2">Módulo 2 · {isMLDS ? "Data Analyst" : "Insight Analyst"} · {
+                <p className="running-header mb-2">Módulo 2 · {isMLDS ? "Exploración de Datos" : "Lectura de los Datos"} · {
                     result.outputDepth === "visual_plus_notebook" ? "Gráficos + Código" : "Gráficos + Análisis"
                 }</p>
                 <h1 className="type-h1 text-slate-900 mb-2">

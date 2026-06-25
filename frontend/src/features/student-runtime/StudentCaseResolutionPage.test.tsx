@@ -14,8 +14,8 @@ vi.mock("@/shared/case-viewer", () => ({
         {
             id: "m1",
             number: 1,
-            name: "Case Reader",
-            subLabel: "Comprension Gerencial",
+            name: "El Caso y el Dilema",
+            subLabel: "Comprende la situacion gerencial",
             iconColor: "#3b82f6",
         },
         {
