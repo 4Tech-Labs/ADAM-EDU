@@ -10,6 +10,9 @@
 **/.ruff_cache
 **/.DS_Store
 .claude
+# top-level secrets file (defense-in-depth; none exists today)
+.env
+.env.*
 backend/.env
 backend/.env.*
 !backend/.env.example
