@@ -1,15 +1,31 @@
 # Build the frontend assets that will be served with the backend image.
-FROM node:20-alpine AS frontend-builder
+# Node 22+ is required: pnpm 11 uses the built-in node:sqlite module (Node 22.13+).
+FROM node:22-alpine AS frontend-builder
+
+# Pinned pnpm (matches frontend/package.json "packageManager"). A direct npm
+# global install avoids Corepack signature pitfalls on the alpine base.
+RUN npm install -g pnpm@11.5.1
 
 WORKDIR /app/frontend
 
-COPY frontend/package.json ./
-COPY frontend/package-lock.json ./
-RUN npm install
+# pnpm-workspace.yaml carries the allowBuilds permissions (esbuild, @swc/core)
+# that pnpm needs to run those packages' install scripts during build.
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 
 COPY frontend/ ./
 
-RUN npm run build
+# Vite inlines import.meta.env.VITE_* literals at BUILD time. ARG alone is not
+# enough — Vite reads process.env, so each ARG must be promoted to ENV before
+# `pnpm run build`. Pass real values with `docker build --build-arg ...`.
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+ARG VITE_AUTH_CALLBACK_URL
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+ENV VITE_AUTH_CALLBACK_URL=$VITE_AUTH_CALLBACK_URL
+
+RUN pnpm run build
 
 # Build the Python backend on top of the LangGraph API base image.
 FROM docker.io/langchain/langgraph-api:3.12

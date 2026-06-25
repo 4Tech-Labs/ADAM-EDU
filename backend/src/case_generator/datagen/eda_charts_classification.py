@@ -210,8 +210,10 @@ def _build_missingness_heatmap(
     matrix = na.astype(int).T.values.tolist()
 
     n_sample = len(sample)
-    base_subtitle = f"Muestra aleatoria de {n_sample} filas (random_state=42)"
-    subtitle = base_subtitle
+    # `fallback_subtitle` solo sobrevive en el path kill-switch (`honest_text=False`);
+    # dentro de `if honest_text:` el subtítulo se reescribe siempre.
+    fallback_subtitle = f"Muestra aleatoria de {n_sample} filas (random_state=42)"
+    subtitle = fallback_subtitle
     description = ""
     notes = ""
     layout: dict[str, Any] = {
@@ -220,26 +222,44 @@ def _build_missingness_heatmap(
         "yaxis": {"title": "Columnas"},
     }
 
-    # El builder conoce la verdad EXACTA de la muestra → escribe texto determinista
+    # El builder conoce la verdad EXACTA del dataset → escribe texto determinista
     # y honesto en lugar de dejar que el LLM anotador (que no ve los datos) invente
     # un patrón MNAR inexistente. Para los casos ml_ds+clf de dominio (de-churned,
     # Issue #382) el dataset no tiene nulos por construcción, así que el mapa es
     # uniforme y el texto debe DECIRLO en vez de afirmar missingness que no existe.
     # `honest_text=False` (kill-switch) restaura el comportamiento previo byte-idéntico.
     if honest_text:
-        total_missing = int(na.values.sum())
+        # El CONTEO se hace sobre el dataset COMPLETO (`df`, = `doc7_dataset`, lo mismo
+        # que lee el notebook vía `dataset.csv`), no sobre la muestra dibujada — así el
+        # total del subtítulo deja de divergir del notebook por submuestreo. Se cuenta
+        # sobre `cols` (features, EXCLUYE el target): coincide con `df.isnull().sum()`
+        # del notebook porque el target binario ml_ds+clf es `nullable: False` (0 nulos);
+        # si algún día el target fuese nullable, el chart subcontaría vs el notebook. La
+        # matriz `na` (muestra) solo alimenta el RENDER del heatmap, topado a
+        # `_MISSINGNESS_SAMPLE_ROWS` para no pesar el payload.
+        na_full = df[cols].isna()
+        total_missing = int(na_full.values.sum())
         n_cols = len(cols)
+        sampled = n_rows > n_sample
+        sample_clause = f" · heatmap muestra {n_sample} filas" if sampled else ""
+        # `sample_sentence` se usa SOLO en la rama con nulos; la rama completa ya explica
+        # el mapa uniforme en su descripción, así que ahí solo se añade `sample_clause`.
+        sample_sentence = (
+            f" El heatmap muestra una muestra aleatoria de {n_sample} filas."
+            if sampled
+            else ""
+        )
         if total_missing == 0:
-            subtitle = f"{base_subtitle} · sin valores faltantes"
+            subtitle = f"{n_rows} registros · sin valores faltantes{sample_clause}"
             description = (
-                f"Mapa de completitud de {n_cols} variables sobre {n_sample} "
-                "registros de la muestra. El dataset está COMPLETO (0 valores "
+                f"Mapa de completitud de {n_cols} variables sobre {n_rows} "
+                "registros. El dataset está COMPLETO (0 valores "
                 "faltantes), por eso el mapa se ve uniforme; en datos reales "
                 "esperarías huecos y el paso es confirmar la completitud antes "
                 "de modelar."
             )
             notes = (
-                "Sin nulos en esta muestra: no hay que imputar. En un caso real "
+                "Sin nulos en el dataset: no hay que imputar. En un caso real "
                 "evaluarías si los faltantes son MCAR/MAR/MNAR antes de eliminar "
                 "filas o imputar."
             )
@@ -247,7 +267,7 @@ def _build_missingness_heatmap(
             # `buildLayout` (frontend) preserva `layout.annotations` vía spread.
             layout["annotations"] = [
                 {
-                    "text": "Sin valores faltantes en la muestra",
+                    "text": "Sin valores faltantes en el dataset",
                     "xref": "paper",
                     "yref": "paper",
                     "x": 0.5,
@@ -257,19 +277,21 @@ def _build_missingness_heatmap(
                 }
             ]
         else:
-            cols_with_nulls = [c for c in cols if int(na[c].sum()) > 0]
+            cols_with_nulls = [c for c in cols if int(na_full[c].sum()) > 0]
             k = len(cols_with_nulls)
             top_cols = sorted(
-                cols_with_nulls, key=lambda c: int(na[c].sum()), reverse=True
+                cols_with_nulls, key=lambda c: int(na_full[c].sum()), reverse=True
             )[:3]
             subtitle = (
-                f"{base_subtitle} · {total_missing} celdas faltantes en {k} "
-                f"{'columna' if k == 1 else 'columnas'}"
+                f"{total_missing} celdas faltantes en {k} "
+                f"{'columna' if k == 1 else 'columnas'} · {n_rows} registros"
+                f"{sample_clause}"
             )
             description = (
-                f"Mapa de completitud de {n_cols} variables sobre {n_sample} "
+                f"Mapa de completitud de {n_cols} variables sobre {n_rows} "
                 f"registros. Hay {total_missing} celdas faltantes concentradas "
                 f"en: {', '.join(top_cols)}. Las franjas rojas marcan los nulos."
+                f"{sample_sentence}"
             )
             notes = (
                 "Observa si los nulos se concentran en ciertas columnas o filas. "
