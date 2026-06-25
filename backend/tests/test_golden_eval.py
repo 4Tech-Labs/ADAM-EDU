@@ -20,6 +20,7 @@ from golden_eval import (
     JUDGE_MAX_DROP,
     NodeEvalInputs,
     check_domain_coherence,
+    check_m4_deployment_section_unique,
     evaluate_downgrade_gate,
 )
 from test_issue351_mlds_multidomain_evals import _build_schema
@@ -143,6 +144,34 @@ def test_gate_blocks_on_domain_coherence_failure() -> None:
 def test_gate_domain_coherence_defaults_true_backcompat() -> None:
     # Existing NodeEvalInputs callers (business / non-clf) omit the field → must stay passing.
     assert evaluate_downgrade_gate(NodeEvalInputs(node="schema_designer", deterministic_pass=True)).passed
+
+
+# ── M4 deployment-recommendation uniqueness gate + oracle (deterministic) ──────
+
+
+def test_gate_blocks_on_m4_deployment_section_failure() -> None:
+    # An M4 narrative regression that reintroduces a second deployment heading must block downgrade.
+    r = NodeEvalInputs(
+        node="m5_questions_generator",
+        deterministic_pass=True,
+        m4_deployment_section_unique_ok=False,
+    )
+    result = evaluate_downgrade_gate(r)
+    assert not result.passed
+    assert any("duplicate deployment" in reason for reason in result.reasons)
+
+
+def test_gate_m4_deployment_defaults_true_backcompat() -> None:
+    # Callers that omit the field (business / non-clf) must stay passing.
+    assert evaluate_downgrade_gate(NodeEvalInputs(node="m3_content_generator", deterministic_pass=True)).passed
+
+
+def test_check_m4_deployment_section_unique_oracle() -> None:
+    """The golden oracle reuses the production detector: True on a single §4.5, False on a duplicate."""
+    clean = "### 4.5 Recomendación de Despliegue\nVeredicto: Desplegar con restricciones.\n"
+    assert check_m4_deployment_section_unique(clean) is True
+    dup = clean + "\n## Recomendación de despliegue (un solo modelo)\nProsa duplicada.\n"
+    assert check_m4_deployment_section_unique(dup) is False
 
 
 def test_g13_fixture_is_domain_coherent() -> None:
