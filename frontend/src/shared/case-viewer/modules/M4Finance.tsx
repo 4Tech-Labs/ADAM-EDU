@@ -25,7 +25,7 @@ export function M4Finance({ content, md, renderPreguntas }: CaseModuleProps) {
                     <strong>Metáfora:</strong> Imagina que soy un agricultor evaluando si plantar un cultivo nuevo
                     o comprar un sistema de riego automatizado costoso. El Ingeniero de Experimentos
                     (mi agrónomo) ya demostró que funciona. Ahora necesito calcular si vale la pena la inversión
-                    para toda la finca: costos, ingresos proyectados y análisis de sensibilidad.
+                    para toda la finca: costos, ingresos proyectados y el retorno de la inversión.
                     En términos financieros, mido el <strong>NPV, ROI y Payback</strong>.
                 </p>
             </div>

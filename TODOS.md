@@ -556,7 +556,7 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 
 **What:** Después de despliegue en staging, evaluar si el único `M4_QUESTIONS_PROMPT_CLASSIFICATION` y `M4_CHART_PROMPT_CLASSIFICATION` es suficiente para todos los valores de `algorithm_mode` (`single`/`contrast`), o si se necesitan variantes dedicadas similares al patrón `M3_CLASSIFICATION_QUESTIONS_BY_VARIANT` (`lr_only`, `rf_only`, `lr_rf_contrast`).
 
-**Why:** M4 questions/charts reciben `algorithm_mode` como placeholder pero el prompt actual no tiene branching explícito por variante — el LLM debe inferir el comportamiento correcto. Si la calidad pedagógica difiere materialmente entre modes (especialmente en el gráfico de escenarios del Tornado), puede valer la pena introducir variantes.
+**Why:** M4 questions/charts reciben `algorithm_mode` como placeholder pero el prompt actual no tiene branching explícito por variante — el LLM debe inferir el comportamiento correcto. Si la calidad pedagógica difiere materialmente entre modes (especialmente en el Gráfico de Comparativa de Escenarios, que ramifica single vs contrast), puede valer la pena introducir variantes. (Nota: el Gráfico de Sensibilidad/Tornado se retiró del Módulo 4 — ver sección "M4 Financial Charts — Sensitivity chart removed" en CLAUDE.md.)
 
 **Scope:** Revisar outputs generados en staging para al menos 3 casos: `clasificacion + lr_only`, `clasificacion + rf_only`, `clasificacion + lr_rf_contrast`. Si la calidad es aceptable en los 3, este TODO se cierra como no necesario. Si hay regresión en uno o más, crear `M4_clasificacion/questions_by_variant.py` y `M4_clasificacion/charts_by_variant.py` siguiendo el patrón de `M3_clasificacion/`.
 
@@ -564,7 +564,7 @@ implementar de forma independiente en un PR posterior de bajo riesgo.
 
 **Cons:** Añade 2 dicts de variantes y más superficie de test si se decide implementar. Requiere eval con LLM real (no solo tests determinísticos).
 
-**Context:** El `m4_chart_generator` ya usa `_extract_state_algorithm_mode(state)` y pasa `algorithm_mode` al prompt. El Tornado chart en `M4_CHART_PROMPT_CLASSIFICATION` tiene una nota `(adapta el eje si es single-mode vs contrast)` para guiar al LLM, pero sin branching duro.
+**Context:** El `m4_chart_generator` ya usa `_extract_state_algorithm_mode(state)` y pasa `algorithm_mode` al prompt. El Gráfico de Comparativa de Escenarios en `M4_CHART_PROMPT_CLASSIFICATION` adapta su contenido a `single` (opciones A/B/C) vs `contrast` (LR vs RF) mediante una nota al LLM, pero sin branching duro. (El Gráfico de Sensibilidad/Tornado se retiró; la variante 3-gráficos se conserva en `M4_CHART_PROMPT_CLASSIFICATION_LEGACY` tras el kill-switch `M4_CHART_DROP_SENSITIVITY`.)
 
 **Depends on / blocked by:** PR `feat/m4-clasificacion-prompt-subfolder` mergeado en main y al menos 1 semana de telemetría de jobs M4-clasificacion en staging.
 

@@ -116,3 +116,51 @@ def log_duplicate_deployment_sections(
             )
     except Exception:  # pragma: no cover - defensive; never fail a job
         pass
+
+
+# ── M4 chart sensitivity/tornado backstop ────────────────────────────────────────────────────────
+# Deterministic, best-effort filter that drops a residual sensitivity/"tornado" chart from the M4
+# financial-chart set. The chart was retired from the M4-chart prompts (orphan, highest fabrication
+# risk, redundant with the Payback chart); this detector is defense-in-depth for the case where the
+# LLM emits one anyway. Used by ``graph.py::m4_chart_generator`` on the new path, gated by the
+# ``M4_CHART_DROP_SENSITIVITY`` kill-switch.
+#
+# Matched on TITLE + SUBTITLE only — the headline fields a chart names itself with. The free-form
+# ``academic_rationale``/``notes`` are deliberately NOT scanned, so a legitimate Payback/Comparativa
+# chart whose rationale cites the *recall* metric ("sensibilidad") is never dropped. Word-boundary +
+# accent-insensitive → zero false positives against the two surviving charts (whose titles never
+# contain these tokens). Pure, total, never raises (the node also wraps the call in try/except).
+_SENSITIVITY_MARKERS = ("tornado", "sensibilidad", "sensitivity")
+_SENSITIVITY_MARKER_RE = re.compile(r"\b(?:" + "|".join(_SENSITIVITY_MARKERS) + r")\b")
+
+
+def _normalize_chart_text(value: object) -> str:
+    """Lowercase + strip accents from a chart text field. Non-str / None → empty string."""
+    if not isinstance(value, str):
+        return ""
+    decomposed = unicodedata.normalize("NFKD", value)
+    return "".join(c for c in decomposed if not unicodedata.combining(c)).lower()
+
+
+def is_sensitivity_chart(chart: object) -> bool:
+    """True iff ``chart`` is an M4 sensitivity/tornado chart.
+
+    Scans ``title`` + ``subtitle`` only (accent-normalized, word-boundary). Any non-dict input or
+    missing fields → ``False`` (never misclassify a malformed entry as a tornado).
+    """
+    if not isinstance(chart, dict):
+        return False
+    blob = " ".join(_normalize_chart_text(chart.get(field)) for field in ("title", "subtitle"))
+    return bool(_SENSITIVITY_MARKER_RE.search(blob))
+
+
+def drop_sensitivity_charts(charts: list[dict]) -> tuple[list[dict], int]:
+    """Return ``(kept, dropped_count)`` with every sensitivity/tornado chart removed.
+
+    Non-mutating (keeps the same dict objects in a NEW list). Identity-based — only sensitivity
+    charts are dropped, never a blind truncate-to-N (which would wrongly drop the scenario-comparison
+    chart). The caller (``m4_chart_generator``) wraps this in try/except, so a surprise on a non-list
+    input degrades to "keep all charts" rather than failing the job.
+    """
+    kept = [c for c in charts if not is_sensitivity_chart(c)]
+    return kept, len(charts) - len(kept)
