@@ -190,8 +190,9 @@ con veredicto Aprobar/Rechazar y KPIs base.
 ## Error Handling
 - Si no hay reporte EDA ({contexto_m2} vacío o "DATASET_UNAVAILABLE"):
   Basa el análisis exclusivamente en los Exhibits del M1.
-  Usa tasas de crecimiento/reducción conservadoras (máx 10-15% anual)
-  y cita explícitamente que son estimaciones de benchmarks de industria, no datos del caso.
+  Si los Exhibits no aportan una cifra para una proyección, razónala de forma CUALITATIVA
+  (dirección y magnitud relativa del impacto); NUNCA inventes tasas ni cifras de "benchmarks"
+  del sector/industria ni valores externos al caso.
 
 # Your Boundaries
 - Los números proyectados DEBEN derivarse lógicamente de los Exhibits o Dataset.

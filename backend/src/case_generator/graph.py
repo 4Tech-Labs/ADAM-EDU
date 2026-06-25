@@ -192,7 +192,9 @@ from case_generator.m6_grounding import log_out_of_roster_mentions
 from case_generator.m4_grounding import (
     build_m4_chart_grounding_reprompt,
     drop_sensitivity_charts,
+    log_chart_benchmark_fabrication,
     log_duplicate_deployment_sections,
+    log_narrative_benchmark_fabrication,
     validate_m4_chart_grounding,
 )
 from case_generator.m3_notebook_execution import (
@@ -7797,6 +7799,14 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             log_duplicate_deployment_sections(
                 m4, variant=variant, case_id=state.get("case_id")
             )
+        # Issue #436 — logger-only backstop: warn if the narrative still carries a benchmark-fabrication
+        # tell despite the prompt fix. ALL profiles/families (domain-wide risk). Best-effort — never
+        # reprompts, mutates, or fails the job (the wrapper swallows all exceptions internally, so it
+        # cannot trip this node's outer except that would degrade M4 to an error placeholder).
+        if settings.m4_fabrication_guard:
+            log_narrative_benchmark_fabrication(
+                m4, node="m4_content_generator", case_id=state.get("case_id")
+            )
         return {
             "m4_content": m4,
             "current_agent": "m4_content_generator",
@@ -7987,6 +7997,13 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
                     )
             except Exception:  # pragma: no cover - defensive; never fail/empty a job
                 logger.exception("[m4_chart_generator] sensitivity-drop backstop failed")
+        # Issue #436 — logger-only backstop over the FINAL chart set (after the clf reprompt-then-DROP and
+        # the sensitivity drop, so for clf it sees the cleaned set → no double-count). ALL families. Warns
+        # if a residual benchmark-fabrication tell survives the prompt fix; never reprompts/mutates/fails.
+        if settings.m4_fabrication_guard:
+            log_chart_benchmark_fabrication(
+                charts, node="m4_chart_generator", case_id=state.get("case_id")
+            )
         print(f"[m4_chart_generator] {len(charts)} charts generados")
         return {"m4_charts": charts, "current_agent": "m4_chart_generator"}
     except Exception as e:

@@ -393,11 +393,16 @@ def test_live_clf_prompt_drops_benchmark_invitation_adds_hardening() -> None:
     assert "EXACTAMENTE del bloque" in P  # metric-anchoring instruction
 
 
-def test_generic_chart_prompt_unchanged_zero_nonclf_blast_radius() -> None:
+def test_generic_chart_prompt_drops_benchmark_invitation_issue436() -> None:
     from case_generator.prompts import M4_CHART_GENERATOR_PROMPT as G
 
-    # The shared generic prompt (regresion/clustering/serie_temporal + business base) is untouched.
-    assert "benchmarks de {industria}" in G
+    # Issue #436 — the shared generic chart prompt (regresion/clustering/serie_temporal + business base)
+    # NO LONGER invites fabricating benchmarks; it now degrades to qualitative. (Before #436 this test
+    # asserted the invitation was still PRESENT — that gap is exactly what #436 closes.)
+    assert "benchmarks de {industria}" not in G  # invitation removed
+    assert "estimaciones conservadoras" not in G
+    assert "NUNCA inventes" in G  # qualitative-degradation hardening present
+    assert "EXACTAMENTE 2" in G  # 2-chart contract (#426) untouched
 
 
 def test_business_block_overrides_benchmark_instruction() -> None:

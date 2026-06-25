@@ -291,6 +291,82 @@ def _chart_prose_blob(chart: object) -> str:
     return "\n".join(p for p in parts if isinstance(p, str))
 
 
+# ── Issue #436 — benchmark-fabrication logger-only backstops (narrative + generic charts) ──────────
+# The PROMPT fix (M4_CONTENT_GENERATOR_PROMPT / M4_CHART_GENERATOR_PROMPT) is the CURE — it removes the
+# sanctioned "benchmarks de {industria}" invitation. These two best-effort, logger-only wrappers are the
+# observability NET, extending the zero-FP ``detect_benchmark_fabrication`` (today wired only in the
+# clf-gated chart reprompt-then-DROP path) to the M4 narrative and the generic/non-clf charts, for ALL
+# profiles/families (the fabrication risk is domain-wide, not classification-specific). They mirror
+# ``log_duplicate_deployment_sections`` exactly: NEVER reprompt, mutate, or fail a job. Gated by the
+# ``m4_fabrication_guard`` kill-switch at the call site. The deterministic guarantees on the frozen
+# golden set live in ``tests/golden_eval`` (``check_m4_narrative_no_fabrication`` /
+# ``check_m4_charts_no_fabrication``).
+
+
+def log_narrative_benchmark_fabrication(
+    prose: str | None,
+    *,
+    node: str = "m4_content_generator",
+    case_id: str | None = "unknown",
+) -> None:
+    """Best-effort, logger-only: warn when the M4 narrative invents a benchmark figure.
+
+    Runs for ALL profiles/families. Reuses the zero-FP ``detect_benchmark_fabrication`` (disclaimer-shape
+    only — legitimate business numbers and a grounded "benchmark interno (Exhibit 1)" never fire).
+    LOGGER-ONLY: never reprompts, mutates, or fails a job. Emits no PII (only the enumerated violation
+    tokens). Never raises (it runs INSIDE the node's try whose outer except degrades M4 to an error
+    placeholder; a throw here must never trip that).
+    """
+    try:
+        violations = detect_benchmark_fabrication(prose)
+        if violations:
+            logger.warning(
+                "[m4_grounding] benchmark fabrication tell in M4 narrative",
+                extra={
+                    "node": node,
+                    "case_id": case_id or "unknown",
+                    "surface": "narrative",
+                    "violations": violations,
+                },
+            )
+    except Exception:  # pragma: no cover - defensive; never fail a job
+        pass
+
+
+def log_chart_benchmark_fabrication(
+    charts: list[dict] | None,
+    *,
+    node: str = "m4_chart_generator",
+    case_id: str | None = "unknown",
+) -> None:
+    """Best-effort, logger-only: warn when an M4 chart's prose invents a benchmark figure.
+
+    Runs for ALL families. Placed AFTER the clf reprompt-then-DROP (``_apply_m4_chart_grounding``) in
+    ``m4_chart_generator``, so for clf it sees the already-cleaned set (no double-count); for non-clf /
+    business it observes the raw set. Reuses ``_chart_prose_blob`` + the zero-FP
+    ``detect_benchmark_fabrication``; logs only the offending chart indices (no raw prose / PII).
+    LOGGER-ONLY, never raises (mirrors ``drop_sensitivity_charts`` / ``log_duplicate_deployment_sections``).
+    """
+    try:
+        offending = [
+            index
+            for index, chart in enumerate(charts or [])
+            if detect_benchmark_fabrication(_chart_prose_blob(chart))
+        ]
+        if offending:
+            logger.warning(
+                "[m4_grounding] benchmark fabrication tell in M4 chart prose",
+                extra={
+                    "node": node,
+                    "case_id": case_id or "unknown",
+                    "surface": "chart",
+                    "offending_indices": offending,
+                },
+            )
+    except Exception:  # pragma: no cover - defensive; never fail a job
+        pass
+
+
 def validate_m4_chart_grounding(
     charts: list[dict], *, metrics_block: str, variant: str | None
 ) -> list[tuple[int, list[str]]]:

@@ -103,6 +103,13 @@ class NodeEvalInputs:
     # re-invites benchmark estimates fails the golden gate. (The metric-anchoring + unselected-model
     # guarantees are unit-tested — they require per-job metrics/variant fixtures the golden set lacks.)
     m4_charts_no_fabrication_ok: bool = True
+    # M4 narrative avoids the benchmark-fabrication disclaimer ("estimaciones de benchmarks de
+    # industria"), for both profiles / all families (Issue #436). True (n/a) when a job carries no M4
+    # narrative. Computed via ``check_m4_narrative_no_fabrication`` (reuses the production
+    # ``m4_grounding.detect_benchmark_fabrication``), so a future M4-narrative prompt regression that
+    # re-invites benchmark estimates fails the golden gate (DETERMINISTIC guarantee behind the
+    # logger-only runtime backstop).
+    m4_narrative_no_fabrication_ok: bool = True
 
 
 @dataclass
@@ -148,6 +155,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M4 chart coherence failure: retired sensitivity/tornado chart emitted")
     if not r.m4_charts_no_fabrication_ok:
         reasons.append("M4 chart coherence failure: invented benchmark figure in chart prose")
+    if not r.m4_narrative_no_fabrication_ok:
+        reasons.append("M4 narrative coherence failure: invented benchmark figure in narrative prose")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -289,6 +298,20 @@ def check_m4_charts_no_fabrication(charts: list[dict]) -> bool:
     from case_generator.m4_grounding import _chart_prose_blob, detect_benchmark_fabrication
 
     return not any(detect_benchmark_fabrication(_chart_prose_blob(c)) for c in charts or [])
+
+
+def check_m4_narrative_no_fabrication(narrative: str | None) -> bool:
+    """Pure oracle: does the M4 impact narrative avoid the benchmark-fabrication disclaimer?
+
+    Issue #436 sibling of ``check_m4_charts_no_fabrication`` for the M4 narrative (``m4_content``).
+    Reuses the production detector ``m4_grounding.detect_benchmark_fabrication`` (single source of
+    truth), so a future M4-narrative prompt regression that re-invites "estimaciones de benchmarks de
+    industria" fails the golden gate. Scope: every job's M4 narrative (both profiles, all families);
+    empty/absent is trivially True (n/a).
+    """
+    from case_generator.m4_grounding import detect_benchmark_fabrication
+
+    return not detect_benchmark_fabrication(narrative)
 
 
 def check_m5_questions_coherence(

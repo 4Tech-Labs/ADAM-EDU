@@ -957,9 +957,10 @@ cuantitativo de las opciones A, B y C del caso.
 # Your Boundaries
 - Los números de los gráficos DEBEN coincidir con las proyecciones del {m4_content}.
   Si M4 dice "Opción A genera ROI del 35%", el gráfico DEBE mostrar 35% para Opción A.
-- Si {m4_content} no tiene números suficientes para los 2 gráficos (ej: harvard_only
-  sin datos cuantitativos), generar gráficos con estimaciones conservadoras y documentar
-  en `notes`: "Valores estimados basados en benchmarks de {industria}."
+- Usa SOLO cifras presentes en {m4_content} o en el Exhibit 1 ({anexo_financiero}), o derivadas
+  aritméticamente de ellas (p. ej. flujo mensual = anual / 12, acumulado = suma). Si {m4_content}
+  no tiene números suficientes, omite esa serie o exprésala de forma CUALITATIVA; NUNCA inventes
+  valores ni los justifiques con "benchmarks", "estimaciones del sector" o cifras externas al caso.
 - `library`: siempre `"plotly"`.
 - `source`: `"Análisis Financiero — {case_id}"`.
 - **Idioma de títulos y etiquetas: {output_language}**
