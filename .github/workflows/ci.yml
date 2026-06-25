@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - deploy
   pull_request:
     branches:
       - main
@@ -139,3 +140,72 @@ jobs:
 
       - name: Run frontend tests
         run: npm --prefix frontend run test
+
+  # Continuous deployment to Cloud Run.
+  # Runs ONLY on push to the `deploy` branch, and ONLY after every test job above
+  # is green (the `needs:` gate). Pushes to `main` run the tests but skip this job
+  # (the `if:` guard), so the team can keep merging to `main` without triggering a
+  # deploy. To ship: merge `main` into `deploy` and push.
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    needs: [backend-test, backend-typecheck, frontend-lint, frontend-build, frontend-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/deploy'
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      REGION: us-west1
+      IMAGE: us-west1-docker.pkg.dev/gen-lang-client-0145484488/adam-edu/public-api
+      RUNTIME_SA: adam-run@gen-lang-client-0145484488.iam.gserviceaccount.com
+      # Public frontend config — the anon key is public by design (it already ships
+      # inside the SPA bundle), so it is safe to bake at build time here.
+      VITE_SUPABASE_URL: https://aoauxftghxujeduutbev.supabase.co
+      VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFvYXV4ZnRnaHh1amVkdXV0YmV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNjI0NDcsImV4cCI6MjA5MDczODQ0N30.rnnLFHZesrWHhgYTvXFQ-UmnKx6kS-VsQ1Fx6BYkZz0
+      VITE_AUTH_CALLBACK_URL: https://public-api-1039937714231.us-west1.run.app/app/auth/callback
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud (Workload Identity, keyless)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/1039937714231/locations/global/workloadIdentityPools/github-pool/providers/github
+          service_account: github-deployer@gen-lang-client-0145484488.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-west1-docker.pkg.dev --quiet
+
+      - name: Build image (frontend baked with VITE_* build-args)
+        run: |
+          docker build -f Dockerfile \
+            --build-arg VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
+            --build-arg VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY" \
+            --build-arg VITE_AUTH_CALLBACK_URL="$VITE_AUTH_CALLBACK_URL" \
+            -t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:latest" .
+
+      - name: Push image
+        run: |
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:latest"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy public-api \
+            --image="$IMAGE:$GITHUB_SHA" \
+            --region="$REGION" \
+            --service-account="$RUNTIME_SA" \
+            --command=uvicorn \
+            --args="shared.app:app,--host,0.0.0.0,--port,8000" \
+            --port=8000 \
+            --ingress=all \
+            --allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=4 \
+            --no-cpu-throttling \
+            --memory=2Gi --cpu=2 --timeout=3600 \
+            --set-env-vars="ENVIRONMENT=production,SUPABASE_URL=https://aoauxftghxujeduutbev.supabase.co,CORS_ALLOWED_ORIGIN=https://public-api-1039937714231.us-west1.run.app" \
+            --set-secrets="DATABASE_URL=adam-database-url:latest,GEMINI_API_KEY=adam-gemini-api-key:latest,SUPABASE_SERVICE_ROLE_KEY=adam-supabase-service-role-key:latest"

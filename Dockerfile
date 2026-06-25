@@ -9,6 +9,16 @@ RUN npm install
 
 COPY frontend/ ./
 
+# Vite inlines import.meta.env.VITE_* literals at BUILD time. ARG alone is not
+# enough — Vite reads process.env, so each ARG must be promoted to ENV before
+# `npm run build`. Pass real values with `docker build --build-arg ...`.
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+ARG VITE_AUTH_CALLBACK_URL
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+ENV VITE_AUTH_CALLBACK_URL=$VITE_AUTH_CALLBACK_URL
+
 RUN npm run build
 
 # Build the Python backend on top of the LangGraph API base image.
