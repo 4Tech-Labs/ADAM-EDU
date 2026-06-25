@@ -1,5 +1,6 @@
 # Build the frontend assets that will be served with the backend image.
-FROM node:20-alpine AS frontend-builder
+# Node 22+ is required: pnpm 11 uses the built-in node:sqlite module (Node 22.13+).
+FROM node:22-alpine AS frontend-builder
 
 # Pinned pnpm (matches frontend/package.json "packageManager"). A direct npm
 # global install avoids Corepack signature pitfalls on the alpine base.
