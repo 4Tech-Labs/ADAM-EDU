@@ -18,6 +18,7 @@ import {
 } from "./authoringFormConfig";
 import { GroupsCombobox } from "./GroupsCombobox";
 import { AlgorithmSelector } from "./AlgorithmSelector";
+import { isContrastHiddenForProfile } from "./algorithmContrastGate";
 import { ScenarioStaleBanner } from "./ScenarioStaleBanner";
 
 // Fingerprint of the algorithm picks AT THE TIME the scenario was generated.
@@ -257,10 +258,19 @@ export function AuthoringForm({
 
     // ── Validation CanSubmit ──
     const isAlgorithmsRequired = caseType === "harvard_with_eda" || studentProfile === "ml_ds";
+    // Temporary gate: the contrast (2-algorithm) mode is hidden for ml_ds, so the
+    // submitted payload is forced to single regardless of any hydrated state.
+    const contrastHidden = isContrastHiddenForProfile(studentProfile);
+    // Single source of truth for the gate: when contrast is hidden for the
+    // profile, treat the mode as "single" EVERYWHERE (submit gate, submit
+    // payload, suggest payload, scenario fingerprint) so a hydrated "contrast"
+    // state can never block submit or leak into a suggest call — independent of
+    // the child selector's catalog-load/coercion timing.
+    const effectiveAlgorithmMode: AlgorithmMode = contrastHidden ? "single" : algorithmMode;
     const hasValidTopicUnit = units.length === 0 || !!topicUnit;
     const hasValidAlgorithmPicks =
         !!algorithmPrimary
-        && (algorithmMode === "single"
+        && (effectiveAlgorithmMode === "single"
             || (!!algorithmChallenger && algorithmPrimary.toLowerCase() !== algorithmChallenger.toLowerCase()));
 
     // Scenario suggestion gate (this PR): when algorithm picks are required
@@ -299,16 +309,16 @@ export function AuthoringForm({
             includePythonCode,
             scenarioDescription,
             guidingQuestion,
-            mode: algorithmMode,
+            mode: effectiveAlgorithmMode,
             // Scenario-anchored suggest (this PR): only forward picks when
             // they are required by the case shape AND actually selected.
             // Off-anchor calls keep the legacy prompt intact.
             algorithmPrimary: isAlgorithmsRequired ? algorithmPrimary : null,
             algorithmChallenger:
-                isAlgorithmsRequired && algorithmMode === "contrast" ? algorithmChallenger : null,
+                isAlgorithmsRequired && effectiveAlgorithmMode === "contrast" ? algorithmChallenger : null,
         };
     }, [
-        algorithmMode,
+        effectiveAlgorithmMode,
         algorithmPrimary,
         algorithmChallenger,
         caseType,
@@ -361,10 +371,10 @@ export function AuthoringForm({
         // the LLM was actually anchored to, not whatever the form state is at
         // the (later) success callback.
         const fingerprint: ScenarioFingerprint = {
-            mode: algorithmMode,
+            mode: effectiveAlgorithmMode,
             primary: isAlgorithmsRequired ? algorithmPrimary : null,
             challenger:
-                isAlgorithmsRequired && algorithmMode === "contrast" ? algorithmChallenger : null,
+                isAlgorithmsRequired && effectiveAlgorithmMode === "contrast" ? algorithmChallenger : null,
         };
 
         scenarioMutation.mutate(buildSuggestPayload(), {
@@ -401,7 +411,7 @@ export function AuthoringForm({
         });
     }, [
         algorithmChallenger,
-        algorithmMode,
+        effectiveAlgorithmMode,
         algorithmPrimary,
         buildSuggestPayload,
         canSuggestScenario,
@@ -433,7 +443,7 @@ export function AuthoringForm({
                         ? data.algorithmPrimary
                         : null,
                 );
-                if (algorithmMode === "contrast") {
+                if (effectiveAlgorithmMode === "contrast") {
                     setAlgorithmChallenger(
                         typeof data.algorithmChallenger === "string" && data.algorithmChallenger
                             ? data.algorithmChallenger
@@ -445,7 +455,7 @@ export function AuthoringForm({
                 setErrors((prev) => ({ ...prev, suggestedTechniques: false }));
             },
         });
-    }, [algorithmMode, buildSuggestPayload, canSuggest, resetSuggestionFeedback, techniquesMutation]);
+    }, [effectiveAlgorithmMode, buildSuggestPayload, canSuggest, resetSuggestionFeedback, techniquesMutation]);
 
     // ── B6: Cascading resets ──
     const handleSubjectChange = (id: string) => {
@@ -588,10 +598,15 @@ export function AuthoringForm({
                 includePythonCode,
                 scenarioDescription,
                 guidingQuestion,
-                algorithmMode: isAlgorithmsRequired ? algorithmMode : "single",
+                // `effectiveAlgorithmMode` already forces "single" when contrast is
+                // hidden for the profile, so the submitted payload is authoritative
+                // regardless of any hydrated state or the child selector's timing.
+                algorithmMode: isAlgorithmsRequired ? effectiveAlgorithmMode : "single",
                 algorithmPrimary: isAlgorithmsRequired ? algorithmPrimary : null,
                 algorithmChallenger:
-                    isAlgorithmsRequired && algorithmMode === "contrast" ? algorithmChallenger : null,
+                    isAlgorithmsRequired && effectiveAlgorithmMode === "contrast"
+                        ? algorithmChallenger
+                        : null,
                 availableFrom,
                 dueAt
             };

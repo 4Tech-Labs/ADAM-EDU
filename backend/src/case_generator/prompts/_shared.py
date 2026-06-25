@@ -409,26 +409,31 @@ docente usa como referencia de preview y el sistema de IA usa para calificación
 ]
 
 ⚠️ FORMATO CRÍTICO DE JSON — PREVENCIÓN DE PARSING FAILURES:
-- El campo solucion_esperada contiene texto largo multi-párrafo.
+- El campo solucion_esperada contiene texto conciso multi-párrafo.
 - Separa los párrafos con \\n\\n dentro del string JSON.
 - Escapa TODAS las comillas dobles internas con \\" dentro del string.
 - NUNCA uses bullet points (-, *, •) dentro de solucion_esperada — solo texto corrido.
 - Valida mentalmente que el JSON sea parseable antes de responder.
 - NUNCA generes un campo adicional fuera del schema — solo los 7 campos definidos.
 
-# Formato Obligatorio de `solucion_esperada` (memorándum modelo, 350-500 palabras)
-Párrafo 1 — Decisión ejecutiva: nombra la opción (A/B/C) o curso de acción recomendado,
-  explica el criterio rector y conecta con la pregunta eje directiva.
-Párrafo 2 — Evidencia del caso: usa datos concretos de M2/Exhibits/M4 y hallazgos de M3.
-  Incluye al menos 2 valores numéricos anclados en el caso cuando existan.
-Párrafo 3 — Riesgo y mitigación: responde explícitamente a `{main_risk_from_m3_m4}` con una
-  mitigación específica, responsable y observable.
-Párrafo 4 — Implementación: define los primeros hitos dentro de `{implementation_timeframe}`,
-  con área responsable y métrica de seguimiento.
-Párrafo 5 — Criterio académico: relaciona la postura con un framework reconocido.
-  REGLA ANTI-ALUCINACIÓN: citar SOLO frameworks ampliamente reconocidos (Porter, Kahneman,
-  Prahalad, Kotter, Christensen, Osterwalder). Formato: "Según [Marco/Autor] ([concepto])..."
-  PROHIBIDO inventar títulos de fuentes externas, años específicos o autores desconocidos.
+# Formato Obligatorio de `solucion_esperada` (memorándum modelo conciso, 100-160 palabras)
+Redacta CINCO párrafos muy breves (UNA frase concisa cada uno). La solucion_esperada es una
+REFERENCIA DE CALIFICACIÓN concisa (los puntos clave que el docente debe verificar), NO un
+memorándum extenso de ejemplo: prioriza la brevedad. Brevedad NO significa OMITIR una dimensión —
+comprime cada idea, nunca la elimines: deben estar las cinco.
+
+Párrafo 1 — Decisión: nombra la opción recomendada (A/B/C) o curso de acción, el criterio rector y
+  la conexión con la pregunta eje directiva.
+Párrafo 2 — Evidencia: usa datos concretos de M2/Exhibits/M4 y hallazgos de M3; incluye al menos 2
+  valores numéricos anclados en el caso cuando existan. No inventes cifras.
+Párrafo 3 — Riesgo: responde a `{main_risk_from_m3_m4}` con UNA mitigación específica, responsable y
+  observable.
+Párrafo 4 — Implementación: define el primer hito dentro de `{implementation_timeframe}`, con área
+  responsable y una métrica de seguimiento.
+Párrafo 5 — Marco: relaciona la postura con UN framework reconocido. REGLA ANTI-ALUCINACIÓN: citar
+  SOLO frameworks ampliamente reconocidos (Porter, Kahneman, Prahalad, Kotter, Christensen,
+  Osterwalder). Formato: "Según [Marco/Autor] ([concepto])...". PROHIBIDO inventar títulos de
+  fuentes externas, años específicos o autores desconocidos.
 
 # How You Work (Workflow)
 1. **Lee el contexto completo:** m5_content (informe de resolución), hallazgos M3/M4.
@@ -436,8 +441,8 @@ Párrafo 5 — Criterio académico: relaciona la postura con un framework recono
    → Úsalo SOLO para no repetir temas ya evaluados. NO copies ni adaptes estas preguntas.
    → La consigna M5 debe integrar hallazgos frescos de M3 y M4 sin duplicar M1.
 3. **Diseña 1 consigna** que obligue al estudiante a redactar un memorándum final de decisión.
-4. **Redacta solucion_esperada** como memorándum modelo siguiendo el formato anterior.
-   Cuenta palabras antes de finalizar: la solucion_esperada DEBE tener 350-500 palabras.
+4. **Redacta solucion_esperada** como memorándum modelo conciso siguiendo el formato anterior.
+   Cuenta palabras antes de finalizar: la solucion_esperada DEBE tener entre 100 y 160 palabras.
 
 # Your Boundaries
 - EXACTAMENTE 1 consigna — ni más, ni menos.

@@ -7,6 +7,7 @@ import { renderWithProviders } from "@/shared/test-utils";
 import { server } from "@/shared/testing/msw/server";
 
 import { AuthoringForm } from "./AuthoringForm";
+import { algorithmFeatureFlags } from "./algorithmContrastGate";
 import { FORM_STATE_SESSION_KEY } from "./authoringFormConfig";
 
 type DeferredHttpResponse =
@@ -901,6 +902,180 @@ describe("Task 1 — Required fields and disabled submit button", () => {
             expect(screen.getByRole("button", { name: /generar caso harvard/i })).not.toBeDisabled();
         });
     });
+
+    it("ml_ds submits algorithmMode 'single' with no challenger and never offers contrast", async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        server.use(
+            http.get("/api/authoring/algorithm-catalog", ({ request }) => {
+                const profile = new URL(request.url).searchParams.get("profile");
+                if (profile === "ml_ds") {
+                    return HttpResponse.json({
+                        profile: "ml_ds",
+                        case_type: "harvard_with_eda",
+                        items: [
+                            { name: "Árboles de decisión", family: "clasificacion", family_label: "Clasificación", tier: "baseline" },
+                            { name: "XGBoost", family: "clasificacion", family_label: "Clasificación", tier: "challenger" },
+                        ],
+                    });
+                }
+                return HttpResponse.json({
+                    profile: "business",
+                    case_type: "harvard_with_eda",
+                    items: [
+                        { name: "Regresión Lineal", family: "regresion", family_label: "Regresión", tier: "baseline" },
+                    ],
+                });
+            }),
+        );
+
+        renderWithProviders(<AuthoringForm onSubmit={onSubmit} />);
+
+        await enableSuggestions(user);
+        await selectOption(user, /unidad tem/i, /pronosticos/i);
+        await showTechniquesSection(user); // harvard_with_eda
+
+        // Select the ml_ds profile.
+        await user.click(screen.getByLabelText(/perfil del curso/i));
+        await user.click(await screen.findByRole("option", { name: /machine learning/i }));
+
+        // Contrast must NOT be offered for ml_ds (toggle + card hidden). The form
+        // still has the case-type radios, so we assert via the absent label.
+        await waitFor(() => {
+            expect(screen.queryByText(/2 algoritmos/i)).toBeNull();
+        });
+
+        await pickPrimaryAlgorithm(user, /árboles de decisi[oó]n/i);
+        fireEvent.change(screen.getByRole("textbox", { name: /descripci[oó]n/i }), { target: { value: "Escenario ml_ds" } });
+        fireEvent.change(screen.getByLabelText(/pregunta gu[ií]a/i), { target: { value: "¿Intervenir o no?" } });
+        fireEvent.change(screen.getByLabelText(/disponibilidad/i), { target: { value: "2025-06-01T00:00" } });
+        fireEvent.change(screen.getByLabelText(/fecha de cierre/i), { target: { value: "2025-07-01T00:00" } });
+
+        // harvard_with_eda → the submit button is labelled "Generar Caso + EDA".
+        const submitBtn = screen.getByRole("button", { name: /generar caso/i });
+        await waitFor(() => expect(submitBtn).not.toBeDisabled());
+        await user.click(submitBtn);
+
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit).toHaveBeenCalledWith(
+            expect.objectContaining({
+                studentProfile: "ml_ds",
+                algorithmMode: "single",
+                algorithmPrimary: "Árboles de decisión",
+                algorithmChallenger: null,
+            }),
+        );
+    }, 20_000);
+
+    it("business (EDA) hides contrast and submits algorithmMode 'single'", async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        server.use(
+            http.get("/api/authoring/algorithm-catalog", () =>
+                HttpResponse.json({
+                    profile: "business",
+                    case_type: "harvard_with_eda",
+                    items: [
+                        { name: "Regresión Lineal", family: "regresion", family_label: "Regresión", tier: "baseline" },
+                        { name: "Árboles de decisión", family: "clasificacion", family_label: "Clasificación", tier: "baseline" },
+                    ],
+                }),
+            ),
+        );
+
+        renderWithProviders(<AuthoringForm onSubmit={onSubmit} />);
+
+        await enableSuggestions(user);
+        await selectOption(user, /unidad tem/i, /pronosticos/i);
+        await showTechniquesSection(user); // harvard_with_eda, profile stays business
+
+        // Contrast must NOT be offered for business (catalog has no challengers).
+        await waitFor(() => {
+            expect(screen.queryByText(/2 algoritmos/i)).toBeNull();
+        });
+
+        await pickPrimaryAlgorithm(user, /regresi[oó]n lineal/i);
+        fireEvent.change(screen.getByRole("textbox", { name: /descripci[oó]n/i }), { target: { value: "Escenario business" } });
+        fireEvent.change(screen.getByLabelText(/pregunta gu[ií]a/i), { target: { value: "¿Qué decisión tomar?" } });
+        fireEvent.change(screen.getByLabelText(/disponibilidad/i), { target: { value: "2025-06-01T00:00" } });
+        fireEvent.change(screen.getByLabelText(/fecha de cierre/i), { target: { value: "2025-07-01T00:00" } });
+
+        const submitBtn = screen.getByRole("button", { name: /generar caso/i });
+        await waitFor(() => expect(submitBtn).not.toBeDisabled());
+        await user.click(submitBtn);
+
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit).toHaveBeenCalledWith(
+            expect.objectContaining({
+                studentProfile: "business",
+                algorithmMode: "single",
+                algorithmPrimary: "Regresión Lineal",
+                algorithmChallenger: null,
+            }),
+        );
+    }, 20_000);
+
+    it("ml_ds with the contrast flag ON re-enables 2-algoritmos and submits a contrast payload", async () => {
+        // Locks the documented reactivation contract at the submit-payload layer:
+        // flipping algorithmFeatureFlags.mlDsContrastEnabled must yield a contrast
+        // payload again. try/finally resets the shared flag even on assertion error.
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        algorithmFeatureFlags.mlDsContrastEnabled = true;
+        try {
+            server.use(
+                http.get("/api/authoring/algorithm-catalog", () =>
+                    HttpResponse.json({
+                        profile: "ml_ds",
+                        case_type: "harvard_with_eda",
+                        items: [
+                            { name: "Árboles de decisión", family: "clasificacion", family_label: "Clasificación", tier: "baseline" },
+                            { name: "XGBoost", family: "clasificacion", family_label: "Clasificación", tier: "challenger" },
+                        ],
+                    }),
+                ),
+            );
+
+            renderWithProviders(<AuthoringForm onSubmit={onSubmit} />);
+
+            await enableSuggestions(user);
+            await selectOption(user, /unidad tem/i, /pronosticos/i);
+            await showTechniquesSection(user);
+            await user.click(screen.getByLabelText(/perfil del curso/i));
+            await user.click(await screen.findByRole("option", { name: /machine learning/i }));
+
+            // Flag ON → the 2-algoritmos toggle reappears.
+            const contrastRadio = await screen.findByRole("radio", { name: /2 algoritmos/i });
+            await user.click(contrastRadio);
+
+            // Pick baseline + same-family challenger.
+            await user.click(screen.getByLabelText(/baseline \(interpretable\)/i));
+            await user.click(await screen.findByRole("option", { name: /árboles de decisi[oó]n/i }));
+            await user.click(screen.getByLabelText(/challenger \(alta capacidad\)/i));
+            await user.click(await screen.findByRole("option", { name: /xgboost/i }));
+
+            fireEvent.change(screen.getByRole("textbox", { name: /descripci[oó]n/i }), { target: { value: "Escenario contraste" } });
+            fireEvent.change(screen.getByLabelText(/pregunta gu[ií]a/i), { target: { value: "¿Comparar modelos?" } });
+            fireEvent.change(screen.getByLabelText(/disponibilidad/i), { target: { value: "2025-06-01T00:00" } });
+            fireEvent.change(screen.getByLabelText(/fecha de cierre/i), { target: { value: "2025-07-01T00:00" } });
+
+            const submitBtn = screen.getByRole("button", { name: /generar caso/i });
+            await waitFor(() => expect(submitBtn).not.toBeDisabled());
+            await user.click(submitBtn);
+
+            await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+            expect(onSubmit).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    studentProfile: "ml_ds",
+                    algorithmMode: "contrast",
+                    algorithmPrimary: "Árboles de decisión",
+                    algorithmChallenger: "XGBoost",
+                }),
+            );
+        } finally {
+            algorithmFeatureFlags.mlDsContrastEnabled = false;
+        }
+    }, 25_000);
 });
 
 // ─── Task 2 — Profile restriction for harvard_only ───────────────────────────

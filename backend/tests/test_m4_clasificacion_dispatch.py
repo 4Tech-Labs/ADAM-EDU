@@ -55,6 +55,7 @@ from case_generator.prompts.clasificacion.M4_clasificacion import (
     M4_QUESTIONS_PROMPT_CLASSIFICATION,
 )
 from case_generator.prompts.clasificacion.narrative import M4_PROMPT_CLASSIFICATION
+from case_generator.m4_grounding import detect_duplicate_deployment_sections
 
 # ── 1. Import smoke ──────────────────────────────────────────────────────────
 
@@ -691,3 +692,57 @@ def test_m4_questions_business_prompt_placeholder_contract() -> None:
 def test_m4_questions_business_prompt_format_smoke() -> None:
     """.format(**context) no lanza KeyError/ValueError (caza llaves literales sin escapar)."""
     assert M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION.format(**_M4_QUESTIONS_CONTEXT)
+
+
+# ── 15. Redundancia de despliegue — los coherence blocks YA NO añaden secciones ────────
+#
+# Causa raíz del bug reportado: cada coherence block decía "Además del formato base… secciones con
+# títulos EXACTOS" y APILABA encabezados de despliegue/impacto duplicados del §4.1/§4.5 base, así que
+# la narrativa M4 (ml_ds + clasificación) mostraba la recomendación de despliegue dos veces. El fix
+# los reconvierte a anclas DENTRO de §4.1–§4.5 (una sola recomendación = §4.5). Estos candados impiden
+# reintroducir la instrucción aditiva.
+
+_BANNED_M4_HEADING_TITLES = (
+    "Recomendación de despliegue (un solo modelo)",
+    "Modelo recomendado para la decisión",
+    "Impacto financiero del baseline LR",
+    "Impacto financiero de RF",
+    "Desempeño comparado LR vs RF",
+    "Tradeoff de negocio: interpretabilidad vs robustez",
+)
+
+
+def test_m4_coherence_blocks_drop_additive_section_instruction() -> None:
+    """Ninguna variante instruye ya 'títulos EXACTOS' (la orden que apilaba secciones extra)."""
+    for key, prompt in M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT.items():
+        assert "títulos EXACTOS" not in prompt, f"{key} aún apila secciones con títulos EXACTOS"
+
+
+def test_m4_coherence_blocks_declare_single_deployment_steering() -> None:
+    """Las 3 variantes anclan dentro de §4.1–§4.5 y declaran una única recomendación (§4.5)."""
+    for key, prompt in M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT.items():
+        flat = _normalize_ws(prompt)
+        assert "NO añadas secciones ni encabezados nuevos" in flat, key
+        assert "La única recomendación de despliegue es la" in flat, key
+
+
+def test_m4_assembled_prompt_has_single_deployment_heading_instruction() -> None:
+    """El detector de producción sobre el prompt ENSAMBLADO ve UNA sola sección de despliegue.
+
+    El prompt instruye el encabezado base '### 4.5 Recomendación de Despliegue' (ml_ds) y el business
+    '### 4.5 Recomendación Ejecutiva Final' (no-despliegue); ninguna variante reintroduce un segundo
+    encabezado de despliegue. Reusa el detector de m4_grounding → guard estructural anti-regresión.
+    """
+    for key, prompt in M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT.items():
+        assert detect_duplicate_deployment_sections(prompt) == [], (
+            f"{key}: el prompt instruye más de una sección de recomendación de despliegue"
+        )
+
+
+def test_m4_retired_duplicate_titles_absent_as_headings() -> None:
+    """Los títulos retirados ya no aparecen como encabezados ATX (##/###) en ninguna variante."""
+    for key, prompt in M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT.items():
+        for title in _BANNED_M4_HEADING_TITLES:
+            assert not _re.search(
+                rf"(?m)^[ \t]{{0,3}}#{{2,4}}[ \t]+{_re.escape(title)}", prompt
+            ), f"{key}: el título retirado '{title}' reapareció como encabezado"

@@ -401,15 +401,22 @@ class EDAChartSpec(BaseModel):
 
 
 class EDAChartGeneratorOutput(BaseModel):
-    """Salida del EDA Chart Generator — 3 a 5 charts según path de generación.
+    """Salida compartida de los nodos de charts — cantidad variable según el nodo/path.
 
-    Path LLM-JSON original (business y otras familias ml_ds): 3 charts.
-    Path Python-determinista (Issue #237, ml_ds + clasificación): 5 charts.
-    El cap final lo aplica el nodo `eda_chart_generator` en `graph.py`.
+    M2 EDA (`eda_chart_generator`):
+      - Path LLM-JSON original (business y otras familias ml_ds): 3 charts.
+      - Path Python-determinista (Issue #237, ml_ds + clasificación): 5 charts.
+      - El cap final lo aplica el nodo `eda_chart_generator` en `graph.py`.
+    M4 financiero (`m4_chart_generator`): 2 charts (Payback + Comparativa A/B/C); el
+      Gráfico de Sensibilidad/Tornado se retiró. La variante 3-gráficos se reactiva con el
+      kill-switch `M4_CHART_DROP_SENSITIVITY=false`.
+
+    No hay `min_length`/validador de cantidad: cada nodo gobierna su propio conteo por prompt
+    (+ backstop determinista en M4), así que el schema acepta cualquier longitud.
     """
 
     charts: list[EDAChartSpec] = Field(
-        description="Entre 3 y 5 charts estructurados para visualización (depende del path)."
+        description="Charts estructurados para visualización; la cantidad depende del nodo (M2: 3-5, M4: 2)."
     )
 
 
@@ -553,6 +560,47 @@ class EDASocraticQuestion(BaseModel):
 class EDAQuestionsOutput(BaseModel):
     """Salida del eda_questions_generator — EXACTAMENTE 2 preguntas socráticas."""
     preguntas: list[EDASocraticQuestion] = Field(description="Exactamente 2 preguntas socráticas EDA")
+
+
+# ═══════════════════════════════════════════════════════
+# MÓDULO 6 — Teaching Note "Guía del Docente" (intro estructurada)
+# El "Recorrido por Módulo" (§2) lo ensambla Python de forma determinista
+# (build_module_guide_block) → el LLM solo aporta la sinopsis, el público,
+# 3 objetivos y UNA frase de anclaje por módulo del allowlist.
+# ═══════════════════════════════════════════════════════
+
+class TeachingNoteAnchor(BaseModel):
+    """Una frase de anclaje del caso para un módulo del roster (M6 §2)."""
+    modulo_id: str = Field(
+        description="Id del módulo a anclar: m1, m2, m3, m4 o m5 — usa SOLO los del allowlist provisto"
+    )
+    frase: str = Field(
+        description="UNA frase (≤22 palabras) que conecta ese módulo con el dilema/empresa/sector REAL del caso"
+    )
+
+
+class TeachingNoteIntroOutput(BaseModel):
+    """Salida estructurada de teaching_note_part1: §1 Resumen + anclajes de §2.
+
+    ``objetivos`` se deja SIN longitud fija (se piden 3 en el prompt) para no provocar
+    un ``ValidationError`` autoinfligido que degradaría la nota sin necesidad. ``anclajes``
+    se intersecta en Python con el roster real (ids desconocidos se descartan; faltante →
+    el módulo simplemente no muestra la línea "Anclaje del caso").
+    """
+    resumen_markdown: str = Field(
+        description="Sinopsis ejecutiva del dilema central, ≤90 palabras, en prosa markdown SIN encabezados"
+    )
+    publico_objetivo: str = Field(
+        description="Una sola línea: para qué perfil y nivel de estudiante es este caso"
+    )
+    objetivos: list[str] = Field(
+        default_factory=list,
+        description="3 objetivos de aprendizaje (verbos de acción) que referencien SOLO los módulos del caso",
+    )
+    anclajes: list[TeachingNoteAnchor] = Field(
+        default_factory=list,
+        description="Una frase de anclaje por cada módulo del allowlist provisto",
+    )
 
 
 # ═══════════════════════════════════════════════════════

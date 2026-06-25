@@ -174,6 +174,9 @@ CV_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
 # #### 3.0.5.3 Validación cruzada estratificada — Logistic Regression
+# Mide qué tan estable es el desempeño de la Regresión Logística repartiendo los
+# datos en varios grupos y evaluando en cada uno. Reporta el promedio y la
+# variación de la AUC, una señal más confiable que medir una sola vez.
 
 # %%
 # === SECTION:cv_scores ===
@@ -194,6 +197,9 @@ except Exception as e:
     "rf_only": """
 # %% [markdown]
 # #### 3.0.5.3 Validación cruzada estratificada — Random Forest
+# Mide qué tan estable es el desempeño del Random Forest repartiendo los datos en
+# varios grupos y evaluando en cada uno. Reporta el promedio y la variación de la
+# AUC, una señal más confiable que medir una sola vez.
 
 # %%
 # === SECTION:cv_scores ===
@@ -214,6 +220,9 @@ except Exception as e:
     "lr_rf_contrast": """
 # %% [markdown]
 # #### 3.0.5.4 Validación cruzada estratificada — LR vs RF
+# Evalúa ambos modelos repartiendo los datos en varios grupos, para comparar no
+# solo cuál acierta más sino cuál es más estable. Reporta el promedio y la
+# variación de la AUC de cada uno.
 
 # %%
 # === SECTION:cv_scores ===
@@ -408,6 +417,9 @@ COMPARISON_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
 # #### 3.0.5.4 Tabla final — Logistic Regression
+# Reúne en una tabla el baseline ingenuo y la Regresión Logística con sus métricas
+# clave (AUC, F1, acierto en la clase minoritaria y tiempo de entrenamiento).
+# Permite ver de un vistazo cuánto aporta el modelo sobre el baseline.
 
 # %%
 # === SECTION:comparison_table ===
@@ -434,6 +446,9 @@ except Exception as e:
     "rf_only": """
 # %% [markdown]
 # #### 3.0.5.4 Tabla final — Random Forest
+# Reúne en una tabla el baseline ingenuo y el Random Forest con sus métricas clave
+# (AUC, F1, acierto en la clase minoritaria y tiempo de entrenamiento). Permite ver
+# de un vistazo cuánto aporta el modelo sobre el baseline.
 
 # %%
 # === SECTION:comparison_table ===
@@ -460,6 +475,9 @@ except Exception as e:
     "lr_rf_contrast": """
 # %% [markdown]
 # #### 3.0.5.5 Tabla comparativa final — LR vs RF
+# Reúne en una tabla el baseline ingenuo y ambos modelos con sus métricas clave
+# (AUC, F1, acierto en la clase minoritaria y tiempo). Es el resumen para decidir
+# qué modelo conviene según el equilibrio entre desempeño, costo e interpretabilidad.
 
 # %%
 # === SECTION:comparison_table ===
@@ -493,11 +511,11 @@ COST_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
 # #### 3.0.5.6 — Matriz de costos del negocio + threshold tuning
-# El threshold default 0.5 SOLO es óptimo si FP y FN cuestan igual. En la
-# mayoría de los problemas de negocio (churn, fraude, mantenimiento) los
-# costos son asimétricos. Esta celda lee la matriz de costos del contrato
-# (`dataset_schema_required.business_cost_matrix`), barre 100 thresholds
-# y elige el que minimiza el costo total esperado en el hold-out.
+# El umbral de decisión por defecto (0.5) solo es justo si equivocarse de más
+# (actuar sin necesidad) y equivocarse de menos (no actuar a tiempo) costaran
+# igual — y en negocio casi nunca cuestan igual. Esta celda traduce el modelo a
+# una decisión de negocio: prueba muchos umbrales y elige el que minimiza el costo
+# total esperado, en vez de quedarse con el 0.5 por defecto.
 #
 # **Cómo extraer los costos:**
 # Inspecciona el JSON del contrato del caso (bloque `dataset_contract_block`
@@ -573,11 +591,11 @@ except Exception as e:
     "rf_only": """
 # %% [markdown]
 # #### 3.0.5.6 — Matriz de costos del negocio + threshold tuning
-# El threshold default 0.5 SOLO es óptimo si FP y FN cuestan igual. En la
-# mayoría de los problemas de negocio (churn, fraude, mantenimiento) los
-# costos son asimétricos. Esta celda lee la matriz de costos del contrato
-# (`dataset_schema_required.business_cost_matrix`), barre 100 thresholds
-# y elige el que minimiza el costo total esperado en el hold-out.
+# El umbral de decisión por defecto (0.5) solo es justo si equivocarse de más
+# (actuar sin necesidad) y equivocarse de menos (no actuar a tiempo) costaran
+# igual — y en negocio casi nunca cuestan igual. Esta celda traduce el modelo a
+# una decisión de negocio: prueba muchos umbrales y elige el que minimiza el costo
+# total esperado, en vez de quedarse con el 0.5 por defecto.
 #
 # **Cómo extraer los costos:**
 # Inspecciona el JSON del contrato del caso (bloque `dataset_contract_block`
@@ -653,12 +671,13 @@ except Exception as e:
     "lr_rf_contrast": """
 # %% [markdown]
 # #### 3.0.5.7 — Matriz de costos del negocio + threshold tuning
-# En contraste usamos LR como soporte de threshold por interpretabilidad.
-# El threshold default 0.5 SOLO es óptimo si FP y FN cuestan igual. En la
-# mayoría de los problemas de negocio (churn, fraude, mantenimiento) los
-# costos son asimétricos. Esta celda lee la matriz de costos del contrato
-# (`dataset_schema_required.business_cost_matrix`), barre 100 thresholds
-# y elige el que minimiza el costo total esperado en el hold-out.
+# Para fijar el umbral de decisión usamos la Regresión Logística por su facilidad
+# de interpretación.
+# El umbral de decisión por defecto (0.5) solo es justo si equivocarse de más
+# (actuar sin necesidad) y equivocarse de menos (no actuar a tiempo) costaran
+# igual — y en negocio casi nunca cuestan igual. Esta celda traduce el modelo a
+# una decisión de negocio: prueba muchos umbrales y elige el que minimiza el costo
+# total esperado, en vez de quedarse con el 0.5 por defecto.
 #
 # **Cómo extraer los costos:**
 # Inspecciona el JSON del contrato del caso (bloque `dataset_contract_block`
@@ -738,8 +757,8 @@ CONFUSION_MATRIX_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
 # #### 3.0.5.5 Matriz de confusión — Logistic Regression (normalizada por fila)
-# Muestra la tasa de acierto por clase real a umbral fijo 0.5.
-# Normalizado por fila para que sea informativo en datasets desbalanceados.
+# Muestra en qué clase acierta o se equivoca el modelo (con el umbral estándar de
+# 0.5). Normalizado por fila para que sea informativo en datasets desbalanceados.
 
 # %%
 # === SECTION:confusion_matrix ===
@@ -766,8 +785,8 @@ except Exception as e:
     "rf_only": """
 # %% [markdown]
 # #### 3.0.5.5 Matriz de confusión — Random Forest (normalizada por fila)
-# Muestra la tasa de acierto por clase real a umbral fijo 0.5.
-# Normalizado por fila para que sea informativo en datasets desbalanceados.
+# Muestra en qué clase acierta o se equivoca el modelo (con el umbral estándar de
+# 0.5). Normalizado por fila para que sea informativo en datasets desbalanceados.
 
 # %%
 # === SECTION:confusion_matrix ===
@@ -794,7 +813,8 @@ except Exception as e:
     "lr_rf_contrast": """
 # %% [markdown]
 # #### 3.0.5.6 Matrices de confusión — LR y RF (normalizadas por fila)
-# Ambos modelos en una sola figura para comparación directa (Regla L atomic charting).
+# Muestra ambas matrices lado a lado para comparar directamente en qué clase
+# acierta o se equivoca cada modelo.
 # Normalizado por fila para que sea informativo en datasets desbalanceados.
 
 # %%
@@ -881,6 +901,9 @@ METRICS_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
 # #### 3.0.5.7 — Resumen ejecutable de métricas para grounding narrativo
+# Consolida los resultados de la Regresión Logística (AUC, F1, prevalencia y
+# variables más influyentes) en un resumen estructurado, para que el resto del
+# caso se apoye en números reales del experimento y no en estimaciones inventadas.
 
 # %%
 # === SECTION:metrics_summary_json ===
@@ -949,6 +972,9 @@ print("ADAM_M3_METRICS_SUMMARY_JSON=" + _json_m3_metrics.dumps(_metrics_summary,
     "rf_only": """
 # %% [markdown]
 # #### 3.0.5.7 — Resumen ejecutable de métricas para grounding narrativo
+# Consolida los resultados del Random Forest (AUC, F1, prevalencia y variables más
+# influyentes) en un resumen estructurado, para que el resto del caso se apoye en
+# números reales del experimento y no en estimaciones inventadas.
 
 # %%
 # === SECTION:metrics_summary_json ===
@@ -1017,6 +1043,9 @@ print("ADAM_M3_METRICS_SUMMARY_JSON=" + _json_m3_metrics.dumps(_metrics_summary,
     "lr_rf_contrast": """
 # %% [markdown]
 # #### 3.0.5.8 — Resumen ejecutable de métricas para grounding narrativo
+# Consolida los resultados de ambos modelos (AUC, F1, prevalencia, mejor modelo y
+# variables más influyentes) en un resumen estructurado, para que el resto del caso
+# se apoye en números reales del experimento y no en estimaciones inventadas.
 
 # %%
 # === SECTION:metrics_summary_json ===

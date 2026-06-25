@@ -38,51 +38,49 @@ from case_generator.prompts._shared import (
 # ── LR-only deep dive (impact/decision) ───────────────────────────────────────
 _M4_CLASSIFICATION_COHERENCE_BLOCK_LR_ONLY = """\
 
-# Coherencia de impacto — deep dive LR
+# Coherencia de impacto — deep dive de un solo modelo (Logistic Regression)
 Este bloque aplica SOLO a jobs con algorithm_mode="single" y baseline Logistic Regression.
 
-El docente eligió un deep dive sobre un único modelo. NO compares contra ningún otro modelo ni
-introduzcas un challenger; todo el análisis de impacto financiero se construye EXCLUSIVAMENTE
-sobre el baseline Logistic Regression.
+El docente eligió un deep dive sobre un único modelo. Construye TODO el análisis de impacto
+financiero EXCLUSIVAMENTE sobre el baseline Logistic Regression: NO compares contra ningún otro
+modelo ni introduzcas un challenger.
 
 Pregunta eje directiva del caso:
 {pregunta_eje}
 
-Además del formato base, ancla el impacto a estas dos secciones cortas con estos títulos EXACTOS:
-
-## Impacto financiero del baseline LR
-Traduce el desempeño del baseline a valor de negocio (cuánto cuesta cada error, qué decisión
-soporta y a qué costo/riesgo), citando únicamente las métricas del grounding
-`{{computed_metrics_block}}`. No inventes métricas; los números de negocio vienen de M2, Exhibits o M4.
-
-## Recomendación de despliegue (un solo modelo)
-Conecta la lectura del baseline con la pregunta eje: qué acción directiva habilita el modelo, bajo
-qué umbral de la matriz de costos y con qué riesgo operativo (interpretabilidad, reentrenamiento, drift).
+NO añadas secciones ni encabezados nuevos: respeta EXACTAMENTE el formato base §4.1–§4.5. La única
+recomendación de despliegue es la §4.5; el impacto financiero va en §4.1–§4.2. NO generes una segunda
+sección de recomendación de despliegue ni una sección de "impacto financiero" aparte. Aplica estas
+anclas DENTRO de las secciones base:
+- En §4.1–§4.2, traduce el desempeño del baseline a valor de negocio (cuánto cuesta cada error, qué
+  decisión soporta y a qué costo/riesgo), citando únicamente las métricas del grounding
+  `{{computed_metrics_block}}`. No inventes métricas; los números de negocio vienen de M2, Exhibits o M4.
+- En §4.5, conecta el veredicto con la pregunta eje: qué acción directiva habilita el baseline, bajo
+  qué umbral de la matriz de costos y con qué riesgo operativo (interpretabilidad, reentrenamiento, drift).
 """
 
 # ── RF-only deep dive (impact/decision) ───────────────────────────────────────
 _M4_CLASSIFICATION_COHERENCE_BLOCK_RF_ONLY = """\
 
-# Coherencia de impacto — deep dive RF
+# Coherencia de impacto — deep dive de un solo modelo (Random Forest)
 Este bloque aplica SOLO a jobs con algorithm_mode="single" y modelo Random Forest.
 
-El docente eligió un deep dive sobre un único modelo. NO compares contra ningún otro modelo ni
-introduzcas un baseline alternativo; todo el análisis de impacto financiero se construye
-EXCLUSIVAMENTE sobre Random Forest.
+El docente eligió un deep dive sobre un único modelo. Construye TODO el análisis de impacto
+financiero EXCLUSIVAMENTE sobre Random Forest: NO compares contra ningún otro modelo ni introduzcas
+un baseline alternativo.
 
 Pregunta eje directiva del caso:
 {pregunta_eje}
 
-Además del formato base, ancla el impacto a estas dos secciones cortas con estos títulos EXACTOS:
-
-## Impacto financiero de RF
-Traduce el desempeño de Random Forest a valor de negocio (cuánto cuesta cada error, qué decisión
-soporta y a qué costo/riesgo), citando únicamente las métricas del grounding
-`{{computed_metrics_block}}`. No inventes métricas; los números de negocio vienen de M2, Exhibits o M4.
-
-## Recomendación de despliegue (un solo modelo)
-Conecta la lectura de RF con la pregunta eje: qué acción directiva habilita el modelo, bajo qué
-umbral de la matriz de costos y con qué riesgo operativo (robustez, no linealidad, reentrenamiento, drift).
+NO añadas secciones ni encabezados nuevos: respeta EXACTAMENTE el formato base §4.1–§4.5. La única
+recomendación de despliegue es la §4.5; el impacto financiero va en §4.1–§4.2. NO generes una segunda
+sección de recomendación de despliegue ni una sección de "impacto financiero" aparte. Aplica estas
+anclas DENTRO de las secciones base:
+- En §4.1–§4.2, traduce el desempeño de Random Forest a valor de negocio (cuánto cuesta cada error,
+  qué decisión soporta y a qué costo/riesgo), citando únicamente las métricas del grounding
+  `{{computed_metrics_block}}`. No inventes métricas; los números de negocio vienen de M2, Exhibits o M4.
+- En §4.5, conecta el veredicto con la pregunta eje: qué acción directiva habilita el modelo, bajo qué
+  umbral de la matriz de costos y con qué riesgo operativo (robustez, no linealidad, reentrenamiento, drift).
 """
 
 # ── LR vs RF contrast (impact/decision) ───────────────────────────────────────
@@ -97,18 +95,14 @@ Random Forest (RF) en términos de la DECISIÓN directiva, no de justificación 
 Pregunta eje directiva del caso:
 {pregunta_eje}
 
-Además del formato base, ancla el impacto a estas tres secciones cortas con estos títulos EXACTOS:
-
-## Desempeño comparado LR vs RF
-Compara el desempeño de ambos modelos con números anclados ÚNICAMENTE al grounding
-`{{computed_metrics_block}}` (p. ej. auc_lr vs auc_rf). No inventes métricas.
-
-## Tradeoff de negocio: interpretabilidad vs robustez
-Traduce el tradeoff a valor directivo: la interpretabilidad/explicabilidad del baseline LR frente a
-la robustez/no linealidad del challenger RF, y su costo operativo (reentrenamiento, latencia, drift).
-
-## Modelo recomendado para la decisión
-Recomienda qué modelo soporta qué acción de la pregunta eje y a qué costo/riesgo, sin fabricar métricas.
+NO añadas secciones ni encabezados nuevos: respeta EXACTAMENTE el formato base §4.1–§4.5. La única
+recomendación de despliegue es la §4.5. NO generes secciones separadas de comparación, de tradeoff ni
+una segunda recomendación de despliegue; integra el contraste DENTRO de las secciones base:
+- En §4.1–§4.2, compara el desempeño de LR vs RF con números anclados ÚNICAMENTE al grounding
+  `{{computed_metrics_block}}` (p. ej. auc_lr vs auc_rf). No inventes métricas.
+- En §4.3–§4.4, expón el tradeoff de negocio: la interpretabilidad/explicabilidad del baseline LR frente
+  a la robustez/no linealidad del challenger RF, y su costo operativo (reentrenamiento, latencia, drift).
+- En §4.5, recomienda qué modelo soporta qué acción de la pregunta eje y a qué costo/riesgo, sin fabricar métricas.
 """
 
 # ── M4 narrative prompt constants — one per classification variant ─────────────

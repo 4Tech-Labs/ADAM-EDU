@@ -64,7 +64,8 @@ CONTRACT = {"case_id": "test_case_237"}
 
 def test_happy_path_invariants(df_binary: pd.DataFrame) -> None:
     """El happy path emite EXACTAMENTE 3 charts en el orden esperado, todos
-    con `data_source=python_builder` y descriptions/notes vacías (anti-LLM).
+    con `data_source=python_builder`. Solo `missingness_heatmap` lleva texto
+    determinista del builder (honest_text); los otros dos siguen vacíos (anti-LLM).
     """
     charts = generate_classification_eda_charts(df_binary, "churn", CONTRACT)
     assert len(charts) == 3
@@ -77,10 +78,17 @@ def test_happy_path_invariants(df_binary: pd.DataFrame) -> None:
     for c in charts:
         assert c["library"] == "plotly"
         assert c["data_source"] == "python_builder"
-        # Anti-LLM-fabricated: el builder NO escribe textos pedagógicos.
-        assert c["description"] == ""
-        assert c["notes"] == ""
         assert c["source"].startswith("Dataset ADAM")
+        if c["id"] == "missingness_heatmap":
+            # Texto determinista y honesto del builder (no LLM): df_binary no tiene
+            # nulos → describe completitud, no deja que el LLM invente un MNAR.
+            assert "faltantes" in c["subtitle"]
+            assert c["description"] != ""
+            assert c["notes"] != ""
+        else:
+            # Anti-LLM-fabricated: los demás builders NO escriben textos pedagógicos.
+            assert c["description"] == ""
+            assert c["notes"] == ""
 
 
 def test_target_multiclass(df_multiclass: pd.DataFrame) -> None:
@@ -146,6 +154,59 @@ def test_snapshot_mutual_info_top8_features(df_binary: pd.DataFrame) -> None:
 
 
 # ─────────────────────────────────────────────────────────
+# Texto honesto del mapa de valores faltantes (Cambio 1)
+# ─────────────────────────────────────────────────────────
+
+
+def test_missingness_text_complete_dataset(df_binary: pd.DataFrame) -> None:
+    """Dataset sin nulos (caso de-churned ml_ds+clf): el chart de missingness DICE
+    que el dataset está completo y trae una annotation de estado vacío — NO inventa
+    un patrón MNAR inexistente."""
+    charts = generate_classification_eda_charts(df_binary, "churn", CONTRACT)
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+    assert "sin valores faltantes" in mh["subtitle"]
+    assert "COMPLETO" in mh["description"]
+    # El texto del estado-completo no afirma que hay missingness concentrada.
+    assert "concentradas" not in mh["description"]
+    anns = mh["layout"].get("annotations") or []
+    assert any("Sin valores faltantes" in (a.get("text", "") or "") for a in anns)
+
+
+def test_missingness_text_with_real_nulls() -> None:
+    """Dataset CON nulos (caso churn/retención): describe el conteo real + pregunta
+    MNAR legítima y NO añade la annotation de estado vacío."""
+    rng = np.random.default_rng(7)
+    n = 120
+    df = pd.DataFrame(
+        {
+            "age": rng.integers(18, 70, size=n).astype(float),
+            "income": rng.normal(50_000, 15_000, size=n),
+            "churn": rng.choice([0, 1], size=n, p=[0.7, 0.3]),
+        }
+    )
+    df.loc[:9, "age"] = np.nan  # 10 celdas faltantes en una columna feature
+    charts = generate_classification_eda_charts(df, "churn", CONTRACT)
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+    assert "celdas faltantes" in mh["subtitle"]
+    assert "age" in mh["description"]
+    assert "MNAR" in mh["notes"]
+    assert "annotations" not in mh["layout"]
+
+
+def test_missingness_honest_text_off_is_byte_identical(df_binary: pd.DataFrame) -> None:
+    """Kill-switch OFF (`honest_text=False`): comportamiento previo byte-idéntico —
+    description/notes vacías, sin annotation, subtitle base."""
+    charts = generate_classification_eda_charts(
+        df_binary, "churn", CONTRACT, honest_text=False
+    )
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+    assert mh["description"] == ""
+    assert mh["notes"] == ""
+    assert mh["subtitle"] == "Muestra aleatoria de 200 filas (random_state=42)"
+    assert "annotations" not in mh["layout"]
+
+
+# ─────────────────────────────────────────────────────────
 # Boundary del LLM stub (annotate-only path)
 # ─────────────────────────────────────────────────────────
 
@@ -198,6 +259,12 @@ def test_boundary_llm_cannot_alter_traces(df_binary: pd.DataFrame) -> None:
         .tolist()
     ]
     assert cd["data_source"] == "python_builder"
+    # El chart de missingness CONSERVA el texto determinista del builder: el stub
+    # LLM ("d2"/"n2") se descarta por `deterministic_text_ids` (Cambio 2).
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+    assert mh["description"] != "d2"
+    assert mh["notes"] != "n2"
+    assert "faltantes" in mh["subtitle"]
 
 
 def test_llm_ghost_chart_id_is_silently_dropped(df_binary: pd.DataFrame) -> None:
@@ -239,3 +306,199 @@ def test_llm_ghost_chart_id_is_silently_dropped(df_binary: pd.DataFrame) -> None
     # La annotation real sí se aplicó.
     cd = next(c for c in charts if c["id"] == "class_distribution")
     assert cd["description"] == "real"
+
+
+# ─────────────────────────────────────────────────────────
+# Filtro model-ready del chart de Mutual Information
+# (kill-switch `m2_mi_exclude_index`) — fix del artefacto `period`
+# ─────────────────────────────────────────────────────────
+
+
+from case_generator.datagen.eda_charts_classification import (  # noqa: E402
+    _select_mi_feature_columns,
+)
+
+
+def _periods_monthly(n: int) -> list[str]:
+    """Espejo del generador determinista (_generate_time_periods, monthly):
+    el año incrementa cada 12 → etiquetas all-unique ("2023-01", "2023-02", ...)."""
+    return [f"{2023 + i // 12}-{(i % 12) + 1:02d}" for i in range(n)]
+
+
+def _mi_features(df: pd.DataFrame, target: str, **kwargs: Any) -> list[str]:
+    charts = generate_classification_eda_charts(df, target, CONTRACT, **kwargs)
+    mi = next(c for c in charts if c["id"] == "mutual_info_top8")
+    return list(mi["traces"][0]["y"]) if mi["traces"] else []
+
+
+def test_mi_excludes_period_index(df_binary: pd.DataFrame) -> None:
+    """El artefacto reportado: `period` (fecha 'YYYY-MM', all-unique) ya NO entra
+    al ranking de MI; las features numéricas reales siguen presentes."""
+    df = df_binary.copy()
+    df["period"] = _periods_monthly(len(df))
+    feats = _mi_features(df, "churn")
+    assert "period" not in feats
+    assert {"age", "income", "tenure_months"} <= set(feats)
+
+
+def test_mi_keeps_financial_base() -> None:
+    """Candado anti-regresión del bug de 'restricción por contrato': la base
+    financiera (revenue/costs/margin_pct) NO está en feature_columns pero SÍ debe
+    aparecer en el chart (son numéricas legítimas, k-NN-seguras). `period` fuera."""
+    rng = np.random.default_rng(11)
+    n = 120
+    df = pd.DataFrame(
+        {
+            "period": _periods_monthly(n),
+            "revenue": rng.normal(200_000, 50_000, size=n).round(2),
+            "costs": rng.normal(120_000, 30_000, size=n).round(2),
+            "margin_pct": rng.uniform(0.05, 0.4, size=n).round(3),
+            "churn": rng.choice([0, 1], size=n, p=[0.7, 0.3]),
+        }
+    )
+    feats = _mi_features(df, "churn")
+    assert {"revenue", "costs", "margin_pct"} <= set(feats)
+    assert "period" not in feats
+
+
+def test_mi_excludes_high_cardinality_string_id(df_binary: pd.DataFrame) -> None:
+    """Una categórica string de alta cardinalidad (quasi-ID) produce el mismo
+    artefacto de memorización que `period` → se excluye; las categóricas de baja
+    cardinalidad (region/plan) se conservan."""
+    df = df_binary.copy()
+    df["customer_ref"] = [f"CUST-{i:05d}" for i in range(len(df))]  # all-unique
+    feats = _mi_features(df, "churn")
+    assert "customer_ref" not in feats
+    assert {"region", "plan"} <= set(feats)
+
+
+def test_mi_excludes_numeric_id_token(df_binary: pd.DataFrame) -> None:
+    """Un ID numérico se excluye por el token `id` del nombre (defensa en
+    profundidad; aunque k-NN no lo infle, no es una feature)."""
+    df = df_binary.copy()
+    df["account_id"] = np.arange(len(df))
+    assert "account_id" not in _select_mi_feature_columns(df, "churn")
+
+
+def test_mi_id_token_no_false_positive(df_binary: pd.DataFrame) -> None:
+    """El chequeo por igualdad de token (no substring) no descarta numéricas
+    legítimas cuyo nombre contiene 'id' como subcadena."""
+    df = df_binary.copy()
+    df["paid_amount"] = np.linspace(0.0, 1000.0, len(df))
+    df["covid_cases"] = np.arange(len(df))
+    feats = _select_mi_feature_columns(df, "churn")
+    assert "paid_amount" in feats
+    assert "covid_cases" in feats
+
+
+def test_mi_excludes_constant_and_high_null(df_binary: pd.DataFrame) -> None:
+    """Constantes (MI=0, ruido) y columnas con >50%% de nulos se descartan
+    (espejo de la receta model-ready de M3)."""
+    df = df_binary.copy()
+    df["constant_col"] = 7
+    df["mostly_null"] = np.nan
+    df.loc[df.index[:10], "mostly_null"] = np.arange(10).astype(float)  # 10/200 no-nulos
+    feats = _select_mi_feature_columns(df, "churn")
+    assert "constant_col" not in feats
+    assert "mostly_null" not in feats
+
+
+def test_mi_only_index_returns_empty_chart() -> None:
+    """df sin ninguna feature model-ready (solo `period` + target) → placeholder
+    vacío (`traces == []`), nunca un crash ni un ranking de un índice temporal."""
+    n = 24
+    df = pd.DataFrame(
+        {"period": _periods_monthly(n), "churn": [0, 1] * (n // 2)}
+    )
+    charts = generate_classification_eda_charts(df, "churn", CONTRACT)
+    mi = next(c for c in charts if c["id"] == "mutual_info_top8")
+    assert mi["traces"] == []
+
+
+def test_mi_exclude_index_off_is_byte_identical(df_binary: pd.DataFrame) -> None:
+    """Kill-switch OFF (`exclude_index=False`): comportamiento legacy — `period`
+    vuelve a entrar al ranking (revert exacto sin redeploy)."""
+    df = df_binary.copy()
+    df["period"] = _periods_monthly(len(df))
+    feats = _mi_features(df, "churn", exclude_index=False)
+    assert "period" in feats
+
+
+def test_mi_no_index_df_unchanged(df_binary: pd.DataFrame) -> None:
+    """Un df sin índice/ID/alta-card (las fixtures actuales) produce EXACTAMENTE
+    el mismo set de features que antes del fix (promesa byte-idéntica)."""
+    assert set(_mi_features(df_binary, "churn")) == {
+        "age",
+        "income",
+        "tenure_months",
+        "region",
+        "plan",
+    }
+
+
+def test_mi_exclude_index_kill_switch_default_is_true() -> None:
+    from shared.database import Settings
+
+    assert Settings.model_fields["m2_mi_exclude_index"].default is True
+
+
+def test_mi_excludes_period_small_n() -> None:
+    """Borde de dataset pequeño: con <=20 períodos la regla de cardinalidad NO
+    bastaría (nunique(period) <= _MI_CAT_MAX_CARD); el drop por NOMBRE garantiza
+    que `period` queda fuera a CUALQUIER n (cierra el hueco hallado en review)."""
+    n = 12
+    rng = np.random.default_rng(3)
+    df = pd.DataFrame(
+        {
+            "period": _periods_monthly(n),  # 12 valores únicos ≤ 20
+            "income": rng.normal(50_000, 15_000, size=n).round(2),
+            "score": rng.uniform(0.0, 1.0, size=n).round(3),
+            "churn": [0, 1] * (n // 2),
+        }
+    )
+    feats = _select_mi_feature_columns(df, "churn")
+    assert "period" not in feats
+    assert "income" in feats
+
+
+def test_mi_excludes_datetime_column(df_binary: pd.DataFrame) -> None:
+    """Una columna dtype fecha es un índice temporal, nunca una feature de MI →
+    excluida con independencia de su cardinalidad."""
+    df = df_binary.copy()
+    df["signup_date"] = pd.to_datetime("2023-01-01") + pd.to_timedelta(
+        np.arange(len(df)), unit="D"
+    )
+    feats = _select_mi_feature_columns(df, "churn")
+    assert "signup_date" not in feats
+    assert {"age", "income"} <= set(feats)
+
+
+def test_mi_unhashable_column_does_not_crash(df_binary: pd.DataFrame) -> None:
+    """Defensivo: una columna con valores no-hasheables (list/dict) no rompe el
+    filtro (el `nunique` lanzaría TypeError) — se omite y el resto del chart sigue."""
+    df = df_binary.copy()
+    df["tags"] = [[1, 2] for _ in range(len(df))]  # valores no-hasheables
+    feats = _select_mi_feature_columns(df, "churn")  # no debe lanzar
+    assert "tags" not in feats
+    assert {"age", "income", "tenure_months"} <= set(feats)
+
+
+def test_mi_keeps_bool_low_cardinality(df_binary: pd.DataFrame) -> None:
+    """Una columna bool es discreta de baja cardinalidad (no numérica para el MI):
+    se conserva, igual que la rama `discrete_mask` del builder la trataría."""
+    df = df_binary.copy()
+    rng = np.random.default_rng(5)
+    df["is_active"] = rng.choice([True, False], size=len(df))
+    assert "is_active" in _select_mi_feature_columns(df, "churn")
+
+
+def test_mi_cardinality_boundary(df_binary: pd.DataFrame) -> None:
+    """Frontera load-bearing del filtro (_MI_CAT_MAX_CARD=20): una categórica con
+    exactamente 20 valores se conserva; con 21 se descarta."""
+    df = df_binary.copy()
+    n = len(df)
+    df["cat20"] = [f"v{i % 20}" for i in range(n)]  # 20 únicos → conservar
+    df["cat21"] = [f"w{i % 21}" for i in range(n)]  # 21 únicos → descartar
+    feats = _select_mi_feature_columns(df, "churn")
+    assert "cat20" in feats
+    assert "cat21" not in feats

@@ -137,12 +137,32 @@ export function sanitizeTraces(traces: Record<string, unknown>[]): Record<string
 
                 const dataMin = validation.zMin!;
                 const dataMax = validation.zMax!;
+                const backendZmin =
+                    typeof trace.zmin === "number" && Number.isFinite(trace.zmin)
+                        ? (trace.zmin as number)
+                        : null;
+                const backendZmax =
+                    typeof trace.zmax === "number" && Number.isFinite(trace.zmax)
+                        ? (trace.zmax as number)
+                        : null;
                 const isCorrelationLike =
                     dataMin >= -1 - 1e-6 &&
                     dataMax <= 1 + 1e-6 &&
                     dataMin < -1e-6;
 
-                if (isCorrelationLike) {
+                if (
+                    dataMin === dataMax &&
+                    backendZmin !== null &&
+                    backendZmax !== null
+                ) {
+                    // Matriz constante (p.ej. el mapa de missingness sin nulos): un
+                    // rango [v, v] colapsa la colorbar a una escala degenerada. Respetar
+                    // el rango declarado por el backend (0..1) para una leyenda correcta.
+                    // Solo el heatmap de missingness fija zmin/zmax en el backend, así que
+                    // cohort (YlOrRd) y correlación (RdBu) no entran por esta rama.
+                    sanitized.zmin = backendZmin;
+                    sanitized.zmax = backendZmax;
+                } else if (isCorrelationLike) {
                     sanitized.zmin = -1;
                     sanitized.zmax = 1;
                 } else {
