@@ -155,16 +155,47 @@ INTRO_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
 ## No emitas ROC/PR, tuning ni interpretabilidad avanzada (fuera del núcleo, #353).
 ## Las celdas con gráficos son: `confusion_matrix` y `cost_matrix` (dos figuras).
 
+# %% [markdown]
+# ### 3.0.5 ¿Qué es la Regresión Logística y cómo toma una decisión?
+# Antes de entrenar nada, conviene entender el modelo que vamos a usar. La Regresión
+# Logística aprende un peso para cada característica: cuánto empuja cada dato hacia que el
+# evento ocurra o no. Suma todos esos empujes y los pasa por una curva en forma de S que
+# comprime el resultado a una probabilidad entre 0 y 1. Esa probabilidad se compara con un
+# umbral de decisión (por defecto 0.5): por encima predice la clase positiva, por debajo la
+# negativa. Así el modelo toma una decisión, y como cada peso es legible, podemos explicar
+# por qué decidió lo que decidió.
+
 """,
     "rf_only": """## Sección 3.0.5 — Núcleo Random Forest
 ## Emite SOLO celdas RF del núcleo. No generes código ni texto de modelos no seleccionados.
 ## No emitas ROC/PR, tuning ni interpretabilidad avanzada (fuera del núcleo, #353).
 ## Las celdas con gráficos son: `confusion_matrix` y `cost_matrix` (dos figuras).
 
+# %% [markdown]
+# ### 3.0.5 ¿Qué es el Random Forest y cómo toma una decisión?
+# Antes de entrenar nada, conviene entender el modelo que vamos a usar. El Random Forest
+# construye muchos árboles de decisión distintos, cada uno entrenado sobre una muestra y un
+# subconjunto de características diferentes. Cada árbol mira al cliente paso a paso y emite su
+# propia predicción; el bosque combina todos esos votos en una probabilidad entre 0 y 1. Esa
+# probabilidad se compara con un umbral de decisión (por defecto 0.5): por encima predice la
+# clase positiva, por debajo la negativa. Así el modelo toma una decisión, y juntar muchos
+# árboles suele dar un resultado más estable que confiar en uno solo.
+
 """,
     "lr_rf_contrast": """## Sección 3.0.5 — Núcleo Contraste Logistic Regression vs Random Forest
 ## Emite celdas LR y RF del núcleo, con DOS gráficos totales: matriz de confusión y matriz de costos.
 ## No emitas ROC/PR, tuning ni interpretabilidad avanzada (fuera del núcleo, #353).
+
+# %% [markdown]
+# ### 3.0.5 ¿Qué son estos modelos y cómo toma una decisión cada uno?
+# Antes de entrenar nada, conviene entender los dos modelos que vamos a comparar. La Regresión
+# Logística aprende un peso por característica, suma esos empujes y los pasa por una curva en
+# forma de S para obtener una probabilidad; sus pesos son legibles, lo que la hace fácil de
+# explicar. El Random Forest construye muchos árboles distintos y combina sus votos en una
+# probabilidad; suele ser más estable a costa de ser menos transparente. En ambos casos esa
+# probabilidad se compara con un umbral de decisión (por defecto 0.5) y así el modelo toma una
+# decisión. Contrastarlos nos deja elegir entre claridad y desempeño según lo que pida el
+# negocio.
 
 """,
 }
@@ -757,8 +788,10 @@ CONFUSION_MATRIX_SECTIONS: dict[ClassificationNotebookVariant, str] = {
     "lr_only": """
 # %% [markdown]
 # #### 3.0.5.5 Matriz de confusión — Logistic Regression (normalizada por fila)
-# Muestra en qué clase acierta o se equivoca el modelo (con el umbral estándar de
-# 0.5). Normalizado por fila para que sea informativo en datasets desbalanceados.
+# Muestra en qué clase acierta o se equivoca el modelo, separando los dos tipos de
+# error: la falsa alarma (predecir el evento cuando en realidad no ocurre) y la
+# omisión (no predecir el evento cuando sí ocurre). Usa el umbral estándar de 0.5 y
+# está normalizada por fila para que sea informativa en datasets desbalanceados.
 
 # %%
 # === SECTION:confusion_matrix ===
@@ -779,14 +812,17 @@ try:
         colorbar=False, normalize="true", values_format=".2f")
     ax_cfm.set_title("Matriz de confusión — LR (normalizada por fila)")
     plt.tight_layout(); plt.show()
+    print("Lectura: la diagonal son los aciertos; fuera de la diagonal están las falsas alarmas y las omisiones. La siguiente celda le pone precio a cada error para encontrar el umbral que minimiza el costo del negocio.")
 except Exception as e:
   print(f"⚠️ Matriz de confusión LR falló: {{e}}")
 """,
     "rf_only": """
 # %% [markdown]
 # #### 3.0.5.5 Matriz de confusión — Random Forest (normalizada por fila)
-# Muestra en qué clase acierta o se equivoca el modelo (con el umbral estándar de
-# 0.5). Normalizado por fila para que sea informativo en datasets desbalanceados.
+# Muestra en qué clase acierta o se equivoca el modelo, separando los dos tipos de
+# error: la falsa alarma (predecir el evento cuando en realidad no ocurre) y la
+# omisión (no predecir el evento cuando sí ocurre). Usa el umbral estándar de 0.5 y
+# está normalizada por fila para que sea informativa en datasets desbalanceados.
 
 # %%
 # === SECTION:confusion_matrix ===
@@ -807,6 +843,7 @@ try:
         colorbar=False, normalize="true", values_format=".2f")
     ax_cfm.set_title("Matriz de confusión — RF (normalizada por fila)")
     plt.tight_layout(); plt.show()
+    print("Lectura: la diagonal son los aciertos; fuera de la diagonal están las falsas alarmas y las omisiones. La siguiente celda le pone precio a cada error para encontrar el umbral que minimiza el costo del negocio.")
 except Exception as e:
   print(f"⚠️ Matriz de confusión RF falló: {{e}}")
 """,
@@ -814,8 +851,10 @@ except Exception as e:
 # %% [markdown]
 # #### 3.0.5.6 Matrices de confusión — LR y RF (normalizadas por fila)
 # Muestra ambas matrices lado a lado para comparar directamente en qué clase
-# acierta o se equivoca cada modelo.
-# Normalizado por fila para que sea informativo en datasets desbalanceados.
+# acierta o se equivoca cada modelo, separando los dos tipos de error: la falsa
+# alarma (predecir el evento cuando en realidad no ocurre) y la omisión (no predecir
+# el evento cuando sí ocurre). Normalizadas por fila para que sean informativas en
+# datasets desbalanceados.
 
 # %%
 # === SECTION:confusion_matrix ===
@@ -842,6 +881,7 @@ try:
         colorbar=False, normalize="true", values_format=".2f")
     axes_cfm[1].set_title("Matriz de confusión — RF (normalizada por fila)")
     plt.tight_layout(); plt.show()
+    print("Lectura: en cada matriz la diagonal son los aciertos; fuera de la diagonal están las falsas alarmas y las omisiones. La siguiente celda le pone precio a cada error para encontrar el umbral que minimiza el costo del negocio.")
 except Exception as e:
   print(f"⚠️ Matrices de confusión fallaron: {{e}}")
 """,
@@ -1133,6 +1173,7 @@ TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
         "# | 2.1 | Detección asistida de columnas |\n"
         "# | 3 | Módulos Experimentales |\n"
         "# | 3.0 | EDA Express |\n"
+        "# | 3.0.5 | ¿Qué es la Regresión Logística y cómo toma una decisión? |\n"
         "# | 3.0.5.1 | Baseline trivial — DummyClassifier + bootstrap de variables |\n"
         "# | 3.0.5.2 | Pipeline reproducible — Logistic Regression |\n"
         "# | 3.0.5.3 | Validación cruzada estratificada |\n"
@@ -1152,6 +1193,7 @@ TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
         "# | 2.1 | Detección asistida de columnas |\n"
         "# | 3 | Módulos Experimentales |\n"
         "# | 3.0 | EDA Express |\n"
+        "# | 3.0.5 | ¿Qué es el Random Forest y cómo toma una decisión? |\n"
         "# | 3.0.5.1 | Baseline trivial — DummyClassifier + bootstrap de variables |\n"
         "# | 3.0.5.2 | Pipeline reproducible — Random Forest |\n"
         "# | 3.0.5.3 | Validación cruzada estratificada |\n"
@@ -1171,6 +1213,7 @@ TOC_MARKDOWN_CELL_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
         "# | 2.1 | Detección asistida de columnas |\n"
         "# | 3 | Módulos Experimentales |\n"
         "# | 3.0 | EDA Express |\n"
+        "# | 3.0.5 | ¿Qué son estos modelos y cómo toma una decisión cada uno? |\n"
         "# | 3.0.5.1 | Baseline trivial — DummyClassifier + bootstrap de variables |\n"
         "# | 3.0.5.2 | Pipeline reproducible — Logistic Regression |\n"
         "# | 3.0.5.3 | Pipeline reproducible — Random Forest |\n"

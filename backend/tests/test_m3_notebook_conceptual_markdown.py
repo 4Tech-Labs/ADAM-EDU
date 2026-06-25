@@ -165,6 +165,9 @@ def test_rf_only_descriptions_never_name_logistic_regression() -> None:
     prompt = _raw(CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY)
     assert "Logistic Regression" not in prompt
     assert "LogisticRegression" not in prompt
+    # The new concept/pipeline prose is Spanish; guard the Spanish model name too
+    # (the English checks above would miss a Spanish-name leak in a future paraphrase).
+    assert "Regresión Logística" not in prompt
 
 
 # One distinctive phrase per analysis cell, each present in ALL three variants, so a
@@ -180,6 +183,7 @@ _SHARED_PHRASES = (
     "en qué clase acierta o se equivoca",  # confusion_matrix
     "traduce el modelo a",  # cost_matrix
     "números reales del experimento",  # metrics_summary_json
+    "toma una decisión",  # §3.0.5 per-model concept cell (all 3 variants)
 )
 
 
@@ -232,3 +236,77 @@ def test_imports_and_helpers_cells_remain_description_free() -> None:
     # left undescribed. Assert no markdown description was injected before them.
     assert "{toc_cell}\n# %%\nimport io" in M3_NOTEBOOK_BASE_TEMPLATE
     assert "\n\n# %%\ndef normalize_colname" in M3_NOTEBOOK_BASE_TEMPLATE
+
+
+# --- §3.0.5 per-model concept cell (the headline teaching artifact) drift locks ---
+
+_CONCEPT_HEADER_BY_VARIANT = {
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY: (
+        "¿Qué es la Regresión Logística y cómo toma una decisión?"
+    ),
+    CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY: (
+        "¿Qué es el Random Forest y cómo toma una decisión?"
+    ),
+    CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST: (
+        "¿Qué son estos modelos y cómo toma una decisión cada uno?"
+    ),
+}
+
+
+@pytest.mark.parametrize("variant", ALL_VARIANTS)
+def test_concept_cell_present_per_variant(variant: str) -> None:
+    # The §3.0.5 concept cell must render with its model-scoped header in every
+    # variant; a future gutting of the cell fails here (its "toma una decisión"
+    # phrase is also pinned in _SHARED_PHRASES).
+    assert _CONCEPT_HEADER_BY_VARIANT[variant] in _render(variant)
+
+
+def test_contrast_concept_cell_names_both_models() -> None:
+    # The contrast concept cell teaches BOTH models. Scope the assertion to the
+    # §3.0.5 cell itself — both names also appear elsewhere in the contrast prompt
+    # (pipeline headers/descriptions), so a whole-prompt check would pass even if
+    # the concept cell were deleted.
+    raw = _raw(CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST)
+    start = raw.index("# ### 3.0.5 ¿Qué son estos modelos")
+    # _markdown_prose joins wrapped comment lines so "Regresión\n# Logística"
+    # rejoins to the contiguous "Regresión Logística" (same join the phrase pins use).
+    cell = _markdown_prose(raw[start : raw.index("# %% [markdown]", start)])
+    assert "Regresión Logística" in cell
+    assert "Random Forest" in cell
+
+
+@pytest.mark.parametrize("variant", ALL_VARIANTS)
+def test_dummy_baseline_ships_single_baseline(variant: str) -> None:
+    # Post-simplification the dummy_baseline cell ships exactly ONE trivial baseline
+    # (DummyClassifier most_frequent); the confusing second `stratified` baseline was
+    # removed. Locks the simplification so a future edit cannot silently re-add it.
+    # NB: anchor on ``DummyClassifier(strategy=`` — bare ``strategy="most_frequent"``
+    # also appears in the pipeline's SimpleImputer (categorical), and ``stratified``
+    # is DummyClassifier-only so its absence is a clean signal.
+    prompt = _render(variant)
+    assert prompt.count("DummyClassifier(strategy=") == 1
+    assert 'strategy="stratified"' not in prompt
+
+
+@pytest.mark.parametrize("variant", ALL_VARIANTS)
+def test_confusion_print_bridges_to_cost_cell(variant: str) -> None:
+    # The confusion-matrix "Lectura:" print bridges to the cost cell; that sentence
+    # ("le pone precio a cada error") is only true if cost_matrix follows
+    # confusion_matrix. Lock the bridge text AND the adjacency so a future reorder
+    # can't silently make the prose false.
+    prompt = _render(variant)
+    assert "le pone precio a cada error" in prompt
+    assert prompt.index("# === SECTION:confusion_matrix ===") < prompt.index(
+        "# === SECTION:cost_matrix ==="
+    )
+
+
+def test_pipeline_interpretation_prints_present() -> None:
+    # The odds-ratio / feature-importance "Lectura:" prints are part of the teaching
+    # change; lock their presence in the applicable variants (lr names odds ratios,
+    # rf names importances, contrast has both).
+    assert "Lectura: un odds ratio" in _render(CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY)
+    assert "Lectura: la importancia" in _render(CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY)
+    contrast = _render(CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST)
+    assert "Lectura: un odds ratio" in contrast
+    assert "Lectura: la importancia" in contrast
