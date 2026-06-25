@@ -92,10 +92,24 @@ def test_flagship_auc_de_connector_is_caught() -> None:
         "AUC del 86%",  # % form, unanchored vs auc 0.72
         "precisión de 0.40",  # below tolerance of f1/auc anchors
         "recall: 0.10",
+        "coeficiente de 0.40",  # interpretability keyword (chart-unique vs M5's trimmed set)
+        "importancia de 0.05",  # interpretability keyword
+        "shap: 0.95",
     ],
 )
 def test_unanchored_metric_variants_flagged(prose: str) -> None:
     assert detect_unanchored_chart_metrics(prose, _BLOCK), prose
+
+
+def test_chart_metric_regex_keyword_divergence() -> None:
+    """Pin the DELIBERATE divergence from narrative_grounding's adjacency regex so a future edit
+    toward either regex breaks loudly: the chart detector EXCLUDES business-overloaded keywords and
+    INCLUDES the interpretability ones."""
+    block = build_computed_metrics_block({"auc": 0.72})
+    for kw in ("baseline", "dummy", "feature", "variable"):  # excluded → never flagged
+        assert detect_unanchored_chart_metrics(f"{kw} de 0.99", block) == [], kw
+    for kw in ("coeficiente", "importancia", "shap", "permutation"):  # included → flagged
+        assert detect_unanchored_chart_metrics(f"{kw} de 0.99", block), kw
 
 
 @pytest.mark.parametrize(
@@ -118,10 +132,14 @@ def test_anchored_metric_clean(prose: str) -> None:
         "precisión de la entrega del 92% en las rutas",  # 'de la' breaks; 'del 92%' has no metric kw
         "Inversión inicial de $4.5M, payback de 9.8 meses",  # pure business figures
         "atiende a 1,200 clientes",  # thousands-formatted volume
+        "precisión de 30 años de datos históricos",  # bare-int count after the 'de' connector
+        "importancia de 3 factores operativos",  # bare-int count after the 'de' connector
+        "coeficiente de 350.5 unidades",  # decimal above the >200 magnitude guard
     ],
 )
 def test_business_numbers_not_flagged_as_metrics(prose: str) -> None:
-    """Zero false positives on co-located business figures (the M5-memo FP class)."""
+    """Zero false positives on co-located business figures (the M5-memo FP class) and on bare-integer
+    business counts the widened 'de'/'del' connector could otherwise reach."""
     assert detect_unanchored_chart_metrics(prose, _BLOCK) == []
 
 
@@ -312,6 +330,16 @@ def test_node_residual_drops_only_offending(monkeypatch: pytest.MonkeyPatch) -> 
     charts = _run(_ml_ds_clf_state(), fake, monkeypatch)
     assert fake.calls == 2
     assert charts == [_CLEAN_A]  # the still-offending metric chart dropped; clean kept
+
+
+def test_node_reprompt_all_bad_falls_back_to_pass1_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Reprompt regenerates an ALL-bad set → survivors-from-candidate is empty → the wrapper falls
+    # back to pass-1 minus its violators (the safety branch that avoids needlessly emptying charts).
+    bad2 = {"id": "c2b", "title": "Otra", "notes": "cita el AUC de 0.91 del modelo"}
+    fake = _SeqStructuredLLM([[_BAD_METRIC, _CLEAN_A], [_BAD_METRIC, bad2]])
+    charts = _run(_ml_ds_clf_state(), fake, monkeypatch)
+    assert fake.calls == 2
+    assert charts == [_CLEAN_A]  # pass-1 clean chart survives; both reprompt charts dropped
 
 
 def test_node_reprompt_exception_degrades_then_drops(monkeypatch: pytest.MonkeyPatch) -> None:

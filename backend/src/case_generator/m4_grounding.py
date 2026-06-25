@@ -219,7 +219,7 @@ _CHART_MODEL_METRIC_RE = re.compile(
     r"especificidad|prevalencia|prevalence|coeficiente|coefficient|importancia|importance|"
     r"shap|permutation)"
     r"(?:\s*[=:(]\s*|\s+(?:del?\s+)?)"
-    r"(?P<value>[+-]?\d+(?:[.,]\d+)?)\s*%?"
+    r"(?P<value>[+-]?\d+(?:[.,]\d+)?)\s*(?P<pct>%)?"
 )
 
 
@@ -243,6 +243,14 @@ def detect_unanchored_chart_metrics(prose: str, metrics_block: str) -> list[str]
         if _is_thousands_formatted(raw_group):
             continue  # thousands-separator integer — a business volume, not a metric
         raw_number = raw_group.replace(",", ".")
+        # A model metric is a decimal (0.86) or a percentage (86%) — never a BARE integer. The
+        # widened "de"/"del" connector would otherwise flag business counts co-located with a metric
+        # keyword ("precisión de 30 años de datos", "importancia de 3 factores"); requiring metric
+        # shape removes that false-positive class without losing the flagship "AUC de 0.8637" (decimal)
+        # or "AUC del 86%" (percent). A bare-integer metric (e.g. a perfect "AUC de 1") is an accepted,
+        # near-zero FN — generated charts write 0.xx or xx%.
+        if "." not in raw_number and match.group("pct") is None:
+            continue
         float_value = float(raw_number)
         if float_value > 200:
             continue  # business volume — not a model metric
