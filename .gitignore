@@ -204,7 +204,8 @@ backend/.data/
 .python-version
 backend/.python-version
 skills-lock.json
-.claude/
+.claude/*
+!.claude/settings.json
 .agents/*
 !.agents/skills/
 .agents/skills/*
