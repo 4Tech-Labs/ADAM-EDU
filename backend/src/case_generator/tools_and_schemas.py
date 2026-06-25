@@ -401,15 +401,22 @@ class EDAChartSpec(BaseModel):
 
 
 class EDAChartGeneratorOutput(BaseModel):
-    """Salida del EDA Chart Generator — 3 a 5 charts según path de generación.
+    """Salida compartida de los nodos de charts — cantidad variable según el nodo/path.
 
-    Path LLM-JSON original (business y otras familias ml_ds): 3 charts.
-    Path Python-determinista (Issue #237, ml_ds + clasificación): 5 charts.
-    El cap final lo aplica el nodo `eda_chart_generator` en `graph.py`.
+    M2 EDA (`eda_chart_generator`):
+      - Path LLM-JSON original (business y otras familias ml_ds): 3 charts.
+      - Path Python-determinista (Issue #237, ml_ds + clasificación): 5 charts.
+      - El cap final lo aplica el nodo `eda_chart_generator` en `graph.py`.
+    M4 financiero (`m4_chart_generator`): 2 charts (Payback + Comparativa A/B/C); el
+      Gráfico de Sensibilidad/Tornado se retiró. La variante 3-gráficos se reactiva con el
+      kill-switch `M4_CHART_DROP_SENSITIVITY=false`.
+
+    No hay `min_length`/validador de cantidad: cada nodo gobierna su propio conteo por prompt
+    (+ backstop determinista en M4), así que el schema acepta cualquier longitud.
     """
 
     charts: list[EDAChartSpec] = Field(
-        description="Entre 3 y 5 charts estructurados para visualización (depende del path)."
+        description="Charts estructurados para visualización; la cantidad depende del nodo (M2: 3-5, M4: 2)."
     )
 
 

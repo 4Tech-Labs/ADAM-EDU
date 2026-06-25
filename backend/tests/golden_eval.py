@@ -89,6 +89,13 @@ class NodeEvalInputs:
     # future M4-narrative prompt or m4_content tier regression that reintroduces a second deployment
     # heading fails the golden gate (this is the DETERMINISTIC guarantee behind the logger-only backstop).
     m4_deployment_section_unique_ok: bool = True
+    # M4 chart set omits the retired Sensitivity/Tornado chart (both profiles). M4 emits 2 charts
+    # (Payback + Comparativa A/B/C); the tornado was orphan/highest-fabrication-risk/redundant. True
+    # (n/a) when a job carries no M4 charts. Computed via ``check_m4_charts_no_sensitivity`` (reuses
+    # the production ``m4_grounding.is_sensitivity_chart``), so a future M4-chart prompt regression
+    # that reintroduces the tornado fails the golden gate (DETERMINISTIC guarantee behind the
+    # logger-only runtime backstop).
+    m4_charts_no_sensitivity_ok: bool = True
 
 
 @dataclass
@@ -130,6 +137,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M6 teaching-note coherence failure: prose describes a module absent from the case")
     if not r.m4_deployment_section_unique_ok:
         reasons.append("M4 narrative coherence failure: duplicate deployment recommendation section")
+    if not r.m4_charts_no_sensitivity_ok:
+        reasons.append("M4 chart coherence failure: retired sensitivity/tornado chart emitted")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -244,6 +253,19 @@ def check_m4_deployment_section_unique(m4_content: str) -> bool:
     from case_generator.m4_grounding import detect_duplicate_deployment_sections
 
     return not detect_duplicate_deployment_sections(m4_content)
+
+
+def check_m4_charts_no_sensitivity(charts: list[dict]) -> bool:
+    """Pure oracle: does the M4 financial-chart set omit the retired Sensitivity/Tornado chart?
+
+    Reuses the production detector ``m4_grounding.is_sensitivity_chart`` (single source of truth), so
+    a future M4-chart prompt regression that reintroduces the tornado chart fails the golden gate.
+    Scope: every job that carries M4 charts (both profiles); an empty/absent ``charts`` list is
+    trivially True (n/a). Function-level import keeps this support module lightweight.
+    """
+    from case_generator.m4_grounding import is_sensitivity_chart
+
+    return not any(is_sensitivity_chart(c) for c in charts or [])
 
 
 def check_m5_questions_coherence(
