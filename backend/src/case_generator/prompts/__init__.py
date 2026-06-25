@@ -1191,9 +1191,10 @@ internas del modelo.
   escenario es una política de cobertura (intervenir, por ejemplo, al 10%, 25% o 50% de mayor
   probabilidad de evento × valor en riesgo). Compara valor protegido esperado, costo total de
   intervención, falsas alarmas (intervenir sin que ocurra el evento) y eventos no evitados.
-- Honestidad: usa solo cifras del caso (Exhibits, M2, M4). NO inventes probabilidades, tasas ni
-  valores; razona sobre la lógica de priorización (probabilidad de evento × valor en riesgo), no
-  sobre métricas del modelo.
+- Honestidad: usa SOLO cifras del caso (Exhibits, M2, M4) o derivadas aritméticamente de ellas.
+  Ignora cualquier sugerencia previa de generar "estimaciones basadas en benchmarks" o cifras del
+  sector/externas: están PROHIBIDAS. NO inventes probabilidades, tasas ni valores; razona sobre la
+  lógica de priorización (probabilidad de evento × valor en riesgo), no sobre métricas del modelo.
 """
 
 M5_LR_BUSINESS_BLOCK = """

@@ -178,11 +178,14 @@ El contexto incluye el análisis de impacto M4 de un modelo de clasificación
   domina en qué dimensión, reforzando que no existe solución perfecta."
 
 # Your Boundaries
-- Los números de los gráficos DEBEN coincidir con las proyecciones del {m4_content}.
-- Usar métricas de {computed_metrics_block} como anchor cuando los gráficos citen
-  AUC, F1, precisión o recall para justificar proyecciones de beneficio.
-- Si {m4_content} no tiene números suficientes, generar estimaciones conservadoras
-  y documentar en `notes`: "Valores estimados basados en benchmarks de {industria}."
+- Los números de los gráficos DEBEN coincidir con las proyecciones del {m4_content}. Usa SOLO
+  cifras presentes en {m4_content} o en el Exhibit 1 ({anexo_financiero}), o derivadas
+  aritméticamente de ellas (p. ej. flujo mensual = anual / 12, acumulado = suma). Si una serie no
+  tiene cifra en el caso, omítela o exprésala de forma cualitativa; NUNCA inventes valores ni los
+  justifiques con "benchmarks", "estimaciones del sector" o cifras externas al caso.
+- Cita una métrica del modelo (AUC, F1, precisión, recall) SOLO si proviene EXACTAMENTE del bloque
+  «Métricas verificadas del modelo (M3 ejecutado)» ({computed_metrics_block}); si ese bloque declara
+  que no hay métricas computadas, NO menciones ninguna métrica del modelo.
 - `library`: siempre `"plotly"`.
 - `source`: `"Análisis Financiero — {case_id}"`.
 - **Idioma de títulos y etiquetas: {output_language}**
