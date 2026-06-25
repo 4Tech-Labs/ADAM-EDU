@@ -41,14 +41,14 @@ describe("DashboardHeader", () => {
         });
     });
 
-    it("renders the brand, teacher identity, and notification affordance", () => {
+    it("renders the brand and teacher identity", () => {
         renderWithProviders(<DashboardHeader />);
 
         expect(screen.getByText("ADAM")).toBeTruthy();
         expect(screen.getByText("Diseñador de Casos")).toBeTruthy();
         expect(screen.getByText("Julio César Paz")).toBeTruthy();
         expect(screen.getByText("Portal Docente")).toBeTruthy();
-        expect(screen.getByLabelText("Notificaciones")).toBeTruthy();
+        expect(screen.queryByLabelText("Notificaciones")).toBeNull();
         expect(screen.getByLabelText("Iniciales de Julio César Paz")).toHaveTextContent("JC");
         expect(screen.getByRole("button", { name: "Cerrar sesión" })).toBeTruthy();
     });
@@ -103,9 +103,9 @@ describe("DashboardHeader", () => {
         expect(signOut).toHaveBeenCalledTimes(1);
     });
 
-    it("renders the notification dot as a decorative element", () => {
+    it("does not render the notification dot while notifications are hidden", () => {
         const { container } = renderWithProviders(<DashboardHeader />);
 
-        expect(container.querySelector("[aria-hidden].bg-red-500")).toBeTruthy();
+        expect(container.querySelector("[aria-hidden].bg-red-500")).toBeNull();
     });
 });

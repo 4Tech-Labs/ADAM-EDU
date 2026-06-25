@@ -77,6 +77,7 @@ describe("StudentUserHeader", () => {
         expect(screen.getByText("Portal Estudiante")).toBeTruthy();
         expect(screen.getByText("Portal Académico de Casos")).toBeTruthy();
         expect(screen.getByLabelText("Iniciales de Mateo Vargas")).toHaveTextContent("MV");
+        expect(screen.queryByLabelText("Notificaciones")).toBeNull();
     });
 
     it("falls back to default identity data when the actor is missing", () => {
