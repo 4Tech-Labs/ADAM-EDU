@@ -169,6 +169,15 @@ class Settings(BaseSettings):
     # Kill-switch: set M4_DEPLOYMENT_DEDUP=false to skip the detector entirely (no log, no cost;
     # instant env-only revert, no redeploy).
     m4_deployment_dedup: bool = True
+    # M4 financial charts: drop the Sensitivity/Tornado chart, leaving 2 charts (Payback +
+    # Comparativa A/B/C). When true (default), `m4_chart_generator` uses the 2-chart prompts AND
+    # runs the deterministic `drop_sensitivity_charts` backstop over the generated charts (removes a
+    # residual sensitivity chart the LLM might emit anyway). The tornado was an orphan chart (no §4.x
+    # narrative section / no M4 question), the highest fabrication risk (ungrounded ±20% swings), and
+    # redundant with the Payback chart. Kill-switch: set M4_CHART_DROP_SENSITIVITY=false to restore
+    # the prior 3-chart behavior byte-identically — the node selects the *_LEGACY 3-chart prompts and
+    # skips the backstop (instant env-only revert, no redeploy).
+    m4_chart_drop_sensitivity: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

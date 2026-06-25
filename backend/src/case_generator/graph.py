@@ -137,8 +137,11 @@ from case_generator.prompts import (
     M4_BUSINESS_PROMPT_CLASSIFICATION,
     M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_GENERATOR_PROMPT,
+    M4_CHART_GENERATOR_PROMPT_LEGACY,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION,
+    M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY,
     M4_CHARTS_PROMPT_BY_FAMILY,
+    M4_CHARTS_PROMPT_BY_FAMILY_LEGACY,
     M5_PROMPT_BY_FAMILY,
     M5_CONTENT_GENERATOR_PROMPT,
     M5_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
@@ -186,7 +189,10 @@ from case_generator.m3_grounding import (
 )
 from case_generator.m5_grounding import validate_m5_questions_coherence
 from case_generator.m6_grounding import log_out_of_roster_mentions
-from case_generator.m4_grounding import log_duplicate_deployment_sections
+from case_generator.m4_grounding import (
+    drop_sensitivity_charts,
+    log_duplicate_deployment_sections,
+)
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
     _bounded_diagnostic,
@@ -7817,16 +7823,45 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "computed_metrics_block": build_computed_metrics_block(state.get("m3_metrics_summary")),
         })
 
-        prompt = _resolve_family_prompt(state, M4_CHARTS_PROMPT_BY_FAMILY, M4_CHART_GENERATOR_PROMPT)
+        # M4-chart-trim: versión vigente = 2 gráficos (Payback + Comparativa A/B/C); el Gráfico de
+        # Sensibilidad (Tornado) se retiró. El kill-switch M4_CHART_DROP_SENSITIVITY=false revierte a
+        # los prompts LEGACY (3 gráficos) Y desactiva el backstop → comportamiento byte-idéntico al
+        # previo, sin redeploy.
+        use_legacy_charts = not settings.m4_chart_drop_sensitivity
+        charts_by_family = (
+            M4_CHARTS_PROMPT_BY_FAMILY_LEGACY if use_legacy_charts else M4_CHARTS_PROMPT_BY_FAMILY
+        )
+        default_chart_prompt = (
+            M4_CHART_GENERATOR_PROMPT_LEGACY if use_legacy_charts else M4_CHART_GENERATOR_PROMPT
+        )
+        business_chart_prompt = (
+            M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY
+            if use_legacy_charts
+            else M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
+        )
+
+        prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
         # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
         # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
-        prompt = _maybe_business_classification_prompt(
-            state, prompt, M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
-        )
+        prompt = _maybe_business_classification_prompt(state, prompt, business_chart_prompt)
         result: EDAChartGeneratorOutput = llm.with_structured_output(
             EDAChartGeneratorOutput
         ).invoke(prompt.format(**context))
         charts = [c.model_dump() for c in result.charts]
+        # Backstop determinista (solo en el camino vigente): elimina cualquier gráfico de
+        # sensibilidad/tornado residual que el LLM emita pese al prompt de 2 gráficos. INNER try para
+        # que un fallo del backstop NUNCA vacíe los charts ni caiga al except externo (que devuelve []).
+        if not use_legacy_charts:
+            try:
+                charts, dropped = drop_sensitivity_charts(charts)
+                if dropped:
+                    logger.warning(
+                        "[m4_chart_generator] dropped %d residual sensitivity chart(s)",
+                        dropped,
+                        extra={"node": "m4_chart_generator", "dropped": dropped},
+                    )
+            except Exception:  # pragma: no cover - defensive; never fail/empty a job
+                logger.exception("[m4_chart_generator] sensitivity-drop backstop failed")
         print(f"[m4_chart_generator] {len(charts)} charts generados")
         return {"m4_charts": charts, "current_agent": "m4_chart_generator"}
     except Exception as e:

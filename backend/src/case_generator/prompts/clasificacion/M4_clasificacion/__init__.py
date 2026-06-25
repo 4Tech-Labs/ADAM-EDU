@@ -19,10 +19,12 @@ questions.py  M4_QUESTIONS_PROMPT_CLASSIFICATION
                 {computed_metrics_block} for grounded evaluation questions.
 
 charts.py     M4_CHART_PROMPT_CLASSIFICATION
-                Classification-specific M4 financial charts.
-                Tornado diagram includes ML-model variables (retraining cost,
-                drift rate); Scenario comparison adapts to algorithm_mode
-                (single vs contrast).
+                Classification-specific M4 financial charts. Conjunto vigente:
+                2 gráficos (Payback + Comparativa de Escenarios, que adapta el
+                algorithm_mode single vs contrast). El Gráfico de Sensibilidad
+                (Tornado) se retiró; la variante 3-gráficos se conserva en
+                M4_CHART_PROMPT_CLASSIFICATION_LEGACY (kill-switch
+                M4_CHART_DROP_SENSITIVITY=false).
 
 Usage
 -----
@@ -44,6 +46,7 @@ Relationship with parent packages
 
 from case_generator.prompts.clasificacion.M4_clasificacion.charts import (
     M4_CHART_PROMPT_CLASSIFICATION,
+    M4_CHART_PROMPT_CLASSIFICATION_LEGACY,
 )
 from case_generator.prompts.clasificacion.M4_clasificacion.narrative import (
     M4_NARRATIVE_PROMPT_CLASSIFICATION,
@@ -62,4 +65,5 @@ __all__ = [
     "M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT",
     "M4_QUESTIONS_PROMPT_CLASSIFICATION",
     "M4_CHART_PROMPT_CLASSIFICATION",
+    "M4_CHART_PROMPT_CLASSIFICATION_LEGACY",
 ]
