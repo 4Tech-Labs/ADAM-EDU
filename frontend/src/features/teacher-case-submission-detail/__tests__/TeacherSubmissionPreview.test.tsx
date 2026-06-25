@@ -352,8 +352,8 @@ describe("TeacherSubmissionPreview", () => {
         renderPreview();
 
         const mobileBar = await screen.findByTestId("teacher-submission-preview-mobile-modules");
-        // business + harvard_only => m1 renders as "Case Reader", not the raw "m1" id.
-        expect(within(mobileBar).getByRole("button", { name: "Case Reader" })).toBeTruthy();
+        // business + harvard_only => m1 renders as "El Caso y el Dilema", not the raw "m1" id.
+        expect(within(mobileBar).getByRole("button", { name: "El Caso y el Dilema" })).toBeTruthy();
         expect(within(mobileBar).queryByRole("button", { name: "m1" })).toBeNull();
     });
 

@@ -58,18 +58,18 @@ M4_VERDICT_MLDS = "Desplegar / No desplegar / Desplegar con restricciones"
 # Canonical bilingual labels — copied verbatim from getModuleConfig (caseViewerConfig.ts).
 # A drift test asserts these stay equal to the TS literals.
 _LABELS_BUSINESS: dict[str, str] = {
-    "m1": "Case Reader — Comprensión Gerencial",
-    "m2": "Insight Analyst — Interpretación Visual",
-    "m3": "Decision Evidence Reviewer — Evaluación de Evidencia",
-    "m4": "Business Impact Evaluator — Impacto Comercial",
-    "m5": "Executive Recommendation Writer — Recomendación Ejecutiva",
+    "m1": "El Caso y el Dilema — Comprende la situación gerencial",
+    "m2": "Lectura de los Datos — Interpreta la evidencia visual",
+    "m3": "Auditoría de la Evidencia — Evalúa qué tan sólida es la evidencia",
+    "m4": "Impacto en el Negocio — Cuantifica el valor y los trade-offs",
+    "m5": "Recomendación Ejecutiva — Redacta el memorándum a la junta",
 }
 _LABELS_MLDS: dict[str, str] = {
-    "m1": "Problem Framer — Formulación Analítica",
-    "m2": "Data Analyst — Exploración de Datos",
-    "m3": "Experiment Validator — Validación Experimental",
-    "m4": "Value & Impact Translator — Traducción a Valor",
-    "m5": "Technical-Executive Writer — Informe Técnico-Ejecutivo",
+    "m1": "Planteamiento del Problema — Traduce el reto a un problema de datos",
+    "m2": "Exploración de Datos — Analiza el dataset y sus patrones",
+    "m3": "Diseño del Experimento — Valida el modelo con rigor experimental",
+    "m4": "Impacto y Valor — Convierte el modelo en valor de negocio",
+    "m5": "Decisión Ejecutiva — Redacta el memorándum final a la dirección",
 }
 
 _EDA_CASE_TYPE = "harvard_with_eda"
