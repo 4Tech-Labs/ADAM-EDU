@@ -72,7 +72,7 @@ describe("CasePreview lazy modules", () => {
 
         expect(screen.getByTestId("m1-module")).toBeTruthy();
 
-        fireEvent.click(screen.getByText("Data Analyst"));
+        fireEvent.click(screen.getByText("Exploración de Datos"));
 
         expect(screen.getByTestId("case-preview-module-loading")).toBeTruthy();
         expect(screen.getByText("Cargando módulo...")).toBeTruthy();
