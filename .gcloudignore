@@ -1,0 +1,25 @@
+# Controls what `gcloud builds submit` uploads as the build context.
+.git
+**/node_modules
+**/.venv
+.venv
+**/__pycache__
+**/*.pyc
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/.DS_Store
+.claude
+# top-level secrets file (defense-in-depth; none exists today)
+.env
+.env.*
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+frontend/dist
+*.log
+test_results.txt
+frontend/test_results.txt

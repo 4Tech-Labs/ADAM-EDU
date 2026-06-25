@@ -1,0 +1,10 @@
+# pnpm 11 reads dependency build-script permissions from here. npm used to run
+# every dependency's install script; pnpm blocks them by default for security
+# and asks us to decide explicitly. esbuild and @swc/core need theirs for Vite
+# and the SWC React plugin to work; msw's is harmless and keeps test parity.
+# es5-ext's script is only a console banner, so it stays disabled.
+allowBuilds:
+  '@swc/core': true
+  es5-ext: false
+  esbuild: true
+  msw: true
