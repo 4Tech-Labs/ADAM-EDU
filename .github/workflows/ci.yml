@@ -177,7 +177,7 @@ jobs:
       # inside the SPA bundle), so it is safe to bake at build time here.
       VITE_SUPABASE_URL: https://aoauxftghxujeduutbev.supabase.co
       VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFvYXV4ZnRnaHh1amVkdXV0YmV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNjI0NDcsImV4cCI6MjA5MDczODQ0N30.rnnLFHZesrWHhgYTvXFQ-UmnKx6kS-VsQ1Fx6BYkZz0
-      VITE_AUTH_CALLBACK_URL: https://public-api-1039937714231.us-west1.run.app/app/auth/callback
+      VITE_AUTH_CALLBACK_URL: https://adamcampus.com/app/auth/callback
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -220,7 +220,7 @@ jobs:
             --max-instances=4 \
             --no-cpu-throttling \
             --memory=2Gi --cpu=2 --timeout=3600 \
-            --set-env-vars="ENVIRONMENT=production,SUPABASE_URL=https://aoauxftghxujeduutbev.supabase.co,CORS_ALLOWED_ORIGIN=https://public-api-1039937714231.us-west1.run.app" \
+            --set-env-vars="ENVIRONMENT=production,SUPABASE_URL=https://aoauxftghxujeduutbev.supabase.co,CORS_ALLOWED_ORIGIN=https://adamcampus.com" \
             --set-secrets="DATABASE_URL=adam-database-url:latest,GEMINI_API_KEY=adam-gemini-api-key:latest,SUPABASE_SERVICE_ROLE_KEY=adam-supabase-service-role-key:latest"
 
       # Advance the floating :latest tag ONLY after a successful deploy, so :latest
