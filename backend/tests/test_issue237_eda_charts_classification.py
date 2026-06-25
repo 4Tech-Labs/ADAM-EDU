@@ -206,6 +206,95 @@ def test_missingness_honest_text_off_is_byte_identical(df_binary: pd.DataFrame) 
     assert "annotations" not in mh["layout"]
 
 
+def test_missingness_counts_over_full_dataset_when_sampled() -> None:
+    """Regresión: con un dataset > 500 filas el heatmap se SUBMUESTREA a 500 para el
+    render, pero el conteo de nulos del subtítulo/descripción se reporta sobre el dataset
+    COMPLETO (igual que `df.isnull().sum()` del notebook, que lee `dataset.csv` =
+    `doc7_dataset` entero). Replica el caso ml_ds+clf churn reportado: 600 filas, 38 + 27
+    = 65 celdas faltantes. Antes del fix el gráfico contaba sobre las 500 muestreadas y
+    divergía del notebook (p. ej. 57 vs 65)."""
+    rng = np.random.default_rng(11)
+    n = 600  # > _MISSINGNESS_SAMPLE_ROWS (500): se dispara el submuestreo de render
+    df = pd.DataFrame(
+        {
+            "customer_ltv": rng.normal(2000, 500, size=n),
+            "engagement_score": rng.uniform(0.1, 0.95, size=n),
+            "revenue": rng.normal(50_000, 10_000, size=n),
+            "churn_flag": rng.choice([0, 1], size=n, p=[0.7, 0.3]),
+        }
+    )
+    df.loc[:37, "customer_ltv"] = np.nan  # 38 nulos (loc con slice es inclusivo)
+    df.loc[:26, "engagement_score"] = np.nan  # 27 nulos
+    expected = int(df.drop(columns=["churn_flag"]).isna().values.sum())
+    assert expected == 65  # belt-and-suspenders: el setup es exactamente el caso reportado
+
+    charts = generate_classification_eda_charts(df, "churn_flag", CONTRACT)
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+
+    # (1) El conteo es sobre el dataset completo (65 / 600), NO sobre la muestra de 500.
+    blob = f"{mh['subtitle']} {mh['description']}"
+    assert str(expected) in blob  # "65" — el número del notebook, no el de la muestra
+    assert str(n) in blob  # "600" registros
+
+    # (2) El heatmap SIGUE submuestreado a 500 columnas (payload liviano).
+    trace = mh["traces"][0]
+    assert len(trace["x"]) == 500
+    assert all(len(row) == 500 for row in trace["z"])
+
+    # (3) El texto declara la muestra para que "600 vs 500" no se lea como inconsistencia.
+    assert "heatmap muestra" in mh["subtitle"]
+
+
+def test_missingness_complete_dataset_sampled() -> None:
+    """Caso ml_ds+clf de DOMINIO (de-churned): 600 filas, 0 nulos. El conteo completo
+    confirma 'COMPLETO' (no puede rotular completo por azar de la muestra) y el subtítulo
+    declara la muestra del heatmap. Cubre la rama completa+muestreada que el fixture de 200
+    filas (`df_binary`) nunca ejerce (sampled=False)."""
+    rng = np.random.default_rng(5)
+    n = 600  # > 500 → muestreo de render activo, pero sin nulos que contar
+    df = pd.DataFrame(
+        {
+            "feature_a": rng.normal(0, 1, size=n),
+            "feature_b": rng.integers(0, 100, size=n),
+            "target_flag": rng.choice([0, 1], size=n, p=[0.6, 0.4]),
+        }
+    )
+    charts = generate_classification_eda_charts(df, "target_flag", CONTRACT)
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+
+    assert "sin valores faltantes" in mh["subtitle"]
+    assert str(n) in mh["subtitle"]  # "600 registros", no "500"
+    assert "heatmap muestra" in mh["subtitle"]  # declara la muestra del render
+    assert "COMPLETO" in mh["description"]
+    # Decisión "completo" tomada sobre el df completo, no la muestra.
+    anns = mh["layout"].get("annotations") or []
+    assert any("Sin valores faltantes" in (a.get("text", "") or "") for a in anns)
+    # Render sigue submuestreado.
+    assert len(mh["traces"][0]["x"]) == 500
+
+
+def test_missingness_no_sample_clause_at_exact_boundary() -> None:
+    """Frontera n_rows == _MISSINGNESS_SAMPLE_ROWS (500): NO hay submuestreo
+    (`sampled = n_rows > n_sample` es False), así que el subtítulo no debe declarar
+    muestra y el conteo es trivialmente el completo. Blinda un futuro off-by-one (`>=`)."""
+    rng = np.random.default_rng(3)
+    n = 500  # exactamente el tope → sample == df, sin muestreo
+    df = pd.DataFrame(
+        {
+            "amount": rng.normal(100, 20, size=n),
+            "fraud_flag": rng.choice([0, 1], size=n, p=[0.8, 0.2]),
+        }
+    )
+    df.loc[:9, "amount"] = np.nan  # 10 nulos
+    charts = generate_classification_eda_charts(df, "fraud_flag", CONTRACT)
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+
+    assert "heatmap muestra" not in mh["subtitle"]  # no se muestreó en la frontera
+    assert "10 celdas faltantes" in mh["subtitle"]
+    assert "500 registros" in mh["subtitle"]
+    assert len(mh["traces"][0]["x"]) == 500  # todas las filas, sin submuestreo
+
+
 # ─────────────────────────────────────────────────────────
 # Boundary del LLM stub (annotate-only path)
 # ─────────────────────────────────────────────────────────
