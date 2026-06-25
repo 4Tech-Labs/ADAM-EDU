@@ -187,6 +187,18 @@ class Settings(BaseSettings):
     # as the LLM produced them); the prompt hardening is a separate one-way improvement not behind this
     # switch (instant env-only revert of the guard, no redeploy).
     m4_chart_grounding: bool = True
+    # M4 benchmark-fabrication guard (Issue #436, both profiles, ALL families). The M4 prompts used to
+    # ORDER the LLM to fabricate figures when data was missing ("Valores estimados basados en benchmarks
+    # de {industria}"). The prompt fix (M4_CONTENT_GENERATOR_PROMPT / M4_CHART_GENERATOR_PROMPT now
+    # degrade to QUALITATIVE) is a one-way improvement and is NOT behind this switch. When true (default),
+    # `m4_content_generator` / `m4_chart_generator` ALSO run a best-effort, LOGGER-ONLY backstop
+    # (`log_narrative_benchmark_fabrication` / `log_chart_benchmark_fabrication`, reusing the zero-FP
+    # `detect_benchmark_fabrication`) that emits a structured `logger.warning` if a residual fabrication
+    # tell slips through — it NEVER reprompts, mutates, or fails a job. Set M4_FABRICATION_GUARD=false to
+    # skip the runtime backstop (no log, no cost); the prompt fix stays either way (env-only revert of the
+    # guard, no redeploy). The deterministic guarantee on the frozen golden set lives in
+    # `tests/golden_eval` (`check_m4_narrative_no_fabrication` / `check_m4_charts_no_fabrication`).
+    m4_fabrication_guard: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 
