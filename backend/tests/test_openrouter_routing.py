@@ -20,7 +20,7 @@ import pytest
 from pydantic import BaseModel
 
 import case_generator.graph as g
-from case_generator.cost_metrics import _MINIMAX_M3_RATES, _rates_for_model
+from case_generator.cost_metrics import _GLM_RATES, _MINIMAX_M3_RATES, _rates_for_model
 
 
 @pytest.fixture(autouse=True)
@@ -247,6 +247,12 @@ def test_minimax_exact_key_prices() -> None:
 
 def test_minimax_provider_suffixed_slug_prices_via_substring() -> None:
     assert _rates_for_model("minimax/minimax-m3:together") is _MINIMAX_M3_RATES
+
+
+def test_glm_exact_and_versioned_slug_prices() -> None:
+    # OpenRouter returns a versioned slug (e.g. "z-ai/glm-5.2-20260616"); both must price.
+    assert _rates_for_model("z-ai/glm-5.2") is _GLM_RATES
+    assert _rates_for_model("z-ai/glm-5.2-20260616") is _GLM_RATES
 
 
 # ── tolerant env parsing (malformed env must not crash import) ──
