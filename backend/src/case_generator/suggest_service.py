@@ -19,13 +19,15 @@ from typing import Literal, Optional, cast
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, ConfigDict, Field
 
+from shared.database import settings
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ALGORITHM CATALOG — Issue #233 (single source of truth)
 # Replaces the legacy ALGORITHM_TAXONOMY here + ALGORITHM_REGISTRY in graph.py
-# with a single declarative list. 4 families × max 2 algorithms (baseline +
-# optional challenger). Business profile sees only baselines (4 items);
-# ml_ds sees both tiers (8 items).
+# with a single declarative list. 3 active families × max 2 algorithms (baseline +
+# optional challenger). The forward-facing per-profile item counts are defined by
+# get_algorithm_catalog — reduced by default via ALGORITHM_CATALOG_REDUCED.
 #
 # Why so small: the LLM that generates the M3 notebook is more reliable when it
 # reasons over a short, well-known list. Each (family) maps to ONE specialized
@@ -345,13 +347,47 @@ BUSINESS_PROBLEM_TYPES = list(FAMILY_LABELS.keys())
 ML_DS_PROBLEM_TYPES = list(FAMILY_LABELS.keys())
 
 
+def _forward_catalog_hidden(entry: dict[str, object]) -> bool:
+    """True if ``entry`` is hidden from the forward-facing catalog (form selector +
+    suggester taxonomy + intake validation) under the ALGORITHM_CATALOG_REDUCED
+    kill-switch.
+
+    Hides the entire ``regresion`` family and the ``clustering`` challenger
+    (DBSCAN); keeps classification (both tiers) and the clustering baseline
+    (K-Means). Entries stay in ALGORITHM_CATALOG so ``family_of`` /
+    ``get_dispatch_meta`` / ``resolve_legacy_family`` / ``classify_tier`` keep
+    resolving historical jobs unchanged. The clustering-challenger clause is a
+    no-op for the business profile (DBSCAN is already
+    ``profile_visibility=["ml_ds"]``); kept for clarity / forward robustness.
+    """
+    family = cast(str, entry["family"])
+    if family == "regresion":
+        return True
+    if family == "clustering" and cast(str, entry["tier"]) == "challenger":
+        return True
+    return False
+
+
+def _catalog_reduced_enabled() -> bool:
+    """Read the kill-switch fresh per call.
+
+    Read by the catalog/technique helpers and passed as a cache key — NEVER inside
+    the ``lru_cache``'d body — so a monkeypatch of
+    ``settings.algorithm_catalog_reduced`` takes effect without a ``cache_clear()``.
+    """
+    return bool(settings.algorithm_catalog_reduced)
+
+
 def _technique_items(profile: str, family: str) -> list[dict[str, str]]:
     """Return ``[{name, tier}]`` for a (profile, family) pair — used by the suggester prompt."""
+    reduced = _catalog_reduced_enabled()
     out: list[dict[str, str]] = []
     for e in ALGORITHM_CATALOG:
         if e["family"] != family:
             continue
         if profile not in cast(list[str], e["profile_visibility"]):
+            continue
+        if reduced and _forward_catalog_hidden(e):
             continue
         out.append({"name": cast(str, e["name"]), "tier": cast(str, e["tier"])})
     return out
@@ -382,19 +418,32 @@ def classify_tier(technique: str) -> AlgorithmTier:
     return "baseline"
 
 
-@functools.lru_cache(maxsize=8)
 def get_algorithm_catalog(profile: str, case_type: str) -> dict[str, object]:
     """Return the canonical algorithm catalog for a (profile, case_type) pair.
 
     Shape: ``{"items": [{"name", "family", "family_label", "tier", "learning_type"}, ...]}``.
 
-    - ``profile=business``: only baseline-tier items (3 algorithms — one per active family).
-    - ``profile=ml_ds``: full catalog (6 algorithms = 3 active families x 2 tiers).
+    With the ALGORITHM_CATALOG_REDUCED kill-switch ON (default) the forward-facing
+    view hides the ``regresion`` family and the ``clustering`` challenger (DBSCAN):
+    - ``profile=business``: 2 baseline items (Logistic Regression, K-Means).
+    - ``profile=ml_ds``: 3 items (Logistic Regression, Random Forest, K-Means).
     - ``case_type=harvard_only``: empty list (no algorithms picked when no EDA).
 
+    With the kill-switch OFF the full catalog is returned (business 3 / ml_ds 6).
     ``serie_temporal`` is retired from the active catalog; it resolves only via the
     legacy family resolver for historical job replay and is never returned here.
+
+    The kill-switch is read here (not inside the cached helper) and passed as a
+    cache key, so toggling it is honored without a ``cache_clear()``.
     """
+    return _get_algorithm_catalog_cached(profile, case_type, _catalog_reduced_enabled())
+
+
+@functools.lru_cache(maxsize=16)
+def _get_algorithm_catalog_cached(
+    profile: str, case_type: str, reduced: bool
+) -> dict[str, object]:
+    """Cached builder for :func:`get_algorithm_catalog`, keyed on the reduced flag."""
     if profile not in {"business", "ml_ds"}:
         raise ValueError(f"Invalid profile: {profile!r}")
     if case_type not in {"harvard_only", "harvard_with_eda"}:
@@ -405,6 +454,8 @@ def get_algorithm_catalog(profile: str, case_type: str) -> dict[str, object]:
     items: list[dict[str, str]] = []
     for entry in ALGORITHM_CATALOG:
         if profile not in cast(list[str], entry["profile_visibility"]):
+            continue
+        if reduced and _forward_catalog_hidden(entry):
             continue
         items.append({
             "name": cast(str, entry["name"]),
