@@ -210,6 +210,16 @@ class Settings(BaseSettings):
     # always stay USD; the lens reframes only the value side. Charts: the lens applies only on the
     # 2-chart path (M4_CHART_DROP_SENSITIVITY=true); the 3-chart tornado revert skips it.
     impact_lens: bool = True
+    # Impact Lens — architect side (Issue #437 / ADR 0003, Fase 2). Separate from `impact_lens`
+    # (the M4 side) for GRANULAR revert: this gates ONLY the architect. When true (default),
+    # `_assemble_architect_prompt` appends the brace-free ARCHITECT_IMPACT_LENS_BLOCK so the
+    # architect emits `value_model` (its more-informed lens, the D-A hybrid secondary signal that
+    # refines the intake-resolved lens) and frames the A/B/C option-superiority dimension by the
+    # lens's value metric (not always "mayor ROI"). DD3: Exhibit 1 stays a USD P&L; only the value
+    # side is reframed. Set IMPACT_LENS_ARCHITECT=false → `lens_on=False` → the architect prompt is
+    # byte-identical to pre-#437 (the existing _MLDS_ARCHITECT_PROMPT_SHA256 still matches) and the
+    # lens refinement is skipped (the intake lens stands). Instant env-only revert, no redeploy.
+    impact_lens_architect: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

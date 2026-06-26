@@ -15,7 +15,10 @@ VARIABLES GLOBALES NUEVAS AÑADIDAS:
   {industry_cagr_range} → CAGR histórico del sector (ej: "5-8%"). Default: "5-8%"
 """
 
-from case_generator.prompts._architect_base import CASE_ARCHITECT_PROMPT
+from case_generator.prompts._architect_base import (
+    ARCHITECT_IMPACT_LENS_BLOCK,
+    CASE_ARCHITECT_PROMPT,
+)
 from case_generator.prompts._questions_base import CASE_QUESTIONS_PROMPT
 from case_generator.prompts._shared import (
     M3_EXPERIMENT_ENGINEER_PROMPT,

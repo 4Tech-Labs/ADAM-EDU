@@ -282,7 +282,7 @@ def _patch_architect(
     monkeypatch.setattr(
         graph_module, "_build_base_context", lambda state: {"student_profile": profile}
     )
-    monkeypatch.setattr(graph_module, "_assemble_architect_prompt", lambda ctx: "")
+    monkeypatch.setattr(graph_module, "_assemble_architect_prompt", lambda ctx, **k: "")
     monkeypatch.setattr(
         graph_module,
         "_invoke_case_architect_with_contract",

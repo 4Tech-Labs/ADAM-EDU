@@ -9,6 +9,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from case_generator.impact_lens import DEFAULT_IMPACT_LENS, normalize_impact_lens
+
 
 # USD-only product (Issue #370): el producto opera exclusivamente en dólares. Este sigue siendo
 # el único allowlist (single source) — ahora con un solo código. `_normalize_currency` COERCE
@@ -263,6 +265,50 @@ class BusinessCostMatrix(BaseModel):
 DatasetSchemaRequired.model_rebuild()
 
 
+class ValueModel(BaseModel):
+    """The case's value frame (Impact Lens) emitted by the architect (ADR 0003 Fase 2, #437).
+
+    OPTIONAL refinement of the intake-resolved lens (decision D-A hybrid: the architect read the
+    full teacher input, so its lens is a more-informed secondary signal than the intake-dropdown
+    default). Prompt-side only: NOT student-facing, NOT in case_sanitization. Costs stay USD (DD3);
+    this reframes only the VALUE side. Coerce-never-reject: an invalid/absent lens coerces to the
+    default so a stray LLM label never nullifies the architect output (mirrors
+    ``BusinessCostMatrix._normalize_currency``).
+    """
+
+    lens: str = Field(
+        default=DEFAULT_IMPACT_LENS,
+        description=(
+            "Marco de valor del caso, uno de: financial_roi, operational_efficiency, "
+            "clinical_outcomes, learning_outcomes. Elige el que mejor refleje el DOMINIO del caso "
+            "(salud→clinical_outcomes, educación→learning_outcomes, manufactura/logística→"
+            "operational_efficiency, comercial/financiero→financial_roi). Valor inválido se coerce "
+            "al default (no se rechaza)."
+        ),
+    )
+    primary_metric_name: str = Field(
+        default="",
+        description=(
+            "La métrica de VALOR primaria del caso en lenguaje gerencial (p.ej. 'ROI', "
+            "'readmisiones evitadas', 'retención de estudiantes', 'tasa de defecto'). El lado del "
+            "COSTO sigue en USD."
+        ),
+    )
+    kpi_rows: list[str] = Field(
+        default_factory=list,
+        description=(
+            "2-3 etiquetas de KPI de VALOR para el veredicto de M4 (§4.5), acordes a `lens`. "
+            "Vacío permitido (M4 cae al catálogo de la lente)."
+        ),
+    )
+
+    @field_validator("lens")
+    @classmethod
+    def _coerce_lens(cls, v: str) -> str:
+        # Coerce-never-reject (mirror _normalize_currency): unknown/empty lens → default.
+        return normalize_impact_lens(v)
+
+
 # ═══════════════════════════════════════════════════════
 # DOCUMENTO 1 — Caso de Negocio (3 agentes)
 # ═══════════════════════════════════════════════════════
@@ -343,6 +389,17 @@ class CaseArchitectOutput(BaseModel):
             "Contrato que declara variable objetivo y features que el dilema requiere "
             "del dataset. Obligatorio para perfil 'ml_ds'. Consumido por schema_designer, "
             "data_validator, m3_notebook_generator y prompts EDA."
+        ),
+    )
+    # Issue #437 (ADR 0003 Fase 2) — Impact Lens value frame. Optional; the architect's more-
+    # informed refinement of the intake-resolved lens (D-A hybrid). Prompt-side only (NOT canonical
+    # / student-facing). Populated only when the lens-aware architect prompt block is active
+    # (settings.impact_lens_architect); None otherwise → the intake-resolved lens stands.
+    value_model: Optional[ValueModel] = Field(
+        default=None,
+        description=(
+            "Marco de valor del caso (Impact Lens): {lens, primary_metric_name, kpi_rows}. "
+            "Reencuadra solo el lado del VALOR; los costos siguen en USD (DD3)."
         ),
     )
 

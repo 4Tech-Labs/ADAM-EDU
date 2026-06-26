@@ -94,6 +94,7 @@ from case_generator.configuration import (
     M3_NOTEBOOK_MAX_ATTEMPTS,
 )
 from case_generator.prompts import (
+    ARCHITECT_IMPACT_LENS_BLOCK,
     CASE_ARCHITECT_PROMPT,
     CASE_ARCHITECT_PROMPT_BY_FAMILY,
     M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK,
@@ -174,6 +175,7 @@ from case_generator.suggest_service import (
 )
 from case_generator.impact_lens import (
     DEFAULT_IMPACT_LENS,
+    IMPACT_LENS_KEYS,
     build_impact_lens_hint,
     normalize_impact_lens,
 )
@@ -933,8 +935,13 @@ _BUSINESS_CLF_PERMISSIVE_SUBSTITUTIONS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _assemble_architect_prompt(context: dict) -> str:
+def _assemble_architect_prompt(context: dict, *, lens_on: bool = False) -> str:
     """Selecciona el prompt M1 por familia y lo formatea con el contexto.
+
+    ``lens_on`` (Issue #437 Fase 2) appends the brace-free ``ARCHITECT_IMPACT_LENS_BLOCK``
+    (value_model emission + lens-aware option dimension). Default ``False`` so the existing SHA
+    snapshot / differential tests keep asserting the byte-identical base+anchor assembly; the
+    production caller passes ``settings.impact_lens_architect``.
 
     Punto único de ensamblado del prompt del architect. El gate por perfil (#301) vive AQUÍ,
     de modo que el prompt ensamblado para ml_ds queda byte-idéntico (el snapshot de Item 4 /
@@ -957,6 +964,13 @@ def _assemble_architect_prompt(context: dict) -> str:
         for old, new in _BUSINESS_CLF_PERMISSIVE_SUBSTITUTIONS:
             template = template.replace(old, new)
         template = template + M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK
+    # Issue #437 (ADR 0003, Fase 2) — append the Impact Lens block when enabled (value_model
+    # emission + lens-aware option dimension; Exhibit 1 stays a USD P&L per DD3). Purely additive +
+    # brace-free → lens_on=False is byte-identical to pre-#437 (the existing SHA still matches that
+    # path); lens_on=True has its own frozen hash. Default False so callers/tests that omit it (incl.
+    # the existing SHA snapshot) keep the byte-identical assembly.
+    if lens_on:
+        template = template + ARCHITECT_IMPACT_LENS_BLOCK
     return template.format(**context)
 
 
@@ -992,7 +1006,9 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         }, per_field_limit=800, total_limit=2500),
     })
 
-    prompt = _assemble_architect_prompt(context)
+    # Issue #437 Fase 2 — append the Impact Lens block (value_model emission + lens-aware option
+    # dimension) when enabled. lens_on=False is byte-identical to pre-#437 (DD5).
+    prompt = _assemble_architect_prompt(context, lens_on=settings.impact_lens_architect)
 
     try:
         result, profile_resolved, family_resolved, pregunta_eje = (
@@ -1099,8 +1115,23 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             contract=contract_dict,
         )
 
+        # Issue #437 Fase 2 — persist the architect's value_model (prompt-side only; NOT canonical
+        # nor student-facing). It is the D-A hybrid REFINEMENT carrier: _resolve_impact_lens prefers
+        # value_model["lens"] over the intake lens. Gated by the kill-switch (None when off → the
+        # intake lens stands → byte-identical M4 behavior). We DELIBERATELY do NOT write
+        # state["impact_lens"] here: on a resumed job state_input re-injects the intake lens and the
+        # last-write-wins channel would clobber any refinement back to intake (the architect is
+        # skip-short-circuited and never re-emits it). value_model is NOT in state_input, so the
+        # durable checkpoint value SURVIVES resume — making it the resume-robust refinement source.
+        value_model_dict = (
+            result.value_model.model_dump()
+            if (result.value_model is not None and settings.impact_lens_architect)
+            else None
+        )
+
         return {
             "current_agent": "case_architect",
+            "value_model": value_model_dict,
             "titulo": result.titulo,
             "industria": result.industria,
             # Issue #377 — relabel any non-USD currency to USD at the source (structured-output
@@ -6007,16 +6038,29 @@ def _resolve_generation_focus(
 def _resolve_impact_lens(state: ADAMState) -> str:
     """Return the case's resolved Impact Lens (value frame for M4) — Issue #437.
 
-    DD1 single source of truth: the lens is resolved ONCE at intake
-    (``core/authoring.py`` ``state_input``) from the constrained industry label and
-    stored in ``state["impact_lens"]``; every M4 node READS it here, never re-derives
-    (re-deriving from ``state["industria"]`` would parse the architect's free noun and
-    silently default every non-financial case to ``financial_roi`` — Issue #437 F1).
+    DD1 single source of truth. Precedence (D-A hybrid):
+      1. ``state["value_model"]["lens"]`` — the architect's more-informed refinement (Fase 2). It
+         is WRITTEN only when the architect lens block is enabled (``impact_lens_architect`` at
+         case_architect time), so on the normal flow its presence encodes the kill-switch. (Edge:
+         if the switch is flipped OFF and a job that already persisted value_model is RESUMED,
+         case_architect is skip-short-circuited and never clears it, so the refined lens still
+         wins — benign, since a persisted refinement beats the intake default and it never raises.)
+         It is **resume-robust**: ``value_model`` is NOT re-injected by ``state_input`` on resume,
+         so the durable checkpoint value survives — unlike ``impact_lens``, which ``state_input``
+         re-injects with the intake value on every attempt (last-write-wins), clobbering any
+         refinement back to intake on a resumed job.
+      2. ``state["impact_lens"]`` — the intake-resolved lens (Fase 1, from the constrained industry
+         label; never re-derived from the architect's free-noun ``industria``).
+      3. ``DEFAULT_IMPACT_LENS``.
 
-    Total + safe: a missing/legacy/unknown value coerces to ``DEFAULT_IMPACT_LENS``.
-    Fase 2/3 will layer the architect ``value_model`` + the teacher override into this
-    same helper (the hybrid precedence of decision D-A).
+    Total + safe: any missing/legacy/unknown value coerces to the default; never raises. Every M4
+    node READS this (never re-derives), so all consume the SAME lens even on a resumed job.
     """
+    vm = state.get("value_model")
+    if isinstance(vm, dict):
+        vm_lens = vm.get("lens")
+        if vm_lens in IMPACT_LENS_KEYS:
+            return normalize_impact_lens(vm_lens)
     return normalize_impact_lens(state.get("impact_lens", DEFAULT_IMPACT_LENS))
 
 

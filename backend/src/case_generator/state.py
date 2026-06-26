@@ -75,9 +75,13 @@ class ADAMState(CanonicalInputState):
     horas: int
     industria: str
     # Issue #437 (ADR 0003) — the resolved Impact Lens (value frame for M4). Resolved
-    # ONCE at intake from the constrained industry label and consumed by the M4 nodes;
-    # NotRequired so legacy/resumed states default to "financial_roi" via _resolve_impact_lens.
+    # ONCE at intake from the constrained industry label, REFINED by case_architect's value_model
+    # (Fase 2, D-A hybrid), and consumed by the M4 nodes; NotRequired so legacy/resumed states
+    # default to "financial_roi" via _resolve_impact_lens.
     impact_lens: NotRequired[str]
+    # Issue #437 Fase 2 — the architect's value_model {lens, primary_metric_name, kpi_rows};
+    # prompt-side only (NOT canonical / student-facing). None when the architect lens block is off.
+    value_model: NotRequired[dict]
     descripcion: str
     algoritmos: list[str]    # técnicas ML/analíticas seleccionadas
     algorithm_mode: NotRequired[str]  # "single" | "contrast" — selección docente Issue #230
