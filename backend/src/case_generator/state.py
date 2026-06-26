@@ -74,6 +74,10 @@ class ADAMState(CanonicalInputState):
     nivel: str   # "pregrado" | "posgrado"
     horas: int
     industria: str
+    # Issue #437 (ADR 0003) — the resolved Impact Lens (value frame for M4). Resolved
+    # ONCE at intake from the constrained industry label and consumed by the M4 nodes;
+    # NotRequired so legacy/resumed states default to "financial_roi" via _resolve_impact_lens.
+    impact_lens: NotRequired[str]
     descripcion: str
     algoritmos: list[str]    # técnicas ML/analíticas seleccionadas
     algorithm_mode: NotRequired[str]  # "single" | "contrast" — selección docente Issue #230

@@ -22,8 +22,21 @@ from case_generator.prompts._shared import (
     M3_EXPERIMENT_PROMPT,
     M3_EXPERIMENT_QUESTIONS_PROMPT,
     M4_CONTENT_GENERATOR_PROMPT,
+    M4_CONTENT_GENERATOR_PROMPT_NEUTRAL,
     M5_CONTENT_GENERATOR_PROMPT,
     M5_QUESTIONS_GENERATOR_PROMPT,
+)
+# Issue #437 (ADR 0003, Fase 1) — NEUTRAL clf twins imported directly from the leaf
+# modules (the financial twins still come through the clasificacion hub below).
+from case_generator.prompts.clasificacion.M4_clasificacion.charts import (
+    M4_CHART_PROMPT_CLASSIFICATION_NEUTRAL,
+)
+from case_generator.prompts.clasificacion.M4_clasificacion.narrative import (
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT_NEUTRAL,
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_NEUTRAL,
+)
+from case_generator.prompts.clasificacion.M4_clasificacion.questions import (
+    M4_QUESTIONS_PROMPT_CLASSIFICATION_NEUTRAL,
 )
 from case_generator.prompts._writer_base import CASE_WRITER_PROMPT
 from case_generator.prompts.clasificacion import (
@@ -996,6 +1009,96 @@ Industria: {industria}
 case_id: {case_id} | student_profile: {student_profile} | output_language: {output_language}
 """
 
+# ── Issue #437 (ADR 0003, Fase 1) — NEUTRAL generic chart prompt ───────────────
+# Value-locked parts neutralized (identity, Gráfico 2 metric set, source); "EXACTAMENTE 2"
+# and the "NUNCA inventes" honesty boundary preserved verbatim. The Gráfico-2 VALUE metrics
+# come from the concatenated «MARCO DE VALOR (IMPACT LENS)» hint. Selected by
+# m4_chart_generator when settings.impact_lens is on (default, 2-chart path); the financial
+# twin above is the byte-identical kill-switch-off path. Costs stay USD (DD3).
+M4_CHART_GENERATOR_PROMPT_NEUTRAL = """\
+# Your Identity
+Eres el Visualizador de Impacto de ADAM, un analista que traduce proyecciones
+de impacto en gráficos ejecutivos de calidad boardroom.
+
+# Your Mission
+Generar EXACTAMENTE 2 gráficos de impacto Plotly.js para el Módulo 4.
+Estos gráficos permiten al estudiante (y al profesor) VER el impacto
+cuantitativo de las opciones A, B y C del caso.
+
+# How You Work (Workflow)
+1. **Lee M4 Content:** Extrae las proyecciones numéricas de cada opción del {m4_content}.
+2. **Lee Exhibits:** Usa los datos base del {anexo_financiero} como punto de partida.
+3. **Lee el MARCO DE VALOR** (bloque al final): define la métrica de valor primaria del caso.
+4. **Construye 2 gráficos** siguiendo la estructura obligatoria (ver abajo).
+5. **Verifica:** Los números de los gráficos DEBEN coincidir con los del texto M4.
+
+# Estructura OBLIGATORIA de los 2 gráficos
+
+## Gráfico 1: Flujo de Caja y Punto de Equilibrio (Payback)
+- **chart_type:** `"waterfall"` (business) o `"bar"` + `"line"` composed (ml_ds)
+- **Concepto:** Mostrar inversión inicial (negativa) → flujos netos por período → punto
+  donde el acumulado cruza cero ("Valle de la Muerte"). Costos en USD; el "retorno" es el
+  VALOR del MARCO DE VALOR monetizado.
+- **Traces:**
+  - business: waterfall con measure ["absolute", "relative", ...,"total"]
+  - ml_ds: bar (flujo neto por período) + line (acumulado)
+- **Datos:** Extraer inversión de Exhibit 1, proyectar flujos netos según la opción
+  recomendada en M4 content. Usar el horizonte temporal del caso.
+- **academic_rationale:** "El payback period visualiza cuándo la inversión se recupera,
+  dato crítico para la decisión del comité directivo."
+
+## Gráfico 2: Comparativa de Escenarios (A vs B vs C)
+- **chart_type:** `"bar"` agrupado
+- **Concepto:** Comparar las 3 opciones (A, B, C) en 3-4 métricas clave de VALOR.
+- **Traces:** 3 traces (Opción A, B, C), una barra por métrica.
+- **Categories:** usa las métricas de VALOR del MARCO DE VALOR (bloque al final) más,
+  opcionalmente, un Score de Riesgo (1-5). Normaliza valores monetarios (USD) a escala 0-100
+  para que sean comparables visualmente.
+- **academic_rationale:** "La comparativa permite al estudiante ver en una sola vista
+  qué opción domina en qué dimensión, reforzando que no existe solución perfecta."
+
+# Your Boundaries
+- Los números de los gráficos DEBEN coincidir con las proyecciones del {m4_content}.
+  Si M4 dice "Opción A genera un valor de X", el gráfico DEBE mostrar X para Opción A.
+- Usa SOLO cifras presentes en {m4_content} o en el Exhibit 1 ({anexo_financiero}), o derivadas
+  aritméticamente de ellas (p. ej. flujo mensual = anual / 12, acumulado = suma). Si {m4_content}
+  no tiene números suficientes, omite esa serie o exprésala de forma CUALITATIVA; NUNCA inventes
+  valores ni los justifiques con "benchmarks", "estimaciones del sector" o cifras externas al caso.
+- `library`: siempre `"plotly"`.
+- `source`: `"Análisis de Impacto — {case_id}"`.
+- **Idioma de títulos y etiquetas: {output_language}**
+
+# JSON Schema (idéntico a M2 — campos OBLIGATORIOS):
+{{
+  "id": "m4_chart_01",
+  "title": "string (orientado al insight de valor)",
+  "subtitle": "string",
+  "library": "plotly",
+  "chart_type": "waterfall|bar|line",
+  "traces": [{{ "type": "...", "x": [...], "y": [...], "name": "..." }}],
+  "layout": {{ "xaxis": {{"title": "..."}}, "yaxis": {{"title": "..."}}, "showlegend": true, "template": "plotly_white" }},
+  "source": "Análisis de Impacto — {case_id}",
+  "notes": "string (insight + método de cálculo)",
+  "academic_rationale": "string"
+}}
+
+# Perfil del estudiante: {student_profile}
+- Si es "business":
+  Títulos en lenguaje ejecutivo ("Punto de Equilibrio: Mes 14").
+  Sin jerga técnica de modelos.
+- Si es "ml_ds":
+  Gráfico 1 puede incluir costo de infraestructura ML (cloud, GPUs) en los flujos.
+  Títulos técnicos ("Recuperación del Pipeline ML vs Inversión en Infra").
+
+# Context
+Análisis de impacto M4: {m4_content}
+Exhibit 1 (financiero): {anexo_financiero}
+Industria: {industria}
+
+# Metadatos del sistema
+case_id: {case_id} | student_profile: {student_profile} | output_language: {output_language}
+"""
+
 M4_QUESTIONS_GENERATOR_PROMPT = """\
 # Your Identity
 Eres el Evaluador del Módulo 4 en ADAM, especializado en preguntas que conectan análisis
@@ -1040,6 +1143,68 @@ conecta hallazgos con impacto real y sopesa trade-offs ejecutivos.
   "business" → Comparar las 2 opciones con mayor ROI usando los cálculos del M4.
   "ml_ds" → Beneficio proyectado del modelo (§4.2) vs costo de deploy + operación anual.
   ¿El ROI justifica la inversión dado el veredicto de M3?
+- **P3 (synthesis — ref: 4.4):**
+  Cómo mitigar el mayor riesgo de implementación identificado en §4.4.
+  El estudiante debe proponer una acción concreta, no solo nombrarlo.
+
+# Context
+{m4_content}
+Exhibit 1: {anexo_financiero}
+Nombre empresa: {nombre_empresa}
+
+# Metadatos del sistema
+case_id: {case_id} | student_profile: {student_profile} | output_language: {output_language}
+"""
+
+# ── Issue #437 (ADR 0003, Fase 1) — NEUTRAL generic questions prompt ───────────
+# H1 fix: P1's "línea final de ingresos/costos" + P2's "¿El ROI justifica?" reframed to
+# the case's VALUE frame (MARCO DE VALOR). "EXACTAMENTE 3", m4_section_ref and the A/B/C
+# requirement are preserved. Selected by m4_questions_generator when settings.impact_lens
+# is on (default); the financial twin above is the byte-identical kill-switch-off path.
+M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL = """\
+# Your Identity
+Eres el Evaluador del Módulo 4 en ADAM, especializado en preguntas que conectan análisis
+técnico con el VALOR del caso y trade-offs ejecutivos.
+
+# Your Mission
+Generar EXACTAMENTE 3 preguntas usando el JSON schema provisto, que evalúen si el estudiante
+conecta hallazgos con impacto real de VALOR (según el MARCO DE VALOR) y sopesa trade-offs ejecutivos.
+
+# JSON Schema Obligatorio (claves EXACTAS)
+[
+  {{
+    "numero": 1,
+    "titulo": "string corto (≤8 palabras)",
+    "enunciado": "string (pregunta con métricas numéricas y opciones A/B/C explícitas)",
+    "solucion_esperada": "string (máx 60 palabras)",
+    "bloom_level": "analysis|evaluation|synthesis",
+    "m4_section_ref": "4.1|4.2|4.3|4.4|4.5"
+  }},
+  ...
+]
+
+# How You Work (Workflow)
+1. **Analiza:** Lee la Evaluación de Impacto (M4) completa.
+2. **Diseña:** Fuerza al estudiante a elegir y sacrificar. No hay soluciones perfectas.
+3. **Redacta:** `solucion_esperada` máx 60 palabras. Nombrar la opción recomendada
+   por el M4 y el razonamiento esperado del estudiante para llegar a ella.
+
+# Your Boundaries
+- Solo JSON schema. Las preguntas DEBEN citar métricas numéricas del M4 y opciones A/B/C.
+- **Idioma de salida: {output_language}**
+
+# Perfil del estudiante: {student_profile}
+- Si es "business": valor del MARCO DE VALOR, viabilidad operativa, trade-off entre opciones.
+- Si es "ml_ds": Costo infra (USD) vs valor del modelo, MLOps, fallos algorítmicos en producción.
+
+# Estructura de las 3 preguntas
+- **P1 (analysis — ref: 4.1 o 4.2):**
+  Cómo un hallazgo específico del M2 (nombrado con métrica exacta) impacta
+  el VALOR del caso (según el MARCO DE VALOR) de {nombre_empresa}.
+- **P2 (evaluation — ref: 4.2):**
+  "business" → Comparar las 2 opciones con mayor valor usando los cálculos del M4.
+  "ml_ds" → Valor proyectado del modelo (§4.2) vs costo de deploy + operación anual (USD).
+  ¿El valor proyectado justifica la inversión dado el veredicto de M3?
 - **P3 (synthesis — ref: 4.4):**
   Cómo mitigar el mayor riesgo de implementación identificado en §4.4.
   El estudiante debe proponer una acción concreta, no solo nombrarlo.
@@ -1290,6 +1455,41 @@ M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION = (
 M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION = (
     M5_QUESTIONS_GENERATOR_PROMPT + M5_QUESTIONS_LR_BUSINESS_BLOCK
 )
+
+# ── Issue #437 (ADR 0003, Fase 1) — NEUTRAL twins of the M4 dispatch tables ─────
+# Same composition as the financial tables above but on the NEUTRAL bases. The
+# LR-business blocks are REUSED unchanged (probability × value-at-risk framing is
+# value-neutral). m4_{content,questions,chart}_generator select the *_NEUTRAL set
+# when settings.impact_lens is on (the default); the financial tables are the
+# byte-identical kill-switch-off path. M5 is untouched (Fase 3).
+M4_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL = (
+    M4_CONTENT_GENERATOR_PROMPT_NEUTRAL + M4_LR_BUSINESS_BLOCK
+)
+M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL = (
+    M4_CHART_GENERATOR_PROMPT_NEUTRAL + M4_CHART_LR_BUSINESS_BLOCK
+)
+M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL = (
+    M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL + M4_QUESTIONS_LR_BUSINESS_BLOCK
+)
+
+M4_PROMPT_BY_FAMILY_NEUTRAL: dict[str, str] = {
+    "clasificacion": M4_NARRATIVE_PROMPT_CLASSIFICATION_NEUTRAL,
+    "regresion": M4_CONTENT_GENERATOR_PROMPT_NEUTRAL,
+    "clustering": M4_CONTENT_GENERATOR_PROMPT_NEUTRAL,
+    "serie_temporal": M4_CONTENT_GENERATOR_PROMPT_NEUTRAL,
+}
+M4_QUESTIONS_PROMPT_BY_FAMILY_NEUTRAL: dict[str, str] = {
+    "clasificacion": M4_QUESTIONS_PROMPT_CLASSIFICATION_NEUTRAL,
+    "regresion": M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL,
+    "clustering": M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL,
+    "serie_temporal": M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL,
+}
+M4_CHARTS_PROMPT_BY_FAMILY_NEUTRAL: dict[str, str] = {
+    "clasificacion": M4_CHART_PROMPT_CLASSIFICATION_NEUTRAL,
+    "regresion": M4_CHART_GENERATOR_PROMPT_NEUTRAL,
+    "clustering": M4_CHART_GENERATOR_PROMPT_NEUTRAL,
+    "serie_temporal": M4_CHART_GENERATOR_PROMPT_NEUTRAL,
+}
 
 # ── SCHEMA_DESIGNER_PROMPT_BY_FAMILY — dispatch table consumed by
 # graph.py::schema_designer.  Keys MUST match values returned by
