@@ -6040,11 +6040,15 @@ def _resolve_impact_lens(state: ADAMState) -> str:
 
     DD1 single source of truth. Precedence (D-A hybrid):
       1. ``state["value_model"]["lens"]`` — the architect's more-informed refinement (Fase 2). It
-         is set ONLY when the architect lens block is enabled (``impact_lens_architect``), so its
-         presence already encodes the kill-switch. It is **resume-robust**: ``value_model`` is NOT
-         re-injected by ``state_input`` on resume, so the durable checkpoint value survives — unlike
-         ``impact_lens``, which ``state_input`` re-injects with the intake value on every attempt
-         (last-write-wins), clobbering any refinement back to intake on a resumed job.
+         is WRITTEN only when the architect lens block is enabled (``impact_lens_architect`` at
+         case_architect time), so on the normal flow its presence encodes the kill-switch. (Edge:
+         if the switch is flipped OFF and a job that already persisted value_model is RESUMED,
+         case_architect is skip-short-circuited and never clears it, so the refined lens still
+         wins — benign, since a persisted refinement beats the intake default and it never raises.)
+         It is **resume-robust**: ``value_model`` is NOT re-injected by ``state_input`` on resume,
+         so the durable checkpoint value survives — unlike ``impact_lens``, which ``state_input``
+         re-injects with the intake value on every attempt (last-write-wins), clobbering any
+         refinement back to intake on a resumed job.
       2. ``state["impact_lens"]`` — the intake-resolved lens (Fase 1, from the constrained industry
          label; never re-derived from the architect's free-noun ``industria``).
       3. ``DEFAULT_IMPACT_LENS``.
