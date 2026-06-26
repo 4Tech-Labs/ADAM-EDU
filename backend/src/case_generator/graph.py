@@ -191,6 +191,7 @@ from case_generator.narrative_grounding import (
     contextualize_grounding_violations,
     detect_unselected_model_mentions,
     has_metric_anchors,
+    log_raw_identifier_leak,
     validate_narrative_grounding,
 )
 from case_generator.m1_grounding import (
@@ -8161,6 +8162,15 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             log_narrative_benchmark_fabrication(
                 m4, node="m4_content_generator", case_id=state.get("case_id")
             )
+        # Issue #437 follow-up — logger-only backstop: warn if a machine ``word__x`` identifier
+        # (e.g. an sklearn ColumnTransformer ``num__col`` feature name) survived in the narrative.
+        # The deterministic strip in ``build_computed_metrics_block`` is the cure; this is the net
+        # for any other injection path. ALL profiles/families. Best-effort — never reprompts,
+        # mutates, or fails the job (the wrapper swallows all exceptions internally).
+        if settings.case_identifier_leak_guard:
+            log_raw_identifier_leak(
+                m4, node="m4_content_generator", case_id=state.get("case_id")
+            )
         return {
             "m4_content": m4,
             "current_agent": "m4_content_generator",
@@ -8548,6 +8558,14 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             variant=variant,
         )
         print(f"[m5_content_generator] {len(m5)} chars")
+        # Issue #437 follow-up — logger-only backstop (mirror of m4_content_generator): warn if a
+        # machine ``word__x`` identifier survived in the M5 narrative. M5 shares the same
+        # ``computed_metrics_block`` as M4, so the deterministic strip already cures the known path;
+        # this is the net. Best-effort — never reprompts, mutates, or fails the job.
+        if settings.case_identifier_leak_guard:
+            log_raw_identifier_leak(
+                m5, node="m5_content_generator", case_id=state.get("case_id")
+            )
         return {
             "m5_content": m5,
             "current_agent": "m5_content_generator",

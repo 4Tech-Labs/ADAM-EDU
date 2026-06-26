@@ -227,6 +227,18 @@ class Settings(BaseSettings):
     # byte-identical to pre-#437 (the existing _MLDS_ARCHITECT_PROMPT_SHA256 still matches) and the
     # lens refinement is skipped (the intake lens stands). Instant env-only revert, no redeploy.
     impact_lens_architect: bool = True
+    # Raw-identifier leak guard (Issue #437 follow-up, ALL profiles/families). sklearn
+    # ColumnTransformer feature names (`num__col`/`cat__col`/…) used to leak from the M3
+    # `top_features` into the M4/M5 narrative prose ("...Data Drift sobre num__payment_delay_days").
+    # The DETERMINISTIC fix is `_strip_transformer_prefix` inside `build_computed_metrics_block`
+    # (always on, like the `target_col` strip — a transformer prefix has no legitimate prose use).
+    # When true (default), `m4_content_generator` / `m5_content_generator` ALSO run a best-effort,
+    # LOGGER-ONLY backstop (`detect_raw_identifier_leak`) that emits a structured `logger.warning`
+    # if any residual `<word>__<x>` token survives in the generated prose — it NEVER reprompts,
+    # mutates, or fails a job (mirrors `log_narrative_benchmark_fabrication`). Set
+    # CASE_IDENTIFIER_LEAK_GUARD=false to skip the runtime backstop (no log, no cost); the
+    # deterministic strip stays either way (env-only revert of the backstop, no redeploy).
+    case_identifier_leak_guard: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

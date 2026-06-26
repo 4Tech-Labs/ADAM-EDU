@@ -122,6 +122,13 @@ class NodeEvalInputs:
     # ``check_architect_value_model_lens_valid``; gate-protects a case_architect downgrade that
     # would emit a raw, un-normalized value_model. (Semantic lens↔domain coherence is live-eval.)
     architect_value_model_lens_valid_ok: bool = True
+    # The M4/M5 narrative carries no machine ``word__x`` identifier (e.g. an sklearn
+    # ColumnTransformer ``num__col`` feature name) leaked into prose (Issue #437 follow-up). True
+    # (n/a) when the narrative is empty/absent. Computed via ``check_no_raw_identifier_leak`` (reuses
+    # the production ``narrative_grounding.detect_raw_identifier_leak``), so a future M4/M5 downgrade
+    # that reintroduces the leak fails the gate. The DETERMINISTIC cure is the strip in
+    # ``build_computed_metrics_block``; this gate-protects it on the frozen golden set.
+    narrative_no_raw_identifier_ok: bool = True
 
 
 @dataclass
@@ -171,6 +178,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M4 narrative coherence failure: invented benchmark figure in narrative prose")
     if not r.m4_lens_kpi_coherence_ok:
         reasons.append("M4 lens coherence failure: non-financial lens emitted forced ROI/NPV KPI rows")
+    if not r.narrative_no_raw_identifier_ok:
+        reasons.append("narrative coherence failure: raw machine identifier (word__x) leaked into M4/M5 prose")
     if not r.architect_value_model_lens_valid_ok:
         reasons.append("architect value_model failure: emitted an unknown/missing Impact Lens key")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
@@ -328,6 +337,19 @@ def check_m4_narrative_no_fabrication(narrative: str | None) -> bool:
     from case_generator.m4_grounding import detect_benchmark_fabrication
 
     return not detect_benchmark_fabrication(narrative)
+
+
+def check_no_raw_identifier_leak(narrative: str | None) -> bool:
+    """Pure oracle (Issue #437 follow-up): the narrative carries no machine ``word__x`` identifier.
+
+    Reuses the production detector ``narrative_grounding.detect_raw_identifier_leak`` (single source
+    of truth), so a future M4/M5 downgrade that reintroduces an sklearn ColumnTransformer feature
+    name (``num__col``/``cat__col``) — or any ``<word>__<x>`` internal identifier — into prose fails
+    the golden gate. Scope: M4 + M5 narratives (both profiles, all families); empty/absent → True.
+    """
+    from case_generator.narrative_grounding import detect_raw_identifier_leak
+
+    return not detect_raw_identifier_leak(narrative or "")
 
 
 def check_m4_lens_kpi_coherence(narrative: str | None, *, lens: str | None) -> bool:

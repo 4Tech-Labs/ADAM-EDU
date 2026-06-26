@@ -8,6 +8,7 @@ numbers not anchored to that block.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 import unicodedata
@@ -19,6 +20,8 @@ from case_generator.prompts import (
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
 )
+
+logger = logging.getLogger(__name__)
 
 NARRATIVE_GROUNDING_WARNING = (
     "m3_metrics_summary ausente — grounding deshabilitado para este job"
@@ -375,6 +378,69 @@ def detect_unselected_model_mentions(prose: str, variant: str | None) -> list[st
     return violations
 
 
+# Issue #437 follow-up — defense-in-depth raw-identifier leak guard for narrative
+# prose. sklearn ColumnTransformer feature names (``num__col``/``cat__col``/…) and
+# any other ``<word>__<x>`` machine identifier must never reach teacher/student
+# prose. The double-underscore shape is the high-precision sklearn tell; ordinary
+# snake_case (``payment_delay_days``) has single underscores and never matches, so
+# legitimate column references are not flagged. Lowercase-anchored start mirrors
+# ``_strip_transformer_prefix``. The deterministic strip in
+# ``build_computed_metrics_block`` is the GUARANTEE; this is the logger-only net
+# for any OTHER path that might inject such a token.
+_RAW_IDENTIFIER_RE = re.compile(r"\b[a-z][a-z0-9]*__\w+\b")
+
+
+def detect_raw_identifier_leak(prose: str) -> list[str]:
+    """Return ``RAW_IDENTIFIER: <match>`` violations for ``word__x`` tokens in prose.
+
+    Defense-in-depth (mirrors ``detect_unselected_model_mentions``): flags the
+    sklearn ``ColumnTransformer`` double-underscore feature-name shape — and any
+    similar ``<word>__<x>`` internal identifier — that leaked into narrative prose.
+    Pure + total; matches are deduplicated. Empty / no match → ``[]``.
+    """
+    if not prose:
+        return []
+    seen: set[str] = set()
+    violations: list[str] = []
+    for match in _RAW_IDENTIFIER_RE.finditer(prose):
+        text = match.group(0)
+        if text in seen:
+            continue
+        seen.add(text)
+        violations.append(f"RAW_IDENTIFIER: {text}")
+    return violations
+
+
+def log_raw_identifier_leak(
+    prose: str | None,
+    *,
+    node: str,
+    case_id: str | None = "unknown",
+) -> None:
+    """Best-effort, logger-only: warn when a machine ``word__x`` identifier survives in prose.
+
+    The CURE is the deterministic ``_strip_transformer_prefix`` inside
+    ``build_computed_metrics_block``; this is the observability NET for any OTHER injection
+    path. Mirrors ``m4_grounding.log_narrative_benchmark_fabrication`` exactly: LOGGER-ONLY,
+    never reprompts, mutates, or fails a job; emits no PII (only the enumerated tokens). Never
+    raises (it runs INSIDE the node's try whose outer except degrades the module to an error
+    placeholder; a throw here must never trip that).
+    """
+    try:
+        violations = detect_raw_identifier_leak(prose or "")
+        if violations:
+            logger.warning(
+                "[narrative_grounding] raw identifier leak in narrative prose",
+                extra={
+                    "node": node,
+                    "case_id": case_id or "unknown",
+                    "violations": violations,
+                },
+            )
+    except Exception:  # pragma: no cover - defensive; never fail a job
+        pass
+
+
 def _metrics_block_declares_modeling_skipped(metrics_block: str) -> bool:
     for line in metrics_block.splitlines():
         key, separator, value = line.partition(":")
@@ -657,7 +723,22 @@ def _sanitize_key(value: str) -> str:
     return value.strip("_") or "metric"
 
 
+# sklearn ``ColumnTransformer`` emits feature names as ``<transformer>__<col>``
+# (``num__``, ``cat__``, ``remainder__``); nested pipelines can stack the prefixes
+# (``preprocess__num__col``). These are notebook-internal identifiers that must
+# never reach narrative prose. Strip the leading transformer segment(s) but never
+# empty the name. Lowercase-anchored so a real business column (which never starts
+# with ``lowercase__``) is left untouched → ~zero false positives.
+_TRANSFORMER_PREFIX_RE = re.compile(r"^(?:[a-z][a-z0-9]*__)+")
+
+
+def _strip_transformer_prefix(name: str) -> str:
+    """Remove leading sklearn ColumnTransformer prefixes (``num__``/``cat__``/…)."""
+    stripped = _TRANSFORMER_PREFIX_RE.sub("", name)
+    return stripped or name
+
+
 def _sanitize_label(value: str) -> str:
-    value = value.strip()[:80]
+    value = _strip_transformer_prefix(value.strip())[:80]
     value = re.sub(r"[^A-Za-z0-9_ .\-/]", "", value)
     return value or "unavailable"
