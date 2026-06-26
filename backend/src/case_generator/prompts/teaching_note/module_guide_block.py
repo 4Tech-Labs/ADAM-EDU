@@ -78,7 +78,7 @@ _CLASSIFICATION_FAMILY = "clasificacion"
 # Issue #437 Fase 3 — the M4 module synopsis value frame per Impact Lens. CURATED + CURRENCY-TOKEN-FREE
 # (no ``$``/``€``/ISO adjacent to a figure — ``test_block_byte_identical_through_usd_enforce`` requires
 # the composed ``enforce_usd_currency`` to be a no-op here, so we do NOT reuse ``IMPACT_LENS_CATALOG``'s
-# ``kpi_rows``, which carry ``$/outcome``). ``financial_roi``/None reproduces today's exact tokens →
+# ``kpi_rows``, which carry currency tokens like ``(USD)``). ``financial_roi``/None reproduces today's exact tokens →
 # byte-identical for every case without a non-financial lens. Keys mirror ``IMPACT_LENS_KEYS`` (a drift
 # test asserts the set match). ``(value_noun, mlds_examples)``.
 _M4_VALUE_FRAME_BY_LENS: dict[str, tuple[str, str]] = {

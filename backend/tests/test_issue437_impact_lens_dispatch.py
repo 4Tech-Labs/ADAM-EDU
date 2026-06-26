@@ -70,7 +70,7 @@ def test_neutral_content_plus_hint_format_smoke() -> None:
     hint = build_impact_lens_hint(IMPACT_LENS_CLINICAL_OUTCOMES)
     assert "{" not in hint and "}" not in hint
     rendered = (M4_CONTENT_GENERATOR_PROMPT_NEUTRAL + hint).format(**ctx)
-    assert "MARCO DE VALOR" in rendered and "Costo-efectividad" in rendered
+    assert "MARCO DE VALOR" in rendered and "Costo por evento evitado" in rendered
 
 
 # ── 3. DD5 — the kill-switch-off path uses the UNCHANGED financial constants ────
@@ -165,7 +165,7 @@ def test_golden_oracle_m4_lens_kpi_coherence() -> None:
     )
 
     forced = "### 4.5 Recomendación\n| ROI proyectado | 35% |\n| NPV estimado | $1M |"
-    clinical_ok = "### 4.5 Recomendación\n| Outcomes adversos evitados | 120 |"
+    clinical_ok = "### 4.5 Recomendación\n| Eventos adversos evitados | 120 |"
     # non-financial lens + forced financial rows → fails
     assert check_m4_lens_kpi_coherence(forced, lens=IMPACT_LENS_CLINICAL_OUTCOMES) is False
     # non-financial lens + clinical rows → passes

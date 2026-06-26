@@ -55,6 +55,30 @@ def test_catalog_has_exactly_four_lenses_with_required_fields() -> None:
         assert all(isinstance(r, str) and r for r in rows)
 
 
+def test_non_financial_kpi_labels_are_natural_language_not_token_shorthand() -> None:
+    # Issue #437 follow-up — the §4.5 KPI labels are forced VERBATIM into the rendered table
+    # (build_impact_lens_hint: "usar EXACTAMENTE estas filas"), so the catalog string IS the
+    # student-facing label. Forbid spreadsheet/token shorthand (Δ delta, "$/" cost-per slug) in
+    # every NON-financial lens row + primary metric. financial_roi keeps its own ROI/Payback/NPV
+    # phrasing. This makes a tokenized label impossible to reintroduce without breaking CI.
+    for lens, spec in IMPACT_LENS_CATALOG.items():
+        if lens == IMPACT_LENS_FINANCIAL_ROI:
+            continue
+        fields = [str(spec["primary_metric_name"]), *[str(r) for r in spec["kpi_rows"]]]
+        for text in fields:
+            assert "Δ" not in text, f"{lens}: delta shorthand in {text!r}"
+            assert "$/" not in text, f"{lens}: '$/' cost-per slug in {text!r}"
+
+
+def test_learning_lens_uses_clarified_kpi_labels() -> None:
+    # The exact labels the user flagged are gone; the natural-language replacements are present.
+    rows = [str(r) for r in IMPACT_LENS_CATALOG[IMPACT_LENS_LEARNING_OUTCOMES]["kpi_rows"]]
+    assert "Δ retención/graduación (%)" not in rows
+    assert "$/estudiante-retenido (USD)" not in rows
+    assert "Costo por estudiante retenido (USD)" in rows
+    assert "Cambio en retención/graduación (puntos %)" in rows
+
+
 @pytest.mark.parametrize("value,label,expected", _INDUSTRIAS_OPTIONS)
 def test_every_dropdown_value_and_label_maps(value: str, label: str, expected: str) -> None:
     # F2 drift lock — both the value and the persisted LABEL resolve to the lens.
@@ -96,7 +120,7 @@ def test_financial_hint_reproduces_roi_payback_npv() -> None:
 
 def test_non_financial_hint_drops_roi_npv() -> None:
     clinical = build_impact_lens_hint(IMPACT_LENS_CLINICAL_OUTCOMES)
-    assert "Costo-efectividad" in clinical
+    assert "Costo por evento evitado" in clinical
     assert "ROI proyectado" not in clinical and "NPV estimado" not in clinical
     learning = build_impact_lens_hint(IMPACT_LENS_LEARNING_OUTCOMES)
     assert "retención" in learning.lower()
@@ -131,7 +155,7 @@ def test_m5_hint_does_not_mention_section_45() -> None:
 
 def test_m5_hint_carries_lens_metric() -> None:
     clinical = build_impact_lens_m5_hint(IMPACT_LENS_CLINICAL_OUTCOMES)
-    assert "Costo-efectividad" in clinical or "readmisiones" in clinical
+    assert "Costo por evento evitado" in clinical or "readmisiones" in clinical
     learning = build_impact_lens_m5_hint(IMPACT_LENS_LEARNING_OUTCOMES)
     assert "retención" in learning.lower()
 
