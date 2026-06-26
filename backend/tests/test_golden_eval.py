@@ -19,8 +19,10 @@ from golden_eval import (
     GOLDEN_SET,
     JUDGE_MAX_DROP,
     NodeEvalInputs,
+    check_architect_value_model_lens_valid,
     check_domain_coherence,
     check_m4_deployment_section_unique,
+    check_m4_lens_kpi_coherence,
     evaluate_downgrade_gate,
 )
 from test_issue351_mlds_multidomain_evals import _build_schema
@@ -199,6 +201,56 @@ def test_domain_coherence_oracle_on_rebuilt_dechurned_schema() -> None:
     is also domain-coherent, so a real chain change is caught even if the on-disk fixture drifts."""
     rebuilt, _contract = _build_schema("default_60d", "debt_to_income_ratio", 0.12, dechurn=True)
     assert check_domain_coherence(rebuilt) is True
+
+
+# ── Issue #437 Fase 3 — per-lens Impact Lens oracles + gate wiring ────────────
+
+_NON_FINANCIAL_LENSES = ("operational_efficiency", "clinical_outcomes", "learning_outcomes")
+_FORCED_FINANCIAL_45 = "### 4.5 KPIs\n| KPI | Valor |\n| ROI proyectado (%) | 22 |\n| NPV estimado (USD) | 1000 |\n"
+
+
+def test_lens_kpi_oracle_financial_keeps_roi_npv() -> None:
+    # financial_roi (and absent lens) legitimately keep ROI/NPV → trivially True (n/a).
+    assert check_m4_lens_kpi_coherence(_FORCED_FINANCIAL_45, lens="financial_roi") is True
+    assert check_m4_lens_kpi_coherence(_FORCED_FINANCIAL_45, lens=None) is True
+    assert check_m4_lens_kpi_coherence(None, lens="clinical_outcomes") is True  # empty → n/a
+
+
+@pytest.mark.parametrize("lens", _NON_FINANCIAL_LENSES)
+def test_lens_kpi_oracle_non_financial_fails_on_forced_roi_npv(lens: str) -> None:
+    # A non-financial lens that still emits the forced financial §4.5 rows FAILS the oracle.
+    assert check_m4_lens_kpi_coherence(_FORCED_FINANCIAL_45, lens=lens) is False
+
+
+@pytest.mark.parametrize("lens", _NON_FINANCIAL_LENSES)
+def test_lens_kpi_oracle_non_financial_passes_when_clean(lens: str) -> None:
+    clean = "### 4.5 KPIs de valor\n| KPI | Valor |\n| Outcomes evitados | 12 |\n"
+    assert check_m4_lens_kpi_coherence(clean, lens=lens) is True
+
+
+@pytest.mark.parametrize(
+    "lens", ["financial_roi", "operational_efficiency", "clinical_outcomes", "learning_outcomes"]
+)
+def test_value_model_lens_oracle_accepts_every_canonical_key(lens: str) -> None:
+    assert check_architect_value_model_lens_valid({"lens": lens}) is True
+
+
+def test_value_model_lens_oracle_rejects_unknown_and_na_on_absent() -> None:
+    assert check_architect_value_model_lens_valid({"lens": "bogus"}) is False
+    assert check_architect_value_model_lens_valid(None) is True  # n/a (lens-off / business)
+
+
+def test_gate_blocks_on_lens_kpi_and_value_model_failures() -> None:
+    kpi = evaluate_downgrade_gate(
+        NodeEvalInputs(node="m4_content_generator", deterministic_pass=True, m4_lens_kpi_coherence_ok=False)
+    )
+    assert not kpi.passed and any("non-financial lens" in r for r in kpi.reasons)
+    vm = evaluate_downgrade_gate(
+        NodeEvalInputs(
+            node="case_architect", deterministic_pass=True, architect_value_model_lens_valid_ok=False
+        )
+    )
+    assert not vm.passed and any("value_model" in r for r in vm.reasons)
 
 
 # ── live Pro-vs-Flash harness skeleton (auto-skipped) ────

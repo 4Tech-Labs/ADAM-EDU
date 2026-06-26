@@ -83,6 +83,14 @@ export interface AlgorithmCatalog {
     case_type: CaseType;
     items: AlgorithmCatalogItem[];
 }
+// Issue #437 Fase 3 — the optional teacher Impact Lens override. Keep in sync with the backend
+// ImpactLensLiteral (case_generator/impact_lens.py); null = "Automático" (resolve from industry).
+export type ImpactLens =
+    | "financial_roi"
+    | "operational_efficiency"
+    | "clinical_outcomes"
+    | "learning_outcomes";
+
 export interface CaseFormData {
     courseId: string;
     subject: string;
@@ -92,6 +100,7 @@ export interface CaseFormData {
     syllabusModule: string;
     topicUnit: string;
     industry: string;
+    impactLens: ImpactLens | null;
     studentProfile: StudentProfile;
     caseType: CaseType;
     edaDepth?: EDADepth;
@@ -170,6 +179,8 @@ export interface AuthoringJobCreateRequest {
     subject: string;
     academic_level: string;
     industry: string;
+    // Issue #437 Fase 3 — optional teacher Impact Lens override (null = automatic from industry).
+    impact_lens: ImpactLens | null;
     student_profile: StudentProfile;
     case_type: CaseType;
     syllabus_module: string;
@@ -996,6 +1007,7 @@ export const EMPTY_FORM: CaseFormData = {
     syllabusModule: "",
     topicUnit: "",
     industry: "FinTech",
+    impactLens: null,
     studentProfile: "business",
     caseType: "harvard_only",
     includePythonCode: false,

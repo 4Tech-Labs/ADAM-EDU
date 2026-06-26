@@ -33,6 +33,7 @@ describe("buildAuthoringJobCreateRequest", () => {
             subject: "Decision Analysis",
             academic_level: "MBA",
             industry: "Retail",
+            impact_lens: null,
             student_profile: "business",
             case_type: "harvard_only",
             syllabus_module: "M3",
@@ -48,5 +49,13 @@ describe("buildAuthoringJobCreateRequest", () => {
             available_from: null,
             due_at: null,
         });
+    });
+
+    it("maps an explicit Impact Lens override; null when automatic", () => {
+        // Issue #437 Fase 3 — the override is sent as the canonical key; automatic sends null.
+        expect(
+            buildAuthoringJobCreateRequest({ ...EMPTY_FORM, impactLens: "clinical_outcomes" }).impact_lens,
+        ).toBe("clinical_outcomes");
+        expect(buildAuthoringJobCreateRequest({ ...EMPTY_FORM, impactLens: null }).impact_lens).toBeNull();
     });
 });

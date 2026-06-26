@@ -1007,6 +1007,11 @@ class AuthoringService:
                 # value every attempt → a last-write-wins clobber on resume). Downstream nodes READ
                 # via _resolve_impact_lens, never re-derive from state["industria"].
                 "impact_lens": resolve_impact_lens_from_industry(payload.get("industria", "General")),
+                # Issue #437 Fase 3 — the OPTIONAL teacher override (passthrough; may be None, mirrors
+                # algorithm_mode). Intake-only ⇒ re-injected every attempt ⇒ resume-stable. The
+                # VALIDATION (membership ∈ IMPACT_LENS_KEYS) lives in _resolve_impact_lens, which prefers
+                # this over value_model and the industry default.
+                "impact_lens_override": payload.get("impact_lens_override"),
                 "studentProfile": payload.get("studentProfile", "business"),
                 "algoritmos": selected_techniques,
                 "algorithm_mode": payload.get("algorithm_mode"),
