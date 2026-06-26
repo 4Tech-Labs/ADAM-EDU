@@ -479,6 +479,13 @@ def _build_openrouter(
     if _OPENROUTER_PROVIDER_ORDER:
         provider["order"] = _OPENROUTER_PROVIDER_ORDER
     extra_body: dict[str, Any] = {
+        # CRÍTICO: `max_tokens` va AQUÍ (en extra_body), NO como kwarg de ChatOpenAI. ChatOpenAI
+        # serializa su `max_tokens=` como `max_completion_tokens` (campo nuevo de OpenAI), y con
+        # `provider.require_parameters=true` OpenRouter exige un upstream que soporte ESE parámetro
+        # — los proveedores de minimax-m3 solo listan `max_tokens` → ningún endpoint elegible → 404
+        # ("No endpoints found that can handle the requested parameters"). Enviarlo por extra_body
+        # lo serializa como `max_tokens` (soportado por todos) → 200. (Verificado contra la API.)
+        "max_tokens": max_output_tokens + _OPENROUTER_REASONING_MAX_TOKENS,
         "provider": provider,
         "reasoning": {"max_tokens": _OPENROUTER_REASONING_MAX_TOKENS},
         "usage": {"include": True},
@@ -488,7 +495,7 @@ def _build_openrouter(
         base_url=_OPENROUTER_BASE_URL,
         api_key=api_key,
         temperature=temperature,
-        max_tokens=max_output_tokens + _OPENROUTER_REASONING_MAX_TOKENS,
+        # NO pasar max_tokens aquí: se serializaría como max_completion_tokens → 404 (ver extra_body).
         max_retries=2,
         timeout=_OPENROUTER_TIMEOUT_SECONDS,
         rate_limiter=_openrouter_rate_limiter,

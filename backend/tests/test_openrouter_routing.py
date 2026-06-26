@@ -69,18 +69,38 @@ def test_build_openrouter_sets_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=32768)
     assert m.model == "minimax/minimax-m3"
     assert str(m.openai_api_base) == g._OPENROUTER_BASE_URL
-    # max_tokens budget = visible answer + reasoning cap, so reasoning cannot starve the answer.
-    assert m.max_tokens == 32768 + g._OPENROUTER_REASONING_MAX_TOKENS
+    # max_tokens MUST ride in extra_body, NOT the ChatOpenAI field. ChatOpenAI serializes its
+    # `max_tokens=` as `max_completion_tokens`, which minimax-m3's providers don't support; under
+    # provider.require_parameters that → 404. extra_body sends plain `max_tokens` → providers route.
+    assert m.max_tokens is None  # the ChatOpenAI field is unset (would serialize to max_completion_tokens)
+    assert m.extra_body["max_tokens"] == 32768 + g._OPENROUTER_REASONING_MAX_TOKENS
     assert m.request_timeout == g._OPENROUTER_TIMEOUT_SECONDS
     assert m.rate_limiter is g._openrouter_rate_limiter  # dedicated, NOT the Gemini limiter
     assert m.rate_limiter is not g._rate_limiter
     prov = m.extra_body["provider"]
     assert prov["require_parameters"] is True  # default on → structured-output routing
-    # data_collection is OPT-IN (default omitted). Sending "deny" 404s models whose providers
-    # don't offer zero-collection (e.g. minimax-m3), so it must NOT be sent by default.
+    # data_collection is OPT-IN (default omitted) — a routing constraint must not be a hardcoded
+    # default (it can narrow providers and silently fall back to Gemini).
     assert "data_collection" not in prov
     assert m.extra_body["reasoning"]["max_tokens"] == g._OPENROUTER_REASONING_MAX_TOKENS
     assert m.extra_body["usage"]["include"] is True
+
+
+def test_build_openrouter_does_not_serialize_max_completion_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the real 404: ChatOpenAI serializes its `max_tokens=` field as
+    `max_completion_tokens`, which minimax-m3's providers don't support → under
+    provider.require_parameters OpenRouter returns 404 "No endpoints found that can handle the
+    requested parameters". The built client must NOT put max_completion_tokens in its payload
+    (it carries the budget in extra_body.max_tokens instead)."""
+    from langchain_core.messages import HumanMessage
+
+    _with_openrouter_key(monkeypatch)
+    m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=32768)
+    payload = m._get_request_payload([HumanMessage(content="hi")], stop=None)
+    assert "max_completion_tokens" not in payload  # the field that 404s under require_parameters
+    assert "max_tokens" not in payload  # not a top-level field either; it lives in extra_body
 
 
 def test_build_openrouter_data_collection_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
