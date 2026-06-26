@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     # preview). Kill-switch: set AUTHORING_LIVE_PREVIEW=false to disable the per-node
     # partial-canonical write + /preview endpoint and degrade cleanly to the step loader.
     authoring_live_preview: bool = True
+    # Reduce the forward-facing algorithm catalog (form selector + suggester taxonomy +
+    # intake validation). When true (default) the regresion family and the clustering
+    # challenger (DBSCAN) are hidden: ml_ds sees {Logistic Regression, Random Forest,
+    # K-Means}, business sees {Logistic Regression, K-Means}. Set ALGORITHM_CATALOG_REDUCED=
+    # false to restore the full catalog byte-identically (env-only revert, no redeploy).
+    # Entries stay in ALGORITHM_CATALOG, so historical job replay is unaffected.
+    algorithm_catalog_reduced: bool = True
     # De-churn the ml_ds + clasificación dataset SIGNAL (Issue #382). When true, the
     # deterministic sibling `_enforce_mlds_classification_schema` re-points a NON-retention
     # binary target to a domain driver and strips the churn/SaaS template. Kill-switch: set
