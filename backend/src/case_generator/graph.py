@@ -117,7 +117,10 @@ from case_generator.prompts import (
     ClassificationNotebookVariant,
     TOC_MARKDOWN_CELL_BY_VARIANT,
     M4_QUESTIONS_GENERATOR_PROMPT,
+    M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL,
     M4_QUESTIONS_PROMPT_BY_FAMILY,
+    M4_QUESTIONS_PROMPT_BY_FAMILY_NEUTRAL,
+    M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL,
     M5_QUESTIONS_GENERATOR_PROMPT,
     M5_QUESTIONS_PROMPT_BY_FAMILY,
     # v8 M3 — prompts por perfil (aliases backward-compat también disponibles)
@@ -132,16 +135,23 @@ from case_generator.prompts import (
     M3_CLASSIFICATION_QUESTIONS_BY_VARIANT,
     PROMPT_BY_FAMILY,
     M4_PROMPT_BY_FAMILY,
+    M4_PROMPT_BY_FAMILY_NEUTRAL,
     M4_CONTENT_GENERATOR_PROMPT,
+    M4_CONTENT_GENERATOR_PROMPT_NEUTRAL,
     M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT_NEUTRAL,
     M4_BUSINESS_PROMPT_CLASSIFICATION,
+    M4_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL,
     M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_GENERATOR_PROMPT,
     M4_CHART_GENERATOR_PROMPT_LEGACY,
+    M4_CHART_GENERATOR_PROMPT_NEUTRAL,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY,
+    M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL,
     M4_CHARTS_PROMPT_BY_FAMILY,
     M4_CHARTS_PROMPT_BY_FAMILY_LEGACY,
+    M4_CHARTS_PROMPT_BY_FAMILY_NEUTRAL,
     M5_PROMPT_BY_FAMILY,
     M5_CONTENT_GENERATOR_PROMPT,
     M5_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
@@ -5451,12 +5461,24 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "computed_metrics_block": build_computed_metrics_block(state.get("m3_metrics_summary")),
         })
 
-        prompt = _resolve_family_prompt(state, M4_QUESTIONS_PROMPT_BY_FAMILY, M4_QUESTIONS_GENERATOR_PROMPT)
+        # Issue #437 (ADR 0003, Fase 1) — NEUTRAL questions set + «MARCO DE VALOR» hint when
+        # settings.impact_lens is on (default); else the FINANCIAL set (byte-identical off-path).
+        _lens_on = settings.impact_lens
+        prompt = _resolve_family_prompt(
+            state,
+            M4_QUESTIONS_PROMPT_BY_FAMILY_NEUTRAL if _lens_on else M4_QUESTIONS_PROMPT_BY_FAMILY,
+            M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL if _lens_on else M4_QUESTIONS_GENERATOR_PROMPT,
+        )
         # Issue #329 — business+clasificación: alinea las preguntas con el arco LR (#306/#319).
         # No-op para ml_ds y para business no-clasificación (mismo gate que el contenido).
         prompt = _maybe_business_classification_prompt(
-            state, prompt, M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
+            state,
+            prompt,
+            M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL
+            if _lens_on else M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
         )
+        if _lens_on:
+            prompt = prompt + build_impact_lens_hint(_resolve_impact_lens(state))
         # Render once; the coherence reprompt below reuses this verbatim so it re-grounds on
         # the SAME text the model first saw (mirrors the M1/M2 single-render pattern).
         rendered_prompt = prompt.format(**context)
@@ -7769,6 +7791,19 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         _algoritmos_raw = _extract_state_algoritmos(state)
         _algorithm_mode = _extract_state_algorithm_mode(state)
         _profile, _primary_family = _resolve_generation_focus(state)
+        # Issue #437 (ADR 0003, Fase 1) — select the NEUTRAL value-frame-agnostic prompt set
+        # when settings.impact_lens is on (the default); else the original FINANCIAL set, which
+        # makes the kill-switch-off path byte-identical to pre-#437.
+        _lens_on = settings.impact_lens
+        _by_family = M4_PROMPT_BY_FAMILY_NEUTRAL if _lens_on else M4_PROMPT_BY_FAMILY
+        _variant_dict = (
+            M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT_NEUTRAL
+            if _lens_on else M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT
+        )
+        _default_prompt = M4_CONTENT_GENERATOR_PROMPT_NEUTRAL if _lens_on else M4_CONTENT_GENERATOR_PROMPT
+        _business_prompt = (
+            M4_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL if _lens_on else M4_BUSINESS_PROMPT_CLASSIFICATION
+        )
         variant: str | None = None
         if _profile == "ml_ds" and _primary_family == "clasificacion":
             _variant, _variant_warning = _resolve_classification_notebook_variant(
@@ -7783,24 +7818,28 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
                     _variant, _algoritmos_raw, _variant_warning,
                 )
             _effective_prompt_by_family: dict[str, str] = {
-                **M4_PROMPT_BY_FAMILY,
-                "clasificacion": M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT[_variant],
+                **_by_family,
+                "clasificacion": _variant_dict[_variant],
             }
         else:
-            _effective_prompt_by_family = M4_PROMPT_BY_FAMILY
+            _effective_prompt_by_family = _by_family
         prompt_template, metrics_block, grounding_enabled, grounding_update = (
             _select_narrative_prompt(
                 state,
                 "m4_content_generator",
                 _effective_prompt_by_family,
-                M4_CONTENT_GENERATOR_PROMPT,
+                _default_prompt,
             )
         )
         # Issue #306 — business+clasificación cierra el arco LR (probabilidad × valor en riesgo).
         # No-op para ml_ds y para business no-clasificación.
         prompt_template = _maybe_business_classification_prompt(
-            state, prompt_template, M4_BUSINESS_PROMPT_CLASSIFICATION
+            state, prompt_template, _business_prompt
         )
+        # Issue #437 — append the «MARCO DE VALOR» hint for the resolved lens (brace-free, so it is
+        # safe before .format). financial_roi reproduces ROI/Payback/NPV; off-path skips it entirely.
+        if _lens_on:
+            prompt_template = prompt_template + build_impact_lens_hint(_resolve_impact_lens(state))
         context["computed_metrics_block"] = metrics_block
 
         m4 = _invoke_narrative_with_grounding(
@@ -7961,22 +8000,29 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # los prompts LEGACY (3 gráficos) Y desactiva el backstop → comportamiento byte-idéntico al
         # previo, sin redeploy.
         use_legacy_charts = not settings.m4_chart_drop_sensitivity
-        charts_by_family = (
-            M4_CHARTS_PROMPT_BY_FAMILY_LEGACY if use_legacy_charts else M4_CHARTS_PROMPT_BY_FAMILY
-        )
-        default_chart_prompt = (
-            M4_CHART_GENERATOR_PROMPT_LEGACY if use_legacy_charts else M4_CHART_GENERATOR_PROMPT
-        )
-        business_chart_prompt = (
-            M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY
-            if use_legacy_charts
-            else M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
-        )
+        # Issue #437 (ADR 0003, Fase 1) — the Impact Lens applies ONLY on the current 2-chart path;
+        # the 3-chart tornado revert (M4_CHART_DROP_SENSITIVITY=false) skips it entirely (full legacy).
+        _lens_on = settings.impact_lens and not use_legacy_charts
+        if use_legacy_charts:
+            charts_by_family = M4_CHARTS_PROMPT_BY_FAMILY_LEGACY
+            default_chart_prompt = M4_CHART_GENERATOR_PROMPT_LEGACY
+            business_chart_prompt = M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY
+        elif _lens_on:
+            charts_by_family = M4_CHARTS_PROMPT_BY_FAMILY_NEUTRAL
+            default_chart_prompt = M4_CHART_GENERATOR_PROMPT_NEUTRAL
+            business_chart_prompt = M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL
+        else:
+            charts_by_family = M4_CHARTS_PROMPT_BY_FAMILY
+            default_chart_prompt = M4_CHART_GENERATOR_PROMPT
+            business_chart_prompt = M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
 
         prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
         # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
         # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
         prompt = _maybe_business_classification_prompt(state, prompt, business_chart_prompt)
+        # Issue #437 — append the «MARCO DE VALOR» hint (brace-free) on the 2-chart lens path.
+        if _lens_on:
+            prompt = prompt + build_impact_lens_hint(_resolve_impact_lens(state))
         formatted_prompt = prompt.format(**context)
         result: EDAChartGeneratorOutput = llm.with_structured_output(
             EDAChartGeneratorOutput
