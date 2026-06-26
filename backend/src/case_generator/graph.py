@@ -3183,12 +3183,53 @@ def _validate_and_correct_dataset(
     return is_valid, errors, corrected_rows
 
 
+# Entity-level SEGMENTATION feature columns for the ml_ds + clustering fallback schema
+# (Issue #452). Customer-level RFM + behavioural axes (NOT a financial time-series panel), so
+# K-Means clusters interpretable segments. `_enforce_mlds_clustering_structure` injects the
+# latent blob structure over these; the financial Exhibit 1 stays a separate M1 narrative.
+_CLUSTERING_SEGMENTATION_COLUMNS: tuple[dict, ...] = (
+    {"name": "recency_days",      "type": "int",   "description": "Días desde la última actividad de la entidad",         "range_min": 1,    "range_max": 365,  "nullable": False, "trend": None, "dependency": None},
+    {"name": "frequency_count",   "type": "int",   "description": "Número de interacciones/compras en el período",        "range_min": 1,    "range_max": 60,   "nullable": False, "trend": None, "dependency": None},
+    {"name": "monetary_value",    "type": "float", "description": "Valor monetario acumulado de la entidad (USD)",        "range_min": 50.0, "range_max": 5000.0,"nullable": False, "trend": None, "dependency": None},
+    {"name": "tenure_months",     "type": "int",   "description": "Antigüedad de la relación en meses",                   "range_min": 1,    "range_max": 72,   "nullable": False, "trend": None, "dependency": None},
+    {"name": "engagement_score",  "type": "float", "description": "Score de engagement de la entidad (0-1)",             "range_min": 0.0,  "range_max": 1.0,  "nullable": False, "trend": None, "dependency": None},
+    {"name": "support_intensity", "type": "float", "description": "Intensidad de uso de soporte (interacciones/mes)",     "range_min": 0.0,  "range_max": 10.0, "nullable": False, "trend": None, "dependency": None},
+)
+
+
+def _build_clustering_fallback_schema(max_rows: int) -> dict:
+    """Entity-level segmentation fallback schema for ml_ds + clustering (Issue #452).
+
+    ``period`` is kept as a row id (str → excluded from the numeric K-Means fit); the rest are
+    interpretable segmentation features that `_enforce_mlds_clustering_structure` blobs. No
+    revenue/costs/margin/ebitda → the financial scaling + ebitda/margin recompute + outlier
+    target selection in `_generate_dataset_from_schema`/`data_validator` all no-op cleanly.
+    """
+    columns: list[dict] = [
+        {"name": "period", "type": "str", "description": "Identificador de entidad/registro",
+         "range_min": None, "range_max": None, "nullable": False, "trend": None, "dependency": None},
+    ]
+    columns.extend(dict(c) for c in _CLUSTERING_SEGMENTATION_COLUMNS)
+    return {
+        "columns": columns,
+        "n_rows": max_rows,
+        "time_granularity": "monthly",
+        "constraints": {"tolerance_pct": 0.05},
+        "reasoning_summary": "Fallback schema clustering — features de segmentación (Issue #452)",
+    }
+
+
 # ─────────────────────────────────────────────────────────
 # HELPER — _build_fallback_schema (sin LLM, regex sobre Exhibit 1)
 # ─────────────────────────────────────────────────────────
 
 def _build_fallback_schema(
-    state: ADAMState, max_rows: int, profile: str, primary_family: str = "clasificacion"
+    state: ADAMState,
+    max_rows: int,
+    profile: str,
+    primary_family: str = "clasificacion",
+    *,
+    clustering_structure_enabled: bool = True,
 ) -> dict:
     """Schema mínimo si schema_designer falla. Extrae revenue con regex del Exhibit 1.
 
@@ -3196,7 +3237,19 @@ def _build_fallback_schema(
     18-column binary-target schema; all other ml_ds families receive the 12-column
     generic baseline (cols 1–10 + customer_ltv + engagement_score) so their M3
     notebooks do not receive a classification-specific target.
+
+    Issue #452 — for ``ml_ds + clustering`` (with the kill-switch on) it returns a dedicated
+    entity-level SEGMENTATION schema (``period`` + interpretable segmentation features, no
+    churn/retention/financial time-series panel) instead, so K-Means clusters interpretable
+    behavioural axes; ``_enforce_mlds_clustering_structure`` then injects the latent blobs.
     """
+    if (
+        clustering_structure_enabled
+        and profile == "ml_ds"
+        and primary_family == "clustering"
+    ):
+        return _build_clustering_fallback_schema(max_rows)
+
     financial_text = state.get("doc1_anexo_financiero", "")
 
     revenue_match = re.search(r'[\$€]?\s*([\d,]+(?:\.\d+)?)\s*[Mm]', financial_text)
@@ -4673,6 +4726,10 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     _schema_prompt = SCHEMA_DESIGNER_PROMPT_BY_FAMILY.get(
         _effective_family, SCHEMA_DESIGNER_PROMPT
     )
+    # Issue #452 kill-switch — when MLDS_CLUSTERING_STRUCTURE is off, the clustering case reverts
+    # to the generic schema prompt (and the generic ml_ds fallback) byte-identically.
+    if _effective_family == "clustering" and not settings.mlds_clustering_structure:
+        _schema_prompt = SCHEMA_DESIGNER_PROMPT
 
     context = _build_base_context(state)
     context.update({
@@ -4817,7 +4874,8 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
 
     print("[schema_designer] todos los intentos fallaron — usando fallback schema")
     fallback_schema = _build_fallback_schema(
-        state, max_rows, profile, primary_family=_effective_family
+        state, max_rows, profile, primary_family=_effective_family,
+        clustering_structure_enabled=settings.mlds_clustering_structure,
     )
     # Issue #225 — incluso en fallback respetamos el contrato del architect.
     contract = state.get("dataset_schema_required")
@@ -5306,6 +5364,126 @@ def _generate_dataset_from_schema(
 
 
 # ─────────────────────────────────────────────────────────
+# HELPER — _enforce_mlds_clustering_structure (Issue #452)
+# ─────────────────────────────────────────────────────────
+
+# Within-blob standard deviation as a fraction of each feature's [range_min, range_max] span.
+# Calibrated so StandardScaler + KMeans over the blobbed segmentation features lands the
+# silhouette in the healthy band ~[0.45, 0.70] (neither trivial nor degenerate) and the
+# adjusted Rand index vs. the latent blob label stays ≥ 0.6. Tuned against the deterministic
+# golden oracle (tests/test_issue452_clustering_structure.py); do NOT change without re-running it.
+_CLUSTERING_BLOB_SPREAD_FRAC = 0.135
+# K (number of latent segments) is chosen deterministically per case from this set.
+_CLUSTERING_K_CHOICES: tuple[int, ...] = (3, 4)
+
+
+def _clustering_scalable_feature_columns(schema: dict) -> list[dict]:
+    """Numeric, scalable feature columns a K-Means fit would use (Issue #452).
+
+    Excludes the temporal/index column (``period``/date) — it is a row id the notebook drops
+    from the fit. Everything else of type int/float is a segmentation feature that should carry
+    the latent cluster structure.
+    """
+    feats: list[dict] = []
+    for col in schema.get("columns", []):
+        if col.get("type") not in ("int", "float"):
+            continue
+        name = str(col.get("name", ""))
+        if name == "period" or name.startswith("period") or col.get("type") == "date":
+            continue
+        feats.append(col)
+    return feats
+
+
+def _enforce_mlds_clustering_structure(
+    rows: list,
+    schema: dict,
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+    return_labels: bool = False,
+):
+    """Inyecta estructura de clusters REAL en el dataset ml_ds + clustering (Issue #452).
+
+    El generador determinista produce columnas UNIMODALES (una sola moda por columna), así que
+    K-Means parte una nube convexa en cuñas arbitrarias y la premisa pedagógica ("descubrir
+    segmentos latentes") queda hueca. Este helper reescribe las features numéricas escalables
+    como una **mezcla de K∈{3,4} blobs gaussianos separables**, de modo que K-Means descubre
+    segmentos genuinos e interpretables.
+
+    Es PURO copy-on-write (no muta el dict/lista de entrada → determinismo del seed +
+    thread-safety bajo jobs concurrentes), preserva el conteo y el ORDEN de filas (los blobs
+    quedan row-aligned a través de ``data_validator``), y conserva nulls intencionales y los
+    rangos ``range_min``/``range_max`` declarados.
+
+    Gate (fuera de él → la MISMA lista de entrada, byte-idéntica): ``enabled`` (kill-switch
+    ``MLDS_CLUSTERING_STRUCTURE``) AND ``profile == "ml_ds"`` AND
+    ``(primary_family or "clustering") == "clustering"``. business / clasificación / regresión /
+    serie_temporal nunca entran.
+
+    La etiqueta latente del blob es SOLO de generación: no se persiste en ``doc7_dataset`` (no se
+    filtra al fit de K-Means). Con ``return_labels=True`` se devuelve aparte ``(rows, labels)``
+    para que el oráculo golden mida el ARI contra la estructura inyectada (no es teacher/student
+    facing).
+    """
+    if not enabled or profile != "ml_ds" or (primary_family or "clustering") != "clustering":
+        return (rows, None) if return_labels else rows
+    if not isinstance(rows, list) or not rows:
+        return (rows, None) if return_labels else rows
+    feats = _clustering_scalable_feature_columns(schema)
+    if len(feats) < 2:
+        # Sin al menos 2 features escalables no hay espacio donde formar blobs separables.
+        return (rows, None) if return_labels else rows
+
+    import numpy as np
+
+    n = len(rows)
+    # Seed determinista derivado del schema (mismo patrón que `_generate_dataset_from_schema`),
+    # desplazado para no correlacionar con el stream del generador. RNG LOCAL (thread-safe).
+    base_seed = (
+        int(hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(), 16) % (2**31)
+    )
+    rng = np.random.default_rng(base_seed + 452)
+
+    k = _CLUSTERING_K_CHOICES[base_seed % len(_CLUSTERING_K_CHOICES)]
+    k = max(2, min(k, n - 1))
+
+    # Asignación de blobs balanceada y determinista (round-robin barajado).
+    labels = np.array([i % k for i in range(n)], dtype=int)
+    rng.shuffle(labels)
+
+    new_rows = [dict(r) for r in rows]
+    for col in feats:
+        name = col["name"]
+        low = float(col["range_min"]) if col.get("range_min") is not None else 0.0
+        high = float(col["range_max"]) if col.get("range_max") is not None else low + 1.0
+        if low >= high:
+            high = low + 1.0
+        span = high - low
+        # Centros por-blob = niveles EQUI-ESPACIADOS en el interior del rango normalizado,
+        # BARAJADOS por feature. Como cada blob recibe un nivel distinto (permutación biyectiva),
+        # cualquier par de blobs difiere en TODA feature por ≥ el gap mínimo → separación fuerte y
+        # consistente (a diferencia de centros uniformes-aleatorios, que pueden caer juntos); la
+        # permutación por-feature evita que los blobs queden colineales (separación isotrópica).
+        centers = rng.permutation(np.linspace(0.18, 0.82, k))
+        vals_norm = np.clip(
+            centers[labels] + rng.normal(0.0, _CLUSTERING_BLOB_SPREAD_FRAC, n), 0.0, 1.0
+        )
+        vals = low + vals_norm * span
+        is_int = col.get("type") == "int"
+        for i, r in enumerate(new_rows):
+            if r.get(name) is None:  # preserva nulls intencionales
+                continue
+            v = float(vals[i])
+            r[name] = int(round(v)) if is_int else round(v, 4)
+
+    if return_labels:
+        return new_rows, labels.tolist()
+    return new_rows
+
+
+# ─────────────────────────────────────────────────────────
 # NODO 2 — DATA GENERATOR (Python puro, 0 tokens LLM)
 # ─────────────────────────────────────────────────────────
 
@@ -5339,6 +5517,19 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             profile=profile,
             target_event_rate=target_event_rate,
             target_col_name=target_col_name,
+        )
+        # Issue #452 — inyecta estructura de clusters real para ml_ds + clustering (determinista,
+        # gateado por kill-switch). No-op byte-idéntico para business/clasificación/regresión/
+        # serie_temporal. Corre DESPUÉS del generador (sobrescribe las features → neutraliza el
+        # outlier ×3.5 que cayó en la 1ª feature) y ANTES de `data_validator` (que solo corrige
+        # revenue/costs/ebitda/margin/retención → no toca estas features de segmentación).
+        _clustering_family, _ = _resolve_primary_family(_extract_state_algoritmos(state))
+        rows = _enforce_mlds_clustering_structure(
+            rows,
+            schema,
+            profile=profile,
+            primary_family=_clustering_family,
+            enabled=settings.mlds_clustering_structure,
         )
         constraints = schema.get("constraints", {})
         constraints_with_count = {**constraints, "n_rows_expected": schema.get("n_rows", 100)}
