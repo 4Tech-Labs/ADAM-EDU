@@ -8,3 +8,19 @@ allowBuilds:
   es5-ext: false
   esbuild: true
   msw: true
+
+# Supply-chain hardening (react-doctor/require-pnpm-hardening). pnpm 11 already
+# defaults minimumReleaseAge to 1440 (1 day) and blockExoticSubdeps to true; we
+# make the policy explicit and stricter so the hardening is visible and pinned:
+#   minimumReleaseAge: 10080  -> wait 7 days before installing a newly published
+#                                version, so malware that is published and then
+#                                unpublished within hours never reaches us.
+#   blockExoticSubdeps: true  -> transitive deps must resolve from the registry,
+#                                never a git / file / tarball URL that bypasses it.
+# NOTE: `trustPolicy: no-downgrade` is deliberately NOT set. It re-verifies trust
+# signals against the committed pnpm-lock.yaml, which predates the policy, so
+# `pnpm install --frozen-lockfile` (the production Docker build step) fails with
+# ERR_PNPM_TRUST_DOWNGRADE on pre-existing entries (@swc/core, vite). Enabling it
+# requires regenerating the lockfile under the policy in the SAME change.
+minimumReleaseAge: 10080
+blockExoticSubdeps: true
