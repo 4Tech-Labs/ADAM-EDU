@@ -9,6 +9,7 @@ import type {
 import { PreguntaCard, type QuestionRenderable } from "./PreguntaCard";
 import { SectionRail } from "./SectionRail";
 import { isMarkdownTableRow } from "./markdownTable";
+import { SAFE_MARKDOWN_RENDERER } from "./safeMarkdown";
 import { M1StoryReader } from "@/shared/case-viewer/modules/M1StoryReader";
 
 marked.setOptions({ gfm: true, breaks: false });
@@ -42,6 +43,10 @@ renderer.table = function (token: Tokens.Table) {
       </table></div>`;
 };
 marked.use({ renderer });
+// Security: strip raw HTML and neutralize unsafe link/image URLs in LLM-generated markdown
+// before it reaches dangerouslySetInnerHTML. Covers every M1–M6 module body plus PreguntaCard,
+// which share this global instance. Single source of truth in ./safeMarkdown.
+marked.use({ renderer: SAFE_MARKDOWN_RENDERER });
 
 const M2Eda = lazy(() =>
     import("@/shared/case-viewer/modules/M2Eda").then((module) => ({
