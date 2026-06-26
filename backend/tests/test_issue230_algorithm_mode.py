@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
+from case_generator import suggest_service
 from case_generator.suggest_service import (
     _validate_techniques_strict,
     classify_tier,
@@ -92,17 +93,18 @@ def test_catalog_ml_ds_excludes_lstm() -> None:
 
 def test_catalog_items_are_grouped_by_family() -> None:
     families = {it["family"] for it in _items("ml_ds")}
-    # serie_temporal retired from active catalog; ARIMA/Prophet moved to legacy map.
-    assert families == {"clasificacion", "regresion", "clustering"}
+    # Reduced forward catalog (ALGORITHM_CATALOG_REDUCED default ON): regresion hidden,
+    # clustering challenger (DBSCAN) hidden. serie_temporal already retired to legacy.
+    assert families == {"clasificacion", "clustering"}
     # family_label is non-empty and human-readable.
     for it in _items("ml_ds"):
         assert it["family_label"] and isinstance(it["family_label"], str)
 
 
-# serie_temporal removed from active catalog; 3 active families remain.
-def test_catalog_has_exactly_3_families() -> None:
+# Reduced forward catalog exposes 2 active families (regresion hidden).
+def test_catalog_has_exactly_2_forward_families() -> None:
     families = {it["family"] for it in _items("ml_ds")}
-    assert families == {"clasificacion", "regresion", "clustering"}
+    assert families == {"clasificacion", "clustering"}
 
 
 def test_catalog_each_family_has_max_2_algorithms() -> None:
@@ -130,13 +132,21 @@ def test_catalog_business_only_baselines() -> None:
     for it in items:
         assert it["tier"] == "baseline", f"business no debe ver challengers: {it}"
     families = {it["family"] for it in items}
-    assert families == {"clasificacion", "regresion", "clustering"}
+    # Reduced forward catalog (default): regresion hidden for business too.
+    assert families == {"clasificacion", "clustering"}
 
 
-def test_catalog_ml_ds_has_6_algorithms() -> None:
-    # 3 active families × 2 tiers (baseline + challenger) = 6 entries for ml_ds.
-    # serie_temporal (ARIMA/Prophet) retired from active catalog.
-    assert len(_items("ml_ds")) == 6
+def test_catalog_ml_ds_has_3_algorithms() -> None:
+    # Reduced forward catalog (default ON): clasificacion baseline+challenger +
+    # clustering baseline = 3. regresion family and the clustering challenger
+    # (DBSCAN) are hidden; serie_temporal (ARIMA/Prophet) retired to legacy.
+    items = _items("ml_ds")
+    assert len(items) == 3
+    assert {it["name"] for it in items} == {
+        "Logistic Regression",
+        "Random Forest",
+        "K-Means",
+    }
 
 
 def test_catalog_no_legacy_algorithms_exposed() -> None:
@@ -251,8 +261,14 @@ def test_validate_contrast_baseline_in_challenger_slot_raises() -> None:
         )
 
 
-def test_validate_contrast_cross_family_raises() -> None:
-    """Issue #230 follow-up: baseline + challenger must share a family."""
+def test_validate_contrast_cross_family_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #230 follow-up: baseline + challenger must share a family.
+
+    Exercised under the FULL catalog (ALGORITHM_CATALOG_REDUCED off): the reduced
+    forward catalog exposes a single challenger family (clasificacion), so a
+    cross-family contrast can no longer be constructed.
+    """
+    monkeypatch.setattr(suggest_service.settings, "algorithm_catalog_reduced", False)
     baselines = _baselines_of("ml_ds")
     challengers = _challengers_of("ml_ds")
     # Find a baseline + challenger from DIFFERENT families.
@@ -340,9 +356,12 @@ def test_catalog_clasificacion_is_supervised() -> None:
         )
 
 
-def test_catalog_regresion_is_supervised() -> None:
+def test_catalog_regresion_is_supervised(monkeypatch: pytest.MonkeyPatch) -> None:
+    # regresion is hidden from the reduced forward catalog; assert its learning-type
+    # contract under the FULL catalog (kill-switch off).
+    monkeypatch.setattr(suggest_service.settings, "algorithm_catalog_reduced", False)
     items = [it for it in _items("ml_ds") if it["family"] == "regresion"]
-    assert items, "regresion family must be present"
+    assert items, "regresion family must be present in the full catalog"
     for it in items:
         assert it["learning_type"] == "supervised", (
             f"regresion item {it['name']!r} must be supervised"

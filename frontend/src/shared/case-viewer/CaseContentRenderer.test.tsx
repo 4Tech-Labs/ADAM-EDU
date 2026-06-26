@@ -126,13 +126,13 @@ describe("CaseContentRenderer", () => {
 });
 
 describe("injectNotebookRefs", () => {
-    it("injects §3.0.6 badge next to the cost matrix heading", () => {
+    it("injects §3.0.5.6 badge next to the cost matrix heading", () => {
         const html =
             '<h2 id="seccion-como-leer-la-matriz-de-costos" class="scroll-mt-24">Cómo leer la matriz de costos</h2>';
         const result = injectNotebookRefs(html) as string;
 
-        expect(result).toContain("&sect;&thinsp;3.0.6");
-        expect(result).toContain('data-nb-ref="3.0.6"');
+        expect(result).toContain("&sect;&thinsp;3.0.5.6");
+        expect(result).toContain('data-nb-ref="3.0.5.6"');
         expect(result).toContain('aria-label="Sección del notebook"');
     });
 
@@ -153,7 +153,7 @@ describe("injectNotebookRefs", () => {
             '<h2 id="seccion-como-leer-la-matriz-de-costos" class="scroll-mt-24">Cómo leer la matriz de costos</h2>';
         const once = injectNotebookRefs(html) as string;
         const twice = injectNotebookRefs(once) as string;
-        const matches = twice.match(/&sect;&thinsp;3\.0\.6/g);
+        const matches = twice.match(/&sect;&thinsp;3\.0\.5\.6/g);
 
         expect(matches).toHaveLength(1);
     });
