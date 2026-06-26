@@ -9,7 +9,7 @@ import tailwindcss from "@tailwindcss/vite";
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  base: "/app/",
+  base: "/",
   build: {
     // Plotly stays in a dedicated lazy chunk by design. Raise the warning limit
     // above that known isolated payload so future warnings still signal new growth.

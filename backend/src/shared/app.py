@@ -1752,7 +1752,10 @@ def create_frontend_router(build_dir: str = "../frontend/dist") -> Any:
     return StaticFiles(directory=build_path, html=True)
 
 
-app.mount("/app", create_frontend_router(), name="frontend")
+# Serve the SPA at the site root. This MUST stay the last mount: API routes and
+# /health are registered above and take precedence; this catch-all only handles
+# everything else (index.html + built assets).
+app.mount("/", create_frontend_router(), name="frontend")
 
 
 if __name__ == "__main__":

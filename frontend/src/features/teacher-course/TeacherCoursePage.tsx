@@ -200,7 +200,7 @@ export function TeacherCoursePage() {
         ? accessLinkState.access_link_created_at
             ? `Enlace activo. Regenerado el ${formatTeacherCourseTimestamp(accessLinkState.access_link_created_at)}.`
             : "Enlace activo y listo para compartir con estudiantes."
-        : `Aún no existe un enlace activo. Se usará ${accessLinkState?.join_path ?? detail?.configuration.join_path ?? "/app/join"} cuando regeneres uno nuevo.`;
+        : `Aún no existe un enlace activo. Se usará ${accessLinkState?.join_path ?? detail?.configuration.join_path ?? "/join"} cuando regeneres uno nuevo.`;
     const accessLinkErrorMessage = accessLinkActionError;
     const studentsErrorMessage = activeTab === "estudiantes" && courseStudentsQuery.error
         ? getTeacherCourseStudentsErrorMessage(

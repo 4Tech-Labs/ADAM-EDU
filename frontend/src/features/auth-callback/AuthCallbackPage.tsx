@@ -208,7 +208,7 @@ export function AuthCallbackPage() {
                 <p className="text-sm text-danger">{activationError}</p>
                 {activationFlow === "teacher_activate" ? (
                     <a
-                        href="/app/teacher/activate"
+                        href="/teacher/activate"
                         className="text-sm underline hover:opacity-80"
                     >
                         Volver a activación
