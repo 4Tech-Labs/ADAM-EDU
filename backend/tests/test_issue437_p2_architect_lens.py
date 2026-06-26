@@ -49,38 +49,55 @@ def test_lens_block_is_brace_free_and_dd3_bounded() -> None:
         assert k in ARCHITECT_IMPACT_LENS_BLOCK
 
 
-# ── 3. _refine_impact_lens — D-A hybrid precedence ─────────────────────────────
-def test_refine_impact_lens_architect_wins_when_valid_and_enabled() -> None:
-    # architect value_model.lens refines (wins over) the intake default
-    assert _graph._refine_impact_lens(
-        IMPACT_LENS_FINANCIAL_ROI, {"lens": IMPACT_LENS_CLINICAL_OUTCOMES}, enabled=True
+# ── 3. _resolve_impact_lens — D-A hybrid precedence + RESUME-ROBUST (review P1) ─
+def test_resolve_impact_lens_prefers_value_model_over_intake() -> None:
+    # the architect's value_model.lens (refinement) WINS over the intake lens
+    assert _graph._resolve_impact_lens(
+        {"impact_lens": IMPACT_LENS_FINANCIAL_ROI,
+         "value_model": {"lens": IMPACT_LENS_CLINICAL_OUTCOMES}}
     ) == IMPACT_LENS_CLINICAL_OUTCOMES
 
 
-def test_refine_impact_lens_intake_stands_when_disabled_or_invalid_or_absent() -> None:
-    assert _graph._refine_impact_lens(
-        IMPACT_LENS_LEARNING_OUTCOMES, {"lens": IMPACT_LENS_CLINICAL_OUTCOMES}, enabled=False
-    ) == IMPACT_LENS_LEARNING_OUTCOMES  # kill-switch off → intake stands
-    assert _graph._refine_impact_lens(
-        IMPACT_LENS_OPERATIONAL_EFFICIENCY, None, enabled=True
-    ) == IMPACT_LENS_OPERATIONAL_EFFICIENCY  # no value_model → intake stands
-    assert _graph._refine_impact_lens(
-        IMPACT_LENS_CLINICAL_OUTCOMES, {"lens": "bogus"}, enabled=True
-    ) == IMPACT_LENS_CLINICAL_OUTCOMES  # invalid architect lens → intake stands
-    assert _graph._refine_impact_lens(None, None, enabled=True) == DEFAULT_IMPACT_LENS
+def test_resolve_impact_lens_resume_stale_lens_is_fixed() -> None:
+    # RESUME scenario (adversarial review P1): on a resumed job state_input re-injects the INTAKE
+    # lens (clobbering impact_lens back to intake), but value_model SURVIVES the durable checkpoint
+    # (it is NOT in state_input) → _resolve still returns the REFINED lens. This is the regression
+    # guard for the resume-stale-lens defect the review reproduced.
+    resumed_state = {
+        "impact_lens": IMPACT_LENS_FINANCIAL_ROI,  # clobbered back to intake on resume
+        "value_model": {"lens": IMPACT_LENS_OPERATIONAL_EFFICIENCY},  # survives → wins
+    }
+    assert _graph._resolve_impact_lens(resumed_state) == IMPACT_LENS_OPERATIONAL_EFFICIENCY
+
+
+def test_resolve_impact_lens_falls_back_to_intake_then_default() -> None:
+    # no value_model (e.g. kill-switch off → architect emitted None) → intake stands
+    assert _graph._resolve_impact_lens(
+        {"impact_lens": IMPACT_LENS_LEARNING_OUTCOMES}
+    ) == IMPACT_LENS_LEARNING_OUTCOMES
+    assert _graph._resolve_impact_lens(
+        {"impact_lens": IMPACT_LENS_CLINICAL_OUTCOMES, "value_model": None}
+    ) == IMPACT_LENS_CLINICAL_OUTCOMES
+    # invalid architect lens → intake stands (coerce-never-trust)
+    assert _graph._resolve_impact_lens(
+        {"impact_lens": IMPACT_LENS_CLINICAL_OUTCOMES, "value_model": {"lens": "bogus"}}
+    ) == IMPACT_LENS_CLINICAL_OUTCOMES
+    assert _graph._resolve_impact_lens({}) == DEFAULT_IMPACT_LENS
 
 
 # ── 4. case_architect wiring ───────────────────────────────────────────────────
-def test_case_architect_wires_lens_block_and_refinement() -> None:
+def test_case_architect_emits_gated_value_model_and_no_impact_lens_write() -> None:
     src = _inspect.getsource(_graph.case_architect)
     # assembles with the kill-switch
     assert "lens_on=settings.impact_lens_architect" in src
-    # emits impact_lens (refined) + value_model to state
-    assert '"impact_lens": refined_lens' in src
+    # value_model is GATED by the switch (None when off) and returned to state
+    assert "result.value_model is not None and settings.impact_lens_architect" in src
     assert '"value_model": value_model_dict' in src
-    assert "_refine_impact_lens(" in src
-    # the refinement is written BEFORE the M1/EDA/M4 fan-out (single writer — it's in the
-    # architect return, and case_architect is the first node), so DD1 holds.
+    # DELIBERATELY does NOT write impact_lens as a return key — state_input re-injects the intake
+    # value, and a last-write-wins clobber on resume would lose the refinement (review P1). The
+    # refinement rides value_model (resume-robust) and _resolve_impact_lens prefers it. (The
+    # explanatory comment mentions state["impact_lens"], so we assert on the dict-KEY form only.)
+    assert '"impact_lens":' not in src
 
 
 def test_separate_architect_kill_switch_default_true() -> None:

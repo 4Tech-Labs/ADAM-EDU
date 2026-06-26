@@ -1116,20 +1116,21 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         )
 
         # Issue #437 Fase 2 — persist the architect's value_model (prompt-side only; NOT canonical
-        # nor student-facing) and REFINE the Impact Lens (D-A hybrid: a valid architect lens wins
-        # over the intake default). Written ONCE here, before the M1/EDA/M4 fan-out, so every
-        # downstream node reads the SAME refined lens (DD1). When the lens block is disabled,
-        # value_model is None and the intake lens is unchanged (byte-identical M4 behavior).
+        # nor student-facing). It is the D-A hybrid REFINEMENT carrier: _resolve_impact_lens prefers
+        # value_model["lens"] over the intake lens. Gated by the kill-switch (None when off → the
+        # intake lens stands → byte-identical M4 behavior). We DELIBERATELY do NOT write
+        # state["impact_lens"] here: on a resumed job state_input re-injects the intake lens and the
+        # last-write-wins channel would clobber any refinement back to intake (the architect is
+        # skip-short-circuited and never re-emits it). value_model is NOT in state_input, so the
+        # durable checkpoint value SURVIVES resume — making it the resume-robust refinement source.
         value_model_dict = (
-            result.value_model.model_dump() if result.value_model is not None else None
-        )
-        refined_lens = _refine_impact_lens(
-            state.get("impact_lens"), value_model_dict, enabled=settings.impact_lens_architect
+            result.value_model.model_dump()
+            if (result.value_model is not None and settings.impact_lens_architect)
+            else None
         )
 
         return {
             "current_agent": "case_architect",
-            "impact_lens": refined_lens,
             "value_model": value_model_dict,
             "titulo": result.titulo,
             "industria": result.industria,
@@ -6037,38 +6038,26 @@ def _resolve_generation_focus(
 def _resolve_impact_lens(state: ADAMState) -> str:
     """Return the case's resolved Impact Lens (value frame for M4) — Issue #437.
 
-    DD1 single source of truth: the lens is resolved ONCE at intake
-    (``core/authoring.py`` ``state_input``) from the constrained industry label and
-    stored in ``state["impact_lens"]``; every M4 node READS it here, never re-derives
-    (re-deriving from ``state["industria"]`` would parse the architect's free noun and
-    silently default every non-financial case to ``financial_roi`` — Issue #437 F1).
+    DD1 single source of truth. Precedence (D-A hybrid):
+      1. ``state["value_model"]["lens"]`` — the architect's more-informed refinement (Fase 2). It
+         is set ONLY when the architect lens block is enabled (``impact_lens_architect``), so its
+         presence already encodes the kill-switch. It is **resume-robust**: ``value_model`` is NOT
+         re-injected by ``state_input`` on resume, so the durable checkpoint value survives — unlike
+         ``impact_lens``, which ``state_input`` re-injects with the intake value on every attempt
+         (last-write-wins), clobbering any refinement back to intake on a resumed job.
+      2. ``state["impact_lens"]`` — the intake-resolved lens (Fase 1, from the constrained industry
+         label; never re-derived from the architect's free-noun ``industria``).
+      3. ``DEFAULT_IMPACT_LENS``.
 
-    Total + safe: a missing/legacy/unknown value coerces to ``DEFAULT_IMPACT_LENS``.
-    Fase 2/3 will layer the architect ``value_model`` + the teacher override into this
-    same helper (the hybrid precedence of decision D-A).
+    Total + safe: any missing/legacy/unknown value coerces to the default; never raises. Every M4
+    node READS this (never re-derives), so all consume the SAME lens even on a resumed job.
     """
+    vm = state.get("value_model")
+    if isinstance(vm, dict):
+        vm_lens = vm.get("lens")
+        if vm_lens in IMPACT_LENS_KEYS:
+            return normalize_impact_lens(vm_lens)
     return normalize_impact_lens(state.get("impact_lens", DEFAULT_IMPACT_LENS))
-
-
-def _refine_impact_lens(
-    intake_lens: str | None, value_model: dict | None, *, enabled: bool
-) -> str:
-    """D-A hybrid precedence (Issue #437 Fase 2): the architect's ``value_model.lens`` refines
-    the intake-resolved lens.
-
-    When the architect lens block is enabled and emitted a VALID lens, it WINS over the intake
-    default (the architect read the full teacher input → a more-informed signal). Otherwise the
-    intake lens stands. Total + safe: coerces to ``DEFAULT_IMPACT_LENS`` on anything unexpected,
-    never raises. case_architect calls this ONCE and writes the result to ``state["impact_lens"]``
-    before the M1/EDA/M4 fan-out, so every downstream node reads the SAME refined value (DD1).
-    """
-    base = normalize_impact_lens(intake_lens)
-    if not enabled or not value_model:
-        return base
-    vm_lens = value_model.get("lens")
-    if vm_lens in IMPACT_LENS_KEYS:
-        return normalize_impact_lens(vm_lens)
-    return base
 
 
 def _maybe_business_classification_prompt(

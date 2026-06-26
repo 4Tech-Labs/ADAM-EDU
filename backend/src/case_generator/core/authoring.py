@@ -997,11 +997,15 @@ class AuthoringService:
                 "asignatura": payload.get("asignatura", "Default Subject"),
                 "nivel": payload.get("nivel", "pregrado"),
                 "industria": payload.get("industria", "General"),
-                # Issue #437 (ADR 0003, F1) — resolve the Impact Lens ONCE here, from the
+                # Issue #437 (ADR 0003, F1) — resolve the INTAKE Impact Lens here, from the
                 # CONSTRAINED intake industry label, BEFORE case_architect overwrites
-                # state["industria"] with its free-form noun. Single writer, before the
-                # M1/EDA/M4 fan-out; survives the resume_cached_nodes merge below
-                # (case_architect never emits "impact_lens"). Downstream nodes READ it.
+                # state["industria"] with its free-form noun. This is the deterministic, resume-
+                # stable BASELINE. The architect's Fase 2 refinement does NOT live here: it rides
+                # state["value_model"] (which state_input does NOT re-inject), so the refinement
+                # survives resume while `_resolve_impact_lens` prefers value_model over this key.
+                # case_architect must NOT emit "impact_lens" (state_input re-injects this intake
+                # value every attempt → a last-write-wins clobber on resume). Downstream nodes READ
+                # via _resolve_impact_lens, never re-derive from state["industria"].
                 "impact_lens": resolve_impact_lens_from_industry(payload.get("industria", "General")),
                 "studentProfile": payload.get("studentProfile", "business"),
                 "algoritmos": selected_techniques,
