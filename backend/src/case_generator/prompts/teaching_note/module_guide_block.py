@@ -75,6 +75,20 @@ _LABELS_MLDS: dict[str, str] = {
 _EDA_CASE_TYPE = "harvard_with_eda"
 _CLASSIFICATION_FAMILY = "clasificacion"
 
+# Issue #437 Fase 3 — the M4 module synopsis value frame per Impact Lens. CURATED + CURRENCY-TOKEN-FREE
+# (no ``$``/``€``/ISO adjacent to a figure — ``test_block_byte_identical_through_usd_enforce`` requires
+# the composed ``enforce_usd_currency`` to be a no-op here, so we do NOT reuse ``IMPACT_LENS_CATALOG``'s
+# ``kpi_rows``, which carry ``$/outcome``). ``financial_roi``/None reproduces today's exact tokens →
+# byte-identical for every case without a non-financial lens. Keys mirror ``IMPACT_LENS_KEYS`` (a drift
+# test asserts the set match). ``(value_noun, mlds_examples)``.
+_M4_VALUE_FRAME_BY_LENS: dict[str, tuple[str, str]] = {
+    "financial_roi": ("valor de negocio", "retorno, factibilidad de despliegue"),
+    "operational_efficiency": ("valor operativo", "eficiencia, reducción de defectos/downtime"),
+    "clinical_outcomes": ("valor clínico", "outcomes evitados, factibilidad de despliegue"),
+    "learning_outcomes": ("valor educativo", "retención y aprendizaje"),
+}
+_M4_VALUE_FRAME_DEFAULT = _M4_VALUE_FRAME_BY_LENS["financial_roi"]
+
 
 def _roster(is_business: bool, case_type: str) -> list[tuple[str, int, str]]:
     """Return ``[(module_id, number, label), ...]`` for exactly the modules this case has.
@@ -121,8 +135,13 @@ def _module_lines(
     is_business: bool,
     is_clf: bool,
     notebook_present: bool,
+    lens: str | None = None,
 ) -> list[str]:
-    """The 3 deterministic descriptive lines (Qué ve / Qué aprende / Formato) for one module."""
+    """The 3 deterministic descriptive lines (Qué ve / Qué aprende / Formato) for one module.
+
+    ``lens`` (Issue #437 Fase 3) reframes ONLY the M4 ``aprende`` value noun; ``None``/``financial_roi``
+    keeps today's exact wording (byte-identical). It never touches the drift-locked LABELS or verdict.
+    """
     if mod_id == "m1":
         ve = (
             f"Una narrativa de {M1_NARRATIVE_WORDS} palabras con el dilema central, "
@@ -188,12 +207,13 @@ def _module_lines(
             f"Un análisis de impacto ({M4_WORDS} palabras) con la proyección numérica de las "
             "opciones, gráficas y una recomendación ejecutiva final."
         )
+        value_noun, mlds_examples = _M4_VALUE_FRAME_BY_LENS.get(lens or "", _M4_VALUE_FRAME_DEFAULT)
         aprende = (
-            "Traduce la evidencia en valor de negocio, cuantifica los trade-offs y elige una "
+            f"Traduce la evidencia en {value_noun}, cuantifica los trade-offs y elige una "
             "opción justificada con datos."
             if is_business
-            else "Traduce el desempeño técnico del modelo en valor de negocio (retorno, "
-            "factibilidad de despliegue) y decide con evidencia."
+            else f"Traduce el desempeño técnico del modelo en {value_noun} ({mlds_examples}) y "
+            "decide con evidencia."
         )
         verdict = M4_VERDICT_BUSINESS if is_business else M4_VERDICT_MLDS
         formato = (
@@ -225,6 +245,7 @@ def build_module_guide_block(
     family: str | None,
     notebook_present: bool,
     anchors: dict[str, str] | None = None,
+    lens: str | None = None,
 ) -> str:
     """Return the full ``## Recorrido por Módulo`` markdown section for this case.
 
@@ -233,6 +254,10 @@ def build_module_guide_block(
     The result is a markdown BULLET LIST with module headers separated by blank lines, because
     the frontend renders the note with ``marked({breaks:false})`` + justified paragraphs, which
     would otherwise fuse soft-wrapped lines into one paragraph.
+
+    ``lens`` (Issue #437 Fase 3) reframes ONLY the M4 synopsis value noun by the resolved Impact Lens;
+    ``None``/``financial_roi`` is byte-identical to today (the caller passes ``None`` when the lens
+    kill-switch is off, keeping the OFF path byte-identical).
     """
     is_clf = (family or "") == _CLASSIFICATION_FAMILY
     anchors = anchors or {}
@@ -244,6 +269,7 @@ def build_module_guide_block(
             is_business=is_business,
             is_clf=is_clf,
             notebook_present=notebook_present,
+            lens=lens,
         )
         out.append(f"**Módulo {num} · {label}**")
         out.append("")

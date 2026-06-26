@@ -56,6 +56,19 @@ export const STUDENT_PROFILES = [
     { value: "ml_ds", label: "Machine Learning / Data Science" },
 ];
 
+// Issue #437 Fase 3 — optional teacher Impact Lens override. The IMPACT_LENS_AUTO sentinel = "Automático"
+// (resolve from industry → the form sends null, no override). Radix Select forbids an empty-string item
+// value, so the sentinel is a non-empty token the form maps to null. The lens values mirror the backend
+// ImpactLensLiteral keys (case_generator/impact_lens.py) — the backend Literal rejects any mismatch (422).
+export const IMPACT_LENS_AUTO = "auto";
+export const IMPACT_LENS_OPTIONS = [
+    { value: IMPACT_LENS_AUTO, label: "Automático (por industria)" },
+    { value: "financial_roi", label: "Retorno financiero (ROI)" },
+    { value: "operational_efficiency", label: "Eficiencia operativa" },
+    { value: "clinical_outcomes", label: "Resultados clínicos" },
+    { value: "learning_outcomes", label: "Resultados de aprendizaje" },
+];
+
 // Bumped from v2 → v3 when the scenario-anchored authoring contract landed.
 // This forces a one-time discard of stored drafts whose algorithm picks could
 // reference algorithms removed from the canonical catalog (e.g. LSTM removal),

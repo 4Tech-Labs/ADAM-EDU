@@ -3,7 +3,7 @@
 
 import { useState, useCallback, useEffect, useRef, type FormEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { AlgorithmMode, CaseFormData, CaseType, EDADepth, StudentProfile, SuggestRequest, TeacherCourseItem } from "@/shared/adam-types";
+import type { AlgorithmMode, CaseFormData, CaseType, EDADepth, ImpactLens, StudentProfile, SuggestRequest, TeacherCourseItem } from "@/shared/adam-types";
 import {
     Select, SelectContent, SelectGroup,
     SelectItem, SelectTrigger, SelectValue,
@@ -12,6 +12,8 @@ import { api } from "@/shared/api";
 import { queryKeys } from "@/shared/queryKeys";
 import {
     INDUSTRIAS_OPTIONS,
+    IMPACT_LENS_OPTIONS,
+    IMPACT_LENS_AUTO,
     STUDENT_PROFILES,
     FORM_STYLES,
     FORM_STATE_SESSION_KEY,
@@ -99,6 +101,8 @@ export function AuthoringForm({
 
     const initialIndustry = INDUSTRIAS_OPTIONS.find((o) => o.label === initialData?.industry)?.value ?? "fintech";
     const [industry, setIndustry] = useState(initialIndustry);
+    // Issue #437 Fase 3 — optional Impact Lens override (null = "Automático", resolve from industry).
+    const [impactLens, setImpactLens] = useState<ImpactLens | null>(initialData?.impactLens ?? null);
     const [caseType, setCaseType] = useState<CaseType>(initialData?.caseType ?? "harvard_only");
     const [edaDepth, setEdaDepth] = useState<EDADepth | undefined>(initialData?.edaDepth);
     const [includePythonCode, setIncludePythonCode] = useState(initialData?.includePythonCode ?? false);
@@ -145,6 +149,15 @@ export function AuthoringForm({
             }
             if (saved.studentProfile === "business" || saved.studentProfile === "ml_ds") setStudentProfile(saved.studentProfile);
             if (typeof saved.industry === "string") setIndustry(saved.industry);
+            // Issue #437 Fase 3 — restore the Impact Lens override only if null or a valid lens key.
+            if (saved.impactLens === null) {
+                setImpactLens(null);
+            } else if (
+                typeof saved.impactLens === "string" &&
+                IMPACT_LENS_OPTIONS.some((o) => o.value === saved.impactLens && o.value !== IMPACT_LENS_AUTO)
+            ) {
+                setImpactLens(saved.impactLens as ImpactLens);
+            }
             if (saved.caseType === "harvard_only" || saved.caseType === "harvard_with_eda") setCaseType(saved.caseType as CaseType);
             if (typeof saved.notebookToggle === "boolean") setNotebookToggle(saved.notebookToggle);
             if (typeof saved.scenarioDescription === "string") setScenarioDescription(saved.scenarioDescription);
@@ -240,7 +253,7 @@ export function AuthoringForm({
             try {
                 sessionStorage.setItem(FORM_STATE_SESSION_KEY, JSON.stringify({
                     subject, syllabusModule, topicUnit, targetGroups, targetCourseIds, studentProfile,
-                    industry, caseType, notebookToggle,
+                    industry, impactLens, caseType, notebookToggle,
                     scenarioDescription, guidingQuestion,
                     algorithmMode, algorithmPrimary, algorithmChallenger,
                     availableFrom, dueAt,
@@ -252,7 +265,7 @@ export function AuthoringForm({
         return () => {
             if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
         };
-    }, [subject, syllabusModule, topicUnit, targetGroups, targetCourseIds, studentProfile, industry, caseType,
+    }, [subject, syllabusModule, topicUnit, targetGroups, targetCourseIds, studentProfile, industry, impactLens, caseType,
         notebookToggle, scenarioDescription, guidingQuestion,
         algorithmMode, algorithmPrimary, algorithmChallenger,
         availableFrom, dueAt]);
@@ -539,6 +552,10 @@ export function AuthoringForm({
         invalidateSuggestionResponses();
         setIndustry(val);
     };
+    // Issue #437 Fase 3 — the AUTO sentinel maps to null (no override → resolve from industry).
+    const onImpactLensChange = (val: string) => {
+        setImpactLens(val === IMPACT_LENS_AUTO ? null : (val as ImpactLens));
+    };
     const onStudentProfileChange = (val: string) => {
         invalidateSuggestionResponses();
         setStudentProfile(val as StudentProfile);
@@ -606,6 +623,7 @@ export function AuthoringForm({
                 syllabusModule,
                 topicUnit,
                 industry: selectedIndustry?.label ?? industry,
+                impactLens,
                 studentProfile,
                 caseType,
                 edaDepth,
@@ -939,6 +957,29 @@ export function AuthoringForm({
                                                 </SelectContent>
                                             </Select>
                                             <ErrorMsg show={!!errors.industria} />
+                                        </div>
+                                        {/* Marco de valor (Impact Lens) — Issue #437 Fase 3. Opcional; "Automático"
+                                            deja que la lente se resuelva desde la industria. */}
+                                        <div>
+                                            <label htmlFor="field-impact-lens" className="block text-sm font-semibold text-slate-700 mb-1.5">
+                                                Marco de valor (opcional)
+                                            </label>
+                                            <Select value={impactLens ?? IMPACT_LENS_AUTO} onValueChange={onImpactLensChange}>
+                                                <SelectTrigger
+                                                    id="field-impact-lens"
+                                                    className="input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800"
+                                                >
+                                                    <SelectValue placeholder="Automático (por industria)" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectGroup>
+                                                        {IMPACT_LENS_OPTIONS.map((opt) => (
+                                                            <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                                                        ))}
+                                                    </SelectGroup>
+                                                </SelectContent>
+                                            </Select>
+                                            <p className="field-hint">Cómo M4 mide el valor. Por defecto se infiere de la industria.</p>
                                         </div>
                                     </div>
 

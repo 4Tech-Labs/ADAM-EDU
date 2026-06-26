@@ -131,6 +131,7 @@ export function buildAuthoringJobCreateRequest(formData: CaseFormData): Authorin
         subject: formData.subject,
         academic_level: formData.academicLevel,
         industry: formData.industry,
+        impact_lens: formData.impactLens ?? null,
         student_profile: formData.studentProfile,
         case_type: formData.caseType,
         syllabus_module: formData.syllabusModule,

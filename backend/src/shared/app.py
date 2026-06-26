@@ -28,6 +28,7 @@ from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.orm import Session
 
 from case_generator.core.authoring import AuthoringService, derive_progress_percentage
+from case_generator.impact_lens import ImpactLensLiteral
 from case_generator.suggest_service import (
     SuggestRequest,
     SuggestResponse,
@@ -652,6 +653,10 @@ class IntakeRequest(BaseModel):
     subject: str = ""
     academic_level: str = "Pregrado"
     industry: str = "General"
+    # Issue #437 Fase 3 — OPTIONAL teacher Impact Lens override. None ("Automático") = resolve from
+    # industry. A valid key takes the HIGHEST precedence in _resolve_impact_lens (above the architect's
+    # value_model). Pydantic Literal → 422 on garbage; the resolver re-checks membership as 2nd line.
+    impact_lens: ImpactLensLiteral | None = None
     student_profile: Literal["business", "ml_ds"] = "business"
     case_type: Literal["harvard_only", "harvard_with_eda"] = "harvard_only"
     syllabus_module: str = ""
@@ -780,6 +785,8 @@ def create_authoring_job(
                 "asignatura": owned_course.course.title,
                 "nivel": owned_course.course.academic_level,
                 "industria": req.industry,
+                # Issue #437 Fase 3 — the optional teacher Impact Lens override (None = automatic).
+                "impact_lens_override": req.impact_lens,
                 "studentProfile": req.student_profile,
                 "caseType": req.case_type,
                 "modulo": module_title,

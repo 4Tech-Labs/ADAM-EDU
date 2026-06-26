@@ -79,6 +79,11 @@ class ADAMState(CanonicalInputState):
     # (Fase 2, D-A hybrid), and consumed by the M4 nodes; NotRequired so legacy/resumed states
     # default to "financial_roi" via _resolve_impact_lens.
     impact_lens: NotRequired[str]
+    # Issue #437 Fase 3 — the OPTIONAL teacher override (intake-only). When a valid lens key, it has
+    # the HIGHEST precedence in _resolve_impact_lens (above value_model). Intake-only ⇒ state_input
+    # re-injects it every attempt ⇒ resume-stable; no node writes it (no clobber). Absent/invalid →
+    # falls through (NOT coerced to default) so it can never forge a financial override.
+    impact_lens_override: NotRequired[str]
     # Issue #437 Fase 2 — the architect's value_model {lens, primary_metric_name, kpi_rows};
     # prompt-side only (NOT canonical / student-facing). None when the architect lens block is off.
     value_model: NotRequired[dict]

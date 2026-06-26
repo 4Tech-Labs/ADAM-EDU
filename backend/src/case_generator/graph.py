@@ -176,7 +176,9 @@ from case_generator.suggest_service import (
 from case_generator.impact_lens import (
     DEFAULT_IMPACT_LENS,
     IMPACT_LENS_KEYS,
+    build_impact_lens_architect_hint,
     build_impact_lens_hint,
+    build_impact_lens_m5_hint,
     normalize_impact_lens,
 )
 from case_generator.retention_tokens import (
@@ -1009,6 +1011,15 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
     # Issue #437 Fase 2 — append the Impact Lens block (value_model emission + lens-aware option
     # dimension) when enabled. lens_on=False is byte-identical to pre-#437 (DD5).
     prompt = _assemble_architect_prompt(context, lens_on=settings.impact_lens_architect)
+    # Issue #437 Fase 3 — when the teacher set an explicit OVERRIDE, append a brace-free runtime hint
+    # that CONSTRAINS the (otherwise domain-inferred) Fase-2 lens block to the override, so M1 frames
+    # options + emits value_model by the SAME lens M4/M5/M6 take via the resolver (DD1 cross-module
+    # coherence). Fires ONLY on a valid override → no override = byte-identical to Fase 2 (financial AND
+    # non-financial-industry). Appended in the NODE (not in the frozen ARCHITECT_IMPACT_LENS_BLOCK) so
+    # the architect SHA snapshots are untouched; the prompt is already formatted, so no second .format.
+    _lens_override = state.get("impact_lens_override")
+    if settings.impact_lens_architect and _lens_override in IMPACT_LENS_KEYS:
+        prompt = prompt + build_impact_lens_architect_hint(_lens_override)
 
     try:
         result, profile_resolved, family_resolved, pregunta_eje = (
@@ -5371,6 +5382,10 @@ def teaching_note_part1(state: ADAMState, config: RunnableConfig) -> dict:
             state.get("m3_notebook_degraded")
         )
         roster_ids = module_guide_roster_ids(is_business, case_type)
+        # Issue #437 Fase 3 — resolve the Impact Lens ONCE (DD1: the SAME _resolve_impact_lens M1/M4/M5
+        # consume) so the M4 synopsis value noun matches the case's value frame. None when the lens
+        # kill-switch is off → byte-identical OFF path; financial_roi is byte-identical regardless.
+        _m6_lens = _resolve_impact_lens(state) if settings.impact_lens else None
 
         # §2 esqueleto (sin anclajes) — baseline que SIEMPRE existe.
         section2 = build_module_guide_block(
@@ -5379,6 +5394,7 @@ def teaching_note_part1(state: ADAMState, config: RunnableConfig) -> dict:
             family=family,
             notebook_present=notebook_present,
             anchors=None,
+            lens=_m6_lens,
         )
         section1 = _m6_fallback_section1(state)
 
@@ -5406,6 +5422,7 @@ def teaching_note_part1(state: ADAMState, config: RunnableConfig) -> dict:
                 family=family,
                 notebook_present=notebook_present,
                 anchors=anchors,
+                lens=_m6_lens,
             )
         except Exception as e:
             logger.warning(
@@ -6039,6 +6056,12 @@ def _resolve_impact_lens(state: ADAMState) -> str:
     """Return the case's resolved Impact Lens (value frame for M4) — Issue #437.
 
     DD1 single source of truth. Precedence (D-A hybrid):
+      0. ``state["impact_lens_override"]`` — the OPTIONAL teacher override (Fase 3), HIGHEST priority.
+         Validated by MEMBERSHIP in ``IMPACT_LENS_KEYS`` (NOT ``normalize_impact_lens``): an invalid/
+         absent value FALLS THROUGH rather than coercing to the default, so a garbage value from a
+         cached client / direct API call can never forge a ``financial_roi`` override that would beat
+         the architect's ``value_model``. Intake-only (re-injected by ``state_input`` every attempt) ⇒
+         resume-stable; no node writes it (no last-write-wins clobber).
       1. ``state["value_model"]["lens"]`` — the architect's more-informed refinement (Fase 2). It
          is WRITTEN only when the architect lens block is enabled (``impact_lens_architect`` at
          case_architect time), so on the normal flow its presence encodes the kill-switch. (Edge:
@@ -6053,9 +6076,12 @@ def _resolve_impact_lens(state: ADAMState) -> str:
          label; never re-derived from the architect's free-noun ``industria``).
       3. ``DEFAULT_IMPACT_LENS``.
 
-    Total + safe: any missing/legacy/unknown value coerces to the default; never raises. Every M4
-    node READS this (never re-derives), so all consume the SAME lens even on a resumed job.
+    Total + safe: any missing/legacy/unknown value coerces to the default; never raises. Every M1/M4/
+    M5/M6 consumer READS this (never re-derives), so all consume the SAME lens even on a resumed job.
     """
+    override = state.get("impact_lens_override")
+    if override in IMPACT_LENS_KEYS:
+        return override
     vm = state.get("value_model")
     if isinstance(vm, dict):
         vm_lens = vm.get("lens")
@@ -8278,6 +8304,14 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         prompt_template = _maybe_business_classification_prompt(
             state, prompt_template, M5_BUSINESS_PROMPT_CLASSIFICATION
         )
+        # Issue #437 Fase 3 — append the value-frame hint (brace-free) so the M5 decision matrix's
+        # "KPI esperado" column uses the resolved lens's value metric, not a default business indicator.
+        # Skipped for financial_roi (the matrix's native frame) → byte-identical for the dominant cohort
+        # even with the switch on. The matrix header stays byte-identical (it's in the import-time
+        # constant; the hint is APPENDED). DD1: this consumes the SAME _resolve_impact_lens as M1/M4/M6.
+        _m5_lens = _resolve_impact_lens(state)
+        if settings.impact_lens and _m5_lens != DEFAULT_IMPACT_LENS:
+            prompt_template = prompt_template + build_impact_lens_m5_hint(_m5_lens)
         context["computed_metrics_block"] = metrics_block
 
         m5 = _invoke_m5_content_with_contract(

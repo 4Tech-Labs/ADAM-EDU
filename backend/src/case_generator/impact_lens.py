@@ -29,7 +29,7 @@ test ``test_impact_lens`` asserts every value AND label maps.
 from __future__ import annotations
 
 import unicodedata
-from typing import cast
+from typing import Literal, cast
 
 # ── Lens keys (the canonical catalog of 4, Issue #437 decision D-B) ────────────
 IMPACT_LENS_FINANCIAL_ROI = "financial_roi"
@@ -38,6 +38,17 @@ IMPACT_LENS_CLINICAL_OUTCOMES = "clinical_outcomes"
 IMPACT_LENS_LEARNING_OUTCOMES = "learning_outcomes"
 
 DEFAULT_IMPACT_LENS = IMPACT_LENS_FINANCIAL_ROI
+
+# The constrained set of lens keys, as a typed Literal for the intake override field
+# (``IntakeRequest.impact_lens`` in ``shared/app.py``) and the ``value_model`` schema. The drift
+# test ``test_impact_lens`` asserts ``set(get_args(ImpactLensLiteral)) == IMPACT_LENS_KEYS`` so the
+# Literal can never skew from the catalog (Issue #437 Fase 3).
+ImpactLensLiteral = Literal[
+    "financial_roi",
+    "operational_efficiency",
+    "clinical_outcomes",
+    "learning_outcomes",
+]
 
 # Each lens declares only the VALUE-side framing: a primary metric name and the
 # 2-3 KPI rows that replace the hardcoded ROI/Payback/NPV table in M4 §4.5.
@@ -162,15 +173,64 @@ def build_impact_lens_hint(lens: str | None) -> str:
     )
 
 
+def build_impact_lens_m5_hint(lens: str | None) -> str:
+    """Brace-free value-frame hint appended to the M5 narrative prompt (Issue #437 Fase 3).
+
+    Reframes the executive decision-matrix ``KPI esperado`` column and the report's value framing to
+    the resolved lens's primary value metric, instead of always assuming a generic ``indicador de
+    negocio``. The M4 §4.5 KPI table is deliberately NOT mentioned (that is M4's surface, owned by
+    ``build_impact_lens_hint``). Brace-free → safe to concatenate before ``str.format`` (the M5 prompt
+    keeps its ``{pregunta_eje}`` / ``{computed_metrics_block}`` placeholders). Callers append it ONLY
+    for a NON-default lens (``financial_roi`` is the matrix's native frame), so the dominant cohort
+    stays byte-identical even with the kill-switch on.
+    """
+    spec = IMPACT_LENS_CATALOG.get(normalize_impact_lens(lens), IMPACT_LENS_CATALOG[DEFAULT_IMPACT_LENS])
+    return (
+        "\n# MARCO DE VALOR (IMPACT LENS): " + str(spec["label"]) + "\n"
+        "En la matriz de decisión ejecutiva, la columna `KPI esperado` y el marco de valor del "
+        "informe DEBEN expresarse en la métrica de valor primaria de este caso: "
+        + str(spec["primary_metric_name"]) + " (no asumas un indicador financiero por defecto). "
+        "Los COSTOS siguen SIEMPRE en USD; la lente reencuadra solo el lado del VALOR. "
+        "NUNCA inventes cifras ni benchmarks externos.\n"
+    )
+
+
+def build_impact_lens_architect_hint(lens: str | None) -> str:
+    """Brace-free TEACHER-OVERRIDE hint appended in the ``case_architect`` node (Issue #437 Fase 3).
+
+    Appended ONLY when the teacher set an explicit ``impact_lens`` override. It constrains the Fase-2
+    ``ARCHITECT_IMPACT_LENS_BLOCK`` (which otherwise INFERS the lens from the domain) to a fixed
+    value, so M1 frames the A/B/C option-superiority dimension AND emits ``value_model.lens`` by the
+    OVERRIDE — keeping M1 coherent with M4/M5/M6 (which take the override via ``_resolve_impact_lens``).
+    Brace-free → safe to concatenate AFTER ``_assemble_architect_prompt`` (an already-formatted prompt;
+    no second ``.format``). Because it lives in the NODE (not in the frozen ``ARCHITECT_IMPACT_LENS_BLOCK``
+    constant), the architect SHA snapshots are untouched, and without an override the architect prompt
+    is byte-identical to Fase 2.
+    """
+    key = normalize_impact_lens(lens)
+    spec = IMPACT_LENS_CATALOG[key]
+    return (
+        "\n# OVERRIDE DEL DOCENTE — LENTE DE VALOR FIJADA: " + str(spec["label"]) + "\n"
+        "El docente FIJÓ explícitamente la lente de valor de este caso. IGNORA la inferencia por "
+        "DOMINIO del bloque anterior y usa SIEMPRE esta lente: fija `value_model.lens` = " + key + ". "
+        "Enmarca por esta lente la dimensión donde la Opción A supera a las demás y la narrativa de "
+        "valor. La métrica de valor primaria es: " + str(spec["primary_metric_name"]) + ". "
+        "Los COSTOS siguen en USD (Exhibit 1 = P&L USD); la lente reencuadra solo el lado del VALOR.\n"
+    )
+
+
 __all__ = [
     "IMPACT_LENS_FINANCIAL_ROI",
     "IMPACT_LENS_OPERATIONAL_EFFICIENCY",
     "IMPACT_LENS_CLINICAL_OUTCOMES",
     "IMPACT_LENS_LEARNING_OUTCOMES",
     "DEFAULT_IMPACT_LENS",
+    "ImpactLensLiteral",
     "IMPACT_LENS_CATALOG",
     "IMPACT_LENS_KEYS",
     "resolve_impact_lens_from_industry",
     "normalize_impact_lens",
     "build_impact_lens_hint",
+    "build_impact_lens_m5_hint",
+    "build_impact_lens_architect_hint",
 ]

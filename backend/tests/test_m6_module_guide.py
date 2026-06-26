@@ -14,11 +14,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from case_generator.impact_lens import IMPACT_LENS_KEYS
 from case_generator.prompts.teaching_note.module_guide_block import (
     M1_NARRATIVE_WORDS,
     M2_EDA_WORDS,
     M4_VERDICT_BUSINESS,
     M4_VERDICT_MLDS,
+    _M4_VALUE_FRAME_BY_LENS,
     build_module_guide_block,
     build_roster_allowlist,
     module_guide_roster_ids,
@@ -192,6 +194,51 @@ def test_m4_verdict_literals_bound_to_source():
     ).read_text(encoding="utf-8").replace("**", "")
     assert M4_VERDICT_BUSINESS in src, "M4 business verdict drifted from _shared.py"
     assert M4_VERDICT_MLDS in src, "M4 ml_ds verdict drifted from _shared.py"
+
+
+# ─────────────────────────────────────────────────────────
+# 4b. Impact Lens (Issue #437 Fase 3): M4 synopsis value frame
+# ─────────────────────────────────────────────────────────
+
+
+def test_value_frame_keys_match_lens_catalog() -> None:
+    # Drift lock: the per-lens M4 value frame must cover EXACTLY the 4 canonical lens keys.
+    assert set(_M4_VALUE_FRAME_BY_LENS) == IMPACT_LENS_KEYS
+
+
+def test_lens_none_and_financial_are_byte_identical_to_today() -> None:
+    # DD5: no lens / financial_roi reproduces today's exact wording for both profiles.
+    for is_business in (True, False):
+        base = _block(is_business=is_business, lens=None)
+        assert _block(is_business=is_business, lens="financial_roi") == base
+        if is_business:
+            assert "Traduce la evidencia en valor de negocio, cuantifica los trade-offs" in base
+        else:
+            assert "en valor de negocio (retorno, factibilidad de despliegue)" in base
+
+
+def test_non_financial_lens_reframes_only_the_m4_aprende_line() -> None:
+    clinical = _block(is_business=False, lens="clinical_outcomes")
+    assert "en valor clínico (outcomes evitados, factibilidad de despliegue)" in clinical
+    # The drift-locked LABEL keeps "valor de negocio"; only the aprende line is reframed.
+    assert "Convierte el modelo en valor de negocio" in clinical
+    # Business path reframes its (structurally different) sentence too.
+    b = _block(is_business=True, lens="learning_outcomes")
+    assert "Traduce la evidencia en valor educativo, cuantifica los trade-offs" in b
+
+
+def test_every_lens_keeps_block_currency_token_free() -> None:
+    # The curated value nouns must NOT introduce a currency token (enforce_usd_currency no-op).
+    from case_generator.m1_grounding import enforce_usd_currency
+
+    for lens in IMPACT_LENS_KEYS:
+        for is_business in (True, False):
+            block = build_module_guide_block(
+                is_business=is_business, case_type="harvard_with_eda", family="clasificacion",
+                notebook_present=True, anchors=None, lens=lens,
+            )
+            assert enforce_usd_currency(block) == block
+            assert "{" not in block and "}" not in block
 
 
 # ─────────────────────────────────────────────────────────────

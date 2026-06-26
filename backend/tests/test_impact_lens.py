@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import pytest
 
+from typing import get_args
+
 from case_generator.impact_lens import (
     DEFAULT_IMPACT_LENS,
     IMPACT_LENS_CATALOG,
@@ -15,7 +17,10 @@ from case_generator.impact_lens import (
     IMPACT_LENS_KEYS,
     IMPACT_LENS_LEARNING_OUTCOMES,
     IMPACT_LENS_OPERATIONAL_EFFICIENCY,
+    ImpactLensLiteral,
+    build_impact_lens_architect_hint,
     build_impact_lens_hint,
+    build_impact_lens_m5_hint,
     normalize_impact_lens,
     resolve_impact_lens_from_industry,
 )
@@ -99,3 +104,41 @@ def test_non_financial_hint_drops_roi_npv() -> None:
 
 def test_hint_default_on_unknown_lens() -> None:
     assert build_impact_lens_hint("bogus") == build_impact_lens_hint(IMPACT_LENS_FINANCIAL_ROI)
+
+
+# ── Fase 3 — ImpactLensLiteral + M5 / architect hints ──────────────────────────
+
+
+def test_impact_lens_literal_matches_keys() -> None:
+    # Drift lock: the intake-override Literal can never skew from the catalog keys.
+    assert set(get_args(ImpactLensLiteral)) == IMPACT_LENS_KEYS
+
+
+def test_m5_and_architect_hints_brace_free_for_every_lens() -> None:
+    for lens in IMPACT_LENS_KEYS:
+        for hint in (build_impact_lens_m5_hint(lens), build_impact_lens_architect_hint(lens)):
+            assert "{" not in hint and "}" not in hint
+            hint.format()  # .format-safe with no args
+
+
+def test_m5_hint_does_not_mention_section_45() -> None:
+    # The M5 hint is the decision-matrix surface, NOT M4's §4.5 KPI table.
+    for lens in IMPACT_LENS_KEYS:
+        hint = build_impact_lens_m5_hint(lens)
+        assert "§4.5" not in hint and "4.5" not in hint
+        assert "KPI esperado" in hint and "USD" in hint  # value framing + DD3
+
+
+def test_m5_hint_carries_lens_metric() -> None:
+    clinical = build_impact_lens_m5_hint(IMPACT_LENS_CLINICAL_OUTCOMES)
+    assert "Costo-efectividad" in clinical or "readmisiones" in clinical
+    learning = build_impact_lens_m5_hint(IMPACT_LENS_LEARNING_OUTCOMES)
+    assert "retención" in learning.lower()
+
+
+def test_architect_hint_is_override_authoritative_and_names_the_key() -> None:
+    # The architect hint must (a) tell the LLM to IGNORE domain inference and (b) pin value_model.lens.
+    hint = build_impact_lens_architect_hint(IMPACT_LENS_CLINICAL_OUTCOMES)
+    assert "OVERRIDE" in hint and "value_model.lens" in hint
+    assert IMPACT_LENS_CLINICAL_OUTCOMES in hint  # the canonical key, so the LLM emits it verbatim
+    assert "USD" in hint  # DD3 — costs stay USD
