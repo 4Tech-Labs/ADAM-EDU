@@ -128,6 +128,17 @@ def configure_auth_env(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None,
     get_supabase_admin_auth_client.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_node_model_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests must not inherit a developer's local ``NODE_MODEL_OVERRIDES`` (loaded from .env via
+    ``load_dotenv``). That env var has precedence over ``run_config`` and would route nodes to an
+    OpenRouter model, breaking model-tier assertions (e.g. ``test_overrides_via_configurable_dict``
+    and the M5 dedicated-Pro-LLM test). Tests that need it set it explicitly with
+    ``monkeypatch.setenv``, which runs in the test body — after this autouse fixture.
+    """
+    monkeypatch.delenv("NODE_MODEL_OVERRIDES", raising=False)
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Skip live LLM tests unless they are explicitly enabled.
 

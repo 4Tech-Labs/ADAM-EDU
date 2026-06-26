@@ -80,6 +80,10 @@ _FLASH_RATES = LLMCostRates(input_per_1m=0.30, output_per_1m=2.50, cached_input_
 # expone un tier de cache-read estilo Gemini (no sub-facturar). Reusar _FLASH_RATES sería erróneo
 # (su output es 2.50, no 1.20). Confirmar contra el pricing vigente de OpenRouter.
 _MINIMAX_M3_RATES = LLMCostRates(input_per_1m=0.30, output_per_1m=1.20, cached_input_per_1m=0.30)
+# OpenRouter z-ai/glm-5.2 — el pricing varía por proveedor (~$0.95–1.4/M in · ~$3.0–4.4/M out);
+# valor representativo APROXIMADO (los token counts son exactos; solo la escala USD depende de esto).
+# cached_input==input (OpenRouter no expone cache-read estilo Gemini).
+_GLM_RATES = LLMCostRates(input_per_1m=1.0, output_per_1m=4.0, cached_input_per_1m=1.0)
 
 PRICE_MAP: dict[str, LLMCostRates] = {
     "gemini-3.1-pro-preview": _PRO_RATES,
@@ -87,6 +91,7 @@ PRICE_MAP: dict[str, LLMCostRates] = {
     "gemini-3-flash-preview": _FLASH_RATES,
     "gemini-2.5-flash": _FLASH_RATES,
     "minimax/minimax-m3": _MINIMAX_M3_RATES,
+    "z-ai/glm-5.2": _GLM_RATES,
 }
 
 _UNKNOWN_MODELS_WARNED: set[str] = set()
@@ -103,10 +108,13 @@ def _rates_for_model(model_id: str) -> LLMCostRates:
     if rates is not None:
         return rates
     lowered = (model_id or "").lower()
-    # minimax primero: un slug con sufijo de proveedor (p.ej. "minimax/minimax-m3:together") no
-    # matchea la clave exacta del PRICE_MAP ni "pro"/"flash" → sin este brazo reportaría USD 0.
+    # OpenRouter devuelve slugs versionados (p.ej. "minimax/minimax-m3-20260531",
+    # "z-ai/glm-5.2-20260616") que no matchean la clave exacta ni "pro"/"flash" → sin estos brazos
+    # reportarían USD 0. Van ANTES de pro/flash (no colisionan con ids gemini).
     if "minimax" in lowered:
         return _MINIMAX_M3_RATES
+    if "glm" in lowered:
+        return _GLM_RATES
     if "pro" in lowered:
         return _PRO_RATES
     if "flash" in lowered:
