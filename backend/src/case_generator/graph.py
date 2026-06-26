@@ -94,6 +94,7 @@ from case_generator.configuration import (
     M3_NOTEBOOK_MAX_ATTEMPTS,
 )
 from case_generator.prompts import (
+    ARCHITECT_IMPACT_LENS_BLOCK,
     CASE_ARCHITECT_PROMPT,
     CASE_ARCHITECT_PROMPT_BY_FAMILY,
     M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK,
@@ -174,6 +175,7 @@ from case_generator.suggest_service import (
 )
 from case_generator.impact_lens import (
     DEFAULT_IMPACT_LENS,
+    IMPACT_LENS_KEYS,
     build_impact_lens_hint,
     normalize_impact_lens,
 )
@@ -933,8 +935,13 @@ _BUSINESS_CLF_PERMISSIVE_SUBSTITUTIONS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _assemble_architect_prompt(context: dict) -> str:
+def _assemble_architect_prompt(context: dict, *, lens_on: bool = False) -> str:
     """Selecciona el prompt M1 por familia y lo formatea con el contexto.
+
+    ``lens_on`` (Issue #437 Fase 2) appends the brace-free ``ARCHITECT_IMPACT_LENS_BLOCK``
+    (value_model emission + lens-aware option dimension). Default ``False`` so the existing SHA
+    snapshot / differential tests keep asserting the byte-identical base+anchor assembly; the
+    production caller passes ``settings.impact_lens_architect``.
 
     Punto único de ensamblado del prompt del architect. El gate por perfil (#301) vive AQUÍ,
     de modo que el prompt ensamblado para ml_ds queda byte-idéntico (el snapshot de Item 4 /
@@ -957,6 +964,13 @@ def _assemble_architect_prompt(context: dict) -> str:
         for old, new in _BUSINESS_CLF_PERMISSIVE_SUBSTITUTIONS:
             template = template.replace(old, new)
         template = template + M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK
+    # Issue #437 (ADR 0003, Fase 2) — append the Impact Lens block when enabled (value_model
+    # emission + lens-aware option dimension; Exhibit 1 stays a USD P&L per DD3). Purely additive +
+    # brace-free → lens_on=False is byte-identical to pre-#437 (the existing SHA still matches that
+    # path); lens_on=True has its own frozen hash. Default False so callers/tests that omit it (incl.
+    # the existing SHA snapshot) keep the byte-identical assembly.
+    if lens_on:
+        template = template + ARCHITECT_IMPACT_LENS_BLOCK
     return template.format(**context)
 
 
@@ -992,7 +1006,9 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         }, per_field_limit=800, total_limit=2500),
     })
 
-    prompt = _assemble_architect_prompt(context)
+    # Issue #437 Fase 2 — append the Impact Lens block (value_model emission + lens-aware option
+    # dimension) when enabled. lens_on=False is byte-identical to pre-#437 (DD5).
+    prompt = _assemble_architect_prompt(context, lens_on=settings.impact_lens_architect)
 
     try:
         result, profile_resolved, family_resolved, pregunta_eje = (
@@ -1099,8 +1115,22 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             contract=contract_dict,
         )
 
+        # Issue #437 Fase 2 — persist the architect's value_model (prompt-side only; NOT canonical
+        # nor student-facing) and REFINE the Impact Lens (D-A hybrid: a valid architect lens wins
+        # over the intake default). Written ONCE here, before the M1/EDA/M4 fan-out, so every
+        # downstream node reads the SAME refined lens (DD1). When the lens block is disabled,
+        # value_model is None and the intake lens is unchanged (byte-identical M4 behavior).
+        value_model_dict = (
+            result.value_model.model_dump() if result.value_model is not None else None
+        )
+        refined_lens = _refine_impact_lens(
+            state.get("impact_lens"), value_model_dict, enabled=settings.impact_lens_architect
+        )
+
         return {
             "current_agent": "case_architect",
+            "impact_lens": refined_lens,
+            "value_model": value_model_dict,
             "titulo": result.titulo,
             "industria": result.industria,
             # Issue #377 — relabel any non-USD currency to USD at the source (structured-output
@@ -6018,6 +6048,27 @@ def _resolve_impact_lens(state: ADAMState) -> str:
     same helper (the hybrid precedence of decision D-A).
     """
     return normalize_impact_lens(state.get("impact_lens", DEFAULT_IMPACT_LENS))
+
+
+def _refine_impact_lens(
+    intake_lens: str | None, value_model: dict | None, *, enabled: bool
+) -> str:
+    """D-A hybrid precedence (Issue #437 Fase 2): the architect's ``value_model.lens`` refines
+    the intake-resolved lens.
+
+    When the architect lens block is enabled and emitted a VALID lens, it WINS over the intake
+    default (the architect read the full teacher input → a more-informed signal). Otherwise the
+    intake lens stands. Total + safe: coerces to ``DEFAULT_IMPACT_LENS`` on anything unexpected,
+    never raises. case_architect calls this ONCE and writes the result to ``state["impact_lens"]``
+    before the M1/EDA/M4 fan-out, so every downstream node reads the SAME refined value (DD1).
+    """
+    base = normalize_impact_lens(intake_lens)
+    if not enabled or not value_model:
+        return base
+    vm_lens = value_model.get("lens")
+    if vm_lens in IMPACT_LENS_KEYS:
+        return normalize_impact_lens(vm_lens)
+    return base
 
 
 def _maybe_business_classification_prompt(

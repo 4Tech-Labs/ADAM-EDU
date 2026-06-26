@@ -30,6 +30,7 @@ from case_generator.graph import (
     _normalize_business_classification_target,
 )
 from case_generator.prompts import (
+    ARCHITECT_IMPACT_LENS_BLOCK,
     CASE_ARCHITECT_PROMPT,
     CASE_ARCHITECT_PROMPT_CLASSIFICATION,
     M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK,
@@ -105,6 +106,51 @@ def test_mlds_architect_prompt_frozen_hash() -> None:
         f"_MLDS_ARCHITECT_PROMPT_SHA256 to {digest!r}. If you did NOT, the business gate "
         "leaked into the ml_ds path — REVERT before shipping (Risk #1)."
     )
+
+
+# ── 1c. Issue #437 Fase 2 — Impact Lens architect block (lens_on) ─────────────
+# Frozen digest of the LENS-ON assembled ml_ds+clf prompt (base+anchor+ARCHITECT_IMPACT_LENS_BLOCK).
+# The lens-OFF path keeps the original _MLDS_ARCHITECT_PROMPT_SHA256 (byte-identical, untouched) —
+# this is the additive on-path lock, NOT a regen of the off-path. Update deliberately on a prompt edit.
+_MLDS_ARCHITECT_LENS_PROMPT_SHA256 = (
+    "71a9c54deb9fc0fbaae34ef3bd18c9899ab5e1352bdc962be3bc92fcb2a9cb29"
+)
+
+
+def test_architect_lens_off_is_byte_identical_to_base_anchor() -> None:
+    """DD5/Fase 2: lens_on=False (kill-switch off) assembles byte-identically to the original
+    base+anchor — the existing _MLDS_ARCHITECT_PROMPT_SHA256 still matches, no regen."""
+    off = _assemble_architect_prompt(dict(_MLDS_CTX))
+    off_explicit = _assemble_architect_prompt(dict(_MLDS_CTX), lens_on=False)
+    assert off == off_explicit
+    assert hashlib.sha256(off.encode("utf-8")).hexdigest() == _MLDS_ARCHITECT_PROMPT_SHA256
+    assert ARCHITECT_IMPACT_LENS_BLOCK.strip() not in off
+
+
+def test_architect_lens_on_unchanged_by_business_gate() -> None:
+    """Differential (robust to legit edits): lens_on ml_ds == raw classification + lens block,
+    and the business target block did NOT leak in."""
+    assembled = _assemble_architect_prompt(dict(_MLDS_CTX), lens_on=True)
+    baseline = (CASE_ARCHITECT_PROMPT_CLASSIFICATION + ARCHITECT_IMPACT_LENS_BLOCK).format(**_MLDS_CTX)
+    assert assembled == baseline
+    assert M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK.strip() not in assembled
+    assert ARCHITECT_IMPACT_LENS_BLOCK.strip() in assembled
+
+
+def test_architect_lens_on_frozen_hash() -> None:
+    digest = hashlib.sha256(
+        _assemble_architect_prompt(dict(_MLDS_CTX), lens_on=True).encode("utf-8")
+    ).hexdigest()
+    assert digest == _MLDS_ARCHITECT_LENS_PROMPT_SHA256, (
+        "lens-on ml_ds architect prompt changed. If you intentionally edited the lens block, "
+        f"update _MLDS_ARCHITECT_LENS_PROMPT_SHA256 to {digest!r}. The lens-OFF hash "
+        "(_MLDS_ARCHITECT_PROMPT_SHA256) must stay UNCHANGED (off-path byte-identity)."
+    )
+
+
+def test_architect_lens_block_is_brace_free() -> None:
+    """The lens block is concatenated before str.format → must carry zero braces."""
+    assert "{" not in ARCHITECT_IMPACT_LENS_BLOCK and "}" not in ARCHITECT_IMPACT_LENS_BLOCK
 
 
 # ── 1b. dedup identity (#305 Gate 1a) ─────────────────────────────────────────

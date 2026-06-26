@@ -117,6 +117,11 @@ class NodeEvalInputs:
     # ``check_m4_lens_kpi_coherence``, so a future M4-node downgrade that ignores the lens block fails
     # the gate. (Full per-lens semantic coverage is phased to Fase 3, R9.)
     m4_lens_kpi_coherence_ok: bool = True
+    # The architect's value_model (Issue #437 Fase 2) carries a VALID Impact Lens key. True (n/a)
+    # when value_model is absent (lens-off / business). Computed via
+    # ``check_architect_value_model_lens_valid``; gate-protects a case_architect downgrade that
+    # would emit a raw, un-normalized value_model. (Semantic lens↔domain coherence is live-eval.)
+    architect_value_model_lens_valid_ok: bool = True
 
 
 @dataclass
@@ -166,6 +171,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M4 narrative coherence failure: invented benchmark figure in narrative prose")
     if not r.m4_lens_kpi_coherence_ok:
         reasons.append("M4 lens coherence failure: non-financial lens emitted forced ROI/NPV KPI rows")
+    if not r.architect_value_model_lens_valid_ok:
+        reasons.append("architect value_model failure: emitted an unknown/missing Impact Lens key")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -341,6 +348,19 @@ def check_m4_lens_kpi_coherence(narrative: str | None, *, lens: str | None) -> b
         return True
     lowered = narrative.lower()
     return "roi proyectado" not in lowered and "npv estimado" not in lowered
+
+
+def check_architect_value_model_lens_valid(value_model: dict | None) -> bool:
+    """Pure oracle (Issue #437 Fase 2): if the architect emitted a ``value_model``, its ``lens`` is a
+    known Impact Lens key. True (n/a) when ``value_model`` is absent (lens-off / business). A present
+    ``value_model`` with a missing/unknown lens FAILS — the ValueModel coerce should have normalized
+    it, so a failure here means a case_architect downgrade emitted a raw, un-normalized value_model.
+    Reuses the production ``impact_lens.IMPACT_LENS_KEYS`` (single source of truth)."""
+    from case_generator.impact_lens import IMPACT_LENS_KEYS
+
+    if value_model is None:
+        return True
+    return value_model.get("lens") in IMPACT_LENS_KEYS
 
 
 def check_m5_questions_coherence(
