@@ -366,15 +366,23 @@ _openrouter_rate_limiter = InMemoryRateLimiter(
 
 # minimax-m3 es un modelo de RAZONAMIENTO y sus reasoning tokens cuentan contra max_tokens. Sin
 # cap pueden ahogar la salida visible (p.ej. la matriz de decisión de M5). El max_tokens total que
-# enviamos = answer (_M5_MAX_OUTPUT_TOKENS) + este valor. En modo presupuesto se manda como
-# reasoning.max_tokens. Con OPENROUTER_REASONING_EFFORT este valor NO se manda (effort y max_tokens
-# son excluyentes → 400); solo sube el max_tokens total y OpenRouter asigna ~80% al razonamiento
-# ("high") y ~20% a la respuesta — la doc exige max_tokens > presupuesto de razonamiento, que ese
-# ~20% restante garantiza (verificado en vivo: 48768 → finish_reason=stop, sin truncar, en M5).
+# enviamos = answer (_M5_MAX_OUTPUT_TOKENS, 32768) + este valor. En modo PRESUPUESTO (effort vacío)
+# se manda como reasoning.max_tokens, así que answer y razonamiento están separados. En modo EFFORT
+# este valor NO se manda como reasoning.max_tokens (excluyentes → 400); solo sube el max_tokens
+# total, del cual OpenRouter toma una fracción para razonar (~80% "high") y deja el resto a la
+# respuesta. Default 4000 → total 36768 (answer ~7.3k bajo "high", de sobra para M5 ~1-4k). Subirlo
+# (p.ej. 16000 → total 48768) da más respuesta+razonamiento; verificado en vivo: 48768 + effort=high
+# → finish_reason=stop, sin truncar, en M5 (minimax y glm). Para respuestas grandes bajo effort,
+# sube este presupuesto.
 _OPENROUTER_REASONING_MAX_TOKENS = _env_int("OPENROUTER_REASONING_MAX_TOKENS", 4000)
-# Nivel de esfuerzo de razonamiento: "low" | "medium" | "high". Vacío = usar el presupuesto de
-# tokens de arriba. EXCLUYENTE con reasoning.max_tokens (OpenRouter da 400 si se envían ambos):
-# si se fija un nivel, se manda SOLO reasoning.effort (el modelo razona lo que la tarea requiera).
+# Niveles de esfuerzo válidos en OpenRouter (mayor→menor). EXCLUYENTE con reasoning.max_tokens
+# (OpenRouter da 400 si se envían ambos): con effort, OpenRouter asigna una FRACCIÓN del max_tokens
+# total al razonamiento (~95% max/xhigh, ~80% high, ~50% medium, ~20% low, ~10% minimal, 0% none) y
+# deja el resto para la respuesta — por eso el max_tokens total (= answer + presupuesto) debe ser
+# holgado: con presupuesto pequeño y effort alto el ~20% de respuesta puede quedar corto.
+_VALID_OPENROUTER_EFFORTS = frozenset({"max", "xhigh", "high", "medium", "low", "minimal", "none"})
+# Nivel de esfuerzo de razonamiento. Vacío = usar el presupuesto de tokens de arriba. Un valor NO
+# vacío pero inválido (typo) cae a presupuesto CON un warning (no se ignora en silencio).
 _OPENROUTER_REASONING_EFFORT = os.getenv("OPENROUTER_REASONING_EFFORT", "").strip().lower()
 # Timeout por request: acota una llamada colgada para que la cadena .with_fallbacks avance a
 # Gemini mucho antes del deadline global del job (~1900s).
@@ -488,9 +496,16 @@ def _build_openrouter(
         provider["order"] = _OPENROUTER_PROVIDER_ORDER
     # reasoning.effort y reasoning.max_tokens son EXCLUYENTES (OpenRouter → 400 si ambos). Si hay un
     # nivel de esfuerzo configurado, se manda SOLO effort; si no, el presupuesto de tokens.
-    if _OPENROUTER_REASONING_EFFORT in ("low", "medium", "high"):
-        reasoning_cfg: dict[str, Any] = {"effort": _OPENROUTER_REASONING_EFFORT}
+    reasoning_cfg: dict[str, Any]
+    if _OPENROUTER_REASONING_EFFORT in _VALID_OPENROUTER_EFFORTS:
+        reasoning_cfg = {"effort": _OPENROUTER_REASONING_EFFORT}
     else:
+        if _OPENROUTER_REASONING_EFFORT:  # no vacío pero inválido → avisar, no ignorar en silencio
+            logger.warning(
+                "[config] OPENROUTER_REASONING_EFFORT=%r inválido (válidos: %s) — usando reasoning.max_tokens",
+                _OPENROUTER_REASONING_EFFORT,
+                ", ".join(sorted(_VALID_OPENROUTER_EFFORTS)),
+            )
         reasoning_cfg = {"max_tokens": _OPENROUTER_REASONING_MAX_TOKENS}
     extra_body: dict[str, Any] = {
         # CRÍTICO: `max_tokens` va AQUÍ (en extra_body), NO como kwarg de ChatOpenAI. ChatOpenAI

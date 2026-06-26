@@ -134,6 +134,37 @@ def test_build_openrouter_reasoning_budget_mode_default(monkeypatch: pytest.Monk
     assert "effort" not in m.extra_body["reasoning"]
 
 
+@pytest.mark.parametrize("effort", ["max", "xhigh", "high", "medium", "low", "minimal", "none"])
+def test_build_openrouter_accepts_full_effort_set(
+    effort: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OpenRouter's valid effort set is 7 values, not just low/medium/high — accept all of them."""
+    _with_openrouter_key(monkeypatch)
+    monkeypatch.setattr(g, "_OPENROUTER_REASONING_EFFORT", effort)
+    m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=100)
+    assert m.extra_body["reasoning"] == {"effort": effort}
+
+
+def test_build_openrouter_invalid_effort_falls_back_to_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-empty but invalid effort (typo) must NOT silently land in effort mode — it falls back to
+    the token budget (and logs a warning) instead of sending an invalid reasoning.effort."""
+    _with_openrouter_key(monkeypatch)
+    monkeypatch.setattr(g, "_OPENROUTER_REASONING_EFFORT", "hgih")  # typo
+    monkeypatch.setattr(g, "_OPENROUTER_REASONING_MAX_TOKENS", 4000)
+    m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=100)
+    assert m.extra_body["reasoning"] == {"max_tokens": 4000}
+
+
+def test_build_openrouter_data_collection_garbage_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the exact whitelist {deny, allow} is sent; any other value is omitted (never a bad payload)."""
+    _with_openrouter_key(monkeypatch)
+    monkeypatch.setattr(g, "_OPENROUTER_DATA_COLLECTION", "xyz")
+    m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=100)
+    assert "data_collection" not in m.extra_body["provider"]
+
+
 def test_build_openrouter_require_parameters_can_disable(monkeypatch: pytest.MonkeyPatch) -> None:
     _with_openrouter_key(monkeypatch)
     monkeypatch.setattr(g, "_OPENROUTER_REQUIRE_PARAMETERS", False)
