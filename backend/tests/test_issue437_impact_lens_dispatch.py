@@ -154,3 +154,31 @@ def test_graph_resolver_reads_state_with_safe_default() -> None:
     assert _graph._resolve_impact_lens({}) == IMPACT_LENS_FINANCIAL_ROI
     assert _graph._resolve_impact_lens({"impact_lens": IMPACT_LENS_CLINICAL_OUTCOMES}) == IMPACT_LENS_CLINICAL_OUTCOMES
     assert _graph._resolve_impact_lens({"impact_lens": "bogus"}) == IMPACT_LENS_FINANCIAL_ROI
+
+
+# ── 9. Golden oracle: non-financial lens must not emit forced ROI/NPV rows ──────
+def test_golden_oracle_m4_lens_kpi_coherence() -> None:
+    from tests.golden_eval import (
+        NodeEvalInputs,
+        check_m4_lens_kpi_coherence,
+        evaluate_downgrade_gate,
+    )
+
+    forced = "### 4.5 Recomendación\n| ROI proyectado | 35% |\n| NPV estimado | $1M |"
+    clinical_ok = "### 4.5 Recomendación\n| Outcomes adversos evitados | 120 |"
+    # non-financial lens + forced financial rows → fails
+    assert check_m4_lens_kpi_coherence(forced, lens=IMPACT_LENS_CLINICAL_OUTCOMES) is False
+    # non-financial lens + clinical rows → passes
+    assert check_m4_lens_kpi_coherence(clinical_ok, lens=IMPACT_LENS_CLINICAL_OUTCOMES) is True
+    # financial lens / absent lens / empty → trivially n/a
+    assert check_m4_lens_kpi_coherence(forced, lens=IMPACT_LENS_FINANCIAL_ROI) is True
+    assert check_m4_lens_kpi_coherence(forced, lens=None) is True
+    assert check_m4_lens_kpi_coherence(None, lens=IMPACT_LENS_CLINICAL_OUTCOMES) is True
+    # wired into the downgrade gate
+    ok = evaluate_downgrade_gate(NodeEvalInputs(node="m4_content_generator", deterministic_pass=True))
+    assert ok.passed is True
+    blocked = evaluate_downgrade_gate(
+        NodeEvalInputs(node="m4_content_generator", deterministic_pass=True, m4_lens_kpi_coherence_ok=False)
+    )
+    assert blocked.passed is False
+    assert any("lens coherence" in r for r in blocked.reasons)
