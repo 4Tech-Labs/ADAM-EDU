@@ -162,6 +162,11 @@ from case_generator.suggest_service import (
     get_dispatch_meta,
     resolve_legacy_family,
 )
+from case_generator.impact_lens import (
+    DEFAULT_IMPACT_LENS,
+    build_impact_lens_hint,
+    normalize_impact_lens,
+)
 from case_generator.retention_tokens import (
     RETENTION_CHURN_TOKENS,
     is_retention_match,
@@ -5975,6 +5980,22 @@ def _resolve_generation_focus(
     ):
         family = "clasificacion"
     return profile, family
+
+
+def _resolve_impact_lens(state: ADAMState) -> str:
+    """Return the case's resolved Impact Lens (value frame for M4) — Issue #437.
+
+    DD1 single source of truth: the lens is resolved ONCE at intake
+    (``core/authoring.py`` ``state_input``) from the constrained industry label and
+    stored in ``state["impact_lens"]``; every M4 node READS it here, never re-derives
+    (re-deriving from ``state["industria"]`` would parse the architect's free noun and
+    silently default every non-financial case to ``financial_roi`` — Issue #437 F1).
+
+    Total + safe: a missing/legacy/unknown value coerces to ``DEFAULT_IMPACT_LENS``.
+    Fase 2/3 will layer the architect ``value_model`` + the teacher override into this
+    same helper (the hybrid precedence of decision D-A).
+    """
+    return normalize_impact_lens(state.get("impact_lens", DEFAULT_IMPACT_LENS))
 
 
 def _maybe_business_classification_prompt(

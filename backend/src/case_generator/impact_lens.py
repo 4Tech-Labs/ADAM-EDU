@@ -1,0 +1,176 @@
+"""Impact Lens — the value frame for Module 4 (Issue #437 / ADR 0003, Fase 1).
+
+The "impact lens" makes M4's *value frame* (primary metric, KPI rows, verdict
+framing) a variable orthogonal to BOTH the case domain and the algorithm family,
+while M4's *structure* (5 sections, A/B/C options, verdict, KPI table, 2 charts)
+is preserved. The lens is resolved ONCE from the constrained intake industry and
+consumed by the three M4 nodes (content / charts / questions) via a short,
+concatenated hint block.
+
+Design (ADR 0003, decision D-E — *simplify the base*, not add override blocks):
+  * Pure module — no graph/state imports (mirrors ``m4_grounding`` / ``m1_grounding``).
+  * ``resolve_impact_lens_from_industry(raw)`` → a lens key, default ``financial_roi``.
+    It normalizes (casefold + strip accents) and accepts BOTH the dropdown VALUES
+    and their Spanish display LABELS, because the teacher form persists the label
+    (``req.industry``) — never the value (Issue #437 finding F2).
+  * ``build_impact_lens_hint(lens)`` → a brace-free block CONCATENATED onto the
+    neutral M4 prompts (never a ``{placeholder}``; repo anti-``.format()`` precedent).
+    The ``financial_roi`` hint reproduces ROI / Payback / NPV so the dominant
+    commercial cohort stays close to today's output (Issue #437 risk H6).
+
+DD3 invariant: costs ALWAYS stay in USD; the lens reframes ONLY the value side
+(cost-effectiveness $/outcome). This module never touches the cost side.
+
+Keep ``_INDUSTRY_LENS_BY_KEY`` in sync with ``INDUSTRIAS_OPTIONS`` in
+``frontend/src/features/teacher-authoring/authoringFormConfig.ts`` — the drift
+test ``test_impact_lens`` asserts every value AND label maps.
+"""
+
+from __future__ import annotations
+
+import unicodedata
+from typing import cast
+
+# ── Lens keys (the canonical catalog of 4, Issue #437 decision D-B) ────────────
+IMPACT_LENS_FINANCIAL_ROI = "financial_roi"
+IMPACT_LENS_OPERATIONAL_EFFICIENCY = "operational_efficiency"
+IMPACT_LENS_CLINICAL_OUTCOMES = "clinical_outcomes"
+IMPACT_LENS_LEARNING_OUTCOMES = "learning_outcomes"
+
+DEFAULT_IMPACT_LENS = IMPACT_LENS_FINANCIAL_ROI
+
+# Each lens declares only the VALUE-side framing: a primary metric name and the
+# 2-3 KPI rows that replace the hardcoded ROI/Payback/NPV table in M4 §4.5.
+# Per ADR 0003 §"Catálogo de lentes". Costs stay USD (DD3) → KPI rows that carry
+# money are denominated in USD.
+IMPACT_LENS_CATALOG: dict[str, dict[str, object]] = {
+    IMPACT_LENS_FINANCIAL_ROI: {
+        "label": "Retorno financiero (ROI)",
+        "primary_metric_name": "valor económico (USD) y ROI",
+        "kpi_rows": [
+            "Payback (meses/años)",
+            "ROI proyectado (%)",
+            "NPV estimado (USD)",
+        ],
+    },
+    IMPACT_LENS_OPERATIONAL_EFFICIENCY: {
+        "label": "Eficiencia operativa",
+        "primary_metric_name": "tasa de defecto/scrap, downtime y throughput",
+        "kpi_rows": [
+            "Δ tasa de defecto/scrap",
+            "Δ downtime / OEE",
+            "$/unidad evitada (USD)",
+        ],
+    },
+    IMPACT_LENS_CLINICAL_OUTCOMES: {
+        "label": "Resultados clínicos",
+        "primary_metric_name": "eventos/readmisiones evitadas y costo-efectividad ($/outcome)",
+        "kpi_rows": [
+            "Outcomes adversos evitados",
+            "Costo-efectividad ($/outcome, USD)",
+            "Riesgo de seguridad del paciente",
+        ],
+    },
+    IMPACT_LENS_LEARNING_OUTCOMES: {
+        "label": "Resultados de aprendizaje",
+        "primary_metric_name": "retención/graduación (%) y ganancia de aprendizaje",
+        "kpi_rows": [
+            "Δ retención/graduación (%)",
+            "$/estudiante-retenido (USD)",
+            "Equidad del resultado",
+        ],
+    },
+}
+
+IMPACT_LENS_KEYS: frozenset[str] = frozenset(IMPACT_LENS_CATALOG)
+
+# Constrained intake industry (the 7 INDUSTRIAS_OPTIONS values AND their Spanish
+# display labels, accent/case-normalized) → lens. Unknown / "General" / empty →
+# DEFAULT_IMPACT_LENS. Values and labels both map so the resolver is robust to the
+# form persisting the label (F2) AND to a direct-API caller sending the value.
+_INDUSTRY_LENS_BY_KEY: dict[str, str] = {
+    # retail
+    "retail": IMPACT_LENS_FINANCIAL_ROI,
+    "retail & e-commerce": IMPACT_LENS_FINANCIAL_ROI,
+    # fintech
+    "fintech": IMPACT_LENS_FINANCIAL_ROI,
+    "fintech & banca": IMPACT_LENS_FINANCIAL_ROI,
+    # telecomunicaciones
+    "telecomunicaciones": IMPACT_LENS_FINANCIAL_ROI,
+    # general (intake default)
+    "general": IMPACT_LENS_FINANCIAL_ROI,
+    # salud
+    "salud": IMPACT_LENS_CLINICAL_OUTCOMES,
+    "salud & medicina": IMPACT_LENS_CLINICAL_OUTCOMES,
+    # logistica
+    "logistica": IMPACT_LENS_OPERATIONAL_EFFICIENCY,
+    "logistica & supply chain": IMPACT_LENS_OPERATIONAL_EFFICIENCY,
+    # manufactura
+    "manufactura": IMPACT_LENS_OPERATIONAL_EFFICIENCY,
+    # educacion
+    "educacion": IMPACT_LENS_LEARNING_OUTCOMES,
+}
+
+
+def _normalize_industry(raw: str) -> str:
+    """Casefold + strip diacritics so 'Salud & Medicina' / 'salud' / 'SALUD' match."""
+    decomposed = unicodedata.normalize("NFKD", raw)
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return stripped.strip().casefold()
+
+
+def resolve_impact_lens_from_industry(raw: str | None) -> str:
+    """Map a constrained intake industry (value or label) to a lens key.
+
+    Pure + total: unknown / empty / ``"General"`` → ``DEFAULT_IMPACT_LENS``.
+    NEVER raises — a safe default is the whole point (Issue #437 F2/R3).
+    """
+    if not raw:
+        return DEFAULT_IMPACT_LENS
+    return _INDUSTRY_LENS_BY_KEY.get(_normalize_industry(raw), DEFAULT_IMPACT_LENS)
+
+
+def normalize_impact_lens(lens: str | None) -> str:
+    """Coerce an arbitrary lens value to a known key (default on miss). Never raises."""
+    if lens in IMPACT_LENS_CATALOG:
+        return lens
+    return DEFAULT_IMPACT_LENS
+
+
+def build_impact_lens_hint(lens: str | None) -> str:
+    """Brace-free hint block appended to the NEUTRAL M4 prompts (S5).
+
+    Carries ONLY the value-side §4.5 KPI rows for the resolved lens. The
+    ``financial_roi`` hint reproduces ROI/Payback/NPV so the financial cohort
+    stays close to today's output (H6). Output contains NO ``{}`` so it is safe
+    to concatenate before ``str.format`` (H3).
+    """
+    spec = IMPACT_LENS_CATALOG.get(normalize_impact_lens(lens), IMPACT_LENS_CATALOG[DEFAULT_IMPACT_LENS])
+    rows = "\n".join(f"| {row} | X |" for row in cast("list[str]", spec["kpi_rows"]))
+    return (
+        "\n# MARCO DE VALOR (IMPACT LENS): " + str(spec["label"]) + "\n"
+        "La métrica de valor PRIMARIA de este caso es: " + str(spec["primary_metric_name"]) + ".\n"
+        "En §4.5, la tabla de KPIs base DEBE usar EXACTAMENTE estas filas de VALOR "
+        "(sustituyen cualquier fila financiera por defecto):\n"
+        "| KPI | Valor estimado |\n"
+        "|---|---|\n"
+        + rows + "\n"
+        "Reglas: deriva cada valor de los Exhibits / M2 / M3 o de aritmética declarada; "
+        "si falta el dato, exprésalo de forma CUALITATIVA (dirección y magnitud). "
+        "NUNCA inventes cifras ni benchmarks externos. Los COSTOS siguen SIEMPRE en USD; "
+        "la lente reencuadra solo el lado del VALOR.\n"
+    )
+
+
+__all__ = [
+    "IMPACT_LENS_FINANCIAL_ROI",
+    "IMPACT_LENS_OPERATIONAL_EFFICIENCY",
+    "IMPACT_LENS_CLINICAL_OUTCOMES",
+    "IMPACT_LENS_LEARNING_OUTCOMES",
+    "DEFAULT_IMPACT_LENS",
+    "IMPACT_LENS_CATALOG",
+    "IMPACT_LENS_KEYS",
+    "resolve_impact_lens_from_industry",
+    "normalize_impact_lens",
+    "build_impact_lens_hint",
+]
