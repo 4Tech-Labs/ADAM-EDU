@@ -365,9 +365,25 @@ _openrouter_rate_limiter = InMemoryRateLimiter(
 )
 
 # minimax-m3 es un modelo de RAZONAMIENTO y sus reasoning tokens cuentan contra max_tokens. Sin
-# cap pueden ahogar la salida visible (p.ej. la matriz de decisión de M5) y disparar un fallo de
-# validación. El presupuesto de ChatOpenAI = answer (_M5_MAX_OUTPUT_TOKENS) + este cap.
+# cap pueden ahogar la salida visible (p.ej. la matriz de decisión de M5). El max_tokens total que
+# enviamos = answer (_M5_MAX_OUTPUT_TOKENS, 32768) + este valor. En modo PRESUPUESTO (effort vacío)
+# se manda como reasoning.max_tokens, así que answer y razonamiento están separados. En modo EFFORT
+# este valor NO se manda como reasoning.max_tokens (excluyentes → 400); solo sube el max_tokens
+# total, del cual OpenRouter toma una fracción para razonar (~80% "high") y deja el resto a la
+# respuesta. Default 4000 → total 36768 (answer ~7.3k bajo "high", de sobra para M5 ~1-4k). Subirlo
+# (p.ej. 16000 → total 48768) da más respuesta+razonamiento; verificado en vivo: 48768 + effort=high
+# → finish_reason=stop, sin truncar, en M5 (minimax y glm). Para respuestas grandes bajo effort,
+# sube este presupuesto.
 _OPENROUTER_REASONING_MAX_TOKENS = _env_int("OPENROUTER_REASONING_MAX_TOKENS", 4000)
+# Niveles de esfuerzo válidos en OpenRouter (mayor→menor). EXCLUYENTE con reasoning.max_tokens
+# (OpenRouter da 400 si se envían ambos): con effort, OpenRouter asigna una FRACCIÓN del max_tokens
+# total al razonamiento (~95% max/xhigh, ~80% high, ~50% medium, ~20% low, ~10% minimal, 0% none) y
+# deja el resto para la respuesta — por eso el max_tokens total (= answer + presupuesto) debe ser
+# holgado: con presupuesto pequeño y effort alto el ~20% de respuesta puede quedar corto.
+_VALID_OPENROUTER_EFFORTS = frozenset({"max", "xhigh", "high", "medium", "low", "minimal", "none"})
+# Nivel de esfuerzo de razonamiento. Vacío = usar el presupuesto de tokens de arriba. Un valor NO
+# vacío pero inválido (typo) cae a presupuesto CON un warning (no se ignora en silencio).
+_OPENROUTER_REASONING_EFFORT = os.getenv("OPENROUTER_REASONING_EFFORT", "").strip().lower()
 # Timeout por request: acota una llamada colgada para que la cadena .with_fallbacks avance a
 # Gemini mucho antes del deadline global del job (~1900s).
 _OPENROUTER_TIMEOUT_SECONDS = _env_float("OPENROUTER_TIMEOUT_SECONDS", 150.0)
@@ -377,6 +393,18 @@ _OPENROUTER_TIMEOUT_SECONDS = _env_float("OPENROUTER_TIMEOUT_SECONDS", 150.0)
 _OPENROUTER_PROVIDER_ORDER = [
     p.strip() for p in os.getenv("OPENROUTER_PROVIDER_ORDER", "").split(",") if p.strip()
 ]
+# Política de datos del routing. Por DEFECTO NO se envía: muchos modelos (incl. minimax-m3) NO
+# tienen NINGÚN proveedor con data_collection=deny, y enviar "deny" hace que OpenRouter no
+# encuentre endpoint elegible → 404 en CADA llamada (cae todo a Gemini). Pon
+# OPENROUTER_DATA_COLLECTION=deny (o "allow") solo si tu modelo/proveedores lo soportan; vacío =
+# routing normal. data_collection NO es zero-retention (eso es ZDR a nivel de cuenta de OpenRouter).
+_OPENROUTER_DATA_COLLECTION = os.getenv("OPENROUTER_DATA_COLLECTION", "").strip().lower()
+# Filtra a proveedores que soporten los params enviados (necesario para que el structured-output de
+# m5_questions aterrice en un upstream capaz: Together/Parasail/Morph). NO causa 404: sí hay
+# proveedores elegibles. Pon OPENROUTER_REQUIRE_PARAMETERS=false para relajar el routing.
+_OPENROUTER_REQUIRE_PARAMETERS = (
+    os.getenv("OPENROUTER_REQUIRE_PARAMETERS", "true").strip().lower() != "false"
+)
 
 _M5_MODEL = "gemini-3.1-pro-preview"
 _M5_MAX_OUTPUT_TOKENS = 32768
@@ -456,21 +484,40 @@ def _build_openrouter(
         }.items()
         if v
     }
-    provider: dict[str, Any] = {
+    provider: dict[str, Any] = {"allow_fallbacks": True}
+    if _OPENROUTER_REQUIRE_PARAMETERS:
         # solo upstreams que soportan los params enviados (tools/json) → garantiza structured-output
-        "require_parameters": True,
-        # data_collection=deny restringe a upstreams que NO recolectan/entrenan con los datos (el
-        # prompt M5 lleva contenido del docente). OJO: NO es zero-retention — un upstream puede
-        # retener transitoriamente y aún cumplir "deny". La retención-cero real es un control
-        # SEPARADO (ZDR a nivel de cuenta de OpenRouter); habilitarlo antes del rollout amplio.
-        "data_collection": "deny",
-        "allow_fallbacks": True,
-    }
+        provider["require_parameters"] = True
+    if _OPENROUTER_DATA_COLLECTION in ("deny", "allow"):
+        # OPT-IN (default = no enviar). "deny" restringe a proveedores zero-collection; si NINGUNO
+        # del modelo lo cumple → 404. NO es zero-retention (eso es ZDR a nivel de cuenta).
+        provider["data_collection"] = _OPENROUTER_DATA_COLLECTION
     if _OPENROUTER_PROVIDER_ORDER:
         provider["order"] = _OPENROUTER_PROVIDER_ORDER
+    # reasoning.effort y reasoning.max_tokens son EXCLUYENTES (OpenRouter → 400 si ambos). Si hay un
+    # nivel de esfuerzo configurado, se manda SOLO effort; si no, el presupuesto de tokens.
+    reasoning_cfg: dict[str, Any]
+    if _OPENROUTER_REASONING_EFFORT in _VALID_OPENROUTER_EFFORTS:
+        reasoning_cfg = {"effort": _OPENROUTER_REASONING_EFFORT}
+    else:
+        if _OPENROUTER_REASONING_EFFORT:  # no vacío pero inválido → avisar, no ignorar en silencio
+            logger.warning(
+                "[config] OPENROUTER_REASONING_EFFORT=%r inválido (válidos: %s) — usando reasoning.max_tokens",
+                _OPENROUTER_REASONING_EFFORT,
+                ", ".join(sorted(_VALID_OPENROUTER_EFFORTS)),
+            )
+        reasoning_cfg = {"max_tokens": _OPENROUTER_REASONING_MAX_TOKENS}
     extra_body: dict[str, Any] = {
+        # CRÍTICO: `max_tokens` va AQUÍ (en extra_body), NO como kwarg de ChatOpenAI. ChatOpenAI
+        # serializa su `max_tokens=` como `max_completion_tokens` (campo nuevo de OpenAI), y con
+        # `provider.require_parameters=true` OpenRouter exige un upstream que soporte ESE parámetro
+        # — los proveedores de minimax-m3 solo listan `max_tokens` → ningún endpoint elegible → 404
+        # ("No endpoints found that can handle the requested parameters"). Enviarlo por extra_body
+        # lo serializa como `max_tokens` (soportado por todos) → 200. (Verificado contra la API.)
+        # El total = answer + presupuesto de reasoning (que con effort actúa como headroom).
+        "max_tokens": max_output_tokens + _OPENROUTER_REASONING_MAX_TOKENS,
         "provider": provider,
-        "reasoning": {"max_tokens": _OPENROUTER_REASONING_MAX_TOKENS},
+        "reasoning": reasoning_cfg,
         "usage": {"include": True},
     }
     return ChatOpenAI(
@@ -478,7 +525,7 @@ def _build_openrouter(
         base_url=_OPENROUTER_BASE_URL,
         api_key=api_key,
         temperature=temperature,
-        max_tokens=max_output_tokens + _OPENROUTER_REASONING_MAX_TOKENS,
+        # NO pasar max_tokens aquí: se serializaría como max_completion_tokens → 404 (ver extra_body).
         max_retries=2,
         timeout=_OPENROUTER_TIMEOUT_SECONDS,
         rate_limiter=_openrouter_rate_limiter,
