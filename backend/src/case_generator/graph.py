@@ -72,7 +72,7 @@ from pydantic import ValidationError
 from dotenv import load_dotenv
 from langchain_core.exceptions import OutputParserException
 from langchain_core.rate_limiters import InMemoryRateLimiter
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver as LangGraphAsyncPostgresSaver
 from langgraph.graph import StateGraph, START, END
@@ -317,6 +317,67 @@ _rate_limiter = InMemoryRateLimiter(
     max_bucket_size=20,  # Burst de hasta 20 llamadas acumuladas
 )
 
+# ─── OpenRouter (proveedor alterno, OpenAI-compatible) ──────────────────────────
+# Se activa SOLO cuando un nodo resuelve a un model id con "/" (p.ej. "minimax/minimax-m3")
+# vía NODE_MODEL_OVERRIDES; reversible sin redeploy. El fallback cross-provider a Gemini vive
+# en las cadenas .with_fallbacks de las factories (ver _build_llm).
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var, falling back to ``default`` on absence or a malformed value.
+
+    Tolerant by design: a fat-fingered OpenRouter tuning env must NEVER crash module import —
+    that would take down EVERY node (all of M1..M6), not just the OpenRouter path, breaking the
+    inert-by-default guarantee.
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("[config] %s=%r no es float válido — usando default %s", name, raw, default)
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an int env var, falling back to ``default`` on absence or a malformed value (see _env_float)."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("[config] %s=%r no es int válido — usando default %s", name, raw, default)
+        return default
+
+
+# Rate limiter DEDICADO (no el de Gemini): los límites de OpenRouter son independientes de los
+# de Gemini; compartir un bucket acoplaría ambos presupuestos y M5 podría starve a otros nodos
+# Gemini. Process-local → el techo real es N_instancias × requests_per_second (igual que el de
+# Gemini); para un burst que pueda exceder el límite de cuenta de OpenRouter, considerar un
+# limiter distribuido o cap de instancias. Tunable por env.
+_openrouter_rate_limiter = InMemoryRateLimiter(
+    requests_per_second=_env_float("OPENROUTER_REQUESTS_PER_SECOND", 5.0),
+    check_every_n_seconds=0.1,
+    max_bucket_size=_env_int("OPENROUTER_MAX_BUCKET_SIZE", 10),
+)
+
+# minimax-m3 es un modelo de RAZONAMIENTO y sus reasoning tokens cuentan contra max_tokens. Sin
+# cap pueden ahogar la salida visible (p.ej. la matriz de decisión de M5) y disparar un fallo de
+# validación. El presupuesto de ChatOpenAI = answer (_M5_MAX_OUTPUT_TOKENS) + este cap.
+_OPENROUTER_REASONING_MAX_TOKENS = _env_int("OPENROUTER_REASONING_MAX_TOKENS", 4000)
+# Timeout por request: acota una llamada colgada para que la cadena .with_fallbacks avance a
+# Gemini mucho antes del deadline global del job (~1900s).
+_OPENROUTER_TIMEOUT_SECONDS = _env_float("OPENROUTER_TIMEOUT_SECONDS", 150.0)
+# Routing de proveedor (coma-separado): upstreams capaces de structured-output/tools para
+# minimax-m3 (p.ej. "Together,Parasail,Morph"). Vacío = OpenRouter elige; require_parameters
+# igual filtra a un proveedor capaz. VERIFICAR contra los endpoints vigentes de minimax-m3.
+_OPENROUTER_PROVIDER_ORDER = [
+    p.strip() for p in os.getenv("OPENROUTER_PROVIDER_ORDER", "").split(",") if p.strip()
+]
+
 _M5_MODEL = "gemini-3.1-pro-preview"
 _M5_MAX_OUTPUT_TOKENS = 32768
 
@@ -359,6 +420,118 @@ def _build_gemini(
     if response_mime_type is not None:
         kwargs["response_mime_type"] = response_mime_type
     return ChatGoogleGenerativeAI(**kwargs)
+
+
+def _build_openrouter(
+    model: str,
+    *,
+    temperature: float,
+    max_output_tokens: int,
+    thinking_level: str | None = None,  # Gemini-only → ignorado
+    tools: list[dict[str, Any]] | None = None,  # Gemini code_execution → ignorado
+    response_mime_type: str | None = None,  # → se usa .with_structured_output
+) -> Any:
+    """Build one ChatOpenAI pointed at OpenRouter (OpenAI-compatible).
+
+    ESTRICTO: lanza si falta ``OPENROUTER_API_KEY`` o si ``langchain_openai`` no está instalado
+    (import perezoso). El wrapper ``_build_llm`` captura esos fallos y degrada a Gemini, así que
+    un nodo nunca queda sin cliente por una mala config del proveedor alterno.
+
+    ``thinking_level``/``tools``/``response_mime_type`` son kwargs Gemini-only aceptados por
+    paridad de firma con ``_build_gemini`` y se ignoran: minimax usa ``extra_body.reasoning`` para
+    el razonamiento y ``.with_structured_output`` para JSON. ``max_output_tokens`` se mapea a
+    ``max_tokens`` (nombre de ChatOpenAI) y se le suma el cap de reasoning para no truncar la salida.
+    """
+    from langchain_openai import ChatOpenAI  # lazy: dep ausente → ImportError captado por _build_llm
+
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY no está seteado pero un nodo se enrutó a OpenRouter")
+
+    headers = {
+        k: v
+        for k, v in {
+            "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER"),
+            "X-Title": os.getenv("OPENROUTER_APP_TITLE"),
+        }.items()
+        if v
+    }
+    provider: dict[str, Any] = {
+        # solo upstreams que soportan los params enviados (tools/json) → garantiza structured-output
+        "require_parameters": True,
+        # data_collection=deny restringe a upstreams que NO recolectan/entrenan con los datos (el
+        # prompt M5 lleva contenido del docente). OJO: NO es zero-retention — un upstream puede
+        # retener transitoriamente y aún cumplir "deny". La retención-cero real es un control
+        # SEPARADO (ZDR a nivel de cuenta de OpenRouter); habilitarlo antes del rollout amplio.
+        "data_collection": "deny",
+        "allow_fallbacks": True,
+    }
+    if _OPENROUTER_PROVIDER_ORDER:
+        provider["order"] = _OPENROUTER_PROVIDER_ORDER
+    extra_body: dict[str, Any] = {
+        "provider": provider,
+        "reasoning": {"max_tokens": _OPENROUTER_REASONING_MAX_TOKENS},
+        "usage": {"include": True},
+    }
+    return ChatOpenAI(
+        model=model,
+        base_url=_OPENROUTER_BASE_URL,
+        api_key=api_key,
+        temperature=temperature,
+        max_tokens=max_output_tokens + _OPENROUTER_REASONING_MAX_TOKENS,
+        max_retries=2,
+        timeout=_OPENROUTER_TIMEOUT_SECONDS,
+        rate_limiter=_openrouter_rate_limiter,
+        default_headers=headers or None,
+        extra_body=extra_body,
+    )
+
+
+def _build_llm(
+    model: str,
+    *,
+    gemini_fallback_model: str = "gemini-3-flash-preview",
+    **kwargs: Any,
+) -> Runnable:
+    """Dispatch a model id to its provider builder, degrading to Gemini on any OpenRouter failure.
+
+    Regla: un id con ``"/"`` (p.ej. ``"minimax/minimax-m3"``) → OpenRouter; cualquier otro →
+    Gemini (incluye los ids Gemini reales y los sintéticos de tests como ``"pro-x"``).
+
+    RESILIENCIA (clave para no romper el fallback): las tier factories construyen sus tiers de
+    forma EAGER antes de ``.with_fallbacks``; si ``_build_openrouter`` lanzara (falta
+    ``OPENROUTER_API_KEY``, ``langchain_openai`` no instalado, error de construcción) la factory
+    entera reventaría ANTES de existir la cadena de fallbacks → Gemini inalcanzable. Por eso aquí
+    degradamos a ``_build_gemini(gemini_fallback_model)`` en vez de propagar: una mala config del
+    proveedor alterno cae limpio a Gemini (el fallback deseado) y el nodo nunca queda sin cliente.
+    """
+    if "/" in model:
+        try:
+            return _build_openrouter(model, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — degradar SIEMPRE a Gemini, nunca romper la factory
+            logger.warning(
+                "[_build_llm] OpenRouter no disponible para model=%s (%s) — degradando a Gemini %s",
+                model,
+                type(exc).__name__,
+                gemini_fallback_model,
+            )
+            return _build_gemini(gemini_fallback_model, **kwargs)
+    return _build_gemini(model, **kwargs)
+
+
+def _is_transient_llm_error(exc: BaseException) -> bool:
+    """Return True if an LLM error is transient (worth a graph-level retry).
+
+    Reconoce los marcadores de Google/Gemini (string-match histórico) Y los de OpenAI/OpenRouter
+    (``openai.*`` expone el código HTTP en ``.status_code``). 402 (sin créditos) NO es transitorio
+    — debe degradar al fallback Gemini, no reintentar.
+    """
+    if any(code in str(exc) for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED")):
+        return True
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status == 429 or 500 <= status < 600
+    return False
 
 
 def _get_writer_llm(
@@ -468,8 +641,12 @@ def _get_m5_llm(
     fallbacks so operations can route around preview-model incidents.
     """
     _max = _M5_MAX_OUTPUT_TOKENS
-    primary = _build_gemini(model, temperature=temperature, thinking_level="medium", max_output_tokens=_max)
-    pro_fallback_low = _build_gemini(model, temperature=temperature, thinking_level="low", max_output_tokens=_max)
+    # Las dos tiers que llevan el `model` resuelto pasan por el dispatcher: un id con "/" corre en
+    # OpenRouter (minimax), si no en Gemini. Un fallo de construcción OpenRouter degrada a
+    # `fallback_model` (Gemini) DENTRO de `_build_llm`, así que esta factory nunca lanza por el
+    # proveedor alterno. Las dos tiers finales son SIEMPRE Gemini (la red cross-provider del plan).
+    primary = _build_llm(model, gemini_fallback_model=fallback_model, temperature=temperature, thinking_level="medium", max_output_tokens=_max)
+    pro_fallback_low = _build_llm(model, gemini_fallback_model=fallback_model, temperature=temperature, thinking_level="low", max_output_tokens=_max)
     writer_fallback = _build_gemini(fallback_model, temperature=temperature, max_output_tokens=_max)
     stable_fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=_max)
     return primary.with_fallbacks([pro_fallback_low, writer_fallback, stable_fallback])
@@ -5721,11 +5898,9 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         cfg = Configuration.from_runnable_config(config)
         # temperature=0.5: balance entre creatividad en enunciados y consistencia estructural
         # Usa Gemini Pro medium + fallback Pro low: M5 es evaluación final integrativa.
-        llm = _get_m5_llm(
-            resolve_node_model(cfg, NODE_M5_QUESTIONS, cfg.architect_model),
-            cfg.writer_model,
-            temperature=0.5,
-        )
+        m5_model = resolve_node_model(cfg, NODE_M5_QUESTIONS, cfg.architect_model)
+        logger.info("[m5_questions_generator] llm model=%s", m5_model)
+        llm = _get_m5_llm(m5_model, cfg.writer_model, temperature=0.5)
 
         # Filtrar preguntas complejas de M1 (bloom Level 2/3) como historial de referencia.
         # Prioridad: synthesis → evaluation → analysis. Máx 3 para no saturar el contexto.
@@ -5821,9 +5996,11 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # Re-raise errores transitorios → LangGraph RetryPolicy dispara con backoff
         # (max 3 intentos: 1s → 2s → 4s con jitter — ver standard_retry línea ~2805).
         # Sin este re-raise, el RetryPolicy nunca se activa porque el nodo "retorna" en lugar de "lanzar".
-        if any(code in err_msg for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED")):
+        if _is_transient_llm_error(e):
             logger.warning("[m5_questions_generator] ERROR TRANSITORIO (reintentando): %s", err_msg)
             raise
+        if getattr(e, "status_code", None) == 402:
+            logger.warning("[m5_questions_generator] OpenRouter SIN CRÉDITOS (402) — degradado a Gemini falló; recargar saldo")
         logger.error("[m5_questions_generator] ERROR: %s", e, exc_info=True)
         return {"m5_questions": [], "current_agent": "m5_questions_generator"}
 
@@ -8249,11 +8426,9 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """
     try:
         cfg = Configuration.from_runnable_config(config)
-        llm = _get_m5_llm(
-            resolve_node_model(cfg, NODE_M5_CONTENT, cfg.architect_model),
-            cfg.writer_model,
-            temperature=0.6,
-        )
+        m5_model = resolve_node_model(cfg, NODE_M5_CONTENT, cfg.architect_model)
+        logger.info("[m5_content_generator] llm model=%s", m5_model)
+        llm = _get_m5_llm(m5_model, cfg.writer_model, temperature=0.6)
 
         context = _build_base_context(state)
         context.update({

@@ -76,12 +76,17 @@ class LLMCostRates:
 # Keyed by the model id surfaced in response_metadata["model_name"].
 _PRO_RATES = LLMCostRates(input_per_1m=1.25, output_per_1m=10.0, cached_input_per_1m=0.3125)
 _FLASH_RATES = LLMCostRates(input_per_1m=0.30, output_per_1m=2.50, cached_input_per_1m=0.075)
+# OpenRouter minimax-m3 ($0.30/M in · $1.20/M out). cached_input==input porque OpenRouter no
+# expone un tier de cache-read estilo Gemini (no sub-facturar). Reusar _FLASH_RATES sería erróneo
+# (su output es 2.50, no 1.20). Confirmar contra el pricing vigente de OpenRouter.
+_MINIMAX_M3_RATES = LLMCostRates(input_per_1m=0.30, output_per_1m=1.20, cached_input_per_1m=0.30)
 
 PRICE_MAP: dict[str, LLMCostRates] = {
     "gemini-3.1-pro-preview": _PRO_RATES,
     "gemini-2.5-pro": _PRO_RATES,
     "gemini-3-flash-preview": _FLASH_RATES,
     "gemini-2.5-flash": _FLASH_RATES,
+    "minimax/minimax-m3": _MINIMAX_M3_RATES,
 }
 
 _UNKNOWN_MODELS_WARNED: set[str] = set()
@@ -98,6 +103,10 @@ def _rates_for_model(model_id: str) -> LLMCostRates:
     if rates is not None:
         return rates
     lowered = (model_id or "").lower()
+    # minimax primero: un slug con sufijo de proveedor (p.ej. "minimax/minimax-m3:together") no
+    # matchea la clave exacta del PRICE_MAP ni "pro"/"flash" → sin este brazo reportaría USD 0.
+    if "minimax" in lowered:
+        return _MINIMAX_M3_RATES
     if "pro" in lowered:
         return _PRO_RATES
     if "flash" in lowered:
