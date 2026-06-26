@@ -66,6 +66,7 @@ def test_build_openrouter_sets_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     # regardless of the developer's shell env.
     monkeypatch.setattr(g, "_OPENROUTER_DATA_COLLECTION", "")
     monkeypatch.setattr(g, "_OPENROUTER_REQUIRE_PARAMETERS", True)
+    monkeypatch.setattr(g, "_OPENROUTER_REASONING_EFFORT", "")  # default = token-budget mode
     m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=32768)
     assert m.model == "minimax/minimax-m3"
     assert str(m.openai_api_base) == g._OPENROUTER_BASE_URL
@@ -108,6 +109,29 @@ def test_build_openrouter_data_collection_opt_in(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(g, "_OPENROUTER_DATA_COLLECTION", "deny")
     m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=100)
     assert m.extra_body["provider"]["data_collection"] == "deny"
+
+
+def test_build_openrouter_reasoning_effort_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With OPENROUTER_REASONING_EFFORT set, send reasoning.effort ONLY (effort and max_tokens are
+    mutually exclusive on OpenRouter → 400 if both). The token budget still reserves headroom in the
+    total max_tokens."""
+    _with_openrouter_key(monkeypatch)
+    monkeypatch.setattr(g, "_OPENROUTER_REASONING_EFFORT", "high")
+    monkeypatch.setattr(g, "_OPENROUTER_REASONING_MAX_TOKENS", 16000)
+    m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=32768)
+    assert m.extra_body["reasoning"] == {"effort": "high"}  # effort only, no max_tokens
+    assert "max_tokens" not in m.extra_body["reasoning"]
+    assert m.extra_body["max_tokens"] == 32768 + 16000  # budget still reserves headroom
+
+
+def test_build_openrouter_reasoning_budget_mode_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no effort set, send reasoning.max_tokens (the token budget)."""
+    _with_openrouter_key(monkeypatch)
+    monkeypatch.setattr(g, "_OPENROUTER_REASONING_EFFORT", "")
+    monkeypatch.setattr(g, "_OPENROUTER_REASONING_MAX_TOKENS", 4000)
+    m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=100)
+    assert m.extra_body["reasoning"] == {"max_tokens": 4000}
+    assert "effort" not in m.extra_body["reasoning"]
 
 
 def test_build_openrouter_require_parameters_can_disable(monkeypatch: pytest.MonkeyPatch) -> None:
