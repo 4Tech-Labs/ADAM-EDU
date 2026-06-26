@@ -365,10 +365,12 @@ _openrouter_rate_limiter = InMemoryRateLimiter(
 )
 
 # minimax-m3 es un modelo de RAZONAMIENTO y sus reasoning tokens cuentan contra max_tokens. Sin
-# cap pueden ahogar la salida visible (p.ej. la matriz de decisión de M5) y disparar un fallo de
-# validación. El presupuesto total de ChatOpenAI = answer (_M5_MAX_OUTPUT_TOKENS) + este valor.
-# Cuando se fija OPENROUTER_REASONING_EFFORT este valor NO se envía como reasoning.max_tokens (son
-# excluyentes → 400) pero sigue reservando HEADROOM en el max_tokens total para el razonamiento.
+# cap pueden ahogar la salida visible (p.ej. la matriz de decisión de M5). El max_tokens total que
+# enviamos = answer (_M5_MAX_OUTPUT_TOKENS) + este valor. En modo presupuesto se manda como
+# reasoning.max_tokens. Con OPENROUTER_REASONING_EFFORT este valor NO se manda (effort y max_tokens
+# son excluyentes → 400); solo sube el max_tokens total y OpenRouter asigna ~80% al razonamiento
+# ("high") y ~20% a la respuesta — la doc exige max_tokens > presupuesto de razonamiento, que ese
+# ~20% restante garantiza (verificado en vivo: 48768 → finish_reason=stop, sin truncar, en M5).
 _OPENROUTER_REASONING_MAX_TOKENS = _env_int("OPENROUTER_REASONING_MAX_TOKENS", 4000)
 # Nivel de esfuerzo de razonamiento: "low" | "medium" | "high". Vacío = usar el presupuesto de
 # tokens de arriba. EXCLUYENTE con reasoning.max_tokens (OpenRouter da 400 si se envían ambos):
