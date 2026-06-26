@@ -62,6 +62,10 @@ def test_synthetic_test_id_without_slash_routes_to_gemini() -> None:
 
 def test_build_openrouter_sets_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     _with_openrouter_key(monkeypatch)
+    # Pin the env-derived module constants to their defaults so the test is deterministic
+    # regardless of the developer's shell env.
+    monkeypatch.setattr(g, "_OPENROUTER_DATA_COLLECTION", "")
+    monkeypatch.setattr(g, "_OPENROUTER_REQUIRE_PARAMETERS", True)
     m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=32768)
     assert m.model == "minimax/minimax-m3"
     assert str(m.openai_api_base) == g._OPENROUTER_BASE_URL
@@ -71,10 +75,26 @@ def test_build_openrouter_sets_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     assert m.rate_limiter is g._openrouter_rate_limiter  # dedicated, NOT the Gemini limiter
     assert m.rate_limiter is not g._rate_limiter
     prov = m.extra_body["provider"]
-    assert prov["require_parameters"] is True
-    assert prov["data_collection"] == "deny"  # no-collection/no-training (NOT zero-retention; ZDR is separate)
+    assert prov["require_parameters"] is True  # default on → structured-output routing
+    # data_collection is OPT-IN (default omitted). Sending "deny" 404s models whose providers
+    # don't offer zero-collection (e.g. minimax-m3), so it must NOT be sent by default.
+    assert "data_collection" not in prov
     assert m.extra_body["reasoning"]["max_tokens"] == g._OPENROUTER_REASONING_MAX_TOKENS
     assert m.extra_body["usage"]["include"] is True
+
+
+def test_build_openrouter_data_collection_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    _with_openrouter_key(monkeypatch)
+    monkeypatch.setattr(g, "_OPENROUTER_DATA_COLLECTION", "deny")
+    m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=100)
+    assert m.extra_body["provider"]["data_collection"] == "deny"
+
+
+def test_build_openrouter_require_parameters_can_disable(monkeypatch: pytest.MonkeyPatch) -> None:
+    _with_openrouter_key(monkeypatch)
+    monkeypatch.setattr(g, "_OPENROUTER_REQUIRE_PARAMETERS", False)
+    m = g._build_openrouter("minimax/minimax-m3", temperature=0.5, max_output_tokens=100)
+    assert "require_parameters" not in m.extra_body["provider"]
 
 
 def test_build_openrouter_omits_order_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -377,6 +377,18 @@ _OPENROUTER_TIMEOUT_SECONDS = _env_float("OPENROUTER_TIMEOUT_SECONDS", 150.0)
 _OPENROUTER_PROVIDER_ORDER = [
     p.strip() for p in os.getenv("OPENROUTER_PROVIDER_ORDER", "").split(",") if p.strip()
 ]
+# Política de datos del routing. Por DEFECTO NO se envía: muchos modelos (incl. minimax-m3) NO
+# tienen NINGÚN proveedor con data_collection=deny, y enviar "deny" hace que OpenRouter no
+# encuentre endpoint elegible → 404 en CADA llamada (cae todo a Gemini). Pon
+# OPENROUTER_DATA_COLLECTION=deny (o "allow") solo si tu modelo/proveedores lo soportan; vacío =
+# routing normal. data_collection NO es zero-retention (eso es ZDR a nivel de cuenta de OpenRouter).
+_OPENROUTER_DATA_COLLECTION = os.getenv("OPENROUTER_DATA_COLLECTION", "").strip().lower()
+# Filtra a proveedores que soporten los params enviados (necesario para que el structured-output de
+# m5_questions aterrice en un upstream capaz: Together/Parasail/Morph). NO causa 404: sí hay
+# proveedores elegibles. Pon OPENROUTER_REQUIRE_PARAMETERS=false para relajar el routing.
+_OPENROUTER_REQUIRE_PARAMETERS = (
+    os.getenv("OPENROUTER_REQUIRE_PARAMETERS", "true").strip().lower() != "false"
+)
 
 _M5_MODEL = "gemini-3.1-pro-preview"
 _M5_MAX_OUTPUT_TOKENS = 32768
@@ -456,16 +468,14 @@ def _build_openrouter(
         }.items()
         if v
     }
-    provider: dict[str, Any] = {
+    provider: dict[str, Any] = {"allow_fallbacks": True}
+    if _OPENROUTER_REQUIRE_PARAMETERS:
         # solo upstreams que soportan los params enviados (tools/json) → garantiza structured-output
-        "require_parameters": True,
-        # data_collection=deny restringe a upstreams que NO recolectan/entrenan con los datos (el
-        # prompt M5 lleva contenido del docente). OJO: NO es zero-retention — un upstream puede
-        # retener transitoriamente y aún cumplir "deny". La retención-cero real es un control
-        # SEPARADO (ZDR a nivel de cuenta de OpenRouter); habilitarlo antes del rollout amplio.
-        "data_collection": "deny",
-        "allow_fallbacks": True,
-    }
+        provider["require_parameters"] = True
+    if _OPENROUTER_DATA_COLLECTION in ("deny", "allow"):
+        # OPT-IN (default = no enviar). "deny" restringe a proveedores zero-collection; si NINGUNO
+        # del modelo lo cumple → 404. NO es zero-retention (eso es ZDR a nivel de cuenta).
+        provider["data_collection"] = _OPENROUTER_DATA_COLLECTION
     if _OPENROUTER_PROVIDER_ORDER:
         provider["order"] = _OPENROUTER_PROVIDER_ORDER
     extra_body: dict[str, Any] = {
