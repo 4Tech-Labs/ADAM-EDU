@@ -21,6 +21,20 @@ import { AlgorithmSelector } from "./AlgorithmSelector";
 import { isContrastHiddenForProfile } from "./algorithmContrastGate";
 import { ScenarioStaleBanner } from "./ScenarioStaleBanner";
 
+// Hoisted to module scope: a component defined INSIDE AuthoringForm is a brand-new
+// type on every render, so React remounts it each time. ErrorMsg closes over nothing
+// (only its `show` prop), so module scope is safe and removes the remount
+// (react-doctor/no-nested-component-definition).
+const ErrorMsg = ({ show }: { show: boolean }) =>
+    show ? (
+        <p role="alert" className="mt-1.5 text-xs text-red-500 font-medium flex items-center gap-1">
+            <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Campo requerido
+        </p>
+    ) : null;
+
 // Fingerprint of the algorithm picks AT THE TIME the scenario was generated.
 // If the teacher changes any of these afterwards, the previous scenario is
 // flagged as stale and a regenerate banner appears.
@@ -642,16 +656,6 @@ export function AuthoringForm({
         setAvailableFrom("");
         setDueAt("");
     };
-
-    const ErrorMsg = ({ show }: { show: boolean }) =>
-        show ? (
-            <p role="alert" className="mt-1.5 text-xs text-red-500 font-medium flex items-center gap-1">
-                <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                Campo requerido
-            </p>
-        ) : null;
 
     return (
         <>
