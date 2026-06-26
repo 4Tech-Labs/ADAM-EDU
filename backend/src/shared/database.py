@@ -199,6 +199,17 @@ class Settings(BaseSettings):
     # guard, no redeploy). The deterministic guarantee on the frozen golden set lives in
     # `tests/golden_eval` (`check_m4_narrative_no_fabrication` / `check_m4_charts_no_fabrication`).
     m4_fabrication_guard: bool = True
+    # Impact Lens (Issue #437 / ADR 0003, Fase 1, ALL profiles/families). M4's value frame
+    # (primary metric, §4.5 KPI rows, chart metrics, questions framing) is no longer hardcoded
+    # to ROI/Payback/NPV; it is a lens resolved ONCE from the constrained intake industry and
+    # consumed by the 3 M4 nodes. When true (default), m4_{content,questions,chart}_generator
+    # select the NEUTRAL (value-frame-agnostic) prompt twins and append the «MARCO DE VALOR»
+    # hint for the resolved lens (financial_roi reproduces ROI/Payback/NPV). Set IMPACT_LENS=false
+    # to select the original FINANCIAL prompts and skip the hint → byte-identical to the pre-#437
+    # behavior (instant env-only revert, no redeploy; mirrors M4_CHART_DROP_SENSITIVITY). Costs
+    # always stay USD; the lens reframes only the value side. Charts: the lens applies only on the
+    # 2-chart path (M4_CHART_DROP_SENSITIVITY=true); the 3-chart tornado revert skips it.
+    impact_lens: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

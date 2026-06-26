@@ -14,6 +14,7 @@ from typing import Any, Literal, Mapping, cast
 from case_generator.core.artifact_manager import ArtifactManager
 from case_generator.core.storage import get_storage_provider
 from case_generator.cost_metrics import CostCallbackHandler
+from case_generator.impact_lens import resolve_impact_lens_from_industry
 from case_generator.graph import (
     DurableCheckpointUnavailableError,
     M3NotebookValidationError,
@@ -996,6 +997,12 @@ class AuthoringService:
                 "asignatura": payload.get("asignatura", "Default Subject"),
                 "nivel": payload.get("nivel", "pregrado"),
                 "industria": payload.get("industria", "General"),
+                # Issue #437 (ADR 0003, F1) — resolve the Impact Lens ONCE here, from the
+                # CONSTRAINED intake industry label, BEFORE case_architect overwrites
+                # state["industria"] with its free-form noun. Single writer, before the
+                # M1/EDA/M4 fan-out; survives the resume_cached_nodes merge below
+                # (case_architect never emits "impact_lens"). Downstream nodes READ it.
+                "impact_lens": resolve_impact_lens_from_industry(payload.get("industria", "General")),
                 "studentProfile": payload.get("studentProfile", "business"),
                 "algoritmos": selected_techniques,
                 "algorithm_mode": payload.get("algorithm_mode"),

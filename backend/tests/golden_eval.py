@@ -110,6 +110,13 @@ class NodeEvalInputs:
     # re-invites benchmark estimates fails the golden gate (DETERMINISTIC guarantee behind the
     # logger-only runtime backstop).
     m4_narrative_no_fabrication_ok: bool = True
+    # M4 §4.5 KPI rows match the resolved Impact Lens (Issue #437 / ADR 0003): a NON-financial lens
+    # must NOT emit the forced financial rows ("ROI proyectado" / "NPV estimado"). True (n/a) for the
+    # financial_roi lens, the business profile, an absent lens, or an empty narrative — the financial
+    # lens legitimately keeps ROI/NPV; the lens only swaps the value rows. Computed via
+    # ``check_m4_lens_kpi_coherence``, so a future M4-node downgrade that ignores the lens block fails
+    # the gate. (Full per-lens semantic coverage is phased to Fase 3, R9.)
+    m4_lens_kpi_coherence_ok: bool = True
 
 
 @dataclass
@@ -157,6 +164,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M4 chart coherence failure: invented benchmark figure in chart prose")
     if not r.m4_narrative_no_fabrication_ok:
         reasons.append("M4 narrative coherence failure: invented benchmark figure in narrative prose")
+    if not r.m4_lens_kpi_coherence_ok:
+        reasons.append("M4 lens coherence failure: non-financial lens emitted forced ROI/NPV KPI rows")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -312,6 +321,26 @@ def check_m4_narrative_no_fabrication(narrative: str | None) -> bool:
     from case_generator.m4_grounding import detect_benchmark_fabrication
 
     return not detect_benchmark_fabrication(narrative)
+
+
+def check_m4_lens_kpi_coherence(narrative: str | None, *, lens: str | None) -> bool:
+    """Pure oracle (Issue #437): a NON-financial Impact Lens must not emit the forced
+    financial KPI rows (``ROI proyectado`` / ``NPV estimado``) in the M4 §4.5 table.
+
+    Reuses the production lens keys (``impact_lens.normalize_impact_lens``) as the single source
+    of truth. ``financial_roi`` / absent lens / empty narrative are trivially True (n/a) — the
+    financial lens legitimately keeps ROI/NPV; the lens swaps only the value rows. Matches the
+    exact §4.5 row labels (not bare "ROI"/"NPV") to stay zero-FP against prose that merely
+    mentions a financial term. Full per-lens semantic coverage is phased to Fase 3 (R9).
+    """
+    from case_generator.impact_lens import DEFAULT_IMPACT_LENS, normalize_impact_lens
+
+    if not narrative or lens is None:
+        return True
+    if normalize_impact_lens(lens) == DEFAULT_IMPACT_LENS:
+        return True
+    lowered = narrative.lower()
+    return "roi proyectado" not in lowered and "npv estimado" not in lowered
 
 
 def check_m5_questions_coherence(
