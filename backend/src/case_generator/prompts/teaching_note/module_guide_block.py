@@ -29,6 +29,9 @@ Wiring notes for the caller (see ``teaching_note_part1`` in ``graph.py``):
   ``"desconocida"`` fallback — never ``None``), reused from the ``_build_base_context`` the node
   already calls. ``state.get("primary_family")`` does NOT exist (always ``None``). ``is_clf``
   compares the resolved value strictly to ``"clasificacion"``, so ``"desconocida"`` → generic M2 line.
+  ``is_clustering`` (Issue #471) compares strictly to ``"clustering"`` and is consumed ml_ds-ONLY
+  (M1/M3 are nested in the ml_ds branch; M2 guards with ``and not is_business``) — mirroring the
+  strict ``_is_ml_ds_clustering`` gate, so business+clustering stays byte-identical/generic.
 * ``notebook_present = bool(state.get("m3_notebook_code")) and not state.get("m3_notebook_degraded")``
   — REALIZED state. The M3 notebook GENERATOR (graph.py) is family-AGNOSTIC (ml_ds regresión/
   clustering ship a real notebook too); only the EXECUTOR is clasificación-gated. So gating the
@@ -74,6 +77,7 @@ _LABELS_MLDS: dict[str, str] = {
 
 _EDA_CASE_TYPE = "harvard_with_eda"
 _CLASSIFICATION_FAMILY = "clasificacion"
+_CLUSTERING_FAMILY = "clustering"
 
 # Issue #437 Fase 3 — the M4 module synopsis value frame per Impact Lens. CURATED + CURRENCY-TOKEN-FREE
 # (no ``$``/``€``/ISO adjacent to a figure — ``test_block_byte_identical_through_usd_enforce`` requires
@@ -134,6 +138,7 @@ def _module_lines(
     *,
     is_business: bool,
     is_clf: bool,
+    is_clustering: bool,
     notebook_present: bool,
     lens: str | None = None,
 ) -> list[str]:
@@ -141,19 +146,34 @@ def _module_lines(
 
     ``lens`` (Issue #437 Fase 3) reframes ONLY the M4 ``aprende`` value noun; ``None``/``financial_roi``
     keeps today's exact wording (byte-identical). It never touches the drift-locked LABELS or verdict.
+
+    ``is_clustering`` (Issue #471) reframes M1/M2/M3 for the unsupervised clustering family. It is
+    ml_ds-ONLY: M1/M3 are nested in the ``else`` of ``is_business`` (so business+clustering never
+    reaches them), and M2 guards explicitly with ``and not is_business`` — mirroring the strict
+    ``_is_ml_ds_clustering`` gate (graph.py), so business+clustering stays byte-identical/generic.
     """
     if mod_id == "m1":
         ve = (
             f"Una narrativa de {M1_NARRATIVE_WORDS} palabras con el dilema central, "
             "3 opciones estratégicas (A/B/C) y 3 Exhibits (financiero, operativo y de stakeholders)."
         )
-        aprende = (
-            "Identifica el dilema gerencial real, mapea a los stakeholders y lee los Exhibits "
-            "para formarse una hipótesis inicial."
-            if is_business
-            else "Traduce el problema de negocio a un problema de datos: define la variable "
-            "objetivo, plantea hipótesis analíticas y reconoce los límites de la información."
-        )
+        if is_business:
+            aprende = (
+                "Identifica el dilema gerencial real, mapea a los stakeholders y lee los Exhibits "
+                "para formarse una hipótesis inicial."
+            )
+        elif is_clustering:
+            # Unsupervised: no target variable. Frame the segmentation decision instead (#455/#471).
+            aprende = (
+                "Traduce el problema de negocio a un problema de datos: descubre segmentos latentes "
+                "en datos sin etiquetar (aprendizaje no supervisado), plantea hipótesis de "
+                "segmentación y reconoce los límites de la información."
+            )
+        else:
+            aprende = (
+                "Traduce el problema de negocio a un problema de datos: define la variable "
+                "objetivo, plantea hipótesis analíticas y reconoce los límites de la información."
+            )
         formato = (
             "3 preguntas de discusión (comprensión → análisis → evaluación); la última exige "
             "elegir A/B/C con información incompleta y nombrar el supuesto más frágil."
@@ -172,13 +192,24 @@ def _module_lines(
             else "Examina distribuciones, valores atípicos y correlaciones para confirmar o "
             "refutar la hipótesis del Módulo 1 con rigor técnico."
         )
-        formato = (
-            "2 preguntas socráticas abiertas: la Paradoja de la Exactitud (desbalance de clases) "
-            "y el equilibrio entre precisión y exhaustividad."
-            if is_clf
-            else "2 preguntas socráticas abiertas: el sesgo de confirmación en los datos y la "
-            "diferencia entre correlación y causalidad."
-        )
+        if is_clf:
+            formato = (
+                "2 preguntas socráticas abiertas: la Paradoja de la Exactitud (desbalance de clases) "
+                "y el equilibrio entre precisión y exhaustividad."
+            )
+        elif is_clustering and not is_business:
+            # Mirror EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING (#456): P1 escala/distancia, P2
+            # correlación + silhouette. ml_ds-only (business+clustering keeps the generic line).
+            formato = (
+                "2 preguntas socráticas abiertas: por qué estandarizar las features antes de "
+                "aplicar K-Means (escala y distancia) y cómo juzgar la validez de los segmentos "
+                "(correlación entre features y lectura del coeficiente de silhouette)."
+            )
+        else:
+            formato = (
+                "2 preguntas socráticas abiertas: el sesgo de confirmación en los datos y la "
+                "diferencia entre correlación y causalidad."
+            )
         return [ve, aprende, formato]
 
     if mod_id == "m3":
@@ -189,16 +220,28 @@ def _module_lines(
             )
             aprende = "Aprende a dudar de forma constructiva de los hallazgos del Módulo 2 antes de decidir."
         else:
-            ve = (
-                f"Un diseño experimental ({M3_EXPERIMENT_WORDS} palabras) que conecta los datos "
-                "con la arquitectura de la solución y prueba la causalidad."
-            )
+            if is_clustering:
+                # Unsupervised segmentation, not a supervised experiment / causality (#457/#471).
+                ve = (
+                    f"Un diseño de segmentación ({M3_EXPERIMENT_WORDS} palabras) que conecta los "
+                    "datos con la elección del número de grupos y la validación de su cohesión."
+                )
+                aprende = (
+                    "Aprende a elegir el número de segmentos, validar su cohesión (silhouette) y "
+                    "traducir cada grupo en un perfil accionable."
+                )
+            else:
+                ve = (
+                    f"Un diseño experimental ({M3_EXPERIMENT_WORDS} palabras) que conecta los datos "
+                    "con la arquitectura de la solución y prueba la causalidad."
+                )
+                aprende = (
+                    "Aprende a diseñar experimentos rigurosos, anticipar sesgos y definir criterios "
+                    "de validación."
+                )
+            # Notebook clause is family-agnostic for ml_ds (DRY: applies to clustering + clf/reg).
             if notebook_present:
                 ve += " Incluye un notebook de Python (Jupyter) con la implementación."
-            aprende = (
-                "Aprende a diseñar experimentos rigurosos, anticipar sesgos y definir criterios "
-                "de validación."
-            )
         formato = "3 preguntas de discusión (análisis, evaluación y síntesis)."
         return [ve, aprende, formato]
 
@@ -260,6 +303,7 @@ def build_module_guide_block(
     kill-switch is off, keeping the OFF path byte-identical).
     """
     is_clf = (family or "") == _CLASSIFICATION_FAMILY
+    is_clustering = (family or "") == _CLUSTERING_FAMILY
     anchors = anchors or {}
 
     out: list[str] = ["## Recorrido por Módulo", ""]
@@ -268,6 +312,7 @@ def build_module_guide_block(
             mod_id,
             is_business=is_business,
             is_clf=is_clf,
+            is_clustering=is_clustering,
             notebook_present=notebook_present,
             lens=lens,
         )
