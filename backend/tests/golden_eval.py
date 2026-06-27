@@ -136,6 +136,14 @@ class NodeEvalInputs:
     # silhouette ≈ 0.12 / ARI ≈ 0) proves non-tautology; gate-protects against a future data-layer
     # regression that ships unimodal clustering data.
     clustering_structure_ok: bool = True
+    # ml_ds + clustering K-Means notebook is K-Means-ONLY and DBSCAN-free (Issue #454). Computed via
+    # ``check_kmeans_notebook_shape``, which DELEGATES to the production validator
+    # ``_validate_notebook_family_consistency('clustering', code, 'kmeans_only')`` (so the oracle
+    # tracks the runtime contract automatically) plus a stripped ``DBSCAN(`` / ``NearestNeighbors(``
+    # absence check. True (n/a) for non-K-Means jobs. The RED control feeds the mixed/DBSCAN notebook
+    # (real DBSCAN call sites → False); gate-protects a future generator regression that drops a
+    # required cell or reintroduces DBSCAN on the K-Means path.
+    kmeans_notebook_shape_ok: bool = True
 
 
 @dataclass
@@ -191,6 +199,10 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("architect value_model failure: emitted an unknown/missing Impact Lens key")
     if not r.clustering_structure_ok:
         reasons.append("clustering structure failure: unimodal data (silhouette/ARI below band)")
+    if not r.kmeans_notebook_shape_ok:
+        reasons.append(
+            "K-Means notebook shape failure: missing required cell/API or DBSCAN on the K-Means path"
+        )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -467,6 +479,35 @@ def check_clustering_structure(
     if latent_labels is not None:
         if float(adjusted_rand_score(latent_labels, labels)) < ari_floor:
             return False
+    return True
+
+
+# ── Issue #454 — deterministic K-Means notebook shape oracle ───
+
+
+def check_kmeans_notebook_shape(code: str) -> bool:
+    """Pure oracle (Issue #454): is a generated ml_ds+clustering notebook K-Means-ONLY + DBSCAN-free?
+
+    DELEGATES to the production validator so the oracle tracks the runtime contract automatically
+    (no drift): ``_validate_notebook_family_consistency('clustering', code, 'kmeans_only')`` must
+    return no violations (the 6 required cell sentinels + KMeans/StandardScaler/silhouette_score, and
+    no prohibited cross-family / DBSCAN call site). Plus a belt-and-suspenders stripped-code check
+    that no ``DBSCAN(`` / ``NearestNeighbors(`` call survives in EXECUTABLE code (the validator
+    already enforces this for the kmeans_only variant; repeated here so the RED control is explicit
+    and robust to a future contract edit). The DBSCAN check runs on the SAME jupytext-stripped view
+    the validator uses, so a pedagogical mention of DBSCAN in markdown/comments does NOT false-RED.
+    No LLM / network / API key. GREEN on a real K-Means notebook; RED on the mixed/DBSCAN notebook.
+    """
+    from case_generator.graph import (
+        _strip_jupytext_for_validation,
+        _validate_notebook_family_consistency,
+    )
+
+    if _validate_notebook_family_consistency("clustering", code, "kmeans_only"):
+        return False
+    stripped = _strip_jupytext_for_validation(code)
+    if "DBSCAN(" in stripped or "NearestNeighbors(" in stripped:
+        return False
     return True
 
 

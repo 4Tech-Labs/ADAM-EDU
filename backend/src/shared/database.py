@@ -92,6 +92,15 @@ class Settings(BaseSettings):
     # clustering notebook but NOT execute it (prior behaviour, byte-identical; instant env-only
     # revert, no redeploy). classification execution (#239) is unaffected either way.
     mlds_clustering_executor: bool = True
+    # Specialise the ml_ds + clustering M3 notebook in K-Means (Issue #454, EPIC #458). When true
+    # (default), an ml_ds + clustering case whose only algorithm is K-Means gets the K-Means-ONLY
+    # notebook (elbow + silhouette-vs-k, fit, cluster profiling, PCA scatter) with DBSCAN removed
+    # from the executable code, dispatched via CLUSTERING_NOTEBOOK_PROMPT_BY_VARIANT and validated
+    # against the K-Means-only sentinel/API set. Set MLDS_CLUSTERING_KMEANS_NOTEBOOK=false to revert
+    # to the mixed K-Means+DBSCAN prompt + family-level validation byte-identically (instant env-only
+    # revert, no redeploy). DBSCAN/contrast replay jobs keep the mixed prompt either way. Orthogonal
+    # to MLDS_CLUSTERING_EXECUTOR (which decides whether the notebook is executed + quality-gated).
+    mlds_clustering_kmeans_notebook: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign
