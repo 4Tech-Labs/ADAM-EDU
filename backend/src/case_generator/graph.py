@@ -105,6 +105,7 @@ from case_generator.prompts import (
     CASE_WRITER_PROMPT_BY_FAMILY,
     EDA_ANNOTATE_ONLY_PROMPT,
     EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
+    EDA_ANNOTATE_ONLY_PROMPT_CLUSTERING,
     EDA_CHART_GENERATOR_PROMPT,
     EDA_QUESTIONS_GENERATOR_PROMPT,
     EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING,
@@ -263,6 +264,9 @@ from case_generator.datagen.eda_charts_business import (
 )
 from case_generator.datagen.eda_charts_classification import (
     generate_classification_eda_charts,
+)
+from case_generator.datagen.eda_charts_clustering import (
+    generate_clustering_eda_charts,
 )
 from case_generator.orchestration.frontend_adapter import adapter_canonical_to_legacy
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
@@ -2740,6 +2744,47 @@ def _eda_business_python_path(
         return None
 
 
+def _eda_clustering_python_path(
+    state: ADAMState, config: RunnableConfig, contract: dict | None
+) -> dict | None:
+    """Issue #466 — builder determinista DATA-ONLY de los charts EDA de clustering (ml_ds).
+
+    Construye 3 charts PRE-MODELO (distribución/escala → motiva estandarizar, correlación,
+    dispersión 2D SIN etiquetas de cluster) y pide al LLM solo `description`/`notes`. Devuelve el
+    update del nodo o ``None`` en fallo. Profile-agnostic (reutilizable por #317). A diferencia del
+    path ml_ds+clasificación, el caller NO hace fallback al LLM-JSON (mirror business 5A): ``None``
+    → panel vacío, para no reintroducir el chart supervisado que este builder retira.
+    """
+    try:
+        import pandas as pd  # noqa: PLC0415 — local para no penalizar imports globales
+
+        dataset = state.get("doc7_dataset") or []
+        if not dataset:
+            logger.warning(
+                "[eda_chart_generator/clustering] doc7_dataset vacío — panel vacío (sin fallback LLM)"
+            )
+            return None
+        df = pd.DataFrame(dataset)
+        # `correlation_matrix` es data-only en `_calculate_eda_regressions`; la regresión target_vs_X
+        # que también computa es INERTE aquí (el builder data-only no la consume).
+        precalculated = _calculate_eda_regressions(state, dataset)
+
+        charts = generate_clustering_eda_charts(df, contract, precalculated)
+        if not charts:
+            logger.warning(
+                "[eda_chart_generator/clustering] builder devolvió 0 charts — panel vacío (sin fallback LLM)"
+            )
+            return None
+
+        return _annotate_validate_emit(charts, state, config, EDA_ANNOTATE_ONLY_PROMPT_CLUSTERING)
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "[eda_chart_generator/clustering] ERROR no recuperable: %s — panel vacío (sin fallback LLM)",
+            e, exc_info=True,
+        )
+        return None
+
+
 def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """Extrae los charts del reporte EDA (Documento 2 — parte charts).
 
@@ -2789,6 +2834,20 @@ def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 "[eda_chart_generator] business builder no produjo charts — panel vacío (sin fallback LLM)"
             )
             return {"doc2_eda_charts": [], "current_agent": "eda_chart_generator"}
+
+    # Issue #466 — ml_ds + clustering: builder DATA-ONLY determinista (3 charts pre-modelo, sin
+    # target ni etiquetas de cluster). Mirror business: None → panel vacío, SIN fallback LLM-JSON
+    # (para no reintroducir el chart supervisado "feature vs objetivo"). Kill-switch off → cae al
+    # path LLM-JSON byte-idéntico. Builder profile-agnostic; business+clustering es #317.
+    elif primary_family == "clustering" and profile == "ml_ds" and settings.mlds_clustering_charts:
+        contract = state.get("dataset_schema_required")
+        py_update = _eda_clustering_python_path(state, config, contract)
+        if py_update is not None:
+            return py_update
+        logger.warning(
+            "[eda_chart_generator] clustering builder no produjo charts — panel vacío (sin fallback LLM)"
+        )
+        return {"doc2_eda_charts": [], "current_agent": "eda_chart_generator"}
 
     try:
         cfg = Configuration.from_runnable_config(config)
@@ -4763,6 +4822,127 @@ def _enforce_mlds_classification_schema(
     return new_schema
 
 
+# Issue #466 — leaked-target detection for the ml_ds + clustering strip. Clustering is unsupervised →
+# NO target column of ANY kind may exist. Three vectors: (A) an explicit contract `target_column` (any
+# role/shape — clustering has no target); (B) a target-named binary column (a hallucinated
+# `dummy_target`); (C) a cluster-label artifact name (`cluster_id`/`kmeans_*` — a pre-assigned cluster
+# answer that hands the student the result and must never appear pre-model).
+_CLUSTERING_TARGET_NAME_TOKENS: tuple[str, ...] = (
+    "dummy_target", "target", "objetivo", "label", "categoria", "clase", "clasificacion", "churn",
+)
+_CLUSTERING_TARGET_EXACT_NAMES: frozenset[str] = frozenset({"y", "y_true", "y_pred"})
+# Cluster-label artifacts (answer leak): stripped by NAME regardless of shape — no legitimate
+# pre-model segmentation feature is named `cluster*`/`kmeans*` (a k-valued cluster id is NOT binary,
+# so the binary-shape guard of Regla B would otherwise miss it).
+_CLUSTERING_LABEL_NAME_TOKENS: tuple[str, ...] = ("cluster", "kmeans")
+
+
+def _enforce_mlds_clustering_no_target(
+    schema: dict,
+    contract: dict | None,
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+) -> dict:
+    """Strip any leaked SUPERVISED target column from an ml_ds + clustering schema (Issue #466).
+
+    SIBLING determinista de ``_enforce_mlds_classification_schema`` (#382) — NO generalizar esa
+    función. Corre DESPUÉS de ``_align`` + ``_augment`` + los spines de clasificación en
+    ``schema_designer``, sobre el schema ya ensamblado y ANTES de la generación de datos, de modo que
+    la columna nunca se materializa en el CSV. 0 tokens LLM, PURO copy-on-write (no muta el dict de
+    entrada) → determinismo del seed + thread-safety. Idempotente → resume-safe.
+
+    Clustering es no supervisado → no debe existir target. El LLM (schema_designer) puede alucinar un
+    ``dummy_target`` pese a la prohibición del prompt, y ``_augment_schema_with_contract`` es gateless
+    (inyecta un ``target_column`` del contrato para cualquier familia). El strip es la GARANTÍA robusta
+    a ambos orígenes. Detección (anti-FP):
+      * Regla A (contrato, FP-proof): cualquier ``target_column`` declarado (clustering NO tiene
+        target de NINGÚN rol) → elimina su columna, sea cual sea su rol o forma.
+      * Regla B (heurística guardada): nombre tipo-target de clasificación (token o exacto) Y forma
+        binaria/unitaria (rango [0,1]) Y NO en ``protected``.
+      * Regla C (etiqueta de cluster): nombre ``cluster*``/``kmeans*`` (artefacto del modelo/answer
+        leak) → elimina sin importar la forma (un id de cluster k-valuado NO es binario).
+      * ``protected`` (nunca se elimina): ``period`` ∪ ``contract.feature_columns`` ∪ las features de
+        segmentación #452. Un RFM continuo nunca matchea los tokens → FP ≈ 0.
+
+    Gate (fuera de él → MISMO objeto, byte-idéntico):
+      ``enabled`` (kill-switch ``MLDS_CLUSTERING_NO_TARGET``) AND ``profile=="ml_ds"`` AND
+      ``primary_family=="clustering"`` (estricto, espeja ``_enforce_mlds_clustering_structure``).
+    """
+    if not enabled or profile != "ml_ds" or primary_family != "clustering":
+        return schema
+
+    columns = [dict(c) for c in schema.get("columns", [])]
+    if not columns:
+        return schema
+
+    protected = {"period"}
+    for f in (contract or {}).get("feature_columns") or []:
+        fname = (f.get("name") or "").strip()
+        if fname:
+            protected.add(fname)
+    protected |= {c["name"] for c in _CLUSTERING_SEGMENTATION_COLUMNS}
+
+    strip_names: set[str] = set()
+
+    # Regla A (contrato, FP-proof): clustering NO debe tener target_column de NINGÚN rol/forma → si el
+    # contrato declara uno (architect descarriado o inyección del augmenter gateless), elimínalo.
+    tgt = (contract or {}).get("target_column") or {}
+    tgt_name = (tgt.get("name") or "").strip()
+    if tgt_name and tgt_name not in protected:
+        strip_names.add(tgt_name)
+
+    for c in columns:
+        name = (c.get("name") or "").strip()
+        if not name or name in protected:
+            continue
+        lname = name.lower()
+        # Regla C (etiqueta de cluster, cualquier forma): `cluster_id`/`cluster_label`/`kmeans_*` es un
+        # artefacto del modelo (answer leak), nunca una feature pre-modelo → elimina sin guarda de forma.
+        if any(tok in lname for tok in _CLUSTERING_LABEL_NAME_TOKENS):
+            strip_names.add(name)
+            continue
+        # Regla B (heurística guardada): nombre tipo-target de clasificación + forma binaria/unitaria.
+        name_is_target = (
+            lname in _CLUSTERING_TARGET_EXACT_NAMES
+            or any(tok in lname for tok in _CLUSTERING_TARGET_NAME_TOKENS)
+        )
+        # rmin == 0 / rmax == 1 cubre int 0/1 Y float 0.0/1.0 (0 == 0.0). Un str (rango None) → False.
+        binary_shape = c.get("range_min") == 0 and c.get("range_max") == 1
+        if name_is_target and binary_shape:
+            strip_names.add(name)
+
+    if not strip_names:
+        return schema
+
+    stripped = [c.get("name") for c in columns if c.get("name") in strip_names]
+    columns = [c for c in columns if c.get("name") not in strip_names]
+
+    # Reparación de dependencias colgantes: una columna cuyo padre fue eliminado genera independiente
+    # (evita huérfanos → ruido). Defensivo: una feature de segmentación no debería depender del target.
+    remaining = {c.get("name") for c in columns}
+    for c in columns:
+        dep = c.get("dependency")
+        if isinstance(dep, dict) and dep.get("depends_on") not in remaining:
+            c["dependency"] = None
+
+    # Observabilidad LOG-ONLY (no teacher-facing; precedente #336/#382; sin PII, solo nombres).
+    logger.warning(
+        "[_enforce_mlds_clustering_no_target] ml_ds+clustering no supervisado: columnas target "
+        "removidas: %s",
+        stripped,
+        extra={
+            "node": "schema_designer", "family": "clustering",
+            "columns_stripped": stripped, "reason": "unsupervised_family_no_target",
+        },
+    )
+
+    new_schema = dict(schema)
+    new_schema["columns"] = columns
+    return new_schema
+
+
 def _contract_with_enforced_target(contract: dict | None, target_name: str | None) -> dict | None:
     """Reescribe ``target_column`` del contrato al target binario que el spine garantizó.
 
@@ -4958,6 +5138,13 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 schema_result, contract, profile=profile, primary_family=primary_family,
                 enabled=settings.mlds_dechurn_signal,
             )
+            # Issue #466 — clustering es no supervisado: elimina cualquier target supervisado filtrado
+            # (dummy_target alucinado o target del contrato inyectado por el augmenter gateless) ANTES
+            # de generar datos, para que el CSV no tenga target. No-op fuera de ml_ds+clustering.
+            schema_result = _enforce_mlds_clustering_no_target(
+                schema_result, contract, profile=profile, primary_family=primary_family,
+                enabled=settings.mlds_clustering_no_target,
+            )
             missing, leakage = _validate_schema_against_contract(schema_result, contract)
             # Issue #228 — preserva semillas de data_gap_warnings emitidas por
             # case_architect (ej: target_semantic_mismatch). LangGraph reemplaza
@@ -5004,6 +5191,11 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     fallback_schema = _enforce_mlds_classification_schema(
         fallback_schema, contract, profile=profile, primary_family=primary_family,
         enabled=settings.mlds_dechurn_signal,
+    )
+    # Issue #466 — mismo strip de target supervisado en el fallback (red de seguridad).
+    fallback_schema = _enforce_mlds_clustering_no_target(
+        fallback_schema, contract, profile=profile, primary_family=primary_family,
+        enabled=settings.mlds_clustering_no_target,
     )
     missing, leakage = _validate_schema_against_contract(fallback_schema, contract)
     # Issue #228 — preserva warnings sembrados por case_architect.
@@ -8326,6 +8518,25 @@ def _get_m3_notebook_escalation_llm(cfg: Configuration) -> Any:
     return pro_high.with_fallbacks([pro_medium, stable_flash])
 
 
+# Issue #466 Frente 3 — la §2.1 "Detección asistida" de `M3_NOTEBOOK_BASE_TEMPLATE` es
+# supervised-flavored ("la categoría a predecir"); clustering es no supervisado → no hay categoría
+# que predecir. Se reescribe SOLO la PROSA §2.1 para family=="clustering" al ensamblar (gateado por
+# el kill-switch), dejando todas las demás familias byte-idénticas (la constante base NO cambia). El
+# código ejecutable de detección queda igual (post-strip de Frente 1 imprime "No detectadas").
+# Drift-lock (test): el original DEBE seguir presente en la base; si cambia, este replace no-opearía
+# en silencio y el test falla.
+_M3_NB_SECTION_2_1_SUPERVISED_PROSE = (
+    "# Sugiere qué columna podría ser la categoría a predecir, la fecha o el texto, a\n"
+    "# partir de sus nombres. Es una guía para orientarte; tú validas que la elección\n"
+    "# sea la correcta."
+)
+_M3_NB_SECTION_2_1_CLUSTERING_PROSE = (
+    "# Identifica las columnas numéricas (variables de segmentación), las fechas y los\n"
+    "# identificadores a partir de sus nombres. En clustering NO hay una categoría a\n"
+    "# predecir: todas las variables numéricas alimentan el agrupamiento por similitud."
+)
+
+
 def _prepare_m3_notebook_generation_context(
     state: ADAMState,
     config: RunnableConfig,
@@ -8431,6 +8642,12 @@ def _prepare_m3_notebook_generation_context(
     # Inject the static TOC cell (classification variants only; computed in the dispatch above).
     # Non-classification families have no TOC, so toc_cell stays "".
     base_template = base_template.replace("{toc_cell}", toc_cell)
+    # Issue #466 Frente 3 — §2.1 clustering-aware (sin "categoría a predecir"). family-gated +
+    # kill-switch → no-clustering byte-idéntico; NO toca la TOC (clustering no tiene TOC).
+    if family == "clustering" and settings.mlds_clustering_no_target:
+        base_template = base_template.replace(
+            _M3_NB_SECTION_2_1_SUPERVISED_PROSE, _M3_NB_SECTION_2_1_CLUSTERING_PROSE
+        )
     return _M3NotebookGenerationContext(
         llm=llm,
         escalation_llm=escalation_llm,

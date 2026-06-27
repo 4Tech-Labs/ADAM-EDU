@@ -17,11 +17,18 @@ eda_questions.py  EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING
 
 Charts
 ------
-There is NO chart-generation prompt here. ml_ds + clustering EDA charts still
-go through the LLM-JSON path; a deterministic clustering chart builder is a
-follow-up coordinated with #317 (business + clustering charts).
+eda_annotate.py   EDA_ANNOTATE_ONLY_PROMPT_CLUSTERING
+                    Annotate-only prompt for the deterministic, data-only,
+                    PRE-MODEL clustering chart builder (Issue #466, Frente 2;
+                    ``datagen/eda_charts_clustering.py``). The LLM only writes
+                    description/notes — no clusters/centroids/elbow/silhouette.
+                    The builder is profile-agnostic; business + clustering
+                    wiring stays a #317 follow-up.
 """
 
+from case_generator.prompts.clustering.M2_clustering.eda_annotate import (
+    EDA_ANNOTATE_ONLY_PROMPT_CLUSTERING,
+)
 from case_generator.prompts.clustering.M2_clustering.eda_questions import (
     EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING,
 )
@@ -32,4 +39,5 @@ from case_generator.prompts.clustering.M2_clustering.eda_text import (
 __all__ = [
     "EDA_TEXT_ANALYST_PROMPT_CLUSTERING",
     "EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING",
+    "EDA_ANNOTATE_ONLY_PROMPT_CLUSTERING",
 ]

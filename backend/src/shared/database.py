@@ -156,6 +156,27 @@ class Settings(BaseSettings):
     # byte-identically (generic M4 prompts + no silhouette check; instant env-only revert, no redeploy).
     # The gate is profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
     mlds_clustering_m4_value_frame: bool = True
+    # De-supervise the ml_ds + clustering DATA + notebook prose (Issue #466). When true (default),
+    # (a) `_enforce_mlds_clustering_no_target` deterministically strips any leaked supervised target
+    # column (e.g. an LLM-hallucinated `dummy_target`, or a contract `target_column` injected by the
+    # gateless `_augment_schema_with_contract`) from the clustering schema BEFORE data generation, so
+    # the CSV the student sees carries NO target; and (b) the M3 notebook §2.1 "Detección asistida"
+    # prose drops the supervised "categoría a predecir" framing for clustering. Clustering is
+    # unsupervised → no target. Set MLDS_CLUSTERING_NO_TARGET=false to revert byte-identically (schema
+    # keeps the leaked column + §2.1 stays supervised; instant env-only revert, no redeploy). The gate
+    # is profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
+    mlds_clustering_no_target: bool = True
+    # Deterministic, data-only EDA chart builder for ml_ds + clustering (Issue #466, Frente 2). When
+    # true (default), an ml_ds + clustering case routes M2 charts through `_eda_clustering_python_path`
+    # (3 PRE-MODEL, target-free charts: feature distributions → motivates StandardScaler, correlation
+    # heatmap, 2D feature-pair scatter with NO cluster labels/centroids) — the LLM only annotates
+    # description/notes. This kills the supervised "feature vs Target" regression chart the generic
+    # LLM-JSON path emits (it hardcodes "variable objetivo" for ml_ds). Set MLDS_CLUSTERING_CHARTS=false
+    # to revert to the generic LLM-JSON path byte-identically (instant env-only revert, no redeploy). On
+    # a runtime builder failure it degrades to an empty panel (NOT the LLM-JSON path) so the supervised
+    # chart can never reappear. The gate is profile=="ml_ds" AND family=="clustering"; the builder is
+    # profile-agnostic so business+clustering (#317) is a 1-line dispatch follow-up.
+    mlds_clustering_charts: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign
