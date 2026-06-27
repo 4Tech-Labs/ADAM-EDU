@@ -150,6 +150,14 @@ class NodeEvalInputs:
     # Computed via ``check_clustering_m1_no_target_anchors``; gate-protects against an M1 regression
     # that frames clustering as supervised. RED control: a contract with any anchor fails.
     clustering_m1_no_target_ok: bool = True
+    # The ml_ds + clustering M2 EDA narrative stays TARGET-FREE (Issue #456): clustering is
+    # unsupervised, so the EDA must not cite a target column / "churn" / "categoria". True (n/a) for
+    # non-clustering jobs and when the narrative is empty/absent. Computed via
+    # ``check_clustering_eda_no_target``. NOTE: the frozen golden set carries no clustering EDA
+    # narrative fixture yet, so this is n/a today — the deterministic teeth live in the unit RED/GREEN
+    # (the pure oracle + the kill-switch dispatch test); this gate wiring is future-proofing for when
+    # such a fixture (or an eda_text_analyst downgrade) lands.
+    clustering_eda_no_target_ok: bool = True
 
 
 @dataclass
@@ -214,6 +222,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             "clustering M1 failure: architect emitted a supervised target_column / "
             "business_cost_matrix / target_event_rate"
         )
+    if not r.clustering_eda_no_target_ok:
+        reasons.append("clustering M2 EDA coherence failure: narrative cites a target column on an unsupervised job")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -539,6 +549,27 @@ def check_kmeans_notebook_shape(code: str) -> bool:
     if "DBSCAN(" in stripped or "NearestNeighbors(" in stripped:
         return False
     return True
+
+
+def check_clustering_eda_no_target(narrative: str | None) -> bool:
+    """Pure oracle (Issue #456): is an ml_ds+clustering M2 EDA narrative TARGET-FREE?
+
+    Clustering is unsupervised — there is no target column. The specialized EDA prompt forbids any
+    target framing, so a generated narrative must not cite ``churn`` / ``categoria`` / a target
+    column (the markers a generic, classification-oriented EDA would leak). Pure, deterministic, no
+    LLM / network / API key. Empty/absent → True (n/a). GREEN on a clustering EDA narrative; RED on
+    a narrative that names a target/churn column (e.g. the generic prompt's output on a clustering
+    job). NOTE: n/a on the frozen golden set today (no clustering EDA narrative fixture) — the unit
+    RED/GREEN tests carry the deterministic teeth.
+    """
+    if not narrative:
+        return True
+    lowered = narrative.lower()
+    return (
+        "churn" not in lowered
+        and "categoria" not in lowered
+        and "variable objetivo" not in lowered
+    )
 
 
 # ── frozen golden set ────────────────────────────────────

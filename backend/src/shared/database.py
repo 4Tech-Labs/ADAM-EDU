@@ -111,6 +111,17 @@ class Settings(BaseSettings):
     # profile=="ml_ds" AND family=="clustering"; clasificación / regresión / serie_temporal /
     # business (including business+clustering) are unaffected either way.
     mlds_clustering_m1_anchor: bool = True
+    # Specialize the M2 EDA (narrative + 2 Socratic questions) for ml_ds + clustering (Issue #456,
+    # EPIC #458). When true (default), an ml_ds + clustering case gets a data-only, PRE-MODEL,
+    # TARGET-FREE EDA narrative + clustering-specific questions (scale/distance → StandardScaler,
+    # correlation/redundancy → PCA, cluster tendency, silhouette reading) instead of the generic
+    # EDA prompt (which talks about a target/predictive feature engineering). Set
+    # MLDS_CLUSTERING_M2_EDA=false to revert to the generic EDA prompt byte-identically (instant
+    # env-only revert, no redeploy). The gate is profile=="ml_ds" AND family=="clustering", so
+    # clasificación / regresión / serie_temporal / business (including business + clustering, which
+    # stays on the generic prompt — #317's lane) are unaffected either way. EDA charts are
+    # unchanged (still the LLM-JSON path; a deterministic clustering chart builder is a follow-up).
+    mlds_clustering_m2_eda: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign

@@ -1,8 +1,13 @@
-"""Clustering-family (segmentation) prompt exports (Issue #455).
+"""Clustering-family (segmentation) prompt exports.
 
 Mirrors ``case_generator.prompts.clasificacion`` for the unsupervised clustering
-family. Currently exposes the M1 segmentation anchors; future issues (#456 M2 EDA,
-#457 M3-content) add their subtrees here.
+family. Exposes the M1 segmentation anchors (#455); the M2 EDA prompts (#456) live
+in the ``M2_clustering`` sub-package and are imported directly by
+``case_generator.prompts``; future issues (#457 M3-content) add their subtrees here.
+
+IMPORTANT — circular-import constraint: modules under this package MUST NOT import
+from ``case_generator.prompts`` (the parent ``__init__.py``). They hold
+self-contained prompt strings; the parent imports FROM them.
 """
 
 from case_generator.prompts.clustering.M1_clustering import (
