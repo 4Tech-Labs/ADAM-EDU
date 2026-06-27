@@ -175,6 +175,39 @@ def drop_sensitivity_charts(charts: list[dict]) -> tuple[list[dict], int]:
     return kept, len(charts) - len(kept)
 
 
+# ── M4 payback-chart detector (Issue #469 — ml_ds + clustering value frame) ───────────────────────
+# For ml_ds + clustering, M4's first chart must NOT be a payback / break-even ("Punto de Equilibrio:
+# Mes N") — a fabricated cash-flow milestone for an EXPLORATORY segmentation (no cash-flow model
+# derives it). The dedicated clustering M4 chart prompt (#469) replaces it with a value-by-segment
+# chart; this detector is the deterministic golden-oracle backstop (reused by
+# ``tests/golden_eval.check_m4_clustering_no_payback_chart``) so a regression that re-emits the payback
+# chart for a clustering case fails the gate. Scans TITLE + SUBTITLE only (accent-insensitive) — the
+# headline fields a chart names itself with, never the free-form rationale. Pure, total, never raises.
+_PAYBACK_MARKERS = (
+    "payback",
+    "punto de equilibrio",
+    "break even",
+    "breakeven",
+    "valle de la muerte",
+    "flujo de caja",
+)
+_PAYBACK_MARKER_RE = re.compile("|".join(re.escape(marker) for marker in _PAYBACK_MARKERS))
+
+
+def is_payback_chart(chart: object) -> bool:
+    """True iff ``chart`` is an M4 payback / cash-flow / break-even chart (Issue #469).
+
+    Scans ``title`` + ``subtitle`` only (accent-normalized). Any non-dict / missing fields → ``False``.
+    Used by the clustering golden oracle to assert the dedicated clustering chart prompt replaced the
+    financial payback chart with a value-by-segment one. ``flujo de caja`` is included because the
+    generic Gráfico 1 title is "Flujo de Caja y Punto de Equilibrio (Payback)".
+    """
+    if not isinstance(chart, dict):
+        return False
+    blob = " ".join(_normalize_chart_text(chart.get(field)) for field in ("title", "subtitle"))
+    return bool(_PAYBACK_MARKER_RE.search(blob))
+
+
 # ── M4 chart grounding (ml_ds+clf · business+clf) ─────────────────────────────────────────────────
 # Deterministic, pure validator so the M4 financial charts can NEVER ship a false/unverified model
 # metric or an invented "benchmark" figure. It closes the gap the repo documents verbatim ("los

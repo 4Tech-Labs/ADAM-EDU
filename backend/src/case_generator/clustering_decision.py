@@ -33,6 +33,7 @@ Design (Issue #467, gate-approved Option A — strong deterministic coordination
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 
 from case_generator.m1_grounding import _extract_option_labels
@@ -308,6 +309,90 @@ def validate_m4_verdict_option(m4_content: str, recommended_option: str) -> list
     return validate_verdict_option(_recommendation_section(m4_content), recommended_option)
 
 
+# ── M4 silhouette grounding (Issue #469 — the deterministic GUARANTEE) ─────────────────────────────
+# The #467 verdict hint already TELLS the M4 narrative to cite ONLY the real executed silhouette
+# (``m3_metrics_summary["silhouette"]``, available post-executor) and NEVER a fabricated "> 0.55".
+# This detector is the deterministic GUARANTEE behind that hint (repo doctrine "prompt = defense,
+# validator = guarantee") + anti-regression for a future Pro→Flash downgrade: it flags any cited
+# silhouette VALUE that diverges from the real one beyond ``tol``.
+#
+# Precision rules (each closes a real FP class found in the #469 hardening review):
+#   * ASSERTION shape only — "silhouette" then ≤12 non-digit chars then a DECIMAL ``[01].d``. A bare
+#     integer ("the silhouette ranges -1 to 1") has no decimal point → never matched. A value detached
+#     from its keyword (>12 chars away) is an accepted FN (zero-FP doctrine).
+#   * BAND ``[_SIL_GROUND_LO, _SIL_GROUND_HI]`` — excludes the 0.0 / 1.0 of a range explanation
+#     ("el silhouette va de 0.0 a 1.0").
+#   * FLOOR-EXEMPT — a value within ``tol`` of the decision floor (0.45) is the legitimate "banda
+#     saludable a partir de ~0.45" reference (the #467 qualitative fallback), not the achieved metric.
+#   * NEGATION-GUARDED — a value inside a prohibition window ("NUNCA fijar silhouette > 0.55") is the
+#     ECHO of the forbidden example the #467 hint itself names, not a fabrication.
+# Pure, total, never raises. Used by the M4 reprompt-once-then-degrade guard (best-effort), so an FP
+# costs at most one reprompt and never ships a wrong value.
+_SIL_GROUND_TOL: float = 0.03
+_SIL_GROUND_LO: float = 0.30
+_SIL_GROUND_HI: float = 0.95
+# "silhouette"/"silueta" then ≤12 non-digit, non-newline chars (lazy, bounded → ReDoS-safe), then a
+# DECIMAL in [0,1]. The optional connector (de / : / = / > / score …) is absorbed by the char class.
+_SILHOUETTE_VALUE_RE = re.compile(
+    r"(?:silhouette|silueta)\b[^\d\n]{0,12}?([01][.,]\d{1,3})",
+    re.IGNORECASE,
+)
+_SIL_NEGATION_MARKERS: tuple[str, ...] = (
+    "no ",
+    "nunca",
+    "evitar",
+    "evita",
+    "sin ",
+    "arbitrari",
+    "inventad",
+    "fij",
+)
+
+
+def detect_unanchored_silhouette(
+    prose: str | None,
+    real_silhouette: float | None,
+    *,
+    floor: float = _SILHOUETTE_FLOOR,
+    tol: float = _SIL_GROUND_TOL,
+) -> list[str]:
+    """Return ``["SILHOUETTE_NO_ANCLADA:<value>", ...]`` for cited silhouette values that diverge from
+    the REAL executed ``real_silhouette`` beyond ``tol`` (Issue #469).
+
+    ``[]`` when ``prose`` / ``real_silhouette`` is ``None`` or non-finite (degrade-safe: no anchor →
+    nothing to validate). Pure and total — never raises. See the module comment above for the four
+    precision rules (assertion shape, band, floor-exempt, negation-guard) that keep it zero-FP in
+    practice; the accepted FN is a value detached (>12 chars) from its keyword.
+    """
+    if prose is None or real_silhouette is None:
+        return []
+    try:
+        real = float(real_silhouette)
+    except (TypeError, ValueError):
+        return []
+    if not math.isfinite(real):
+        return []
+    violations: list[str] = []
+    seen: set[str] = set()
+    for match in _SILHOUETTE_VALUE_RE.finditer(prose):
+        raw = match.group(1)
+        value = float(raw.replace(",", "."))
+        if not (_SIL_GROUND_LO <= value <= _SIL_GROUND_HI):
+            continue  # range bound (0.0 / 1.0) — not a claimed achieved metric
+        if abs(value - real) <= tol:
+            continue  # matches the real executed value (within rounding)
+        if abs(value - floor) <= tol:
+            continue  # the qualitative "banda saludable a partir de ~0.45" reference
+        window = prose[max(0, match.start() - 30) : match.start()].lower()
+        if any(marker in window for marker in _SIL_NEGATION_MARKERS):
+            continue  # echo of the forbidden ">0.55" example in a prohibition, not a fabrication
+        if raw in seen:
+            continue
+        seen.add(raw)
+        violations.append(f"SILHOUETTE_NO_ANCLADA:{raw}")
+    return violations
+
+
 __all__ = [
     "resolve_clustering_decision",
     "recommended_option_of",
@@ -317,4 +402,5 @@ __all__ = [
     "build_clustering_verdict_hint",
     "validate_verdict_option",
     "validate_m4_verdict_option",
+    "detect_unanchored_silhouette",
 ]
