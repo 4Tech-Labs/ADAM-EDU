@@ -185,6 +185,51 @@ def test_red_control_kill_switch_off_keeps_target_in_csv() -> None:
     assert check_clustering_no_target(rows) is False
 
 
+# ── Frente 1 — review hardening: cluster-label leaks (any role, any shape) ──
+
+
+def test_strip_removes_contract_target_any_role_incl_clustering_target() -> None:
+    """Regla A role-agnóstica (#466 adversarial review): un `target_column` del contrato con rol
+    `clustering_target` (o cualquier rol) se elimina — clustering NO tiene target de ningún tipo."""
+    col = {
+        "name": "latent_segment", "type": "int", "description": "segmento latente pre-asignado",
+        "range_min": 0, "range_max": 3, "nullable": False, "trend": None, "dependency": None,
+    }
+    schema = _clustering_schema([col])
+    contract = {
+        "target_column": {"name": "latent_segment", "role": "clustering_target", "dtype": "int"},
+        "feature_columns": [],
+    }
+    out = _enforce_mlds_clustering_no_target(
+        schema, contract, profile="ml_ds", primary_family="clustering", enabled=True
+    )
+    assert "latent_segment" not in _names(out)
+
+
+def test_strip_removes_kvalued_cluster_id_any_shape() -> None:
+    """Regla C (#466 adversarial review): una etiqueta de cluster k-valuada (`cluster_id` rango [0,3],
+    NO binaria) se elimina pese a no ser binaria — es el answer leak más dañino."""
+    col = {
+        "name": "cluster_id", "type": "int", "description": "id de cluster pre-asignado",
+        "range_min": 0, "range_max": 3, "nullable": False, "trend": None, "dependency": None,
+    }
+    schema = _clustering_schema([col])
+    out = _enforce_mlds_clustering_no_target(
+        schema, None, profile="ml_ds", primary_family="clustering", enabled=True
+    )
+    assert "cluster_id" not in _names(out)
+    assert {"period", "recency_days"} <= _names(out)
+
+
+def test_oracle_no_target_red_on_kvalued_cluster_id() -> None:
+    rows = [
+        {"period": "a", "recency_days": 10, "cluster_id": 0},
+        {"period": "b", "recency_days": 20, "cluster_id": 2},
+        {"period": "c", "recency_days": 30, "cluster_id": 3},
+    ]
+    assert check_clustering_no_target(rows) is False
+
+
 # ─────────────────────────── Frente 2 — charts ───────────────────────────
 
 
@@ -247,6 +292,42 @@ def test_charts_oracle_red_on_model_output_marker() -> None:
         "chart_type": "scatter", "traces": [], "data_source": "python_builder",
     }
     assert check_clustering_eda_no_target_charts([cluster_chart]) is False
+
+
+def test_charts_oracle_red_on_supervised_framing_in_python_builder_chart() -> None:
+    """Keeps the supervised-framing teeth after the precision fix: a python_builder chart with
+    "vs target" framing / a regression trace (a future builder regression) is still caught."""
+    chart = {
+        "id": "x", "title": "Foros vs Target", "subtitle": "predictor del riesgo",
+        "chart_type": "scatter", "traces": [{"type": "scatter", "name": "regresión"}],
+        "data_source": "python_builder",
+    }
+    assert check_clustering_eda_no_target_charts([chart]) is False
+
+
+def test_charts_oracle_no_fp_on_feature_name_with_fit_substring() -> None:
+    """#466 adversarial review: a legit feature whose name contains 'fit' (profit_margin) as the box
+    trace name must NOT trip the oracle (was a substring false positive)."""
+    chart = {
+        "id": "feature_distributions", "title": "Distribución y escala de las variables",
+        "subtitle": "Escalas muy distintas", "chart_type": "box",
+        "traces": [{"type": "box", "name": "profit_margin", "y": [1.0, 2.0]}],
+        "data_source": "python_builder",
+    }
+    assert check_clustering_eda_no_target_charts([chart]) is True
+
+
+def test_charts_oracle_no_fp_on_target_named_continuous_feature_in_title() -> None:
+    """#466 adversarial review: a continuous feature with 'target' substring (target_segment_value)
+    embedded in the scatter title must NOT trip the oracle (was a substring false positive)."""
+    chart = {
+        "id": "data_dispersion_2d", "title": "Dispersión en target_segment_value × monetary_value",
+        "subtitle": "Agrupamiento natural visible en los datos (antes de modelar)",
+        "chart_type": "scatter",
+        "traces": [{"type": "scatter", "mode": "markers", "name": "observaciones"}],
+        "data_source": "python_builder",
+    }
+    assert check_clustering_eda_no_target_charts([chart]) is True
 
 
 # ── Frente 2 dispatch ──

@@ -4819,18 +4819,19 @@ def _enforce_mlds_classification_schema(
     return new_schema
 
 
-# Issue #466 — supervised target detection for the ml_ds + clustering strip. Clustering is
-# unsupervised → no target column may exist. A leaked `dummy_target` (or any supervised target the
-# schema_designer LLM hallucinates / the gateless `_augment` injects) is detected by name token +
-# binary/unit shape, OR (FP-proof) by an explicit supervised role on the contract target_column.
+# Issue #466 — leaked-target detection for the ml_ds + clustering strip. Clustering is unsupervised →
+# NO target column of ANY kind may exist. Three vectors: (A) an explicit contract `target_column` (any
+# role/shape — clustering has no target); (B) a target-named binary column (a hallucinated
+# `dummy_target`); (C) a cluster-label artifact name (`cluster_id`/`kmeans_*` — a pre-assigned cluster
+# answer that hands the student the result and must never appear pre-model).
 _CLUSTERING_TARGET_NAME_TOKENS: tuple[str, ...] = (
     "dummy_target", "target", "objetivo", "label", "categoria", "clase", "clasificacion", "churn",
 )
 _CLUSTERING_TARGET_EXACT_NAMES: frozenset[str] = frozenset({"y", "y_true", "y_pred"})
-_SUPERVISED_TARGET_ROLES: frozenset[str] = frozenset({
-    "classification_target", "regression_target", "anomaly_target",
-    "ranking_target", "forecasting_target",
-})
+# Cluster-label artifacts (answer leak): stripped by NAME regardless of shape — no legitimate
+# pre-model segmentation feature is named `cluster*`/`kmeans*` (a k-valued cluster id is NOT binary,
+# so the binary-shape guard of Regla B would otherwise miss it).
+_CLUSTERING_LABEL_NAME_TOKENS: tuple[str, ...] = ("cluster", "kmeans")
 
 
 def _enforce_mlds_clustering_no_target(
@@ -4853,9 +4854,12 @@ def _enforce_mlds_clustering_no_target(
     ``dummy_target`` pese a la prohibición del prompt, y ``_augment_schema_with_contract`` es gateless
     (inyecta un ``target_column`` del contrato para cualquier familia). El strip es la GARANTÍA robusta
     a ambos orígenes. Detección (anti-FP):
-      * Regla A (contrato, FP-proof): un ``target_column`` con rol supervisado → elimina su columna.
-      * Regla B (heurística guardada): nombre tipo-target (token o exacto) Y forma binaria/unitaria
-        (rango [0,1]) Y NO en ``protected``.
+      * Regla A (contrato, FP-proof): cualquier ``target_column`` declarado (clustering NO tiene
+        target de NINGÚN rol) → elimina su columna, sea cual sea su rol o forma.
+      * Regla B (heurística guardada): nombre tipo-target de clasificación (token o exacto) Y forma
+        binaria/unitaria (rango [0,1]) Y NO en ``protected``.
+      * Regla C (etiqueta de cluster): nombre ``cluster*``/``kmeans*`` (artefacto del modelo/answer
+        leak) → elimina sin importar la forma (un id de cluster k-valuado NO es binario).
       * ``protected`` (nunca se elimina): ``period`` ∪ ``contract.feature_columns`` ∪ las features de
         segmentación #452. Un RFM continuo nunca matchea los tokens → FP ≈ 0.
 
@@ -4879,18 +4883,24 @@ def _enforce_mlds_clustering_no_target(
 
     strip_names: set[str] = set()
 
-    # Regla A (contrato, FP-proof): un target_column con rol supervisado (cualquier forma).
+    # Regla A (contrato, FP-proof): clustering NO debe tener target_column de NINGÚN rol/forma → si el
+    # contrato declara uno (architect descarriado o inyección del augmenter gateless), elimínalo.
     tgt = (contract or {}).get("target_column") or {}
     tgt_name = (tgt.get("name") or "").strip()
-    if tgt_name and tgt_name not in protected and tgt.get("role") in _SUPERVISED_TARGET_ROLES:
+    if tgt_name and tgt_name not in protected:
         strip_names.add(tgt_name)
 
-    # Regla B (heurística guardada): nombre tipo-target + forma binaria/unitaria, fuera de protected.
     for c in columns:
         name = (c.get("name") or "").strip()
         if not name or name in protected:
             continue
         lname = name.lower()
+        # Regla C (etiqueta de cluster, cualquier forma): `cluster_id`/`cluster_label`/`kmeans_*` es un
+        # artefacto del modelo (answer leak), nunca una feature pre-modelo → elimina sin guarda de forma.
+        if any(tok in lname for tok in _CLUSTERING_LABEL_NAME_TOKENS):
+            strip_names.add(name)
+            continue
+        # Regla B (heurística guardada): nombre tipo-target de clasificación + forma binaria/unitaria.
         name_is_target = (
             lname in _CLUSTERING_TARGET_EXACT_NAMES
             or any(tok in lname for tok in _CLUSTERING_TARGET_NAME_TOKENS)
