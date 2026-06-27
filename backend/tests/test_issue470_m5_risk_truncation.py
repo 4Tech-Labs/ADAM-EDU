@@ -149,6 +149,17 @@ def test_newline_separated_sentences_collapse_so_boundary_cut_works() -> None:
     assert out == first  # cortó exactamente en la 1ª oración completa
 
 
+def test_single_oversized_token_preserves_content_not_bare_ellipsis() -> None:
+    """Caso degenerado: un único token sin espacios > cap (URL/hash/blob). `textwrap.shorten`
+    devolvería solo «…» (pérdida total); el corte duro conserva el inicio. Nunca un «…» pelado."""
+    token = "https://example.com/" + ("a" * 400)  # un solo token, sin espacios, > cap
+    out = _truncate_risk_text(token)
+    assert out != "…", "no debe colapsar a un «…» pelado"
+    assert out.startswith("https://example.com/"), f"debe conservar el inicio: {out[:30]!r}"
+    assert out.endswith("…")
+    assert 30 < len(out) <= _MAX_RISK_CHARS + 1
+
+
 def test_empty_input_is_safe() -> None:
     assert _truncate_risk_text("") == ""
     assert _truncate_risk_text("   \n  ") == ""

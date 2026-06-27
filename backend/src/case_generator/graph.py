@@ -1010,7 +1010,12 @@ def _truncate_risk_text(text: str) -> str:
     if sentence_end >= 40:  # prefiere la última oración completa dentro de la ventana
         return window[: sentence_end + 1].rstrip()
     # Sin frontera de oración utilizable → fallback word-safe (stdlib): nunca corta a media palabra.
-    return textwrap.shorten(text, width=_MAX_RISK_CHARS, placeholder="…")
+    shortened = textwrap.shorten(text, width=_MAX_RISK_CHARS, placeholder="…")
+    if len(shortened) > 1:
+        return shortened
+    # Degenerado: un único token sin espacios > cap (URL/hash/blob) → shorten devolvería solo «…» y
+    # perdería todo el contenido; corte duro conservando el inicio (mejor que un «…» pelado).
+    return text[: _MAX_RISK_CHARS - 1].rstrip() + "…"
 
 
 # ─────────────────────────────────────────────────────────
