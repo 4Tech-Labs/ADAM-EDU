@@ -33,6 +33,7 @@ Design (Issue #467, gate-approved Option A — strong deterministic coordination
 from __future__ import annotations
 
 import hashlib
+import re
 
 from case_generator.m1_grounding import _extract_option_labels
 
@@ -46,7 +47,28 @@ _RECOMMENDED_OPTION_CHOICES: tuple[str, ...] = ("A", "B", "C")
 # fabricated 0.55, which is the classification AUC floor the LLM was leaking into clustering prose).
 _SILHOUETTE_FLOOR: float = 0.45
 
-CLUSTERING_DECISION_STATE_KEY = "clustering_decision"
+# Spanish recommendation verbs/phrases that BIND an explicit "Opción X" as the chosen verdict.
+# Used by ``validate_verdict_option`` to catch the inversion case — a verdict that RECOMMENDS the
+# wrong option while merely MENTIONING the correct one (e.g. "se recomienda la Opción A, a diferencia
+# de la Opción C"). The window is a bounded lazy quantifier over a non-newline class (no nested
+# quantifier over the same class) → linear-time / ReDoS-safe.
+_RECOMMEND_BOUND_RE = re.compile(
+    r"(?:se\s+recomienda|recomendam[oa]s|recomendad[oa]s?|recomendaci[oó]n|veredicto|"
+    r"elegir|seleccionar|desplegar|adoptar|optar\s+por)"
+    r"[^.\n]{0,40}?\b(?:opci[oó]n|alternativa)\s+([A-F])\b",
+    re.IGNORECASE,
+)
+
+
+def _recommend_bound_options(text: str) -> set[str]:
+    """Option letters bound to an explicit recommendation verb (e.g. 'se recomienda la Opción C').
+
+    The KEY to closing the inversion gap: a verdict that recommends the wrong option will bind that
+    wrong letter to a recommendation verb, while the correct letter (if only contrasted) is NOT bound.
+    Negation ('no se recomienda A, se recomienda C') binds BOTH, so the correct one IS in the set →
+    no false positive. Returns ``set()`` when no recommendation verb binds an explicit option, in
+    which case the caller falls back to the mention-based check (strictly no worse than before)."""
+    return {m.group(1).upper() for m in _RECOMMEND_BOUND_RE.finditer(text or "")}
 
 
 def resolve_clustering_decision(
@@ -99,6 +121,16 @@ def _decision_parts(decision: dict | None) -> tuple[int, str, float] | None:
     if recommended_option not in _RECOMMENDED_OPTION_CHOICES:
         return None
     return target_k, recommended_option, silhouette_floor
+
+
+def recommended_option_of(decision: dict | None) -> str:
+    """The recommended option letter (upper-cased) from a decision dict, or '' if absent/malformed.
+
+    Single source for the verdict guards' extraction (they then validate membership via
+    ``validate_verdict_option``, which no-ops on a non-letter), so the read lives in one place."""
+    if not isinstance(decision, dict):
+        return ""
+    return str(decision.get("recommended_option", "")).strip().upper()
 
 
 def build_clustering_architect_hint(decision: dict | None) -> str:
@@ -237,11 +269,17 @@ def _recommendation_section(text: str) -> str:
 def validate_verdict_option(text: str, recommended_option: str) -> list[str]:
     """Deterministic verdict-coherence check (the GUARANTEE behind the M4/M5 hints).
 
-    Returns ``["VERDICT_OPTION_MISMATCH: …"]`` when ``text`` names a strategic option but NOT the
-    case's ``recommended_option`` (i.e. it recommends a different letter). Zero-FP by construction:
-    if no option label is named, or the correct one IS named, it passes (``[]``). Reuses
-    ``m1_grounding._extract_option_labels`` (the hardened 'Opción A/B/C' extractor) — no new regex.
-    Pure, total, never raises.
+    Two layers, both zero-FP by construction:
+    * **Inversion** — if a recommendation verb BINDS one or more explicit options
+      (``_recommend_bound_options``) and ``recommended_option`` is NOT among them, the prose
+      recommends a different letter → mismatch. This closes the gap where the verdict recommends the
+      wrong option while merely contrasting the correct one ("se recomienda la Opción A, a diferencia
+      de la Opción C"). Negation binds both letters, so the correct one stays in the set → no FP.
+    * **Absence** — otherwise, if an option is named at all but ``recommended_option`` is not among
+      the mentions, it cannot be the recommendation → mismatch.
+    If no option is named, or the correct one is the bound/only recommendation, it passes (``[]``).
+    Reuses ``m1_grounding._extract_option_labels`` (the hardened 'Opción A/B/C' extractor). Pure,
+    total, never raises.
     """
     option = (recommended_option or "").strip().upper()
     if option not in _RECOMMENDED_OPTION_CHOICES:
@@ -249,6 +287,13 @@ def validate_verdict_option(text: str, recommended_option: str) -> list[str]:
     labels = set(_extract_option_labels(text or ""))
     if not labels:
         return []
+    bound = _recommend_bound_options(text or "")
+    if bound and option not in bound:
+        return [
+            "VERDICT_OPTION_MISMATCH: la recomendación se asocia a "
+            + ", ".join(sorted(bound))
+            + " pero la opción correcta del caso es " + option
+        ]
     if option in labels:
         return []
     return [
@@ -264,8 +309,8 @@ def validate_m4_verdict_option(m4_content: str, recommended_option: str) -> list
 
 
 __all__ = [
-    "CLUSTERING_DECISION_STATE_KEY",
     "resolve_clustering_decision",
+    "recommended_option_of",
     "build_clustering_architect_hint",
     "build_clustering_m1_questions_hint",
     "build_clustering_m3_questions_hint",

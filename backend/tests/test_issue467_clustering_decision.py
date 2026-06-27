@@ -185,6 +185,31 @@ def test_validate_verdict_option_no_false_positive_without_labels():
     assert validate_verdict_option("", "B") == []
 
 
+def test_validate_verdict_option_flags_inversion_recommends_wrong_mentions_right():
+    # The P1 hole: recommends A, only CONTRASTS the correct C → must still flag (C is merely mentioned,
+    # not recommended). Before the fix this passed because C appeared anywhere in the text.
+    v = validate_verdict_option("Se recomienda la Opción A, a diferencia de la Opción C.", "C")
+    assert v and "VERDICT_OPTION_MISMATCH" in v[0]
+
+
+def test_validate_verdict_option_passes_contrast_recommending_correct():
+    # Recommends C, contrasts the others → pass (C is the recommendation-bound option).
+    assert validate_verdict_option("Se recomienda la Opción C frente a la Opción A y la Opción B.", "C") == []
+
+
+def test_validate_verdict_option_negation_no_false_positive():
+    # "no se recomienda A; se recomienda C" binds BOTH letters → C is bound → no false positive.
+    assert validate_verdict_option("No se recomienda la Opción A; se recomienda la Opción C.", "C") == []
+
+
+def test_validate_m4_flags_inversion_in_recommendation_section():
+    m4 = (
+        "## 4.1 Valor\nLas Opciones A, B y C ofrecen distinta granularidad.\n"
+        "## 4.5 Recomendación de Despliegue\nSe recomienda la Opción A, a diferencia de la Opción C."
+    )
+    assert validate_m4_verdict_option(m4, "C")  # §4.5 recommends A while contrasting C → flagged
+
+
 def test_validate_m4_scopes_to_recommendation_section():
     # The body lists all options; only the §4.5 recommendation is judged.
     m4 = (
@@ -248,8 +273,15 @@ def test_golden_oracle_na_when_no_target_k():
     assert check_clustering_decision_coherence([{"a": 1.0}], [0, 1], None) is True
 
 
-def test_target_k_none_is_byte_identical_to_no_arg():
+def test_target_k_none_reproduces_hash_chosen_k():
+    # The REAL #452 byte-identity guarantee: target_k=None must reproduce the pre-#467 behavior, i.e.
+    # k = _CLUSTERING_K_CHOICES[sha256(schema) % 2] (the hash choice), NOT a forced default. (The
+    # no-arg == None equality alone is tautological — the default IS None.)
+    import hashlib
+    import json
+
     from case_generator.graph import (
+        _CLUSTERING_K_CHOICES,
         _build_clustering_fallback_schema,
         _enforce_mlds_clustering_structure,
         _generate_dataset_from_schema,
@@ -257,6 +289,14 @@ def test_target_k_none_is_byte_identical_to_no_arg():
 
     schema = _build_clustering_fallback_schema(200)
     rows = _generate_dataset_from_schema(schema, profile="ml_ds")
+    base_seed = int(hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(), 16) % (2**31)
+    expected_k = _CLUSTERING_K_CHOICES[base_seed % len(_CLUSTERING_K_CHOICES)]
+    _out, labels = _enforce_mlds_clustering_structure(
+        list(rows), schema, profile="ml_ds", primary_family="clustering",
+        enabled=True, return_labels=True, target_k=None,
+    )
+    assert len(set(labels)) == expected_k  # None path == hash-chosen k (byte-identical to #452)
+    # And the no-arg call equals the explicit-None call (determinism of the default path).
     a = _enforce_mlds_clustering_structure(
         list(rows), schema, profile="ml_ds", primary_family="clustering", enabled=True, target_k=None
     )
@@ -282,11 +322,31 @@ def test_data_layer_noop_for_non_clustering():
 
 def test_no_graph_node_writes_clustering_decision():
     graph_src = Path("src/case_generator/graph.py").read_text(encoding="utf-8")
-    # Nodes only READ via state.get("clustering_decision"); a dict-literal write would create a
-    # fan-out merge hazard + a resume clobber. The ONLY writer is authoring.state_input.
+    # Nodes only READ via state.get("clustering_decision"); a write would create a fan-out merge
+    # hazard + a resume clobber. The ONLY writer is authoring.state_input. Two write shapes are
+    # checked: a return-dict key (`"clustering_decision":`) AND an in-place subscript assignment
+    # (`["clustering_decision"]`) — reads use `.get("clustering_decision")`, so a subscript form in
+    # graph.py would be a write.
     assert '"clustering_decision":' not in graph_src
+    assert '["clustering_decision"]' not in graph_src
     authoring_src = Path("src/case_generator/core/authoring.py").read_text(encoding="utf-8")
     assert 'state_input["clustering_decision"]' in authoring_src
+
+
+def test_graph_wires_all_clustering_hints_and_guards():
+    # The architect + M3-questions hints are prompt-only (no downstream guard), so a silent removal
+    # of their wiring would not be caught by a behavioral guard — this source-scan is their insurance.
+    graph_src = Path("src/case_generator/graph.py").read_text(encoding="utf-8")
+    for call in (
+        "build_clustering_architect_hint(",
+        "build_clustering_m1_questions_hint(",
+        "build_clustering_m3_questions_hint(",
+        "build_clustering_verdict_hint(",
+        "_apply_clustering_m1_verdict_coherence(",
+        "_apply_clustering_m4_verdict_coherence(",
+        "_apply_clustering_m5_verdict_coherence(",
+    ):
+        assert call in graph_src, f"missing #467 wiring: {call}"
 
 
 # ── 6. verdict guards — reprompt-once-then-degrade (fake LLM) ──────────────────
@@ -528,5 +588,59 @@ def test_m1_verdict_guard_noop_off_gate(monkeypatch):
     llm = _FakeM5LLM(_StubResult([]))
     out = graph._apply_clustering_m1_verdict_coherence(
         llm=llm, prompt="P", state=state, preguntas_dict=wrong
+    )
+    assert out == wrong and llm.calls == 0
+
+
+def test_m1_verdict_guard_degrades_when_reprompt_still_wrong(monkeypatch):
+    # Shared-helper still-wrong-degrade path (covers M1 AND M5 — they share the helper).
+    from case_generator import graph
+
+    monkeypatch.setattr(graph.settings, "mlds_clustering_decision_coherence", True, raising=False)
+    state = _clustering_state(recommended="C")
+    wrong = _m1_questions("Se recomienda la Opción A.")
+    still = _StubResult([_StubMemo(q) for q in _m1_questions("Se recomienda la Opción B.")])  # still != C
+    llm = _FakeM5LLM(still)
+    out = graph._apply_clustering_m1_verdict_coherence(
+        llm=llm, prompt="P", state=state, preguntas_dict=wrong
+    )
+    assert llm.calls == 1 and out == wrong  # reprompted once, still wrong → degrade to pass-1
+
+
+def test_m1_verdict_guard_noop_kill_switch_off(monkeypatch):
+    from case_generator import graph
+
+    monkeypatch.setattr(graph.settings, "mlds_clustering_decision_coherence", False, raising=False)
+    state = _clustering_state(recommended="C")
+    wrong = _m1_questions("Se recomienda la Opción A.")
+    llm = _FakeM5LLM(_StubResult([]))
+    out = graph._apply_clustering_m1_verdict_coherence(
+        llm=llm, prompt="P", state=state, preguntas_dict=wrong
+    )
+    assert out == wrong and llm.calls == 0
+
+
+def test_m5_verdict_guard_noop_off_gate(monkeypatch):
+    from case_generator import graph
+
+    monkeypatch.setattr(graph.settings, "mlds_clustering_decision_coherence", True, raising=False)
+    state = {"studentProfile": "business", "algoritmos": ["K-Means"], "case_id": "x"}
+    wrong = [{"numero": 1, "titulo": "M", "enunciado": "x", "solucion_esperada": "Se recomienda la Opción A."}]
+    llm = _FakeM5LLM(_StubResult([]))
+    out = graph._apply_clustering_m5_verdict_coherence(
+        llm=llm, prompt="P", preguntas_dict=wrong, state=state
+    )
+    assert out == wrong and llm.calls == 0
+
+
+def test_m5_verdict_guard_noop_kill_switch_off(monkeypatch):
+    from case_generator import graph
+
+    monkeypatch.setattr(graph.settings, "mlds_clustering_decision_coherence", False, raising=False)
+    state = _clustering_state(recommended="C")
+    wrong = [{"numero": 1, "titulo": "M", "enunciado": "x", "solucion_esperada": "Se recomienda la Opción A."}]
+    llm = _FakeM5LLM(_StubResult([]))
+    out = graph._apply_clustering_m5_verdict_coherence(
+        llm=llm, prompt="P", preguntas_dict=wrong, state=state
     )
     assert out == wrong and llm.calls == 0
