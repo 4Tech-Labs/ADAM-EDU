@@ -101,6 +101,16 @@ class Settings(BaseSettings):
     # revert, no redeploy). DBSCAN/contrast replay jobs keep the mixed prompt either way. Orthogonal
     # to MLDS_CLUSTERING_EXECUTOR (which decides whether the notebook is executed + quality-gated).
     mlds_clustering_kmeans_notebook: bool = True
+    # M1 segmentation narrative anchor for ml_ds + clustering (Issue #455). When true (default),
+    # an ml_ds + clustering case selects the dedicated clustering M1 prompts (architect/writer/
+    # questions): the dilemma is framed as a SEGMENTATION decision, the A/B/C options are
+    # segmentation strategies (not classifier thresholds), no business_cost_matrix/target_event_rate
+    # are emitted, and the segmentation `pregunta_eje` survives `_sanitize_pregunta_eje` into the
+    # questions prompt. Set MLDS_CLUSTERING_M1_ANCHOR=false to revert to the generic M1 prompts +
+    # nulled pregunta_eje byte-identically (instant env-only revert; no redeploy). The gate is
+    # profile=="ml_ds" AND family=="clustering"; clasificación / regresión / serie_temporal /
+    # business (including business+clustering) are unaffected either way.
+    mlds_clustering_m1_anchor: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign

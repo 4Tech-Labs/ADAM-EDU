@@ -44,6 +44,11 @@ from case_generator.prompts.clasificacion.M4_clasificacion.questions import (
     M4_QUESTIONS_PROMPT_CLASSIFICATION_NEUTRAL,
 )
 from case_generator.prompts._writer_base import CASE_WRITER_PROMPT
+from case_generator.prompts.clustering import (
+    CASE_ARCHITECT_PROMPT_CLUSTERING,
+    CASE_QUESTIONS_PROMPT_CLUSTERING,
+    CASE_WRITER_PROMPT_CLUSTERING,
+)
 from case_generator.prompts.clasificacion import (
     CASE_ARCHITECT_PROMPT_CLASSIFICATION,
     CASE_QUESTIONS_PROMPT_CLASSIFICATION,
@@ -2978,14 +2983,20 @@ Contexto M3 (extracto): {m3_content}
 # preserves the pre-Issue-#245 generic behaviour for all non-clasificacion families.
 CASE_ARCHITECT_PROMPT_BY_FAMILY: dict[str, str] = {
     "clasificacion": CASE_ARCHITECT_PROMPT_CLASSIFICATION,
+    # Issue #455 — clustering (segmentation) M1 anchor. Runtime selection is gated
+    # to ml_ds + kill-switch in graph._resolve_m1_prompt_family; the dict is a pure
+    # family→prompt map.
+    "clustering": CASE_ARCHITECT_PROMPT_CLUSTERING,
 }
 
 CASE_WRITER_PROMPT_BY_FAMILY: dict[str, str] = {
     "clasificacion": CASE_WRITER_PROMPT_CLASSIFICATION,
+    "clustering": CASE_WRITER_PROMPT_CLUSTERING,
 }
 
 CASE_QUESTIONS_PROMPT_BY_FAMILY: dict[str, str] = {
     "clasificacion": CASE_QUESTIONS_PROMPT_CLASSIFICATION,
+    "clustering": CASE_QUESTIONS_PROMPT_CLUSTERING,
 }
 
 # ── PROMPT_BY_FAMILY — dispatch table consumed by graph.py::m3_notebook_generator
@@ -3007,14 +3018,17 @@ __all__ = [
   "CASE_ARCHITECT_PROMPT",
   "CASE_ARCHITECT_PROMPT_BY_FAMILY",
   "CASE_ARCHITECT_PROMPT_CLASSIFICATION",
+  "CASE_ARCHITECT_PROMPT_CLUSTERING",
   "M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK",
   "CASE_QUESTIONS_PROMPT",
   "CASE_QUESTIONS_PROMPT_BY_FAMILY",
   "CASE_QUESTIONS_PROMPT_CLASSIFICATION",
+  "CASE_QUESTIONS_PROMPT_CLUSTERING",
   "build_cost_matrix_block",
   "CASE_WRITER_PROMPT",
   "CASE_WRITER_PROMPT_BY_FAMILY",
   "CASE_WRITER_PROMPT_CLASSIFICATION",
+  "CASE_WRITER_PROMPT_CLUSTERING",
   "EDA_ANNOTATE_ONLY_PROMPT",
   "EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION",
   "EDA_CHART_GENERATOR_PROMPT",

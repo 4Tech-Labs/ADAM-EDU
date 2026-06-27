@@ -144,6 +144,12 @@ class NodeEvalInputs:
     # (real DBSCAN call sites → False); gate-protects a future generator regression that drops a
     # required cell or reintroduces DBSCAN on the K-Means path.
     kmeans_notebook_shape_ok: bool = True
+    # ml_ds + clustering M1 architect output carries NO supervised anchor (Issue #455): clustering is
+    # unsupervised, so the `dataset_schema_required` contract must not emit a `target_column`,
+    # `business_cost_matrix`, or `target_event_rate`. True (n/a) for non-clustering jobs / no contract.
+    # Computed via ``check_clustering_m1_no_target_anchors``; gate-protects against an M1 regression
+    # that frames clustering as supervised. RED control: a contract with any anchor fails.
+    clustering_m1_no_target_ok: bool = True
 
 
 @dataclass
@@ -202,6 +208,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
     if not r.kmeans_notebook_shape_ok:
         reasons.append(
             "K-Means notebook shape failure: missing required cell/API or DBSCAN on the K-Means path"
+        )
+    if not r.clustering_m1_no_target_ok:
+        reasons.append(
+            "clustering M1 failure: architect emitted a supervised target_column / "
+            "business_cost_matrix / target_event_rate"
         )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
@@ -404,6 +415,25 @@ def check_architect_value_model_lens_valid(value_model: dict | None) -> bool:
     if value_model is None:
         return True
     return value_model.get("lens") in IMPACT_LENS_KEYS
+
+
+def check_clustering_m1_no_target_anchors(contract: dict | None) -> bool:
+    """Pure oracle (Issue #455): an ml_ds + clustering M1 ``dataset_schema_required`` contract
+    carries NO supervised anchor — clustering is unsupervised.
+
+    True iff the contract has NO supervised ``target_column``, NO ``business_cost_matrix``, and NO
+    ``target_event_rate`` (all three are contract-nested keys the classification architect anchor
+    emits). True (n/a) when the contract is None (architect emitted no contract). A clustering case
+    that populates any of them FAILS — the clustering M1 prompt forbids them and the clf-gated
+    validators no-op for clustering, so a populated anchor means the generic/classification framing
+    leaked in. RED control: a contract with any anchor returns False (non-tautological)."""
+    if not isinstance(contract, dict):
+        return True
+    return (
+        contract.get("target_column") is None
+        and contract.get("business_cost_matrix") is None
+        and contract.get("target_event_rate") is None
+    )
 
 
 def check_m5_questions_coherence(

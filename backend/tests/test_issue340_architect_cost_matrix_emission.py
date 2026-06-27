@@ -79,14 +79,24 @@ def test_mlds_classification_prompt_emits_cost_matrix_instruction() -> None:
 
 # ── (b) absent for non-classification families (anchor not applied) ───────────
 
-@pytest.mark.parametrize("family", ["regresion", "clustering", "serie_temporal"])
+@pytest.mark.parametrize("family", ["regresion", "serie_temporal"])
 def test_non_classification_families_omit_cost_matrix_instruction(family: str) -> None:
-    """Non-classification families fall back to the anchor-free base
-    (CASE_ARCHITECT_PROMPT_BY_FAMILY has only ``clasificacion``), so the new
-    instruction must not appear — even for ml_ds."""
+    """regresion / serie_temporal fall back to the anchor-free generic base (no dedicated
+    M1 prompt), so the cost-matrix instruction must not appear — even for ml_ds. (clustering
+    has its own #455 prompt and is covered by the dedicated test below.)"""
     assembled = _assemble_architect_prompt(_ctx("ml_ds", family))
     assert _COST_MATRIX_TOKEN not in assembled
     assert _GATE_PHRASE not in assembled
+
+
+def test_clustering_family_forbids_cost_matrix_emission() -> None:
+    """Issue #455 — ml_ds + clustering now selects its own segmentation architect prompt, which
+    NAMES ``business_cost_matrix`` only inside an explicit PROHIBITION (clustering is unsupervised),
+    never as an EMISSION instruction. So the clf emission gate phrase must be ABSENT while the
+    forbid-instruction is PRESENT — a stronger guarantee than the anchor-free fallback."""
+    assembled = _assemble_architect_prompt(_ctx("ml_ds", "clustering"))
+    assert _GATE_PHRASE not in assembled  # no clf "emit cost matrix SOLO para ml_ds" instruction
+    assert "NUNCA emitas `business_cost_matrix`" in assembled  # explicit prohibition instead
 
 
 # ── (b') business + clasificación DOES carry the gated text (like pregunta_eje) ──
