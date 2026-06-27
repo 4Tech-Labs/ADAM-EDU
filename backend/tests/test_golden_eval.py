@@ -20,6 +20,7 @@ from golden_eval import (
     JUDGE_MAX_DROP,
     NodeEvalInputs,
     check_architect_value_model_lens_valid,
+    check_clustering_structure,
     check_domain_coherence,
     check_m4_deployment_section_unique,
     check_m4_lens_kpi_coherence,
@@ -194,6 +195,13 @@ def test_domain_coherence_oracle_discriminates_churn_coupled() -> None:
         "default_60d", "debt_to_income_ratio", 0.12, dechurn=False
     )
     assert check_domain_coherence(churn_coupled) is False
+
+
+def test_g07_fixture_has_clustering_structure() -> None:
+    """Issue #452 — the materialized g07 fixture (real ml_ds+clustering dataset with injected
+    blobs) carries genuine latent structure: silhouette ∈ band AND ARI ≥ 0.6 vs the latent label."""
+    fixture = json.loads((_FIXTURES / "g07_mlds_clu_single.json").read_text(encoding="utf-8"))
+    assert check_clustering_structure(fixture["rows"], fixture["latent_labels"]) is True
 
 
 def test_domain_coherence_oracle_on_rebuilt_dechurned_schema() -> None:

@@ -276,6 +276,65 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
 """
 
 
+# ── SCHEMA_DESIGNER_PROMPT_CLUSTERING (Issue #452) ──────────────────────────────
+# Dedicated entity-level SEGMENTATION schema for ml_ds + clustering. Standalone (NOT appended to
+# the generic prompt, whose rigid "12 fixed churn-panel columns" rule would contradict it). The
+# deterministic `_enforce_mlds_clustering_structure` injects the latent blob structure over the
+# declared numeric features; the architect's financial Exhibit 1 stays a separate M1 narrative.
+SCHEMA_DESIGNER_PROMPT_CLUSTERING = """\
+Diseña el schema de un dataset sintético de SEGMENTACIÓN (clustering NO supervisado) para el caso.
+Perfil: {student_profile} | Industria: {industria}
+
+## Contrato dataset_schema_required
+{dataset_contract_block}
+
+OBJETIVO PEDAGÓGICO: el estudiante descubrirá segmentos latentes con K-Means. El dataset es una
+tabla A NIVEL DE ENTIDAD (cliente, producto, cuenta…), UNA fila por entidad, con features NUMÉRICAS
+de comportamiento INTERPRETABLES y en escalas distintas (para motivar la estandarización).
+
+REGLAS DURAS (clustering):
+- NO hay variable target supervisada. NO incluyas `categoria`/`label` ni un target binario.
+- NO incluyas un panel financiero de serie temporal (revenue/costs/margin_pct/ebitda) ni columnas de
+  churn/retención (churn_rate/nps/retention_mX). Este caso NO es de retención.
+- Genera `period` SOLO como identificador de fila (type "str", row id), nunca como eje temporal.
+- Genera entre 5 y 8 features numéricas de segmentación interpretables (elige nombres y rangos
+  coherentes con la industria; espíritu RFM + comportamiento): recency_days (int),
+  frequency_count (int), monetary_value (float), tenure_months (int), engagement_score (float 0-1),
+  support_intensity (float), avg_ticket_value (float)…
+- Cada feature numérica: range_min/range_max coherentes, nullable=false, trend=null, dependency=null.
+  (La estructura latente de segmentos la inyecta el pipeline determinista; tú SOLO declaras las
+  features y sus rangos.)
+- Si el contrato declara `feature_columns`, INCLÚYELAS con su `name` y `dtype` exactos.
+
+## ESTRUCTURA DE OUTPUT OBLIGATORIA (JSON puro, sin markdown, sin claves extra)
+{{
+  "columns": [
+    {{"name": "period", "type": "str", "description": "Identificador de entidad", "range_min": null, "range_max": null, "nullable": false, "trend": null, "dependency": null}},
+    {{"name": "recency_days", "type": "int", "description": "Días desde la última actividad", "range_min": 1, "range_max": 365, "nullable": false, "trend": null, "dependency": null}},
+    {{"name": "frequency_count", "type": "int", "description": "Interacciones en el período", "range_min": 1, "range_max": 60, "nullable": false, "trend": null, "dependency": null}},
+    {{"name": "monetary_value", "type": "float", "description": "Valor monetario acumulado (USD)", "range_min": 50, "range_max": 5000, "nullable": false, "trend": null, "dependency": null}}
+    ... 2 a 5 features de segmentación más, mismas reglas ...
+  ],
+  "n_rows": {max_rows},
+  "time_granularity": "monthly",
+  "constraints": {{"tolerance_pct": 0.05}},
+  "reasoning_summary": "<justificación en 1 línea>"
+}}
+
+## Reglas para columnas
+- type DEBE ser exactamente "int" o "float" para las features (y "str" solo para `period`).
+- range_min/range_max: números para columnas numéricas; null para `period`.
+- n_rows: usa exactamente {max_rows}.
+
+## Exhibits del caso (solo CONTEXTO de negocio; NO los conviertas en columnas financieras)
+### Exhibit 1 — Financiero
+{financial_data}
+
+### Exhibit 2 — Operativo
+{operational_data}
+"""
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # NEW-3 (Fix Grupo 3): DATA_SERIALIZER_PROMPT eliminado en v8.
 # Fue reemplazado por data_generator (Python puro) en Issue 6.4c.
@@ -1501,7 +1560,10 @@ M4_CHARTS_PROMPT_BY_FAMILY_NEUTRAL: dict[str, str] = {
 # until their specialised prompts are authored in future iterations.
 SCHEMA_DESIGNER_PROMPT_BY_FAMILY: dict[str, str] = {
     "clasificacion": SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
-    # regresion, clustering, serie_temporal — deferred (future iterations)
+    # Issue #452 — ml_ds + clustering gets a dedicated entity-level segmentation schema
+    # (gated at the schema_designer call site by MLDS_CLUSTERING_STRUCTURE).
+    "clustering": SCHEMA_DESIGNER_PROMPT_CLUSTERING,
+    # regresion, serie_temporal — deferred (future iterations)
 }
 
 
@@ -2753,6 +2815,7 @@ __all__ = [
   "PROMPT_BY_FAMILY",
   "SCHEMA_DESIGNER_PROMPT",
   "SCHEMA_DESIGNER_PROMPT_BY_FAMILY",
+  "SCHEMA_DESIGNER_PROMPT_CLUSTERING",
   "SCHEMA_DESIGNER_PROMPT_CLASSIFICATION",
   "TEACHING_NOTE_PART1_PROMPT",
   "TEACHING_NOTE_PART1_PROMPT_LEGACY",

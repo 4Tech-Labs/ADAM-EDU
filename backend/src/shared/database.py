@@ -72,6 +72,17 @@ class Settings(BaseSettings):
     # prior behavior byte-identically (instant env-only revert; no redeploy). churn / already-binary
     # cases are unaffected either way (the sibling passes them through unchanged).
     mlds_binary_target_coerce: bool = True
+    # Inject real cluster structure into the ml_ds + clustering synthetic dataset (Issue #452).
+    # When true (default), an ml_ds + clustering case (a) gets a dedicated entity-level SEGMENTATION
+    # schema (period + interpretable segmentation features, instead of the generic churn/SaaS time-
+    # series panel) and (b) the deterministic helper `_enforce_mlds_clustering_structure` rewrites the
+    # scalable numeric features into K∈{3,4} separable Gaussian blobs, so K-Means discovers genuine,
+    # interpretable segments (silhouette ∈ ~[0.45,0.70]) instead of carving a unimodal cloud into
+    # arbitrary wedges. Set MLDS_CLUSTERING_STRUCTURE=false to disable both (the clustering case
+    # reverts to the generic schema + unimodal data byte-identically; instant env-only revert, no
+    # redeploy). clasificación / regresión / serie_temporal / business are unaffected either way
+    # (the gate is profile=="ml_ds" AND family=="clustering").
+    mlds_clustering_structure: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign

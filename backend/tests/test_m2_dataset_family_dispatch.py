@@ -17,6 +17,7 @@ from case_generator.prompts import (
     SCHEMA_DESIGNER_PROMPT,
     SCHEMA_DESIGNER_PROMPT_BY_FAMILY,
     SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
+    SCHEMA_DESIGNER_PROMPT_CLUSTERING,
 )
 
 
@@ -76,11 +77,20 @@ def test_dispatch_clasificacion_via_get_routes_to_classification_prompt() -> Non
     assert result is SCHEMA_DESIGNER_PROMPT_CLASSIFICATION
 
 
-@pytest.mark.parametrize("family", ["regresion", "clustering", "serie_temporal"])
+@pytest.mark.parametrize("family", ["regresion", "serie_temporal"])
 def test_dispatch_non_clasificacion_families_fall_back_to_generic(family: str) -> None:
-    """Families without a specialised prompt fall back to the generic prompt."""
+    """Families without a specialised prompt fall back to the generic prompt.
+
+    (Issue #452 — ``clustering`` now has its own SCHEMA_DESIGNER_PROMPT_CLUSTERING, so it is
+    asserted separately below; regresion/serie_temporal remain on the generic prompt.)"""
     result = SCHEMA_DESIGNER_PROMPT_BY_FAMILY.get(family, SCHEMA_DESIGNER_PROMPT)
     assert result is SCHEMA_DESIGNER_PROMPT
+
+
+def test_dispatch_clustering_routes_to_clustering_prompt() -> None:
+    """Issue #452 — 'clustering' maps to the dedicated segmentation schema prompt."""
+    result = SCHEMA_DESIGNER_PROMPT_BY_FAMILY.get("clustering", SCHEMA_DESIGNER_PROMPT)
+    assert result is SCHEMA_DESIGNER_PROMPT_CLUSTERING
 
 
 def test_dispatch_unknown_family_falls_back_to_generic() -> None:
@@ -226,7 +236,7 @@ def test_classification_fallback_schema_categoria_is_int_with_dependency() -> No
     )
 
 
-@pytest.mark.parametrize("family", ["regresion", "clustering", "serie_temporal", ""])
+@pytest.mark.parametrize("family", ["regresion", "serie_temporal", ""])
 def test_non_clasificacion_fallback_schema_has_no_classification_columns(family: str) -> None:
     """_build_fallback_schema for non-clasificacion ml_ds families must NOT emit
     classification-specific columns (``categoria``, ``plan_tier``, ``payment_failures``,
@@ -261,6 +271,56 @@ def test_non_clasificacion_fallback_schema_has_no_classification_columns(family:
         f"family={family!r}: fallback schema must still include 'engagement_score'"
     )
     assert result["n_rows"] == 200
+
+
+def test_clustering_fallback_schema_is_segmentation_panel() -> None:
+    """Issue #452 — ml_ds+clustering fallback is an entity-level SEGMENTATION schema (no
+    classification target, no churn/retention/financial time-series panel)."""
+    from case_generator.graph import _build_fallback_schema  # noqa: PLC0415
+
+    result = _build_fallback_schema(  # type: ignore[arg-type]
+        state={}, max_rows=200, profile="ml_ds", primary_family="clustering"
+    )
+    names = {c["name"] for c in result["columns"]}
+    assert {"recency_days", "frequency_count", "monetary_value"}.issubset(names)
+    assert names.isdisjoint({"categoria", "churn_rate", "nps", "retention_m1", "revenue", "costs"})
+    assert result["n_rows"] == 200
+
+
+def test_clustering_fallback_reverts_to_generic_when_disabled() -> None:
+    """Issue #452 kill-switch — with structure off, clustering falls back to the generic ml_ds panel."""
+    from case_generator.graph import _build_fallback_schema  # noqa: PLC0415
+
+    result = _build_fallback_schema(  # type: ignore[arg-type]
+        state={}, max_rows=200, profile="ml_ds", primary_family="clustering",
+        clustering_structure_enabled=False,
+    )
+    names = {c["name"] for c in result["columns"]}
+    assert "churn_rate" in names and "recency_days" not in names
+
+
+_CLUSTERING_REQUIRED_PLACEHOLDERS = [
+    "{student_profile}",
+    "{industria}",
+    "{dataset_contract_block}",
+    "{max_rows}",
+    "{financial_data}",
+    "{operational_data}",
+]
+
+
+@pytest.mark.parametrize("placeholder", _CLUSTERING_REQUIRED_PLACEHOLDERS)
+def test_clustering_prompt_contains_required_placeholders(placeholder: str) -> None:
+    """SCHEMA_DESIGNER_PROMPT_CLUSTERING must contain every placeholder schema_designer injects,
+    or .format() would KeyError at runtime. (It must NOT require {ml_required_families}.)"""
+    assert placeholder in SCHEMA_DESIGNER_PROMPT_CLUSTERING
+
+
+def test_clustering_prompt_has_no_churn_or_target_vocabulary() -> None:
+    """The clustering schema prompt must not seed a target or the churn/retention panel."""
+    lowered = SCHEMA_DESIGNER_PROMPT_CLUSTERING.lower()
+    assert "no supervisado" in lowered or "no hay variable target" in lowered
+    assert "retention_m1" not in lowered
 
 
 # ---------------------------------------------------------------------------

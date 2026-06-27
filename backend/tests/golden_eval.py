@@ -129,6 +129,13 @@ class NodeEvalInputs:
     # that reintroduces the leak fails the gate. The DETERMINISTIC cure is the strip in
     # ``build_computed_metrics_block``; this gate-protects it on the frozen golden set.
     narrative_no_raw_identifier_ok: bool = True
+    # ml_ds + clustering synthetic dataset carries REAL latent structure (Issue #452): K-Means over
+    # the StandardScaler-ed segmentation features must land the silhouette in ~[0.45, 0.70] AND
+    # recover the injected blobs (adjusted Rand index ≥ 0.6). True (n/a) for non-clustering jobs.
+    # Computed via ``check_clustering_structure``. The RED control (kill-switch off → unimodal data →
+    # silhouette ≈ 0.12 / ARI ≈ 0) proves non-tautology; gate-protects against a future data-layer
+    # regression that ships unimodal clustering data.
+    clustering_structure_ok: bool = True
 
 
 @dataclass
@@ -182,6 +189,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("narrative coherence failure: raw machine identifier (word__x) leaked into M4/M5 prose")
     if not r.architect_value_model_lens_valid_ok:
         reasons.append("architect value_model failure: emitted an unknown/missing Impact Lens key")
+    if not r.clustering_structure_ok:
+        reasons.append("clustering structure failure: unimodal data (silhouette/ARI below band)")
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -401,6 +410,64 @@ def check_m5_questions_coherence(
     return not validate_m5_questions_coherence(
         preguntas, variant=variant, metrics_block=metrics_block, dilema_brief=dilema_brief
     )
+
+
+# ── Issue #452 — deterministic clustering-structure oracle ───
+
+
+def check_clustering_structure(
+    rows: list,
+    latent_labels: list | None = None,
+    *,
+    silhouette_band: tuple[float, float] = (0.45, 0.70),
+    ari_floor: float = 0.6,
+) -> bool:
+    """Pure oracle (Issue #452): does the ml_ds+clustering dataset carry REAL latent structure?
+
+    Runs StandardScaler + KMeans (deterministic, ``random_state=42``) over the numeric
+    segmentation features and requires the silhouette ∈ ``silhouette_band``. When
+    ``latent_labels`` (the injected blob labels) are provided, also requires
+    ``adjusted_rand_score(KMeans, latent) >= ari_floor`` — a much stronger, separation-robust
+    discriminator than an absolute floor alone. No LLM / network / API key (scikit-learn is a
+    backend dependency). Returns False on a unimodal dataset (the RED control), so the oracle is
+    provably non-tautological. ``period``/id and non-numeric columns are excluded from the fit.
+    """
+    import numpy as np
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import adjusted_rand_score, silhouette_score
+    from sklearn.preprocessing import StandardScaler
+
+    if not rows:
+        return False
+    feat_names = [
+        name
+        for name in rows[0].keys()
+        if name != "period"
+        and not str(name).startswith("period")
+        and all(
+            isinstance(r.get(name), (int, float)) and not isinstance(r.get(name), bool)
+            for r in rows
+        )
+    ]
+    if len(feat_names) < 2:
+        return False
+    X = np.array([[float(r[name]) for name in feat_names] for r in rows], dtype=float)
+    if X.shape[0] < 6:
+        return False
+    X_scaled = StandardScaler().fit_transform(X)
+    k = len(set(latent_labels)) if latent_labels else 3
+    k = max(2, min(k, X.shape[0] - 1))
+    labels = KMeans(n_clusters=k, n_init=10, random_state=42).fit_predict(X_scaled)
+    if len(set(labels.tolist())) < 2:
+        return False
+    sil = float(silhouette_score(X_scaled, labels))
+    lo, hi = silhouette_band
+    if not (lo <= sil <= hi):
+        return False
+    if latent_labels is not None:
+        if float(adjusted_rand_score(latent_labels, labels)) < ari_floor:
+            return False
+    return True
 
 
 # ── frozen golden set ────────────────────────────────────
