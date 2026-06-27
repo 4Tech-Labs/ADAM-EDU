@@ -127,6 +127,29 @@ def build_clustering_architect_hint(decision: dict | None) -> str:
     )
 
 
+def build_clustering_m1_questions_hint(decision: dict | None) -> str:
+    """Brace-free hint appended to the M1 ``case_questions`` prompt for ml_ds+clustering.
+
+    The M1 decision question (P3) is written by ``case_questions`` — a SEPARATE node from
+    ``case_architect`` — so the architect hint's "recommend Opción X" directive never reaches it.
+    This hint puts the directive where P3 is actually authored: the recommended-option answer key
+    MUST be ``recommended_option`` (the shared verdict M4/M5 also honor). Brace-free. ``""`` if
+    malformed.
+    """
+    parts = _decision_parts(decision)
+    if parts is None:
+        return ""
+    _target_k, recommended_option, _ = parts
+    return (
+        "\n# COHERENCIA DE DECISIÓN (clustering, Issue #467)\n"
+        "La opción estratégica recomendada de este caso es la Opción " + recommended_option + ". "
+        "En la pregunta de decisión (la que plantea elegir entre las opciones A/B/C), la "
+        "`solucion_esperada` DEBE recomendar EXACTAMENTE la Opción " + recommended_option
+        + " por su letra; no recomiendes ninguna otra. Puedes contrastar con las demás, pero el "
+        "veredicto final es la Opción " + recommended_option + ".\n"
+    )
+
+
 def build_clustering_m3_questions_hint(decision: dict | None) -> str:
     """Brace-free hint appended to the M3-questions prompt for ml_ds+clustering.
 
@@ -244,6 +267,7 @@ __all__ = [
     "CLUSTERING_DECISION_STATE_KEY",
     "resolve_clustering_decision",
     "build_clustering_architect_hint",
+    "build_clustering_m1_questions_hint",
     "build_clustering_m3_questions_hint",
     "build_clustering_verdict_hint",
     "validate_verdict_option",

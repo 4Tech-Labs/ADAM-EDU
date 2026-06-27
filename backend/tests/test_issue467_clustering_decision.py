@@ -22,6 +22,7 @@ import pytest
 from case_generator import clustering_decision as cd
 from case_generator.clustering_decision import (
     build_clustering_architect_hint,
+    build_clustering_m1_questions_hint,
     build_clustering_m3_questions_hint,
     build_clustering_verdict_hint,
     resolve_clustering_decision,
@@ -113,6 +114,7 @@ def test_all_hints_are_brace_free():
     )
     hints = [
         build_clustering_architect_hint(d),
+        build_clustering_m1_questions_hint(d),
         build_clustering_m3_questions_hint(d),
         build_clustering_verdict_hint(d),
         build_clustering_verdict_hint(d, real_silhouette=0.498),
@@ -146,9 +148,17 @@ def test_m3_questions_hint_bans_fabricated_threshold():
     assert "3" in h
 
 
+def test_m1_questions_hint_directs_recommended_option():
+    d = {"target_k": 4, "recommended_option": "C", "silhouette_floor": 0.45}
+    h = build_clustering_m1_questions_hint(d)
+    assert "Opción C" in h
+    assert "solucion_esperada" in h  # directs the answer key, not the enunciado
+
+
 @pytest.mark.parametrize("bad", [None, {}, {"target_k": "x"}, {"recommended_option": "Z"}])
 def test_hints_empty_on_malformed_decision(bad):
     assert build_clustering_architect_hint(bad) == ""
+    assert build_clustering_m1_questions_hint(bad) == ""
     assert build_clustering_m3_questions_hint(bad) == ""
     assert build_clustering_verdict_hint(bad) == ""
 
@@ -454,3 +464,69 @@ def test_m5_verdict_guard_noop_when_coherent(monkeypatch):
         llm=llm, prompt="P", preguntas_dict=ok, state=state
     )
     assert out == ok and llm.calls == 0
+
+
+# ── 7. M1 verdict guard (the gap the live run caught) ─────────────────────────
+
+
+def _m1_questions(q3_solution):
+    return [
+        {"numero": 1, "titulo": "Ejes", "enunciado": "Propón ejes", "solucion_esperada": "Recencia, frecuencia, valor."},
+        {"numero": 2, "titulo": "Hipótesis", "enunciado": "Formula hipótesis", "solucion_esperada": "Existen grupos por valor."},
+        {"numero": 3, "titulo": "Decisión", "enunciado": "Elige Opción A, B o C", "solucion_esperada": q3_solution},
+    ]
+
+
+def test_m1_verdict_guard_fixes_on_reprompt(monkeypatch):
+    from case_generator import graph
+
+    monkeypatch.setattr(graph.settings, "mlds_clustering_decision_coherence", True, raising=False)
+    state = _clustering_state(recommended="C")
+    wrong = _m1_questions("A diferencia de la Opción A y la Opción B, conviene...")  # names A,B not C
+    corrected = _StubResult([_StubMemo(q) for q in _m1_questions("Se recomienda la Opción C.")])
+    llm = _FakeM5LLM(corrected)
+    out = graph._apply_clustering_m1_verdict_coherence(
+        llm=llm, prompt="PROMPT", state=state, preguntas_dict=wrong
+    )
+    assert llm.calls == 1
+    assert "Opción C" in out[2]["solucion_esperada"]
+
+
+def test_m1_verdict_guard_noop_when_coherent(monkeypatch):
+    from case_generator import graph
+
+    monkeypatch.setattr(graph.settings, "mlds_clustering_decision_coherence", True, raising=False)
+    state = _clustering_state(recommended="C")
+    ok = _m1_questions("Se recomienda la Opción C frente a A y B.")  # names C (and others) → OK
+    llm = _FakeM5LLM(_StubResult([]))
+    out = graph._apply_clustering_m1_verdict_coherence(
+        llm=llm, prompt="P", state=state, preguntas_dict=ok
+    )
+    assert out == ok and llm.calls == 0
+
+
+def test_m1_verdict_guard_degrades_on_numero_drift(monkeypatch):
+    from case_generator import graph
+
+    monkeypatch.setattr(graph.settings, "mlds_clustering_decision_coherence", True, raising=False)
+    state = _clustering_state(recommended="C")
+    wrong = _m1_questions("Se recomienda la Opción A.")
+    drift = _StubResult([_StubMemo({"numero": 1, "titulo": "x", "enunciado": "x", "solucion_esperada": "Opción C"})])
+    llm = _FakeM5LLM(drift)
+    out = graph._apply_clustering_m1_verdict_coherence(
+        llm=llm, prompt="P", state=state, preguntas_dict=wrong
+    )
+    assert out == wrong  # count/numero changed → degrade to pass-1
+
+
+def test_m1_verdict_guard_noop_off_gate(monkeypatch):
+    from case_generator import graph
+
+    monkeypatch.setattr(graph.settings, "mlds_clustering_decision_coherence", True, raising=False)
+    state = {"studentProfile": "business", "algoritmos": ["K-Means"], "case_id": "x"}
+    wrong = _m1_questions("Se recomienda la Opción A.")
+    llm = _FakeM5LLM(_StubResult([]))
+    out = graph._apply_clustering_m1_verdict_coherence(
+        llm=llm, prompt="P", state=state, preguntas_dict=wrong
+    )
+    assert out == wrong and llm.calls == 0
