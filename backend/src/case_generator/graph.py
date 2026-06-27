@@ -106,9 +106,11 @@ from case_generator.prompts import (
     EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
     EDA_CHART_GENERATOR_PROMPT,
     EDA_QUESTIONS_GENERATOR_PROMPT,
+    EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING,
     EDA_QUESTIONS_PROMPT_BY_FAMILY,
     EDA_TEXT_ANALYST_PROMPT,
     EDA_TEXT_ANALYST_PROMPT_BY_FAMILY,
+    EDA_TEXT_ANALYST_PROMPT_CLUSTERING,
     build_cost_matrix_block,
     select_eda_text_blocks,
     CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT,
@@ -2144,8 +2146,12 @@ def eda_text_analyst(state: ADAMState, config: RunnableConfig) -> dict:
             select_eda_text_blocks(state.get("studentProfile", "business"), target_column_name)
         )
 
-        prompt = EDA_TEXT_ANALYST_PROMPT_BY_FAMILY.get(
-            context.get("primary_family", ""), EDA_TEXT_ANALYST_PROMPT
+        prompt = _select_eda_prompt(
+            state,
+            context.get("primary_family", ""),
+            by_family=EDA_TEXT_ANALYST_PROMPT_BY_FAMILY,
+            generic=EDA_TEXT_ANALYST_PROMPT,
+            clustering_override=EDA_TEXT_ANALYST_PROMPT_CLUSTERING,
         ).format(**context)
 
         # 🚀 LA SOLUCIÓN: Invocación directa sin JSON schema
@@ -2949,8 +2955,12 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "chart_manifest": chart_manifest,
         })
 
-        prompt = EDA_QUESTIONS_PROMPT_BY_FAMILY.get(
-            context.get("primary_family", ""), EDA_QUESTIONS_GENERATOR_PROMPT
+        prompt = _select_eda_prompt(
+            state,
+            context.get("primary_family", ""),
+            by_family=EDA_QUESTIONS_PROMPT_BY_FAMILY,
+            generic=EDA_QUESTIONS_GENERATOR_PROMPT,
+            clustering_override=EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING,
         ).format(**context)
 
         # v9 M2-Redesign: EDAQuestionsOutput con EDASocraticQuestion (solucion_esperada = objeto)
@@ -6589,6 +6599,40 @@ def _is_ml_ds_classification(
         default_unresolved_ml_ds_to_classification=default_unresolved_ml_ds_to_classification,
     )
     return profile == "ml_ds" and family == "clasificacion"
+
+
+def _is_ml_ds_clustering(state: ADAMState) -> bool:
+    """True only for ``profile == "ml_ds"`` AND family ``clustering`` (Issue #456).
+
+    STRICT gate (``default_unresolved_ml_ds_to_classification=False``): clustering requires the
+    algorithm picks to resolve to ``clustering`` explicitly. An ml_ds job with empty/unresolved
+    algoritmos is NOT clustering (it is treated as clasificación by the rest of the pipeline) —
+    avoiding the lax ``(primary_family or "clustering")`` footgun. Mirrors the data-layer gate
+    ``_enforce_mlds_clustering_structure`` (#452). business + clustering is deliberately excluded
+    so it stays byte-identical on the generic prompt.
+    """
+    profile, family = _resolve_generation_focus(state)
+    return profile == "ml_ds" and family == "clustering"
+
+
+def _select_eda_prompt(
+    state: ADAMState,
+    primary_family: str,
+    *,
+    by_family: dict[str, str],
+    generic: str,
+    clustering_override: str,
+) -> str:
+    """Pick the M2 EDA prompt template (Issue #456).
+
+    ml_ds + clustering (gated by ``MLDS_CLUSTERING_M2_EDA``) gets the specialized clustering
+    prompt; every other case keeps the existing family dispatch byte-identically (clasificación →
+    its prompt; business + clustering / regresión / serie_temporal → the generic). Pure (modulo the
+    settings read) so the dispatch is unit-testable without an LLM.
+    """
+    if settings.mlds_clustering_m2_eda and _is_ml_ds_clustering(state):
+        return clustering_override
+    return by_family.get(primary_family, generic)
 
 
 def _is_classification_family(state: ADAMState) -> bool:

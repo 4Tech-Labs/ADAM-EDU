@@ -93,6 +93,10 @@ from case_generator.prompts.clasificacion import (
     build_cost_matrix_block,
     select_eda_text_blocks,
 )
+from case_generator.prompts.clustering.M2_clustering import (
+    EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING,
+    EDA_TEXT_ANALYST_PROMPT_CLUSTERING,
+)
 from case_generator.prompts.teaching_note import (
     build_module_guide_block,
     build_roster_allowlist,
@@ -3033,9 +3037,11 @@ __all__ = [
   "EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION",
   "EDA_CHART_GENERATOR_PROMPT",
   "EDA_QUESTIONS_GENERATOR_PROMPT",
+  "EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING",
   "EDA_QUESTIONS_PROMPT_BY_FAMILY",
   "EDA_TEXT_ANALYST_PROMPT",
   "EDA_TEXT_ANALYST_PROMPT_BY_FAMILY",
+  "EDA_TEXT_ANALYST_PROMPT_CLUSTERING",
   "M3_AUDIT_LR_BUSINESS_BLOCK",
   "M3_AUDIT_PROMPT",
   "M3_AUDIT_QUESTIONS_PROMPT",
