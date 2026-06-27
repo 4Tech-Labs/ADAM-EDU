@@ -5418,16 +5418,19 @@ def _enforce_mlds_clustering_structure(
     rangos ``range_min``/``range_max`` declarados.
 
     Gate (fuera de él → la MISMA lista de entrada, byte-idéntica): ``enabled`` (kill-switch
-    ``MLDS_CLUSTERING_STRUCTURE``) AND ``profile == "ml_ds"`` AND
-    ``(primary_family or "clustering") == "clustering"``. business / clasificación / regresión /
-    serie_temporal nunca entran.
+    ``MLDS_CLUSTERING_STRUCTURE``) AND ``profile == "ml_ds"`` AND ``primary_family == "clustering"``
+    (ESTRICTO — NO ``primary_family or "clustering"``: un job ml_ds con algoritmos vacíos/no
+    mapeables resuelve ``primary_family=None`` y el resto del pipeline lo trata como CLASIFICACIÓN
+    [``_effective_family = primary_family or "clasificacion"``], así que coaccionar ``None →
+    clustering`` aquí blobearía el target binario ``categoria`` de ese cohorte). business /
+    clasificación / regresión / serie_temporal / ml_ds-sin-algoritmos nunca entran.
 
     La etiqueta latente del blob es SOLO de generación: no se persiste en ``doc7_dataset`` (no se
     filtra al fit de K-Means). Con ``return_labels=True`` se devuelve aparte ``(rows, labels)``
     para que el oráculo golden mida el ARI contra la estructura inyectada (no es teacher/student
     facing).
     """
-    if not enabled or profile != "ml_ds" or (primary_family or "clustering") != "clustering":
+    if not enabled or profile != "ml_ds" or primary_family != "clustering":
         return (rows, None) if return_labels else rows
     if not isinstance(rows, list) or not rows:
         return (rows, None) if return_labels else rows
