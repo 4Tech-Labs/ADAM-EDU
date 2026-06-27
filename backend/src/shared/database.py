@@ -134,6 +134,18 @@ class Settings(BaseSettings):
     # family=="clustering"; clasificación / regresión / serie_temporal / business (including
     # business+clustering, which uses the audit prompt) are unaffected either way.
     mlds_clustering_m3_content: bool = True
+    # Cross-module clustering coherence source of truth (Issue #467). When true (default), an
+    # ml_ds + clustering case resolves a deterministic `clustering_decision`
+    # {target_k∈{3,4}, recommended_option∈{A,B,C}, silhouette_floor} ONCE at intake and propagates it:
+    # the data layer (#452) HONORS target_k (exact blob count), the M1 architect frames option
+    # `recommended_option` as the recommended one ≈ target_k segments, M3-questions/M4/M5 are hinted
+    # to honor it, and a deterministic verdict guard reprompts-once-then-degrades M4/M5 so all modules
+    # recommend the SAME option (kills the data-k≠narrative-k, M4=C-vs-M5=B, and fabricated "0.55"
+    # incoherences). INDEPENDENT of MLDS_CLUSTERING_STRUCTURE. Set MLDS_CLUSTERING_DECISION_COHERENCE
+    # =false to revert byte-identically (no clustering_decision → data falls back to K∈{3,4} by schema
+    # hash, no prompt hints, no verdict guard; instant env-only revert, no redeploy). The gate is
+    # profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
+    mlds_clustering_decision_coherence: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign

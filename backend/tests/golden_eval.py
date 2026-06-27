@@ -165,6 +165,14 @@ class NodeEvalInputs:
     # a future m3_content_generator Pro->Flash downgrade that starts fabricating reported metrics. RED
     # control: prose with a metric keyword adjacent to a >=2-decimal value fails.
     clustering_m3_content_no_metric_ok: bool = True
+    # ml_ds + clustering data↔narrative cluster-count coherence (Issue #467): the data layer must inject
+    # EXACTLY the coordinated ``target_k`` blobs (so the k the student measures == the k the narrative
+    # frames) AND that data must still carry real latent structure (silhouette in band + ARI). True
+    # (n/a) for non-clustering jobs / when no target_k is coordinated. Computed via
+    # ``check_clustering_decision_coherence``. RED control: a dataset whose injected blob count differs
+    # from target_k (the pre-#467 hash-chosen k, or the kill-switch-off path) fails. gate-protects a
+    # future data-layer regression that stops honoring target_k.
+    clustering_decision_coherence_ok: bool = True
 
 
 @dataclass
@@ -235,6 +243,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "clustering M3-content failure: narrative cites a fabricated cluster-metric value "
             "(silhouette / Davies-Bouldin) pre-execution"
+        )
+    if not r.clustering_decision_coherence_ok:
+        reasons.append(
+            "clustering decision coherence failure: injected blob count != coordinated target_k "
+            "(data k would contradict the narrative's framed k)"
         )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
@@ -532,6 +545,32 @@ def check_clustering_structure(
         if float(adjusted_rand_score(latent_labels, labels)) < ari_floor:
             return False
     return True
+
+
+# ── Issue #467 — deterministic clustering data↔narrative k coherence oracle ───
+
+
+def check_clustering_decision_coherence(
+    rows: list,
+    latent_labels: list | None,
+    target_k: int | None,
+) -> bool:
+    """Pure oracle (Issue #467): does the injected clustering data carry EXACTLY ``target_k`` blobs?
+
+    The root incoherence of #467 is data k != narrative k. With the coordination on, the data layer
+    HONORS the coordinated ``target_k`` (so the k the student measures == the k the narrative frames).
+    This oracle requires (a) the injected ``latent_labels`` have exactly ``target_k`` distinct values
+    AND (b) the data still carries real latent structure (delegates to ``check_clustering_structure``:
+    silhouette in band + ARI >= floor). True (n/a) when ``target_k``/``latent_labels`` are absent
+    (non-clustering job / no coordination). RED control: the pre-#467 hash-chosen k (or the
+    kill-switch-off path) injects a blob count that differs from ``target_k`` → distinct-count
+    mismatch → False. No LLM / network / API key. Never raises on well-formed input.
+    """
+    if target_k is None or latent_labels is None:
+        return True
+    if len(set(latent_labels)) != int(target_k):
+        return False
+    return check_clustering_structure(rows, latent_labels)
 
 
 # ── Issue #454 — deterministic K-Means notebook shape oracle ───

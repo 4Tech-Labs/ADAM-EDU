@@ -188,6 +188,15 @@ from case_generator.impact_lens import (
     build_impact_lens_m5_hint,
     normalize_impact_lens,
 )
+from case_generator.clustering_decision import (
+    build_clustering_architect_hint,
+    build_clustering_m1_questions_hint,
+    build_clustering_m3_questions_hint,
+    build_clustering_verdict_hint,
+    recommended_option_of,
+    validate_m4_verdict_option,
+    validate_verdict_option,
+)
 from case_generator.retention_tokens import (
     RETENTION_CHURN_TOKENS,
     is_retention_match,
@@ -1278,6 +1287,19 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
     if settings.impact_lens_architect and _lens_override in IMPACT_LENS_KEYS:
         prompt = prompt + build_impact_lens_architect_hint(_lens_override)
 
+    # Issue #467 — append the clustering coherence hint (brace-free) so M1 frames option
+    # recommended_option as the recommended one ~= target_k segments. Gated to ml_ds+clustering +
+    # kill-switch + a resolved decision; appended in the NODE (the architect SHA snapshots hash
+    # _assemble_architect_prompt's output, not this post-format append → SHA untouched). No-op
+    # (byte-identical) elsewhere: build_clustering_architect_hint returns "" without a valid decision.
+    _clustering_decision = state.get("clustering_decision")
+    if (
+        settings.mlds_clustering_decision_coherence
+        and _clustering_decision
+        and _is_ml_ds_clustering(state)
+    ):
+        prompt = prompt + build_clustering_architect_hint(_clustering_decision)
+
     try:
         result, profile_resolved, family_resolved, pregunta_eje = (
             _invoke_case_architect_with_contract(
@@ -2024,6 +2046,13 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
     prompt = CASE_QUESTIONS_PROMPT_BY_FAMILY.get(
         _resolve_m1_prompt_family(context), CASE_QUESTIONS_PROMPT
     ).format(**context)
+    # Issue #467 — for ml_ds+clustering, direct P3's answer key to the shared recommended_option
+    # (the architect hint lands in case_architect, NOT here, where P3 is actually authored). Brace-
+    # free → safe after .format. No-op (byte-identical) for every other cohort.
+    if settings.mlds_clustering_decision_coherence and _is_ml_ds_clustering(state):
+        _cq_cd = state.get("clustering_decision")
+        if _cq_cd:
+            prompt = prompt + build_clustering_m1_questions_hint(_cq_cd)
 
     try:
         resultado: GeneradorPreguntasM1Output = llm.with_structured_output(
@@ -2049,6 +2078,11 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
     # Option coherence (clasificación, both profiles) — best-effort, runs after the Exhibit
     # pass; the solución must only recommend options the case defines and the enunciado presents.
     preguntas_dict = _apply_m1_questions_option_coherence(
+        llm=llm, prompt=prompt, state=state, preguntas_dict=preguntas_dict
+    )
+    # Issue #467 — clustering verdict coherence: the M1 decision answer key must recommend the SAME
+    # option as M4/M5 (reprompt-once-then-degrade). No-op (byte-identical) for non ml_ds+clustering.
+    preguntas_dict = _apply_clustering_m1_verdict_coherence(
         llm=llm, prompt=prompt, state=state, preguntas_dict=preguntas_dict
     )
     # No escribe current_agent — nodo paralelo (evita race condition)
@@ -5443,6 +5477,7 @@ def _enforce_mlds_clustering_structure(
     primary_family: str | None,
     enabled: bool = True,
     return_labels: bool = False,
+    target_k: int | None = None,
 ):
     """Inyecta estructura de clusters REAL en el dataset ml_ds + clustering (Issue #452).
 
@@ -5490,7 +5525,22 @@ def _enforce_mlds_clustering_structure(
     rng = np.random.default_rng(base_seed + 452)
 
     k = _CLUSTERING_K_CHOICES[base_seed % len(_CLUSTERING_K_CHOICES)]
-    k = max(2, min(k, n - 1))
+    # Issue #467 — HONOR the coordinated target_k (capped to {3,4} at resolve time) so the data's
+    # cluster count matches the narrative's framing. When target_k is None (kill-switch off / non-#467
+    # path) the hash choice stands → the blob shape stays seeded by sha256(schema), BYTE-IDENTICAL to
+    # #452. The blob noise/shuffle stream is unchanged either way (target_k only overrides the COUNT).
+    if target_k is not None:
+        try:
+            k = int(target_k)
+        except (TypeError, ValueError):
+            k = _CLUSTERING_K_CHOICES[base_seed % len(_CLUSTERING_K_CHOICES)]
+    _k_clamped = max(2, min(k, n - 1))
+    if target_k is not None and _k_clamped != k:
+        logger.info(
+            "[_enforce_mlds_clustering_structure] target_k=%s clamped to %s (n=%s)",
+            target_k, _k_clamped, n,
+        )
+    k = _k_clamped
 
     # Asignación de blobs balanceada y determinista (round-robin barajado).
     labels = np.array([i % k for i in range(n)], dtype=int)
@@ -5567,12 +5617,25 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
         # outlier ×3.5 que cayó en la 1ª feature) y ANTES de `data_validator` (que solo corrige
         # revenue/costs/ebitda/margin/retención → no toca estas features de segmentación).
         _clustering_family, _ = _resolve_primary_family(_extract_state_algoritmos(state))
+        # Issue #467 — honor the coordinated target_k from clustering_decision (resolved at intake) so
+        # the injected blob count == the k the narrative frames. Gated on the SAME kill-switch as every
+        # other consumer (architect / M1 / M3 / M4 / M5) so a mid-run / resume-time flip of
+        # MLDS_CLUSTERING_DECISION_COHERENCE keeps the data layer consistent with the narrative (no
+        # stale target_k from a durable checkpoint). Absent / off → target_k=None → #452 hash choice
+        # → byte-identical.
+        _clustering_decision = state.get("clustering_decision")
+        _target_k = (
+            _clustering_decision.get("target_k")
+            if settings.mlds_clustering_decision_coherence and isinstance(_clustering_decision, dict)
+            else None
+        )
         rows = _enforce_mlds_clustering_structure(
             rows,
             schema,
             profile=profile,
             primary_family=_clustering_family,
             enabled=settings.mlds_clustering_structure,
+            target_k=_target_k,
         )
         constraints = schema.get("constraints", {})
         constraints_with_count = {**constraints, "n_rows_expected": schema.get("n_rows", 100)}
@@ -6065,6 +6128,188 @@ def _build_m5_coherence_reprompt(
     )
 
 
+def _apply_clustering_m4_verdict_coherence(
+    *,
+    llm: Any,
+    prompt: str,
+    m4: str,
+    state: ADAMState,
+    metrics_block: str,
+) -> str:
+    """Reprompt-once-then-DEGRADE so M4's §4.5 deployment recommendation names the case's
+    ``recommended_option`` (Issue #467 — the cross-module verdict GUARANTEE).
+
+    Gated to ml_ds+clustering + the ``MLDS_CLUSTERING_DECISION_COHERENCE`` kill-switch + a resolved
+    ``clustering_decision``; a byte-identical no-op otherwise. ``prompt`` is the ALREADY-formatted M4
+    prompt; the reprompt is built by CONCATENATION (never a second ``.format`` — chart/JSON braces).
+    Best-effort: ANY throw degrades to the pass-1 ``m4`` (a coherence pass must never fail the job).
+    """
+    log_extra = {"node": "m4_content_generator", "case_id": state.get("case_id")}
+    try:
+        if not settings.mlds_clustering_decision_coherence or not _is_ml_ds_clustering(state):
+            return m4
+        decision = state.get("clustering_decision")
+        if not isinstance(decision, dict):
+            return m4
+        recommended = recommended_option_of(decision)
+        if validate_m4_verdict_option(m4, recommended) == []:
+            return m4
+        logger.info(
+            "[m4_content] reprompt de coherencia de veredicto clustering disparado",
+            extra={**log_extra, "recommended_option": recommended},
+        )
+        reprompt = prompt + (
+            "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE DECISIÓN (clustering)\n"
+            "La recomendación de despliegue (§4.5) DEBE recomendar EXACTAMENTE la Opción "
+            + recommended + " como veredicto final. Reescribe el módulo recomendando la Opción "
+            + recommended + "; no recomiendes ninguna otra letra.\n"
+        )
+        corrected = _invoke_narrative_with_grounding(
+            node_name="m4_content_generator",
+            llm=llm,
+            prompt=reprompt,
+            metrics_block=metrics_block,
+            grounding_enabled=False,
+            variant=None,
+        )
+        if validate_m4_verdict_option(corrected, recommended) == []:
+            logger.info(
+                "[m4_content] coherencia de veredicto clustering corregida",
+                extra={**log_extra, "degraded": False},
+            )
+            return corrected
+        logger.warning(
+            "[m4_content] coherencia de veredicto clustering degradada tras reprompt",
+            extra={**log_extra, "degraded": True},
+        )
+        return m4
+    except Exception as exc:  # best-effort — a coherence pass must never fail the job
+        logger.warning(
+            "[m4_content] validador de veredicto clustering falló (best-effort): %s",
+            exc,
+            extra=log_extra,
+        )
+        return m4
+
+
+def _clustering_solution_verdict_text(preguntas_dict: list[dict]) -> str:
+    """Concatenate each question's ``titulo`` + ``solucion_esperada`` (the model answer key) for the
+    verdict-option check (shared by the M1 and M5 clustering guards). The ``enunciado`` is
+    deliberately EXCLUDED — it PRESENTS the A/B/C options to the student, so scanning it would mask
+    which option the answer key actually recommends."""
+    return " ".join(
+        str(q.get("titulo", "")) + " " + str(q.get("solucion_esperada", ""))
+        for q in preguntas_dict
+    )
+
+
+def _apply_clustering_questions_verdict_coherence(
+    *,
+    llm: Any,
+    prompt: str,
+    state: ADAMState,
+    preguntas_dict: list[dict],
+    output_schema: Any,
+    log_tag: str,
+    reprompt_directive: str,
+) -> list[dict]:
+    """Shared reprompt-once-then-DEGRADE verdict-coherence guard for the M1 and M5 question sets
+    (Issue #467). Both answer keys are authored by their own node (separate from ``case_architect``),
+    so each must independently recommend the case's ``recommended_option`` to stay coherent with the
+    rest of the case (the live run showed M1 Q3 naming A/B while M4/M5 named C). Gated to
+    ml_ds+clustering + the ``MLDS_CLUSTERING_DECISION_COHERENCE`` kill-switch + a resolved decision;
+    byte-identical no-op otherwise. Accepts the correction ONLY if it preserves the ``numero``
+    sequence AND is now coherent; else degrades to pass-1. Best-effort — never raises (a reprompt
+    ``RuntimeError`` degrades instead of escaping the node's ``except RuntimeError: raise``).
+    ``prompt`` is the ALREADY-formatted prompt; the reprompt is built by CONCATENATION (never a second
+    ``.format`` — schema/JSON braces). ``reprompt_directive`` may carry the ``{opt}`` token for the
+    recommended letter (substituted by ``str.replace``, so stray braces never raise)."""
+    log_extra = {"node": log_tag, "case_id": state.get("case_id")}
+    try:
+        if not settings.mlds_clustering_decision_coherence or not _is_ml_ds_clustering(state):
+            return preguntas_dict
+        decision = state.get("clustering_decision")
+        if not isinstance(decision, dict):
+            return preguntas_dict
+        recommended = recommended_option_of(decision)
+        if validate_verdict_option(_clustering_solution_verdict_text(preguntas_dict), recommended) == []:
+            return preguntas_dict
+        numeros = [q.get("numero") for q in preguntas_dict]
+        logger.info(
+            "[%s] reprompt de coherencia de veredicto clustering disparado",
+            log_tag,
+            extra={**log_extra, "recommended_option": recommended},
+        )
+        reprompt = prompt + (
+            "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE DECISIÓN (clustering)\n"
+            + reprompt_directive.replace("{opt}", recommended)
+            + "\n"
+        )
+        try:
+            resultado = llm.with_structured_output(output_schema).invoke(reprompt)
+            corrected = [p.model_dump() for p in resultado.preguntas]
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[%s] reprompt de veredicto clustering inválido — degrada a pass-1: %s",
+                log_tag, exc, extra=log_extra,
+            )
+            return preguntas_dict
+        if [q.get("numero") for q in corrected] != numeros:
+            logger.warning(
+                "[%s] reprompt de veredicto clustering alteró numero — degrada a pass-1",
+                log_tag, extra=log_extra,
+            )
+            return preguntas_dict
+        if validate_verdict_option(_clustering_solution_verdict_text(corrected), recommended) == []:
+            logger.info(
+                "[%s] coherencia de veredicto clustering corregida",
+                log_tag, extra={**log_extra, "degraded": False},
+            )
+            return corrected
+        logger.warning(
+            "[%s] coherencia de veredicto clustering degradada tras reprompt",
+            log_tag, extra={**log_extra, "degraded": True},
+        )
+        return preguntas_dict
+    except Exception as exc:  # best-effort — a coherence pass must never fail the job
+        logger.warning(
+            "[%s] validador de veredicto clustering falló (best-effort): %s",
+            log_tag, exc, extra=log_extra,
+        )
+        return preguntas_dict
+
+
+def _apply_clustering_m1_verdict_coherence(
+    *, llm: Any, prompt: str, state: ADAMState, preguntas_dict: list[dict]
+) -> list[dict]:
+    """M1 decision-question verdict guard (Issue #467) — thin wrapper over the shared guard. The M1 Q3
+    answer key is authored by ``case_questions`` (separate from ``case_architect``); the live run
+    showed it naming A/B while M4/M5 named C, so it needs its own guard."""
+    return _apply_clustering_questions_verdict_coherence(
+        llm=llm, prompt=prompt, state=state, preguntas_dict=preguntas_dict,
+        output_schema=GeneradorPreguntasM1Output, log_tag="case_questions",
+        reprompt_directive=(
+            "La `solucion_esperada` de la pregunta de decisión DEBE recomendar EXACTAMENTE la "
+            "Opción {opt} por su letra; no recomiendes ninguna otra. Mantén el mismo número de "
+            "preguntas y la misma numeración."
+        ),
+    )
+
+
+def _apply_clustering_m5_verdict_coherence(
+    *, llm: Any, prompt: str, preguntas_dict: list[dict], state: ADAMState
+) -> list[dict]:
+    """M5 memo verdict guard (Issue #467) — thin wrapper over the shared guard."""
+    return _apply_clustering_questions_verdict_coherence(
+        llm=llm, prompt=prompt, state=state, preguntas_dict=preguntas_dict,
+        output_schema=GeneradorPreguntasM5Output, log_tag="m5_questions",
+        reprompt_directive=(
+            "El memorándum DEBE recomendar EXACTAMENTE la Opción {opt} como decisión final; no "
+            "recomiendes ninguna otra letra. Mantén la misma estructura y numeración."
+        ),
+    )
+
+
 def _apply_m5_questions_coherence(
     *,
     llm: Any,
@@ -6236,6 +6481,17 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         prompt_text = _maybe_business_classification_prompt(
             state, prompt_text, M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
         )
+        # Issue #467 — for ml_ds+clustering, append the decision hint (recommended option + the REAL
+        # executed silhouette) so the M5 memo recommends the shared option and anchors any silhouette
+        # to reality. Brace-free → safe before .format. No-op (byte-identical) for every other cohort.
+        if settings.mlds_clustering_decision_coherence and _is_ml_ds_clustering(state):
+            _m5_cd = state.get("clustering_decision")
+            if _m5_cd:
+                _m5_ms = state.get("m3_metrics_summary")
+                _m5_real_sil = _m5_ms.get("silhouette") if isinstance(_m5_ms, dict) else None
+                prompt_text = prompt_text + build_clustering_verdict_hint(
+                    _m5_cd, real_silhouette=_m5_real_sil
+                )
         computed_metrics_block = (
             build_computed_metrics_block(state.get("m3_metrics_summary"))
             if family == "clasificacion"
@@ -6265,6 +6521,11 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             variant=resolved_variant,
             metrics_block=computed_metrics_block,
             dilema_brief=str(state.get("dilema_brief") or ""),
+        )
+        # Issue #467 — clustering verdict coherence guard (reprompt-once-then-degrade): forces the
+        # memo to recommend the shared option. No-op (byte-identical) for non ml_ds+clustering.
+        preguntas = _apply_clustering_m5_verdict_coherence(
+            llm=llm, prompt=formatted, preguntas_dict=preguntas, state=state,
         )
         print(f"[m5_questions_generator] {len(preguntas)} memorándum final")
         return {"m5_questions": preguntas, "current_agent": "m5_questions_generator"}
@@ -7420,6 +7681,17 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # Capture the formatted prompt so the coherence wrapper can CONCATENATE its
         # correction suffix onto it (never a second `.format()` — JSON schema braces).
         formatted = prompt.format(**context)
+        # Issue #467 — for ml_ds+clustering, append a brace-free hint that reframes the (generic
+        # experiment-shaped) M3 questions toward segmentation and kills the two leaks the generic
+        # prompt produced: a contradictory committed k and a fabricated "silhouette > 0.55" success
+        # bar. Anchors the k the solutions reference to target_k. No-op (byte-identical) elsewhere.
+        _m3_clustering_decision = state.get("clustering_decision")
+        if (
+            settings.mlds_clustering_decision_coherence
+            and _m3_clustering_decision
+            and _is_ml_ds_clustering(state)
+        ):
+            formatted = formatted + build_clustering_m3_questions_hint(_m3_clustering_decision)
         resultado: GeneradorPreguntasOutput = llm.with_structured_output(
             GeneradorPreguntasOutput
         ).invoke(formatted)
@@ -8571,15 +8843,33 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # safe before .format). financial_roi reproduces ROI/Payback/NPV; off-path skips it entirely.
         if _lens_on:
             prompt_template = prompt_template + build_impact_lens_hint(_resolve_impact_lens(state))
+        # Issue #467 — for ml_ds+clustering, append the decision hint (recommended option + the REAL
+        # executed silhouette from m3_metrics_summary, available post-executor) so M4's §4.5 verdict
+        # honors the shared option and anchors any silhouette to reality (not a fabricated "0.55").
+        # Brace-free → safe before .format. No-op (byte-identical) for every other cohort.
+        if settings.mlds_clustering_decision_coherence and _is_ml_ds_clustering(state):
+            _m4_cd = state.get("clustering_decision")
+            if _m4_cd:
+                _m4_ms = state.get("m3_metrics_summary")
+                _m4_real_sil = _m4_ms.get("silhouette") if isinstance(_m4_ms, dict) else None
+                prompt_template = prompt_template + build_clustering_verdict_hint(
+                    _m4_cd, real_silhouette=_m4_real_sil
+                )
         context["computed_metrics_block"] = metrics_block
 
+        _m4_formatted = prompt_template.format(**context)
         m4 = _invoke_narrative_with_grounding(
             node_name="m4_content_generator",
             llm=llm,
-            prompt=prompt_template.format(**context),
+            prompt=_m4_formatted,
             metrics_block=metrics_block,
             grounding_enabled=grounding_enabled,
             variant=variant,
+        )
+        # Issue #467 — clustering verdict coherence guard (reprompt-once-then-degrade). The
+        # GUARANTEE behind the hint: forces §4.5 to recommend the shared option. No-op elsewhere.
+        m4 = _apply_clustering_m4_verdict_coherence(
+            llm=llm, prompt=_m4_formatted, m4=m4, state=state, metrics_block=metrics_block,
         )
         print(f"[m4_content_generator] {len(m4)} chars")
         # Logger-only backstop (M4_DEPLOYMENT_DEDUP): flag a residual duplicate deployment

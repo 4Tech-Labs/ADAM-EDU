@@ -15,10 +15,12 @@ from case_generator.core.artifact_manager import ArtifactManager
 from case_generator.core.storage import get_storage_provider
 from case_generator.cost_metrics import CostCallbackHandler
 from case_generator.impact_lens import resolve_impact_lens_from_industry
+from case_generator.clustering_decision import resolve_clustering_decision
 from case_generator.graph import (
     DurableCheckpointUnavailableError,
     M3NotebookValidationError,
     RESUME_CACHE_STATE_KEY,
+    _resolve_primary_family,
     get_graph,
     m3_notebook_executor,
     m3_notebook_generator,
@@ -1042,6 +1044,28 @@ class AuthoringService:
             }
             if grounding_context is not None:
                 state_input["ai_grounding_context"] = grounding_context
+
+            # Issue #467 — resolve the ml_ds + clustering coherence source of truth ONCE here, from
+            # STABLE intake fields (NOT the per-attempt case_id uuid, which can be regenerated on
+            # resume), so it is re-injected identically every attempt → resume-stable, and NO node
+            # writes it (no clobber / no fan-out merge hazard) — the impact_lens lifecycle, not
+            # value_model. Returns None for every non ml_ds+clustering cohort and when the
+            # MLDS_CLUSTERING_DECISION_COHERENCE kill-switch is off → no key set → byte-identical.
+            _cd_family, _ = _resolve_primary_family(selected_techniques)
+            _clustering_decision = resolve_clustering_decision(
+                profile=payload.get("studentProfile", "business"),
+                family=_cd_family,
+                seed_source="|".join([
+                    str(payload.get("asignatura", "")),
+                    str(payload.get("industria", "")),
+                    str(payload.get("studentProfile", "")),
+                    str(scenario_description),
+                    ",".join(str(t) for t in selected_techniques),
+                ]),
+                enabled=settings.mlds_clustering_decision_coherence,
+            )
+            if _clustering_decision is not None:
+                state_input["clustering_decision"] = _clustering_decision
 
             # Inject hydrated artifacts into initial graph state so downstream nodes
             # keep context even when upstream generation is skipped.
