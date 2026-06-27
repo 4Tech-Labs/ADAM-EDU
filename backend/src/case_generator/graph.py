@@ -1162,6 +1162,26 @@ _BUSINESS_CLF_PERMISSIVE_SUBSTITUTIONS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _resolve_m1_prompt_family(context: dict) -> str:
+    """Resolve the family KEY for M1 prompt dispatch (architect/writer/questions).
+
+    Identity for every family EXCEPT clustering. The clustering M1 segmentation anchor
+    (Issue #455) is gated to ``studentProfile == "ml_ds"`` AND the
+    ``MLDS_CLUSTERING_M1_ANCHOR`` kill-switch. Outside that gate (business profile, or
+    switch off) it returns ``""`` so ``CASE_*_PROMPT_BY_FAMILY.get(key, GENERIC)`` falls
+    back to the generic prompt byte-identically. Strict ``== "clustering"`` so the
+    ml_ds-no-algoritmos cohort (resolved to "clasificacion" upstream) is never affected,
+    and clasificacion/regresion/serie_temporal/business stay byte-identical.
+    """
+    family = str(context.get("primary_family") or "")
+    profile = str(context.get("student_profile") or "")
+    if family == "clustering" and (
+        profile != "ml_ds" or not settings.mlds_clustering_m1_anchor
+    ):
+        return ""
+    return family
+
+
 def _assemble_architect_prompt(context: dict, *, lens_on: bool = False) -> str:
     """Selecciona el prompt M1 por familia y lo formatea con el contexto.
 
@@ -1183,7 +1203,12 @@ def _assemble_architect_prompt(context: dict, *, lens_on: bool = False) -> str:
     """
     family = str(context.get("primary_family") or "")
     profile = str(context.get("student_profile") or "")
-    template = CASE_ARCHITECT_PROMPT_BY_FAMILY.get(family, CASE_ARCHITECT_PROMPT)
+    # Issue #455 — clustering selects its segmentation anchor only for ml_ds + switch on
+    # (helper returns "" otherwise → generic). The business-surgery gate below keeps using
+    # the raw `family` (it fires only for clasificacion, so it is unaffected).
+    template = CASE_ARCHITECT_PROMPT_BY_FAMILY.get(
+        _resolve_m1_prompt_family(context), CASE_ARCHITECT_PROMPT
+    )
     # business + clasificación: exige un target binario de dominio. Primero NEUTRALIZA la
     # permisión `null`/continuo en el texto (Gate 1b) y luego añade el bloque obligatorio
     # (PR2b). Gate por perfil → ml_ds queda byte-idéntico. El bloque no tiene placeholders.
@@ -1939,7 +1964,7 @@ def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
     })
 
     prompt = CASE_WRITER_PROMPT_BY_FAMILY.get(
-        context["primary_family"], CASE_WRITER_PROMPT
+        _resolve_m1_prompt_family(context), CASE_WRITER_PROMPT
     ).format(**context)
 
     try:
@@ -1990,7 +2015,7 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
     })
 
     prompt = CASE_QUESTIONS_PROMPT_BY_FAMILY.get(
-        context["primary_family"], CASE_QUESTIONS_PROMPT
+        _resolve_m1_prompt_family(context), CASE_QUESTIONS_PROMPT
     ).format(**context)
 
     try:
@@ -6557,7 +6582,15 @@ def _sanitize_pregunta_eje(
     profile: str,
     family: str | None,
 ) -> str | None:
-    if profile != "ml_ds" or family != "clasificacion":
+    # Issue #455 — ml_ds + clustering keeps a segmentation pregunta_eje when the M1
+    # anchor kill-switch is on (clasificacion is unconditional). Every other cohort
+    # (business, other families, and clustering when the switch is off) stays None →
+    # byte-identical to pre-#455. This is graph-layer post-processing only — it does NOT
+    # touch _assemble_architect_prompt, so the architect SHA snapshot is unaffected.
+    allowed_families = {"clasificacion"}
+    if settings.mlds_clustering_m1_anchor:
+        allowed_families = {"clasificacion", "clustering"}
+    if profile != "ml_ds" or family not in allowed_families:
         return None
     if pregunta_eje is None:
         return None

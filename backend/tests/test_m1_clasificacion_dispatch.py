@@ -107,11 +107,15 @@ class TestDispatchTableClasificacionKey:
 # 2. Dispatch tables: non-clasificacion families fall back to generic prompts
 # ─────────────────────────────────────────────────────────────────────────────
 
-NON_CLASIFICACION_FAMILIES = ["regresion", "clustering", "serie_temporal", "desconocida"]
+# Issue #455 — `clustering` is now a DISPATCHED family (its own M1 segmentation prompts),
+# gated at runtime to ml_ds + kill-switch in graph._resolve_m1_prompt_family. Its behavior is
+# covered by tests/test_issue455_clustering_m1_anchor.py. The families below remain pure
+# generic-fallback families with no dedicated M1 prompt.
+NON_CLASIFICACION_FAMILIES = ["regresion", "serie_temporal", "desconocida"]
 
 
 class TestDispatchTableFallback:
-    """Non-clasificacion keys must fall back to the generic M1 prompts."""
+    """Non-clasificacion families with no dedicated M1 prompt fall back to the generic prompts."""
 
     @pytest.mark.parametrize("family", NON_CLASIFICACION_FAMILIES)
     def test_architect_fallback(self, family: str) -> None:
