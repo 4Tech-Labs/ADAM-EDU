@@ -158,6 +158,13 @@ class NodeEvalInputs:
     # (the pure oracle + the kill-switch dispatch test); this gate wiring is future-proofing for when
     # such a fixture (or an eda_text_analyst downgrade) lands.
     clustering_eda_no_target_ok: bool = True
+    # ml_ds + clustering M3-content narrative cites NO fabricated cluster-metric value (Issue #457):
+    # the narrative is written pre-execution (the executor runs AFTER m3_content_generator), so a
+    # concrete silhouette / Davies-Bouldin value would be invented. True (n/a) for non-clustering jobs
+    # or empty narrative. Computed via ``check_clustering_m3_content_no_metric_numbers``; gate-protects
+    # a future m3_content_generator Pro->Flash downgrade that starts fabricating reported metrics. RED
+    # control: prose with a metric keyword adjacent to a >=2-decimal value fails.
+    clustering_m3_content_no_metric_ok: bool = True
 
 
 @dataclass
@@ -224,6 +231,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         )
     if not r.clustering_eda_no_target_ok:
         reasons.append("clustering M2 EDA coherence failure: narrative cites a target column on an unsupervised job")
+    if not r.clustering_m3_content_no_metric_ok:
+        reasons.append(
+            "clustering M3-content failure: narrative cites a fabricated cluster-metric value "
+            "(silhouette / Davies-Bouldin) pre-execution"
+        )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -570,6 +582,65 @@ def check_clustering_eda_no_target(narrative: str | None) -> bool:
         and "categoria" not in lowered
         and "variable objetivo" not in lowered
     )
+
+
+# ── Issue #457 — deterministic clustering M3-content fabrication oracle ───
+
+
+def check_clustering_m3_content_no_metric_numbers(prose: str) -> bool:
+    """Pure oracle (Issue #457): does the ml_ds+clustering M3-content narrative AVOID citing a
+    fabricated cluster-metric VALUE?
+
+    The M3-content narrative is written BEFORE the notebook executor runs (graph order), so no real
+    ``silhouette`` / ``Davies-Bouldin`` exists yet — the prompt forbids any concrete metric value and
+    frames everything as design intent. This zero-FP detector returns ``False`` only when a clustering-
+    metric keyword (``silhouette`` / ``silueta`` / ``davies[- ]bouldin``) is DIRECTLY BOUND (only
+    whitespace + up to two copula/preposition/hedge connectors + optional ``:``/``=``/``~``) to a value
+    IN THE METRIC RANGE ``-?[01]\\.\\d{2,}`` (integer part 0 or 1, >=2 fractional digits — e.g. ``0.62``
+    / ``0.715`` / ``1.24`` / ``-0.30``). It catches ``silueta de 0.62`` / ``silhouette = 0.55`` /
+    ``silhouette alcanza 0.715`` / ``Davies-Bouldin de 1.24`` / ``silhouette será de aproximadamente 0.80``.
+
+    Two layers give the zero-FP guarantee against the figures the prompt INVITES from M1/M2: (1) the
+    integer-part-0/1 value range excludes business magnitudes (``2.500.000`` / ``4.50 millones`` /
+    ``35.00``), which never have an integer part of 0/1; (2) the connector-only binder means a content
+    noun in the gap breaks the bind, so a small business PROPORTION co-located with a silhouette word
+    (``la tasa de conversión 0.30 y la silueta será clara``) is NOT flagged. This mirrors the adjacency
+    approach of ``narrative_grounding.detect_unanchored_adjacent_metrics``.
+
+    Round illustrative thresholds (``0.5`` — one fractional digit) and integer ``k`` (``3 segmentos``)
+    are NOT flagged. Pure, no LLM/network, linear-time / ReDoS-safe (single-digit integer part + bounded
+    connector repetition). The prompt boundary is the real guard; this gate-protects a future
+    m3_content_generator Pro->Flash downgrade that fabricates reported cluster metrics on the frozen set.
+    Honest, accepted FNs: a 1-decimal value, a value separated from the keyword by a content word, or a
+    Davies-Bouldin value >= 2.00 (DB is the secondary metric; the prompt forbids it anyway and the gate
+    is deliberately conservative).
+    """
+    import re
+
+    if not prose:
+        return True
+    keyword = r"(?:silhouette|silueta|davies[\s-]?bouldin)"
+    # Tight binder: the value must be DIRECTLY attached to the metric keyword — only whitespace, up to
+    # two copula/preposition/hedge connectors, and optional :/=/~ punctuation may sit between them. A
+    # content noun in the gap (e.g. "la tasa de conversión 0.30 ... la silueta") breaks the bind, so a
+    # small business proportion co-located with a silhouette word is NOT flagged (the dominant residual
+    # false-positive class). This mirrors `narrative_grounding.detect_unanchored_adjacent_metrics`.
+    connector = (
+        r"(?:de\s+aproximadamente|aproximadamente|alrededor\s+de|cercan[oa]\s+a|"
+        r"pr[oó]xim[oa]\s+a|llega\s+a|rondar[ií]a|ronda|alcanza|de|del|es|son|fue|"
+        r"ser[aá]|da|casi|unos)"
+    )
+    bind = r"\s*(?:" + connector + r"\s*){0,2}[:=~≈]?\s*"
+    # Metric-range value only: integer part 0/1 → excludes business magnitudes (4.50, 2.500, 35.00).
+    # Leading (?<![\d.,]) rejects the tail of a multi-digit/grouped figure (the "0" in "10.50" /
+    # "500.000"); trailing (?!\.\d) rejects a grouped continuation ("0.715.000") but allows an ordinary
+    # trailing comma/period. Single-digit integer part → no `\d+\.` backtracking → linear / ReDoS-safe.
+    value = r"(?<![\d.,])-?[01]\.\d{2,}(?!\.\d)"
+    pattern = re.compile(
+        keyword + bind + value + r"|" + value + bind + keyword,
+        re.IGNORECASE,
+    )
+    return pattern.search(prose) is None
 
 
 # ── frozen golden set ────────────────────────────────────

@@ -122,6 +122,18 @@ class Settings(BaseSettings):
     # stays on the generic prompt — #317's lane) are unaffected either way. EDA charts are
     # unchanged (still the LLM-JSON path; a deterministic clustering chart builder is a follow-up).
     mlds_clustering_m2_eda: bool = True
+    # M3-content segmentation narrative for ml_ds + clustering (Issue #457). When true (default),
+    # an ml_ds + clustering case selects the dedicated `M3_CONTENT_PROMPT_CLUSTERING` (K-Means
+    # segmentation: how k is chosen, how to read the silhouette qualitatively, cluster→persona
+    # profiling, action per segment) instead of the generic `M3_EXPERIMENT_PROMPT`. Anti-fabrication
+    # is enforced at the prompt boundary (it forbids citing concrete metric values) because by graph
+    # order the notebook executor runs AFTER this node, so `m3_metrics_summary` is structurally absent
+    # here (the #336 pattern) — a runtime grounding validator cannot fire; real numeric anchoring is a
+    # downstream M4/M5 follow-up. Set MLDS_CLUSTERING_M3_CONTENT=false to revert to the generic prompt
+    # byte-identically (instant env-only revert; no redeploy). The gate is profile=="ml_ds" AND
+    # family=="clustering"; clasificación / regresión / serie_temporal / business (including
+    # business+clustering, which uses the audit prompt) are unaffected either way.
+    mlds_clustering_m3_content: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign

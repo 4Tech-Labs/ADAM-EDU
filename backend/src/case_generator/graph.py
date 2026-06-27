@@ -139,6 +139,7 @@ from case_generator.prompts import (
     M3_NOTEBOOK_BASE_TEMPLATE,
     M3_CONTENT_PROMPT_BY_FAMILY,
     M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
+    M3_CONTENT_PROMPT_CLUSTERING,
     M3_CLASSIFICATION_QUESTIONS_BY_VARIANT,
     PROMPT_BY_FAMILY,
     M4_PROMPT_BY_FAMILY,
@@ -6535,6 +6536,24 @@ def _resolve_generation_focus(
     return profile, family
 
 
+def _effective_m3_content_prompts(primary_family: str | None) -> dict[str, str]:
+    """M3-content family→prompt map for the ml_ds branch, with the clustering override (Issue #457).
+
+    Pure (no LLM/state) so the kill-switch gate is unit-testable without the node's inline LLM +
+    error-swallowing ``try/except``. Returns the SAME ``M3_CONTENT_PROMPT_BY_FAMILY`` object for every
+    family EXCEPT ``clustering`` under the ``MLDS_CLUSTERING_M3_CONTENT`` switch, where it returns a
+    shallow copy with the ``"clustering"`` key overridden to the dedicated segmentation narrative.
+    The ``clasificacion`` per-variant override stays INLINE in the node (it needs the resolved
+    notebook variant). Off / non-clustering → identity object → byte-identical to the prior behavior.
+    The gate's ``profile == "ml_ds"`` half is the enclosing branch in ``m3_content_generator``;
+    ``business`` never reaches this map (it uses ``M3_AUDIT_PROMPT``), so business+clustering is
+    unaffected.
+    """
+    if primary_family == "clustering" and settings.mlds_clustering_m3_content:
+        return {**M3_CONTENT_PROMPT_BY_FAMILY, "clustering": M3_CONTENT_PROMPT_CLUSTERING}
+    return M3_CONTENT_PROMPT_BY_FAMILY
+
+
 def _resolve_impact_lens(state: ADAMState) -> str:
     """Return the case's resolved Impact Lens (value frame for M4) — Issue #437.
 
@@ -7124,7 +7143,10 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
                     "clasificacion": M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT[_variant],
                 }
             else:
-                _effective_prompt_by_family = M3_CONTENT_PROMPT_BY_FAMILY
+                # Issue #457 — ml_ds + clustering selects the dedicated segmentation
+                # narrative (kill-switch-gated, pure helper); regresion/serie_temporal and
+                # the switch-off path keep the generic M3_CONTENT_PROMPT_BY_FAMILY identity.
+                _effective_prompt_by_family = _effective_m3_content_prompts(_primary_family)
             prompt, metrics_block, grounding_enabled, grounding_update = _select_narrative_prompt(
                 state,
                 "m3_content_generator",
