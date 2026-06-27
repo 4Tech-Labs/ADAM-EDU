@@ -297,6 +297,29 @@ Only run live LLM tests explicitly:
 - **Coherencia capa 2 + tests:** `m6_grounding.py` (best-effort, **logger-only**, nunca lanza/reprompts) marca menciones de módulos fuera del roster en la prosa §1/§3 (palabra-frontera → sin FP por `queda`/`moneda`). Un drift test liga las etiquetas/numeración del backend a `caseViewerConfig.ts`. Kill-switch `TEACHING_NOTE_MODULE_GUIDE` (Settings `teaching_note_module_guide`, default `true`; `backend/.env.example`) → OFF ejecuta `_legacy_teaching_note_part1/part2` (cuerpos + prompts `_LEGACY` verbatim) byte-idéntico. **Sin nueva clave canónica/state, sin entrada en `case_sanitization`** (`content.teachingNote` intacto → sin migración, sin fuga al estudiante). Golden oracle `check_m6_module_coherence` + `NodeEvalInputs.m6_module_coherence_ok`. Tests: `backend/tests/test_m6_module_guide.py`.
 - **Limitaciones documentadas:** (1) el centinela de fallo catastrófico `[TEACHING_NOTE_PART*_ERROR]` se conserva en las claves por-parte (para que el resume recalcule) pero `synthesis_phase2_sync` lo **elimina** de la nota compuesta (`doc3_teaching_note`) → el docente nunca ve el token máquina (la nota legacy y el camino feliz quedan byte-idénticos). (2) `POST .../regenerate-notebook` re-corre solo los nodos M3, NO la teaching note, así que un notebook regenerado tras una corrida degradada deja la cláusula de notebook de §2 desactualizada (omitida) — una sub-descripción menor (nunca una afirmación falsa), aceptada para mantener el regenerate barato y Supabase-native. (3) El §2 determinista está en español; el producto es español-only (`output_language` se fija a `"es"` en intake).
 
+## M5 `main_risk` corte limpio (Issue #470)
+
+- Scope: AMBOS perfiles, TODAS las familias. El "Riesgo principal M3/M4" que el memo M5 cita
+  (`main_risk_from_m3_m4`) se truncaba con `text[:200]` DURO en `_extract_main_risk` (closure de
+  `_build_base_context`, `graph.py`), dejando fragmentos crudos a media palabra/cláusula visibles al
+  estudiante (caso real: «…(cuyo rango va de 5»). Fix: helper PURO a nivel de módulo
+  `_truncate_risk_text` (`_MAX_RISK_CHARS=320`) que colapsa whitespace y corta en frontera de
+  **oración** (preferida, `rfind(". "/"! "/"? ")`, floor ≥40) o de **palabra** (fallback
+  `textwrap.shorten` + «…»). El colapso de whitespace es **load-bearing** (sin él, `".\n"` no matchea
+  `". "` y el corte por oración falla en silencio).
+- **Fix GENERAL, NO gateado.** `_extract_main_risk`/`{main_risk_from_m3_m4}` corren para todas las
+  familias (genérico `prompts/_shared.py` + `M5_clasificacion/questions.py`), así que el corte mejora
+  el memo M5 de TODAS — gatearlo dejaría el bug vivo en clf/business/regresión. **El invariante
+  byte-idéntico-clf NO aplica aquí** (es un bug fix intencional general); la garantía que lo reemplaza
+  es golden-eval sin regresión + lectura del M5 clf. No es byte-idéntico ni para riesgos cortos
+  (el whitespace-collapse también limpia saltos de línea — mejora estricta).
+- **Sin kill-switch** (el revert objetivo sería el `[:200]` roto = re-exponer el bug → anti-patrón;
+  revert = `git revert`). **Sin golden oracle** (es ensamblaje determinista — el unit test es la
+  herramienta correcta). **Sin tocar el template M5** (placeholder `{main_risk_from_m3_m4}` intacto →
+  `test_issue242` / longitud #420 / 5 párrafos verdes por construcción). **Sin nueva clave
+  canónica/state, sin `case_sanitization`, sin migración, sin frontend, sin tocar el architect/SHA.**
+  Casos ya generados NO se reprocesan. Tests: `backend/tests/test_issue470_m5_risk_truncation.py`.
+
 ## Moneda USD-only (Issue #370)
 
 - Decisión de producto: **todo valor monetario del producto es USD.** No reintroducir multi-moneda sin ADR.

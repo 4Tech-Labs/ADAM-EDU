@@ -59,6 +59,7 @@ import logging
 import os
 import random
 import re
+import textwrap
 import threading
 import time
 import unicodedata
@@ -985,6 +986,34 @@ def _extract_json_from_llm_response(raw: str) -> dict | None:
 
 
 # ─────────────────────────────────────────────────────────
+# HELPER — _truncate_risk_text (#470)
+# ─────────────────────────────────────────────────────────
+
+_MAX_RISK_CHARS = 320  # alza modesta desde 200; captura un riesgo típico de 1-2 frases completo
+
+
+def _truncate_risk_text(text: str) -> str:
+    """Colapsa whitespace y trunca en frontera de oración/palabra, de modo que el string de riesgo
+    inyectado en el prompt del memo M5 (``main_risk_from_m3_m4``) nunca quede cortado a media
+    palabra/cláusula (#470 — antes ``text[:200]`` duro dejaba fragmentos crudos como
+    «…(cuyo rango va de 5»).
+
+    El colapso de whitespace es LOAD-BEARING: las secciones de riesgo capturadas por regex (DOTALL)
+    contienen '\\n', y sin normalizar, una oración como "forense.\\nSi el módulo…" no matchearía
+    ". " → el corte por oración fallaría en silencio y caería a una elipsis a media cláusula.
+    """
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= _MAX_RISK_CHARS:
+        return text
+    window = text[: _MAX_RISK_CHARS + 1]  # +1: un terminador justo en el tope cuenta
+    sentence_end = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    if sentence_end >= 40:  # prefiere la última oración completa dentro de la ventana
+        return window[: sentence_end + 1].rstrip()
+    # Sin frontera de oración utilizable → fallback word-safe (stdlib): nunca corta a media palabra.
+    return textwrap.shorten(text, width=_MAX_RISK_CHARS, placeholder="…")
+
+
+# ─────────────────────────────────────────────────────────
 # HELPER — _build_base_context (v8)
 # ─────────────────────────────────────────────────────────
 
@@ -1066,7 +1095,7 @@ def _build_base_context(state: ADAMState) -> dict:
                 text = _m.group(1).strip()
                 # Strip any leading markdown from captured text
                 text = re.sub(r'^#+\s*', '', text).strip()
-                text = text[:200]
+                text = _truncate_risk_text(text)
                 if len(text) > 30:
                     return text
         # Fallback semántico: buscar párrafo que contenga palabras clave de riesgo.
@@ -1078,9 +1107,9 @@ def _build_base_context(state: ADAMState) -> dict:
         # Preferir párrafos con palabras clave de riesgo
         risk_paras = [p for p in paras if _RISK_KEYWORDS.search(p)]
         if risk_paras:
-            return risk_paras[-1][:200]
+            return _truncate_risk_text(risk_paras[-1])
         # Último párrafo sustantivo sin heading
-        return paras[-1][:200] if paras else None
+        return _truncate_risk_text(paras[-1]) if paras else None
 
     m3 = state.get("m3_content", "")
     m4 = state.get("m4_content", "")
