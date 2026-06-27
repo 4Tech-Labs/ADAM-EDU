@@ -421,3 +421,75 @@ def test_runnable_kmeans_notebook_executes_green_under_453_executor() -> None:
     assert result.metrics_summary["n_clusters"] >= 2
     assert result.metrics_summary["silhouette"] >= 0.25
     assert result.quality_warning is None
+
+
+# A notebook mirroring the real prompt's per-cell try/except wrapping. On a dataset with NO usable
+# features (a single all-unique integer id → dropped by the ID-like hygiene), the scaler cell's
+# except fires, the failure cascades, and the metrics cell emits modeling_status="execution_error".
+# This is the graceful-degradation safety net for weird user data: the job degrades (BLOCKING →
+# reprompt-then-degrade), it NEVER crashes the executor and NEVER ships a fake/empty success.
+_DEFENSIVE_KMEANS_NOTEBOOK = '''
+# %%
+import json as _json
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+df = pd.read_csv("dataset.csv")
+# %%
+# === SECTION:scaler_features ===
+try:
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score, davies_bouldin_score
+    num_cols = df.select_dtypes(include=np.number).columns.tolist()
+    feature_cols = [c for c in num_cols if df[c].nunique() > 1 and df[c].isna().mean() <= 0.5 and not (df[c].dtype.kind in "iu" and df[c].nunique() == len(df))]
+    X = df[feature_cols].dropna()
+    if X.shape[1] < 2 or X.shape[0] < 10:
+        print("REQUISITO FALTANTE: features insuficientes")
+    X_scaled = StandardScaler().fit_transform(X)
+except Exception as e:
+    print(f"err scaler: {e}")
+# %%
+# === SECTION:kmeans_fit ===
+try:
+    labels = KMeans(n_clusters=3, n_init=10, random_state=42).fit_predict(X_scaled)
+except Exception as e:
+    print(f"err fit: {e}")
+# %%
+# === SECTION:metrics_summary_json ===
+try:
+    _labels_arr = np.asarray(labels)
+    _uniq = sorted(int(c) for c in set(_labels_arr.tolist()) if c != -1)
+    _n_clusters = len(_uniq)
+    if _n_clusters >= 2:
+        _metrics_summary = {"silhouette": float(silhouette_score(X_scaled, labels)), "n_clusters": int(_n_clusters), "modeling_status": "clustering_completed"}
+    else:
+        _metrics_summary = {"n_clusters": int(_n_clusters), "modeling_status": "execution_error"}
+except Exception as _e:
+    _metrics_summary = {"modeling_status": "execution_error", "execution_warning": str(_e)[:200]}
+print("ADAM_M3_METRICS_SUMMARY_JSON=" + _json.dumps(_metrics_summary, ensure_ascii=False, allow_nan=False))
+'''
+
+
+def test_no_usable_features_degrades_gracefully_not_crash() -> None:
+    # Single all-unique integer id → ID-like hygiene drops it → empty X → scaler raises → cascade →
+    # metrics cell emits execution_error. The notebook RUNS to completion (no uncaught crash); the
+    # gate treats execution_error as BLOCKING (not an intentional skip) → reprompt-then-degrade.
+    from case_generator.m3_notebook_execution import (
+        execute_m3_notebook,
+        is_m3_quality_warning_blocking,
+    )
+
+    result = execute_m3_notebook(
+        notebook_code=_DEFENSIVE_KMEANS_NOTEBOOK,
+        dataset_rows=[{"customer_id": i} for i in range(1, 31)],
+        family="clustering",
+        timeout_seconds=120,
+        internal_timeout_seconds=60,
+    )
+    assert result.metrics_summary is not None, result
+    assert result.metrics_summary["modeling_status"] == "execution_error"
+    # No silhouette emitted → blocking quality warning → reprompt-then-degrade, never a fake success.
+    assert is_m3_quality_warning_blocking(result.quality_warning, result.metrics_summary) is True
