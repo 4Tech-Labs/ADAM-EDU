@@ -173,6 +173,19 @@ class NodeEvalInputs:
     # from target_k (the pre-#467 hash-chosen k, or the kill-switch-off path) fails. gate-protects a
     # future data-layer regression that stops honoring target_k.
     clustering_decision_coherence_ok: bool = True
+    # ml_ds + clustering dataset carries NO supervised target column (Issue #466, Frente 1): clustering
+    # is unsupervised, so a leaked `dummy_target` (LLM-hallucinated or contract-injected) must be
+    # stripped before data generation. True (n/a) for non-clustering jobs / empty rows. Computed via
+    # ``check_clustering_no_target``; gate-protects against a data-layer regression that ships a target
+    # column. RED control: rows with a target-named binary column (kill-switch off) fail.
+    clustering_no_target_ok: bool = True
+    # ml_ds + clustering M2 EDA charts are DATA-ONLY and PRE-MODEL (Issue #466, Frente 2): the
+    # deterministic builder emits only `data_source="python_builder"` charts with NO supervised target
+    # framing ("objetivo"/"target"/regression) and NO model outputs (cluster labels/centroids/elbow/
+    # silhouette/k). True (n/a) for an empty chart set. Computed via
+    # ``check_clustering_eda_no_target_charts``; gate-protects against a chart regression that reopens
+    # the LLM-JSON supervised path. RED control: an LLM-JSON chart with "vs objetivo"/regression fails.
+    clustering_eda_no_target_charts_ok: bool = True
 
 
 @dataclass
@@ -248,6 +261,16 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "clustering decision coherence failure: injected blob count != coordinated target_k "
             "(data k would contradict the narrative's framed k)"
+        )
+    if not r.clustering_no_target_ok:
+        reasons.append(
+            "clustering data failure: a supervised target column (dummy_target) leaked into the "
+            "unsupervised clustering dataset"
+        )
+    if not r.clustering_eda_no_target_charts_ok:
+        reasons.append(
+            "clustering M2 chart failure: a supervised 'feature vs target' / model-output chart "
+            "leaked into the data-only pre-model EDA panel"
         )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
@@ -621,6 +644,84 @@ def check_clustering_eda_no_target(narrative: str | None) -> bool:
         and "categoria" not in lowered
         and "variable objetivo" not in lowered
     )
+
+
+# ── Issue #466 — deterministic clustering no-target (data) + data-only charts oracles ───
+
+_CLUSTERING_TARGET_NAME_TOKENS = (
+    "dummy_target", "target", "objetivo", "label", "categoria", "clase", "clasificacion", "churn",
+)
+_CLUSTERING_TARGET_EXACT_NAMES = frozenset({"y", "y_true", "y_pred"})
+# Cluster-label artifacts (answer leak) — flagged by NAME regardless of values (a k-valued cluster id
+# is not binary, so the binary check below would miss it). Mirrors the strip's Regla C.
+_CLUSTERING_LABEL_NAME_TOKENS = ("cluster", "kmeans")
+
+
+def check_clustering_no_target(rows: list | None) -> bool:
+    """Pure oracle (Issue #466, Frente 1): does the ml_ds+clustering dataset carry NO leaked target?
+
+    Clustering is unsupervised — a leaked target (LLM-hallucinated or contract-injected) must be
+    stripped before data generation. True iff NO column is (a) a cluster-label artifact (name contains
+    ``cluster``/``kmeans`` — flagged at ANY values, the worst answer leak) NOR (b) a classification-
+    target-named binary: name token {dummy_target/target/objetivo/label/categoria/clase/clasificacion/
+    churn} or exact {y/y_true/y_pred} AND values ⊆ {0,1}. The binary guard on (b) mirrors the strip and
+    avoids a FP on a continuous feature with a target-ish name. Pure, deterministic, no LLM/network/API
+    key. Empty/absent → True (n/a). RED controls: rows with a ``dummy_target`` 0/1 column OR a k-valued
+    ``cluster_id`` column (the kill-switch-off path) fail.
+    """
+    if not rows:
+        return True
+    for name in rows[0].keys():
+        lname = str(name).lower()
+        # (a) cluster-label artifact → leak at any values.
+        if any(t in lname for t in _CLUSTERING_LABEL_NAME_TOKENS):
+            return False
+        # (b) classification-target-named binary.
+        if lname not in _CLUSTERING_TARGET_EXACT_NAMES and not any(
+            t in lname for t in _CLUSTERING_TARGET_NAME_TOKENS
+        ):
+            continue
+        non_null = {r.get(name) for r in rows if r.get(name) is not None}
+        # 0/1 con True/False/0.0/1.0 colapsando por igualdad (0==0.0==False, 1==1.0==True).
+        if non_null and non_null <= {0, 1}:
+            return False
+    return True
+
+
+def check_clustering_eda_no_target_charts(charts: list | None) -> bool:
+    """Pure oracle (Issue #466, Frente 2): is the ml_ds+clustering M2 EDA chart panel DATA-ONLY?
+
+    The deterministic builder emits charts that visualize ONLY the natural data structure — NO
+    supervised target framing and NO model output (M2 is pre-model). True iff EVERY chart (a) carries
+    ``data_source == "python_builder"`` AND (b) has no supervised FRAMING ("vs objetivo"/"variable
+    objetivo"/"vs target"/"regres") NOR model-output marker (cluster/centroid/elbow/codo/silhouette/
+    silueta/"k=") in its title/subtitle, and no regression/cluster trace name. The supervised markers
+    are PHRASE-based (not bare "target"/"fit" substrings) so a legitimate feature name embedded in a
+    title/trace (e.g. ``profit_margin`` → "fit", ``target_segment_value`` → "target") does NOT trip a
+    false positive — the box builder names each trace after its raw column. Pure, deterministic. Empty
+    → True (n/a). RED control: an LLM-JSON "feature vs objetivo" chart (data_source != "python_builder"
+    or a supervised title) fails.
+    """
+    if not charts:
+        return True
+    supervised_markers = ("vs objetivo", "variable objetivo", "vs target", "regres")
+    model_markers = (
+        "cluster", "centroid", "centroide", "elbow", "codo", "silhouette", "silueta", "k=",
+    )
+    for c in charts:
+        if not isinstance(c, dict):
+            return False
+        if c.get("data_source") != "python_builder":
+            return False
+        text = " ".join(str(c.get(k, "") or "") for k in ("title", "subtitle")).lower()
+        if any(m in text for m in supervised_markers) or any(m in text for m in model_markers):
+            return False
+        for tr in c.get("traces") or []:
+            tname = str((tr.get("name") if isinstance(tr, dict) else "") or "").lower()
+            # Regression/cluster trace markers only (NO bare "fit" — collides with "profit_*").
+            if any(m in tname for m in ("regres", "cluster")):
+                return False
+    return True
 
 
 # ── Issue #457 — deterministic clustering M3-content fabrication oracle ───
