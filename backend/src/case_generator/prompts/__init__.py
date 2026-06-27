@@ -15,6 +15,8 @@ VARIABLES GLOBALES NUEVAS AÑADIDAS:
   {industry_cagr_range} → CAGR histórico del sector (ej: "5-8%"). Default: "5-8%"
 """
 
+from typing import Final, Literal
+
 from case_generator.prompts._architect_base import (
     ARCHITECT_IMPACT_LENS_BLOCK,
     CASE_ARCHITECT_PROMPT,
@@ -2520,6 +2522,256 @@ Contexto M3 (extracto): {m3_content}
 """
 
 
+# Issue #454 — prompt K-Means-ONLY (despachado por-variante para ml_ds + clustering cuando el
+# único algoritmo es K-Means). Separa K-Means de DBSCAN: cero `DBSCAN/eps/k-distance/min_samples/
+# NearestNeighbors` en código ejecutable. Celdas TOTALMENTE escritas con marcadores
+# `# === SECTION:... ===` que el validador exige (lockstep con `_CLUSTERING_*_BY_VARIANT` en
+# graph.py). La celda `metrics_summary_json` es VERBATIM de M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING
+# (contrato del executor #453). El prompt mixto se conserva como fallback `mixed_legacy`.
+M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING_KMEANS = """\
+Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para Google Colab.
+El notebook resuelve un problema de CLUSTERING NO SUPERVISADO con K-Means (UN solo algoritmo).
+Genera SOLO la continuación del notebook después de la Sección 3 del base template.
+
+# Contrato dataset_schema_required
+{dataset_contract_block}
+
+# Brechas de datos detectadas por el validador
+{data_gap_warnings_block}
+
+# Reglas CONTRACT-FIRST
+* Clustering NO usa target. Si el contrato declara un `target_column`, IGNÓRALO en el fit
+  (puedes mostrarlo a posteriori para colorear los clusters como diagnóstico, pero NO lo uses como `y`).
+* Sin contrato: usa todas las columnas numéricas de `df` como features de segmentación.
+
+# Reglas absolutas
+1. NUNCA uses np.random, pd.DataFrame() fabricado, columnas inventadas ni placeholders.
+2. SOLO trabaja con columnas reales de `df`. Las features se derivan de las columnas numéricas reales.
+3. Formato SOLO Jupytext Percent: `# %%` y `# %% [markdown]`.
+4. NO redefinas funciones del base template.
+5. Idioma de salida: {output_language}.
+6. Cada bloque de código falla de forma aislada — encapsula en try/except local.
+7. Reproduce CADA celda de la sección "Estructura del notebook" VERBATIM, adaptando SOLO los
+   nombres de columnas reales de `df`. NO renombres ni omitas los marcadores `# === SECTION:... ===`.
+
+# Reglas de API estable (SOLO K-Means)
+A. Usa SOLO API documentada y estable de scikit-learn >= 1.0:
+   - sklearn.cluster.KMeans(n_clusters=k, n_init=10, random_state=42)
+   - sklearn.preprocessing.StandardScaler()  <- OBLIGATORIO antes de fit
+   - sklearn.decomposition.PCA(n_components=2, random_state=42)
+   - sklearn.metrics: silhouette_score, davies_bouldin_score
+B. Lista NEGRA explícita (PROHIBIDOS — pertenecen a otras familias o a otro algoritmo de clustering):
+   - sklearn.cluster.DBSCAN, eps, min_samples, k-distance, sklearn.neighbors.NearestNeighbors
+     (este notebook es K-Means; NO uses DBSCAN ni su selección de epsilon).
+   - `from sklearn.model_selection import train_test_split`  <- clustering NO usa split
+   - `from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, f1_score`
+   - `from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error`
+   - `import statsmodels`, `import pmdarima`, `auto_arima`, `import prophet`
+   Si los detectas en tu salida, REESCRIBE — este prompt es solo K-Means.
+C. NO importes nada fuera de: numpy, pandas, matplotlib, seaborn,
+   sklearn.{{cluster,preprocessing,decomposition,metrics}}, scipy.stats.
+
+# StandardScaler OBLIGATORIO
+- TODO el clustering trabaja sobre `X_scaled` (StandardScaler), no sobre `X` cruda. Las distancias
+  sin escalar hacen que las features de mayor magnitud dominen y los clusters resulten arbitrarios.
+
+# Higiene de feature_cols
+1. Candidatas = SOLO columnas numéricas de `df` (sin one-hot de categóricas, para mantener interpretabilidad de PCA).
+2. Drop ID-like (cardinalidad == n_filas), near-constants y high-null (>50% NaN).
+3. Drop el target del contrato (si existe) — clustering NO supervisado.
+4. `X = df[feature_cols].dropna()` (sin imputación con la media — el clustering es sensible a ella).
+5. Si `X.shape[1] < 2` o `X.shape[0] < 10`: imprime "REQUISITO FALTANTE..." pero emite igualmente la celda de métricas.
+
+# Atomic Cell Charting
+- Cada celda de visualización contiene EXACTAMENTE UNA `plt.figure(...)` y UN `plt.show()`.
+- Hay SOLO DOS figuras: (1) selección de k (codo + silhouette) y (2) scatter PCA. El perfilado es una TABLA (sin figura).
+
+# EDA Express (Sección 3.0) OBLIGATORIA antes del bloque de K-Means
+
+## El base template ya abrió `## Sección 3: Módulos Experimentales`; aquí emite un H3.
+# %% [markdown]
+# ### 3.0 EDA Express
+# Antes de hacer clustering, validamos calidad y forma del dataset.
+
+# %%
+try:
+    num_cols = df.select_dtypes(include=np.number).columns.tolist()
+    print(f"Columnas numéricas disponibles: {{len(num_cols)}}")
+    print(num_cols)
+    if len(num_cols) < 2:
+        print("⚠️ REQUISITO FALTANTE: clustering requiere ≥2 columnas numéricas.")
+    if len(df) < 10:
+        print(f"⚠️ Dataset muy pequeño (n={{len(df)}}): clustering no representativo.")
+    print("\\nTop 10 columnas por % missing:")
+    print(df.isna().mean().sort_values(ascending=False).head(10).round(3))
+except Exception as e:
+    print(f"⚠️ EDA Express falló: {{e}}")
+
+# Estructura del notebook (reproduce VERBATIM cada celda, adaptando solo nombres de columnas reales)
+
+## Celda concepto (markdown)
+# %% [markdown]
+# ### clustering — K-Means
+# **¿Qué es K-Means y cómo agrupa?** K-Means elige un número fijo de grupos (k) y asigna cada
+# registro al grupo cuyo centro promedio le queda más cerca, recalculando los centros hasta que
+# los grupos se estabilizan. Por eso necesitamos (a) decidir cuántos grupos buscar y (b) poner
+# todas las variables en la misma escala para que ninguna domine por su tamaño.
+# **Hipótesis experimental:** [extraída de {m3_content}, 1-2 líneas]
+# **Prerequisitos:** [campo "prerequisito" del entry en {familias_meta}]
+
+## Celda higiene + escalado (código)
+# %%
+# === SECTION:scaler_features ===
+try:
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.cluster import KMeans
+    from sklearn.decomposition import PCA
+    from sklearn.metrics import silhouette_score, davies_bouldin_score
+    num_cols = df.select_dtypes(include=np.number).columns.tolist()
+    feature_cols = [
+        c for c in num_cols
+        if df[c].nunique(dropna=True) > 1
+        and df[c].isna().mean() <= 0.5
+        and not (df[c].dtype.kind in "iu" and df[c].nunique(dropna=True) == len(df))
+    ]
+    X = df[feature_cols].dropna()
+    if X.shape[1] < 2 or X.shape[0] < 10:
+        print("⚠️ REQUISITO FALTANTE: se requieren ≥2 columnas numéricas y ≥10 filas para clustering.")
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    print(f"Features de segmentación ({{len(feature_cols)}}): {{feature_cols}}")
+except Exception as e:
+    print(f"⚠️ Error en higiene/escalado: {{e}}")
+
+## Celda selección de k — codo + silhouette (UNA figura)
+# %%
+# === SECTION:elbow ===
+try:
+    _ks = list(range(2, min(11, len(X_scaled))))
+    _inertias = []
+    _silhouettes = []
+    for _k in _ks:
+        _km = KMeans(n_clusters=_k, n_init=10, random_state=42).fit(X_scaled)
+        _inertias.append(_km.inertia_)
+        _silhouettes.append(silhouette_score(X_scaled, _km.labels_))
+    best_k = _ks[int(np.argmax(_silhouettes))] if _silhouettes else 3
+    plt.figure(figsize=(8, 5))
+    ax1 = plt.gca()
+    ax1.plot(_ks, _inertias, marker="o", color="tab:blue", label="Inercia (codo)")
+    ax1.set_xlabel("Número de clusters (k)")
+    ax1.set_ylabel("Inercia", color="tab:blue")
+    ax2 = ax1.twinx()
+    ax2.plot(_ks, _silhouettes, marker="s", color="tab:red", label="Silhouette")
+    ax2.set_ylabel("Silhouette", color="tab:red")
+    ax1.axvline(best_k, color="gray", linestyle="--", alpha=0.7)
+    plt.title(f"Selección de k — codo (inercia) y silhouette · k* = {{best_k}}")
+    plt.tight_layout(); plt.show()
+except Exception as e:
+    print(f"⚠️ Error en la selección de k: {{e}}")
+
+## Celda fit final (código, SIN figura). Reelige k por mayor silhouette y ajusta K-Means.
+# %%
+# === SECTION:kmeans_fit ===
+try:
+    _sil_by_k = {{}}
+    for _k in range(2, min(11, len(X_scaled))):
+        _lab = KMeans(n_clusters=_k, n_init=10, random_state=42).fit_predict(X_scaled)
+        _sil_by_k[_k] = silhouette_score(X_scaled, _lab)
+    best_k = max(_sil_by_k, key=_sil_by_k.get) if _sil_by_k else 3
+    kmeans = KMeans(n_clusters=best_k, n_init=10, random_state=42)
+    labels = kmeans.fit_predict(X_scaled)
+    print(f"k seleccionado (mejor silhouette): {{best_k}}")
+    print(f"Silhouette: {{silhouette_score(X_scaled, labels):.4f}}")
+    print(f"Davies-Bouldin: {{davies_bouldin_score(X_scaled, labels):.4f}}")
+    print("Tamaño por cluster:", pd.Series(labels).value_counts().sort_index().to_dict())
+except Exception as e:
+    print(f"⚠️ Error en el ajuste de K-Means: {{e}}")
+
+## Celda métricas JSON (OBLIGATORIA — la consume el executor del Módulo 3). Reproduce VERBATIM.
+# %%
+# === SECTION:metrics_summary_json ===
+import json as _json
+try:
+    _labels_arr = np.asarray(labels)
+    _uniq = sorted(int(c) for c in set(_labels_arr.tolist()) if c != -1)
+    _n_clusters = len(_uniq)
+    if _n_clusters >= 2:
+        _sizes = [int((_labels_arr == c).sum()) for c in _uniq]
+        _metrics_summary = {{
+            "silhouette": float(silhouette_score(X_scaled, labels)),
+            "davies_bouldin": float(davies_bouldin_score(X_scaled, labels)),
+            "n_clusters": int(_n_clusters),
+            "cluster_sizes": _sizes,
+            "modeling_status": "clustering_completed",
+        }}
+    else:
+        # <2 clusters reales formados: degenerado. NO es un skip intencional → el gate del
+        # executor lo trata como bloqueante (reprompt-then-degrade), no como éxito silencioso.
+        _metrics_summary = {{"n_clusters": int(_n_clusters), "modeling_status": "execution_error",
+                             "execution_warning": "fewer than 2 clusters formed"}}
+except Exception as _e:
+    # Fallo de ejecución (variables del fit ausentes, silhouette NaN, etc.): NO es un skip
+    # intencional → bloqueante → el notebook degrada (m3NotebookDegraded), no shipea vacío.
+    _metrics_summary = {{"modeling_status": "execution_error", "execution_warning": str(_e)[:200]}}
+print("ADAM_M3_METRICS_SUMMARY_JSON=" + _json.dumps(_metrics_summary, ensure_ascii=False, allow_nan=False))
+
+## Celda perfilado de segmentos (TABLA — sin figura). Es la interpretación accionable.
+# %%
+# === SECTION:cluster_profiles ===
+try:
+    _profile = X.assign(cluster=labels).groupby("cluster")[feature_cols].mean().round(2)
+    print("Perfil de cada segmento (media de cada feature por cluster):")
+    print(_profile.to_string())
+    print("\\nTamaño de cada segmento:", pd.Series(labels).value_counts().sort_index().to_dict())
+except Exception as e:
+    print(f"⚠️ Error en el perfilado de segmentos: {{e}}")
+
+## Celda scatter PCA (UNA figura)
+# %%
+# === SECTION:pca_scatter ===
+try:
+    plt.figure(figsize=(8, 6))
+    pca = PCA(n_components=2, random_state=42)
+    X_pca = pca.fit_transform(X_scaled)
+    plt.scatter(X_pca[:, 0], X_pca[:, 1], c=labels, cmap="tab10", alpha=0.7, s=20)
+    plt.xlabel(f"PC1 ({{pca.explained_variance_ratio_[0]:.0%}})")
+    plt.ylabel(f"PC2 ({{pca.explained_variance_ratio_[1]:.0%}})")
+    plt.title("Segmentos proyectados en 2D (PCA)")
+    plt.tight_layout(); plt.show()
+except Exception as e:
+    print(f"⚠️ Error en el scatter PCA: {{e}}")
+
+## Celda acción de negocio (markdown)
+# %% [markdown]
+# **Explicación pedagógica:** [qué muestran el silhouette y el scatter PCA; qué distingue a cada segmento, 2 líneas]
+# **Acción de negocio:** [próximo paso concreto sobre los segmentos descubiertos, 1 línea]
+
+# Sección final OBLIGATORIA
+# %% [markdown]
+# ## Evaluación M3 — Diseño Experimental
+# Responde en la plataforma ADAM las preguntas del Módulo 3 sobre hipótesis, sesgos y descarte.
+
+---
+Caso: {case_title}
+Familias con metadata: {familias_meta}
+Algoritmos detectados: {algoritmos}
+Contexto M3 (extracto): {m3_content}
+"""
+
+
+ClusteringNotebookVariant = Literal["kmeans_only", "mixed_legacy"]
+
+CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY: Final[ClusteringNotebookVariant] = "kmeans_only"
+CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY: Final[ClusteringNotebookVariant] = "mixed_legacy"
+
+# Issue #454 — dispatch por-variante de clustering (espejo de CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT).
+# `mixed_legacy` apunta al MISMO objeto que PROMPT_BY_FAMILY["clustering"] → byte-idéntico al mixto.
+CLUSTERING_NOTEBOOK_PROMPT_BY_VARIANT: dict[ClusteringNotebookVariant, str] = {
+    CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY: M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING_KMEANS,
+    CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY: M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING,
+}
+
+
 M3_NOTEBOOK_ALGO_PROMPT_TIMESERIES = """\
 Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para Google Colab.
 El notebook resuelve un problema de SERIES TEMPORALES (forecasting).
@@ -2806,6 +3058,7 @@ __all__ = [
   "M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST",
   "M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY",
   "M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING",
+  "M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING_KMEANS",
   "M3_NOTEBOOK_ALGO_PROMPT_REGRESSION",
   "M3_NOTEBOOK_ALGO_PROMPT_TIMESERIES",
   "M3_NOTEBOOK_BASE_TEMPLATE",
@@ -2855,6 +3108,10 @@ __all__ = [
   "CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST",
   "CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY",
   "ClassificationNotebookVariant",
+  "CLUSTERING_NOTEBOOK_PROMPT_BY_VARIANT",
+  "CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY",
+  "CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY",
+  "ClusteringNotebookVariant",
   "TOC_MARKDOWN_CELL_BY_VARIANT",
   "PROMPT_BY_FAMILY",
   "SCHEMA_DESIGNER_PROMPT",

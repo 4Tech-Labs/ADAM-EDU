@@ -116,6 +116,10 @@ from case_generator.prompts import (
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
     ClassificationNotebookVariant,
+    CLUSTERING_NOTEBOOK_PROMPT_BY_VARIANT,
+    CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY,
+    CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY,
+    ClusteringNotebookVariant,
     TOC_MARKDOWN_CELL_BY_VARIANT,
     M4_QUESTIONS_GENERATOR_PROMPT,
     M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL,
@@ -6477,6 +6481,31 @@ def _resolve_classification_notebook_variant(
     )
 
 
+def _resolve_clustering_notebook_variant(
+    *,
+    algoritmos: list[str],
+) -> tuple[ClusteringNotebookVariant, str | None]:
+    """Resolve the K-Means-only vs mixed (DBSCAN/contrast) clustering notebook variant (Issue #454).
+
+    Mirrors ``_resolve_classification_notebook_variant`` but keys off the algorithm list ALONE —
+    clustering has no single/contrast axis. ``["K-Means"]`` (and no DBSCAN) → ``kmeans_only`` (the
+    specialised, DBSCAN-free notebook); anything else (DBSCAN present, both, or unresolved) →
+    ``mixed_legacy``, which maps to the byte-identical mixed prompt + family-level validation so
+    historical/replay jobs are unchanged. DBSCAN is hidden from the forward catalog
+    (``ALGORITHM_CATALOG_REDUCED``), so ``mixed_legacy`` is the replay-only fallback.
+    """
+    normalized = {_normalize_algorithm_pick(algo) for algo in algoritmos}
+    has_kmeans = "kmeans" in normalized
+    has_dbscan = "dbscan" in normalized
+    if has_kmeans and not has_dbscan:
+        return CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY, None
+    return (
+        CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY,
+        "Notebook de clustering no resolvió a K-Means único "
+        f"(algoritmos={algoritmos!r}); se usó la plantilla mixta legacy (K-Means + DBSCAN).",
+    )
+
+
 def _resolve_generation_focus(
     state: ADAMState,
     *,
@@ -7558,6 +7587,46 @@ _CLASSIFICATION_PROHIBITED_PATTERNS_BY_VARIANT: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Issue #454 — clustering per-variant required/prohibited sets (K-Means-only). Mirrors the
+# classification per-variant dicts and is STR-KEYED so the validator's
+# ``.get(notebook_variant: str)`` type-checks without a cast. ``mixed_legacy`` has NO entries →
+# ``.get(..., family_default)`` falls back to the family-level sets (metrics marker only, DBSCAN
+# allowed) → byte-identical to the mixed prompt. The 5 analytical-cell markers + the metrics
+# marker are reliably emitted by the fully-written K-Means prompt cells; ``KMeans(`` is the #454
+# raison d'être.
+_CLUSTERING_REQUIRED_SENTINELS_BY_VARIANT: dict[str, tuple[str, ...]] = {
+    CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY: (
+        "# === SECTION:scaler_features ===",
+        "# === SECTION:elbow ===",
+        "# === SECTION:kmeans_fit ===",
+        "# === SECTION:cluster_profiles ===",
+        "# === SECTION:pca_scatter ===",
+        "# === SECTION:metrics_summary_json ===",
+    ),
+}
+
+_CLUSTERING_REQUIRED_APIS_BY_VARIANT: dict[str, tuple[str, ...]] = {
+    # Scanned against STRIPPED code → must appear as a real call/import. ``PCA(`` and
+    # ``davies_bouldin_score`` are emitted but NOT required (execution-tolerant: a guarded-out
+    # figure/metric must not manufacture a FALTANTE).
+    CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY: (
+        "KMeans(",
+        "StandardScaler",
+        "silhouette_score",
+    ),
+}
+
+_CLUSTERING_PROHIBITED_PATTERNS_BY_VARIANT: dict[str, tuple[str, ...]] = {
+    # Call-site tokens (mirrors the ``train_test_split(`` convention). DBSCAN / NearestNeighbors
+    # are the only DBSCAN-unique APIs; ``eps`` / ``min_samples`` are intentionally NOT prohibited
+    # (false-positive risk on legit identifiers). The family-level prohibited set stays unchanged
+    # → ``mixed_legacy`` (DBSCAN replay) is byte-identical.
+    CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY: (
+        "DBSCAN(",
+        "NearestNeighbors(",
+    ),
+}
+
 # Back-compat alias: external callers and Issue #233 unit tests may still
 # reference the legacy combined map. Keep it as a derived view so future code
 # can migrate to the explicit pair without an import break.
@@ -7660,11 +7729,21 @@ def _validate_notebook_family_consistency(
             notebook_variant,
             (),
         )
+    elif family == "clustering" and notebook_variant:
+        prohibited = prohibited + _CLUSTERING_PROHIBITED_PATTERNS_BY_VARIANT.get(
+            notebook_variant,
+            (),
+        )
     if prohibited:
         violations.extend(p for p in prohibited if p in scannable)
 
     if family == "clasificacion" and notebook_variant:
         sentinels = _CLASSIFICATION_REQUIRED_SENTINELS_BY_VARIANT.get(
+            notebook_variant,
+            _FAMILY_REQUIRED_SENTINELS.get(family, ()),
+        )
+    elif family == "clustering" and notebook_variant:
+        sentinels = _CLUSTERING_REQUIRED_SENTINELS_BY_VARIANT.get(
             notebook_variant,
             _FAMILY_REQUIRED_SENTINELS.get(family, ()),
         )
@@ -7674,6 +7753,11 @@ def _validate_notebook_family_consistency(
 
     if family == "clasificacion" and notebook_variant:
         apis = _CLASSIFICATION_REQUIRED_APIS_BY_VARIANT.get(
+            notebook_variant,
+            _FAMILY_REQUIRED_APIS.get(family, ()),
+        )
+    elif family == "clustering" and notebook_variant:
+        apis = _CLUSTERING_REQUIRED_APIS_BY_VARIANT.get(
             notebook_variant,
             _FAMILY_REQUIRED_APIS.get(family, ()),
         )
@@ -7747,7 +7831,9 @@ class _M3NotebookGenerationContext:
     llm: Any
     escalation_llm: Any
     family: str
-    notebook_variant: ClassificationNotebookVariant | None
+    # Issue #454 — widened from ClassificationNotebookVariant|None: holds classification OR
+    # clustering variant strings (both are str Literals). Downstream consumers already take str|None.
+    notebook_variant: str | None
     base_template: str
     prompt: str
     algoritmos_raw: list[str]
@@ -7810,14 +7896,33 @@ def _prepare_m3_notebook_generation_context(
         )
 
     algorithm_mode = _extract_state_algorithm_mode(state)
-    notebook_variant: ClassificationNotebookVariant | None = None
+    # Issue #454 — ``notebook_variant`` is widened to ``str | None`` because clustering variants are
+    # a different ``Literal`` than classification's. ``toc_cell`` is computed INSIDE the clasificacion
+    # branch (where the local is the classification ``Literal``) so ``TOC_MARKDOWN_CELL_BY_VARIANT.get``
+    # — keyed by ``ClassificationNotebookVariant`` — type-checks; clustering has no TOC (stays "").
+    notebook_variant: str | None = None
+    toc_cell = ""
     prompt_template = PROMPT_BY_FAMILY[family]
     if family == "clasificacion":
-        notebook_variant, variant_warning = _resolve_classification_notebook_variant(
+        cls_variant, variant_warning = _resolve_classification_notebook_variant(
             algorithm_mode=algorithm_mode,
             algoritmos=algoritmos_raw,
         )
-        prompt_template = CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT[notebook_variant]
+        notebook_variant = cls_variant
+        prompt_template = CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT[cls_variant]
+        toc_cell = TOC_MARKDOWN_CELL_BY_VARIANT.get(cls_variant, "")
+        if variant_warning:
+            legacy_warning = f"{legacy_warning}\n{variant_warning}" if legacy_warning else variant_warning
+    elif family == "clustering" and settings.mlds_clustering_kmeans_notebook:
+        # Issue #454 — K-Means-only specialised notebook. ``mixed_legacy`` (DBSCAN/replay) maps to
+        # the SAME mixed prompt object + family-level validation → byte-identical. Kill-switch OFF →
+        # this branch is skipped, ``notebook_variant`` stays None, prompt stays the mixed prompt
+        # (pre-#454), validation falls to the family-level path.
+        clu_variant, variant_warning = _resolve_clustering_notebook_variant(
+            algoritmos=algoritmos_raw,
+        )
+        notebook_variant = clu_variant
+        prompt_template = CLUSTERING_NOTEBOOK_PROMPT_BY_VARIANT[clu_variant]
         if variant_warning:
             legacy_warning = f"{legacy_warning}\n{variant_warning}" if legacy_warning else variant_warning
 
@@ -7865,11 +7970,8 @@ def _prepare_m3_notebook_generation_context(
         data_gap_warnings_block=gaps_block,
         contract_target_name=contract_target_name,
     )
-    # Inject static TOC cell for classification variants — zero LLM overhead.
-    # For non-classification families notebook_variant is None, so we use "".
-    toc_cell = (
-        "" if notebook_variant is None else TOC_MARKDOWN_CELL_BY_VARIANT.get(notebook_variant, "")
-    )
+    # Inject the static TOC cell (classification variants only; computed in the dispatch above).
+    # Non-classification families have no TOC, so toc_cell stays "".
     base_template = base_template.replace("{toc_cell}", toc_cell)
     return _M3NotebookGenerationContext(
         llm=llm,
@@ -7895,7 +7997,10 @@ def _build_m3_notebook_validation_correction(
         if not v.startswith("FALTANTE: ") and not v.startswith("INSEGURO: ")
     ]
     corrective_blocks: list[str] = ["\n\n# CORRECCIÓN OBLIGATORIA"]
-    if notebook_variant:
+    # Issue #454 — skip the variant line for ``mixed_legacy`` so a DBSCAN/replay clustering reprompt
+    # stays byte-identical to pre-#454 (where clustering had notebook_variant=None). kmeans_only and
+    # the classification variants keep it.
+    if notebook_variant and notebook_variant != CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY:
         corrective_blocks.append(
             f"# Variante de notebook requerida: {notebook_variant}. "
             "No agregues secciones, métricas ni imports de modelos fuera de esa variante."
@@ -7942,17 +8047,21 @@ def _validate_m3_notebook_algo_section(
     algo_section: str,
     notebook_variant: str | None,
 ) -> list[str]:
-    """Family-consistency + (clasificacion-only) safety violations as one flat list.
+    """Family-consistency + safety violations as one flat list.
 
-    Safety scrub is scoped to clasificacion — the ONLY family the executor runs and
-    scrubs (m3_notebook_executor gate), the only family the bug occurred in, and the
-    only one with a required-API contract. The other 3 families' notebooks are never
-    executed server-side, so applying the denylist there would be new policy with
-    false-positive risk (e.g. dir()/getattr() in pedagogical code), not a bug fix.
-    Keep blast radius == executor scope.
+    The generation-time safety scrub runs for the families whose notebook the executor actually
+    runs + scrubs (the m3_notebook_executor gate): clasificacion (#239) and, since #453, the
+    clustering K-Means path (#454). Routing a stray ``locals()``/``globals()`` through the
+    generation reprompt (Pro escalation) is cheaper and more recoverable than the execution-time
+    degrade. It is FP-safe: legit K-Means code (KMeans/StandardScaler/PCA/silhouette/groupby) calls
+    no denied builtin, and the scrub inspects executable code only (markdown/comments are stripped).
+    regresion/serie_temporal and the clustering ``mixed_legacy`` replay path are NOT executed
+    server-side, so the denylist is not applied there (avoids new-policy FP risk).
     """
     violations = _validate_notebook_family_consistency(family, algo_section, notebook_variant)
-    if family == "clasificacion":
+    if family == "clasificacion" or (
+        family == "clustering" and notebook_variant == CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY
+    ):
         violations += _detect_unsafe_constructs(algo_section)
     return violations
 
