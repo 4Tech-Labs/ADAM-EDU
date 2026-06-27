@@ -80,7 +80,8 @@ def test_required_sentinels_are_core_only_for_classification() -> None:
     assert len(cls) == 8, f"expected 8 core sentinels, got {len(cls)}"
     for sentinel in _REMOVED_SENTINELS:
         assert sentinel not in cls
-    assert set(_FAMILY_REQUIRED_SENTINELS) == {"clasificacion"}
+    # Issue #453 added a clustering metrics-marker sentinel; classification core is unchanged.
+    assert set(_FAMILY_REQUIRED_SENTINELS) == {"clasificacion", "clustering"}
 
 
 def test_required_apis_are_core_only_for_classification() -> None:
@@ -89,7 +90,8 @@ def test_required_apis_are_core_only_for_classification() -> None:
     assert len(cls) == 8, f"expected 8 core APIs, got {len(cls)}"
     for token in (*_REMOVED_APIS, "roc_curve(", "precision_recall_curve("):
         assert token not in cls
-    assert set(_FAMILY_REQUIRED_APIS) == {"clasificacion"}
+    # Issue #453 added clustering APIs (StandardScaler/silhouette_score); classification is unchanged.
+    assert set(_FAMILY_REQUIRED_APIS) == {"clasificacion", "clustering"}
 
 
 def test_validator_does_not_demand_removed_deep_dive_tokens() -> None:
@@ -166,13 +168,26 @@ def test_prohibited_patterns_unchanged_for_classification() -> None:
 
 
 def test_other_families_unaffected_by_classification_core() -> None:
-    """Las 3 familias no-clasificacion no reciben FALTANTE por el contrato de
-    clasificación, ni antes ni después del recorte."""
-    for family in ("regresion", "clustering", "serie_temporal"):
+    """Las familias no-clasificacion no reciben FALTANTE por el contrato de CLASIFICACIÓN.
+
+    regresion/serie_temporal no exigen ningún token. clustering (Issue #453) exige los suyos
+    (marcador de métricas + StandardScaler/silhouette_score) pero NINGUNO del núcleo de
+    clasificación — verificado abajo.
+    """
+    for family in ("regresion", "serie_temporal"):
         assert _validate_notebook_family_consistency(family, "") == []
         violations = _validate_notebook_family_consistency(family, "x = 1\n")
         for token in (*_CORE_SENTINELS, *_REMOVED_SENTINELS, *_REMOVED_APIS):
             assert f"FALTANTE: {token}" not in violations
+    # clustering tiene requisitos propios (#453) pero NO los de clasificación. El sentinel
+    # `metrics_summary_json` es COMPARTIDO (executor/parser de ambas familias), así que se excluye
+    # de esta verificación (clustering sí lo exige, legítimamente).
+    clustering_violations = _validate_notebook_family_consistency("clustering", "x = 1\n")
+    _clf_specific = (set(_CORE_SENTINELS) | set(_REMOVED_SENTINELS) | set(_REMOVED_APIS)) - {
+        "# === SECTION:metrics_summary_json ==="
+    }
+    for token in _clf_specific:
+        assert f"FALTANTE: {token}" not in clustering_violations
 
 
 def test_reprompt_split_still_separates_prohibited_and_faltante() -> None:

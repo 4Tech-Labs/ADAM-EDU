@@ -112,10 +112,13 @@ CLEAN_CLUSTERING_CODE = """
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
+import json
 
 X_scaled = StandardScaler().fit_transform(X)
 labels = KMeans(n_clusters=3, random_state=42).fit_predict(X_scaled)
 score = silhouette_score(X_scaled, labels)
+# === SECTION:metrics_summary_json ===
+print("ADAM_M3_METRICS_SUMMARY_JSON=" + json.dumps({"silhouette": score, "n_clusters": 3}))
 """
 
 CLEAN_REGRESSION_CODE = """
@@ -272,9 +275,12 @@ def test_validator_no_false_positive_on_pedagogical_comments_clustering() -> Non
         "from sklearn.cluster import KMeans\n"
         "from sklearn.preprocessing import StandardScaler\n"
         "from sklearn.metrics import silhouette_score\n"
+        "import json\n"
         "X_scaled = StandardScaler().fit_transform(X)\n"
         "labels = KMeans(n_clusters=3, random_state=42).fit_predict(X_scaled)\n"
         "score = silhouette_score(X_scaled, labels)\n"
+        "# === SECTION:metrics_summary_json ===\n"
+        "print('ADAM_M3_METRICS_SUMMARY_JSON=' + json.dumps({'silhouette': score, 'n_clusters': 3}))\n"
     )
     assert _validate_notebook_family_consistency("clustering", nb) == []
 

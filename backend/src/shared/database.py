@@ -83,6 +83,15 @@ class Settings(BaseSettings):
     # redeploy). clasificación / regresión / serie_temporal / business are unaffected either way
     # (the gate is profile=="ml_ds" AND family=="clustering").
     mlds_clustering_structure: bool = True
+    # Execute + quality-gate the ml_ds + clustering M3 notebook (Issue #453, extends #239). When
+    # true (default), the K-Means notebook is run in the executor subprocess (same nbclient/AST-
+    # scrub/timeout path as classification), its real silhouette/n_clusters metrics are parsed into
+    # `m3_metrics_summary`, and a NON-blocking silhouette-floor quality gate degrades cleanly (a low
+    # silhouette flags `m3NotebookDegraded`, never fails the job; a missing marker / degenerate
+    # clustering reprompts once then degrades). Set MLDS_CLUSTERING_EXECUTOR=false to generate the
+    # clustering notebook but NOT execute it (prior behaviour, byte-identical; instant env-only
+    # revert, no redeploy). classification execution (#239) is unaffected either way.
+    mlds_clustering_executor: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign

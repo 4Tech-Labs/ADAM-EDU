@@ -360,7 +360,7 @@ def scrub_notebook_for_safe_execution(notebook_code: str) -> Any:
 def _write_dataset_csv(dataset_rows: Sequence[dict[str, Any]], destination: Path) -> None:
     if not dataset_rows:
         raise M3NotebookExecutionError(
-            "doc7_dataset is required for classification notebook execution.",
+            "doc7_dataset is required for M3 notebook execution.",
             kind="missing_dataset",
         )
     frame = pd.DataFrame(list(dataset_rows))
@@ -479,6 +479,57 @@ def build_m3_quality_warning(
     return None
 
 
+# Issue #453 — silhouette floor below which a clustering notebook is flagged low-quality. NON-
+# blocking (mirrors the AUC-out-of-range rule): it degrades the notebook (m3NotebookDegraded), it
+# does NOT fail the job. Lenient on purpose — it separates "real structure" (≈0.5 for the #452
+# blobbed data) from "noise" (≈0.12 unimodal) without rejecting a genuinely weaker-but-valid run.
+_CLUSTERING_SILHOUETTE_FLOOR = 0.25
+
+
+def _finite_metric(metrics_summary: dict[str, Any] | None, key: str) -> float | None:
+    if not metrics_summary:
+        return None
+    value = metrics_summary.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) else None
+
+
+def build_clustering_quality_warning(
+    metrics_summary: dict[str, Any] | None,
+    marker_warning: str | None = None,
+) -> str | None:
+    """Return the quality warning for executed ml_ds + clustering notebooks (Issue #453).
+
+    Clustering is genuinely different from classification: no train/test, no AUC, no cost matrix.
+    The gate reads the silhouette + cluster count the executed ``metrics_summary_json`` cell emits:
+
+    * ``marker_warning`` (missing/invalid marker) → propagated (BLOCKING via
+      ``is_m3_quality_warning_blocking``).
+    * an intentional modeling skip (e.g. ``modeling_status="skipped_no_features"``) → ``None``
+      (no model formed on purpose; mirrors the classification ``auc_missing`` skip rule).
+    * no parseable silhouette → ``m3_quality_silhouette_missing`` (BLOCKING → reprompt-once).
+    * fewer than 2 clusters formed → ``m3_quality_clusters_degenerate`` (BLOCKING).
+    * silhouette below the floor → ``m3_quality_silhouette_low`` (NON-blocking → degrade, like AUC
+      out-of-range; ships the notebook flagged rather than failing the job).
+    """
+    if marker_warning:
+        return marker_warning
+    if _metrics_declares_intentional_modeling_skip(metrics_summary):
+        return None
+    silhouette = _finite_metric(metrics_summary, "silhouette")
+    if silhouette is None:
+        return "m3_quality_silhouette_missing: notebook executed but no parseable silhouette was emitted"
+    # `_clean_json_value` coerces ints to float, so accept any finite numeric ≥ 2.
+    n_clusters = _finite_metric(metrics_summary, "n_clusters")
+    if n_clusters is None or n_clusters < 2:
+        return "m3_quality_clusters_degenerate: fewer than 2 non-trivial clusters formed"
+    if silhouette < _CLUSTERING_SILHOUETTE_FLOOR:
+        return f"m3_quality_silhouette_low: silhouette {silhouette:.4f} below floor {_CLUSTERING_SILHOUETTE_FLOOR}"
+    return None
+
+
 def _metrics_declares_intentional_modeling_skip(metrics_summary: dict[str, Any] | None) -> bool:
     if not metrics_summary:
         return False
@@ -547,6 +598,13 @@ def is_m3_quality_warning_blocking(
         return True
     if warning_kind == "m3_quality_auc_missing":
         return not _metrics_declares_intentional_modeling_skip(metrics_summary)
+    # Issue #453 — clustering: a missing silhouette (unless an intentional skip) and a degenerate
+    # (<2) clustering are BLOCKING (reprompt-once-then-degrade). A low-but-present silhouette
+    # (m3_quality_silhouette_low) falls through to the non-blocking default → degrade, not fail.
+    if warning_kind == "m3_quality_silhouette_missing":
+        return not _metrics_declares_intentional_modeling_skip(metrics_summary)
+    if warning_kind == "m3_quality_clusters_degenerate":
+        return True
     return False
 
 
@@ -566,12 +624,18 @@ def execute_m3_notebook(
     *,
     notebook_code: str,
     dataset_rows: Sequence[dict[str, Any]],
+    family: str = "clasificacion",
     timeout_seconds: int = RUNNER_TIMEOUT_SECONDS,
     internal_timeout_seconds: int = RUNNER_INTERNAL_TIMEOUT_SECONDS,
     python_executable: str | None = None,
     subprocess_runner: SubprocessRunner = subprocess.run,
 ) -> M3NotebookExecutionResult:
-    """Execute one generated notebook in a clean subprocess and parse metrics."""
+    """Execute one generated notebook in a clean subprocess and parse metrics.
+
+    ``family`` selects the quality gate over the parsed metrics: "clustering" uses the
+    silhouette-floor gate (Issue #453); anything else uses the classification AUC gate (#239).
+    The subprocess/AST-scrub/marker-parse path is family-agnostic.
+    """
 
     import nbformat
 
@@ -641,7 +705,10 @@ def execute_m3_notebook(
         metrics_summary, marker_warning = extract_metrics_summary_from_text(
             "\n".join([output_text, completed.stdout or ""])
         )
-        quality_warning = build_m3_quality_warning(metrics_summary, marker_warning)
+        if family == "clustering":
+            quality_warning = build_clustering_quality_warning(metrics_summary, marker_warning)
+        else:
+            quality_warning = build_m3_quality_warning(metrics_summary, marker_warning)
         return M3NotebookExecutionResult(
             metrics_summary=metrics_summary,
             quality_warning=quality_warning,
