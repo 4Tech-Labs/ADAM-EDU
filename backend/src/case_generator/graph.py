@@ -142,6 +142,8 @@ from case_generator.prompts import (
     M3_CONTENT_PROMPT_BY_FAMILY,
     M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
     M3_CONTENT_PROMPT_CLUSTERING,
+    M4_CHART_PROMPT_CLUSTERING,
+    M4_CONTENT_PROMPT_CLUSTERING,
     M3_CLASSIFICATION_QUESTIONS_BY_VARIANT,
     PROMPT_BY_FAMILY,
     M4_PROMPT_BY_FAMILY,
@@ -195,6 +197,7 @@ from case_generator.clustering_decision import (
     build_clustering_m1_questions_hint,
     build_clustering_m3_questions_hint,
     build_clustering_verdict_hint,
+    detect_unanchored_silhouette,
     recommended_option_of,
     validate_m4_verdict_option,
     validate_verdict_option,
@@ -6275,6 +6278,17 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         )
         if _lens_on:
             prompt = prompt + build_impact_lens_hint(_resolve_impact_lens(state))
+        # Issue #469 — for ml_ds+clustering, append the decision hint (recommended option + the REAL
+        # silhouette) so the M4 questions don't ask about a fabricated payback/uplift or a fabricated
+        # silhouette threshold and stay coherent with §4.5's verdict. Prompt-only (the questions are
+        # structured output → no reprompt validator). Brace-free → safe before .format. No-op for every
+        # other cohort and when clustering_decision is unresolved (#467 switch off).
+        if settings.mlds_clustering_m4_value_frame and _is_ml_ds_clustering(state):
+            _q_cd = state.get("clustering_decision")
+            if _q_cd:
+                _q_ms = state.get("m3_metrics_summary")
+                _q_real_sil = _q_ms.get("silhouette") if isinstance(_q_ms, dict) else None
+                prompt = prompt + build_clustering_verdict_hint(_q_cd, real_silhouette=_q_real_sil)
         # Render once; the coherence reprompt below reuses this verbatim so it re-grounds on
         # the SAME text the model first saw (mirrors the M1/M2 single-render pattern).
         rendered_prompt = prompt.format(**context)
@@ -6362,56 +6376,101 @@ def _apply_clustering_m4_verdict_coherence(
     state: ADAMState,
     metrics_block: str,
 ) -> str:
-    """Reprompt-once-then-DEGRADE so M4's §4.5 deployment recommendation names the case's
-    ``recommended_option`` (Issue #467 — the cross-module verdict GUARANTEE).
+    """Reprompt-once-then-DEGRADE so M4's §4.5 verdict AND any cited silhouette are coherent for an
+    ml_ds+clustering case (Issues #467 + #469 — the cross-module GUARANTEE behind the M4 hints).
 
-    Gated to ml_ds+clustering + the ``MLDS_CLUSTERING_DECISION_COHERENCE`` kill-switch + a resolved
-    ``clustering_decision``; a byte-identical no-op otherwise. ``prompt`` is the ALREADY-formatted M4
-    prompt; the reprompt is built by CONCATENATION (never a second ``.format`` — chart/JSON braces).
-    Best-effort: ANY throw degrades to the pass-1 ``m4`` (a coherence pass must never fail the job).
+    Two independent checks, each on its own kill-switch, sharing ONE reprompt (so the two corrections
+    never clobber each other — a separate sibling guard would each regenerate from the base prompt and
+    overwrite the other's fix):
+      * **A — verdict option** (``MLDS_CLUSTERING_DECISION_COHERENCE``, #467): §4.5 must recommend the
+        case's shared ``recommended_option``. Active only with a resolved ``clustering_decision``.
+      * **B — silhouette grounding** (``MLDS_CLUSTERING_M4_VALUE_FRAME``, #469): any cited silhouette
+        must match the REAL executed ``m3_metrics_summary["silhouette"]`` (not a fabricated "> 0.55").
+        Active only when that metric is present.
+
+    Gated to ml_ds+clustering; a byte-identical no-op otherwise (and for the #467 fixtures, which carry
+    no ``m3_metrics_summary`` → check B is inert → reprompt = verdict-only). ``prompt`` is the
+    ALREADY-formatted M4 prompt; the reprompt is built by CONCATENATION (never a second ``.format`` —
+    chart/JSON braces). Best-effort: ANY throw degrades to the pass-1 ``m4`` (never fails the job).
     """
     log_extra = {"node": "m4_content_generator", "case_id": state.get("case_id")}
     try:
-        if not settings.mlds_clustering_decision_coherence or not _is_ml_ds_clustering(state):
+        if not _is_ml_ds_clustering(state):
             return m4
-        decision = state.get("clustering_decision")
-        if not isinstance(decision, dict):
-            return m4
-        recommended = recommended_option_of(decision)
-        if validate_m4_verdict_option(m4, recommended) == []:
-            return m4
-        logger.info(
-            "[m4_content] reprompt de coherencia de veredicto clustering disparado",
-            extra={**log_extra, "recommended_option": recommended},
+        # --- Check A: verdict option (#467) ---
+        recommended: str | None = None
+        verdict_active = False
+        if settings.mlds_clustering_decision_coherence:
+            decision = state.get("clustering_decision")
+            if isinstance(decision, dict):
+                recommended = recommended_option_of(decision)
+                verdict_active = True
+        verdict_bad = (
+            verdict_active
+            and recommended is not None
+            and validate_m4_verdict_option(m4, recommended) != []
         )
-        reprompt = prompt + (
-            "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE DECISIÓN (clustering)\n"
-            "La recomendación de despliegue (§4.5) DEBE recomendar EXACTAMENTE la Opción "
-            + recommended + " como veredicto final. Reescribe el módulo recomendando la Opción "
-            + recommended + "; no recomiendes ninguna otra letra.\n"
+        # --- Check B: silhouette grounding (#469) ---
+        real_sil = None
+        sil_active = False
+        if settings.mlds_clustering_m4_value_frame:
+            _ms = state.get("m3_metrics_summary")
+            real_sil = _ms.get("silhouette") if isinstance(_ms, dict) else None
+            sil_active = real_sil is not None
+        sil_violations = detect_unanchored_silhouette(m4, real_sil) if sil_active else []
+        if not verdict_bad and not sil_violations:
+            return m4
+        # --- Build ONE combined reprompt with only the applicable corrections ---
+        corrections = ["\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA (clustering)\n"]
+        if verdict_bad and recommended is not None:
+            corrections.append(
+                "La recomendación de despliegue (§4.5) DEBE recomendar EXACTAMENTE la Opción "
+                + recommended + " como veredicto final; no recomiendes ninguna otra letra.\n"
+            )
+        if sil_violations and real_sil is not None:
+            corrections.append(
+                "Cita el silhouette REAL ejecutado (" + format(float(real_sil), ".3f")
+                + ") y SOLO ese valor; elimina o corrige cualquier otro valor de silhouette "
+                "(por ejemplo un umbral inventado como '> 0.55').\n"
+            )
+        logger.info(
+            "[m4_content] reprompt de coherencia clustering disparado",
+            extra={
+                **log_extra,
+                "verdict_bad": verdict_bad,
+                "silhouette_violations": sil_violations,
+            },
         )
         corrected = _invoke_narrative_with_grounding(
             node_name="m4_content_generator",
             llm=llm,
-            prompt=reprompt,
+            prompt=prompt + "".join(corrections),
             metrics_block=metrics_block,
             grounding_enabled=False,
             variant=None,
         )
-        if validate_m4_verdict_option(corrected, recommended) == []:
+        # Re-validate every ACTIVE check on the regenerated text (the reprompt could break the other
+        # check), accept only if all active checks now pass; otherwise degrade to the pass-1 m4.
+        still_verdict_bad = (
+            verdict_active
+            and recommended is not None
+            and validate_m4_verdict_option(corrected, recommended) != []
+        )
+        still_sil_bad = bool(detect_unanchored_silhouette(corrected, real_sil)) if sil_active else False
+        if not still_verdict_bad and not still_sil_bad:
             logger.info(
-                "[m4_content] coherencia de veredicto clustering corregida",
+                "[m4_content] coherencia clustering corregida",
                 extra={**log_extra, "degraded": False},
             )
             return corrected
         logger.warning(
-            "[m4_content] coherencia de veredicto clustering degradada tras reprompt",
+            "[m4_content] coherencia clustering degradada tras reprompt",
             extra={**log_extra, "degraded": True},
         )
         return m4
     except Exception as exc:  # best-effort — a coherence pass must never fail the job
         logger.warning(
-            "[m4_content] validador de veredicto clustering falló (best-effort): %s",
+            "[m4_content] validador de coherencia clustering falló (best-effort): %s",
             exc,
             extra=log_extra,
         )
@@ -7039,6 +7098,33 @@ def _effective_m3_content_prompts(primary_family: str | None) -> dict[str, str]:
     if primary_family == "clustering" and settings.mlds_clustering_m3_content:
         return {**M3_CONTENT_PROMPT_BY_FAMILY, "clustering": M3_CONTENT_PROMPT_CLUSTERING}
     return M3_CONTENT_PROMPT_BY_FAMILY
+
+
+def _effective_m4_clustering_prompts(
+    by_family: dict[str, str],
+    profile: str | None,
+    primary_family: str | None,
+    *,
+    lens_on: bool,
+    clustering_prompt: str,
+) -> dict[str, str]:
+    """Override the ``"clustering"`` key with the dedicated ml_ds+clustering M4 prompt (Issue #469).
+
+    Mirrors ``_effective_m3_content_prompts`` (#457): returns the SAME ``by_family`` object for every
+    cohort EXCEPT ml_ds+clustering on the NEUTRAL path (``lens_on``) under the
+    ``MLDS_CLUSTERING_M4_VALUE_FRAME`` switch, where it returns a shallow copy with ``"clustering"``
+    overridden to the dedicated value-by-segment prompt. Off / non-clustering / business+clustering
+    (``profile != "ml_ds"``) / lens-off → identity object → byte-identical. Pure (no LLM/state) so the
+    gate is unit-testable. Used for BOTH the M4 content and chart dicts (caller passes the prompt).
+    """
+    if (
+        lens_on
+        and profile == "ml_ds"
+        and primary_family == "clustering"
+        and settings.mlds_clustering_m4_value_frame
+    ):
+        return {**by_family, "clustering": clustering_prompt}
+    return by_family
 
 
 def _resolve_impact_lens(state: ADAMState) -> str:
@@ -9077,6 +9163,16 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             }
         else:
             _effective_prompt_by_family = _by_family
+        # Issue #469 — ml_ds+clustering selects the dedicated value-by-segment M4 narrative on the
+        # NEUTRAL path (kill-switch MLDS_CLUSTERING_M4_VALUE_FRAME); identity object otherwise →
+        # byte-identical for every other cohort. Mirrors the #457 M3-content clustering override.
+        _effective_prompt_by_family = _effective_m4_clustering_prompts(
+            _effective_prompt_by_family,
+            _profile,
+            _primary_family,
+            lens_on=_lens_on,
+            clustering_prompt=M4_CONTENT_PROMPT_CLUSTERING,
+        )
         prompt_template, metrics_block, grounding_enabled, grounding_update = (
             _select_narrative_prompt(
                 state,
@@ -9297,6 +9393,18 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
             default_chart_prompt = M4_CHART_GENERATOR_PROMPT
             business_chart_prompt = M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
 
+        # Issue #469 — ml_ds+clustering selects the dedicated value-by-segment M4 chart prompt on the
+        # NEUTRAL 2-chart path (kill-switch MLDS_CLUSTERING_M4_VALUE_FRAME); identity object otherwise
+        # → byte-identical for every other cohort (and for the legacy 3-chart revert, where _lens_on
+        # is already False). Replaces the financial Gráfico 1 (payback/break-even) for clustering.
+        _chart_profile, _chart_family = _resolve_generation_focus(state)
+        charts_by_family = _effective_m4_clustering_prompts(
+            charts_by_family,
+            _chart_profile,
+            _chart_family,
+            lens_on=_lens_on,
+            clustering_prompt=M4_CHART_PROMPT_CLUSTERING,
+        )
         prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
         # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
         # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.

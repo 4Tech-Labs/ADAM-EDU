@@ -173,6 +173,18 @@ class NodeEvalInputs:
     # from target_k (the pre-#467 hash-chosen k, or the kill-switch-off path) fails. gate-protects a
     # future data-layer regression that stops honoring target_k.
     clustering_decision_coherence_ok: bool = True
+    # ml_ds + clustering M4 first chart is NOT a payback / break-even chart (Issue #469): an exploratory
+    # segmentation has no cash-flow model, so a "Punto de Equilibrio: Mes N" chart is fabricated. The
+    # dedicated clustering M4 chart prompt replaces it with a value-by-segment chart. True (n/a) for
+    # non-clustering jobs / empty charts. Computed via ``check_m4_clustering_no_payback_chart``. RED
+    # control: kill-switch off → generic chart prompt → payback chart present → fails.
+    m4_clustering_no_payback_ok: bool = True
+    # ml_ds + clustering M4 narrative cites NO unanchored silhouette (Issue #469): any cited silhouette
+    # must match the REAL executed ``m3_metrics_summary["silhouette"]`` (not a fabricated "> 0.55"). True
+    # (n/a) when the real silhouette is absent / non-clustering. Computed via
+    # ``check_m4_clustering_silhouette_grounded``. RED control: a narrative citing a divergent silhouette
+    # fails. gate-protects a future m4_content_generator Pro->Flash downgrade that starts fabricating.
+    m4_clustering_silhouette_ok: bool = True
     # ml_ds + clustering dataset carries NO supervised target column (Issue #466, Frente 1): clustering
     # is unsupervised, so a leaked `dummy_target` (LLM-hallucinated or contract-injected) must be
     # stripped before data generation. True (n/a) for non-clustering jobs / empty rows. Computed via
@@ -261,6 +273,16 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "clustering decision coherence failure: injected blob count != coordinated target_k "
             "(data k would contradict the narrative's framed k)"
+        )
+    if not r.m4_clustering_no_payback_ok:
+        reasons.append(
+            "M4 clustering chart coherence failure: payback / break-even chart emitted for an "
+            "exploratory segmentation (no cash-flow model derives it)"
+        )
+    if not r.m4_clustering_silhouette_ok:
+        reasons.append(
+            "M4 clustering narrative coherence failure: cited silhouette diverges from the real "
+            "executed value (fabricated threshold)"
         )
     if not r.clustering_no_target_ok:
         reasons.append(
@@ -399,6 +421,40 @@ def check_m4_charts_no_sensitivity(charts: list[dict]) -> bool:
     from case_generator.m4_grounding import is_sensitivity_chart
 
     return not any(is_sensitivity_chart(c) for c in charts or [])
+
+
+def check_m4_clustering_no_payback_chart(charts: list[dict], *, is_clustering: bool) -> bool:
+    """Pure oracle (Issue #469): for an ml_ds + clustering case, does the M4 chart set OMIT a
+    payback / break-even chart?
+
+    An exploratory segmentation has no cash-flow model, so a "Punto de Equilibrio: Mes N" chart is a
+    fabrication; the dedicated clustering M4 chart prompt replaces it with a value-by-segment chart.
+    Reuses the production detector ``m4_grounding.is_payback_chart`` (single source of truth). True
+    (n/a) for non-clustering jobs or an empty/absent chart set — only a CLUSTERING case must be free of
+    the payback chart. RED control: with the kill-switch off, clustering falls back to the generic
+    chart prompt → Gráfico 1 is the payback chart → fails.
+    """
+    if not is_clustering:
+        return True
+    from case_generator.m4_grounding import is_payback_chart
+
+    return not any(is_payback_chart(c) for c in charts or [])
+
+
+def check_m4_clustering_silhouette_grounded(
+    narrative: str | None, real_silhouette: float | None
+) -> bool:
+    """Pure oracle (Issue #469): does the ml_ds + clustering M4 narrative cite ONLY the REAL silhouette?
+
+    Reuses the production detector ``clustering_decision.detect_unanchored_silhouette`` (single source
+    of truth): a cited silhouette value that diverges from the real executed
+    ``m3_metrics_summary["silhouette"]`` beyond tolerance (e.g. a fabricated "> 0.55" when the real
+    value is 0.498) fails. True (n/a) when ``real_silhouette`` is absent (no anchor) or the narrative is
+    empty. gate-protects a future m4_content_generator Pro->Flash downgrade that starts fabricating.
+    """
+    from case_generator.clustering_decision import detect_unanchored_silhouette
+
+    return not detect_unanchored_silhouette(narrative, real_silhouette)
 
 
 def check_m4_charts_no_fabrication(charts: list[dict]) -> bool:

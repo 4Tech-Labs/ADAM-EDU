@@ -146,6 +146,16 @@ class Settings(BaseSettings):
     # hash, no prompt hints, no verdict guard; instant env-only revert, no redeploy). The gate is
     # profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
     mlds_clustering_decision_coherence: bool = True
+    # M4 value-frame for ml_ds + clustering (Issue #469). When true (default), an ml_ds + clustering
+    # case on the NEUTRAL Impact-Lens path selects a dedicated M4 content + chart prompt where the
+    # first chart is value-BY-SEGMENT (not a fabricated payback / break-even "Mes N"), §4.1/§4.2 are
+    # reframed for an exploratory segmentation (no AUC example, no invented "uplift"), the M4 questions
+    # get a coherence hint, and the M4 content guard ALSO anchors any cited silhouette to the REAL
+    # executed `m3_metrics_summary["silhouette"]` (reprompt-once-then-degrade). INDEPENDENT of
+    # MLDS_CLUSTERING_DECISION_COHERENCE. Set MLDS_CLUSTERING_M4_VALUE_FRAME=false to revert
+    # byte-identically (generic M4 prompts + no silhouette check; instant env-only revert, no redeploy).
+    # The gate is profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
+    mlds_clustering_m4_value_frame: bool = True
     # De-supervise the ml_ds + clustering DATA + notebook prose (Issue #466). When true (default),
     # (a) `_enforce_mlds_clustering_no_target` deterministically strips any leaked supervised target
     # column (e.g. an LLM-hallucinated `dummy_target`, or a contract `target_column` injected by the
