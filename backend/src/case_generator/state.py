@@ -87,6 +87,12 @@ class ADAMState(CanonicalInputState):
     # Issue #437 Fase 2 — the architect's value_model {lens, primary_metric_name, kpi_rows};
     # prompt-side only (NOT canonical / student-facing). None when the architect lens block is off.
     value_model: NotRequired[dict]
+    # Issue #467 — the ml_ds+clustering coherence source of truth {target_k, recommended_option,
+    # silhouette_floor}. Resolved ONCE at intake (state_input) from a stable seed, re-injected every
+    # attempt (resume-stable, the impact_lens lifecycle) and NEVER written by a node (no clobber, no
+    # fan-out merge hazard). Absent for every non ml_ds+clustering cohort and when the
+    # MLDS_CLUSTERING_DECISION_COHERENCE kill-switch is off → byte-identical to pre-#467.
+    clustering_decision: NotRequired[dict]
     descripcion: str
     algoritmos: list[str]    # técnicas ML/analíticas seleccionadas
     algorithm_mode: NotRequired[str]  # "single" | "contrast" — selección docente Issue #230
