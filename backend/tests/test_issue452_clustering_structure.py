@@ -135,6 +135,19 @@ def test_helper_noop_when_disabled() -> None:
     assert out is rows
 
 
+def test_helper_noop_for_unresolved_ml_ds_family() -> None:
+    """STRICT gate guard: an ml_ds job with empty/unmappable algoritmos resolves
+    primary_family=None and the pipeline treats it as CLASSIFICATION — the blob enforcer must NOT
+    fire (it would otherwise blob the binary `categoria` target). Gate is == "clustering", not
+    `primary_family or "clustering"`."""
+    schema = _build_clustering_fallback_schema(max_rows=50)
+    rows = _generate_dataset_from_schema(schema, profile="ml_ds")
+    out = _enforce_mlds_clustering_structure(
+        rows, schema, profile="ml_ds", primary_family=None, enabled=True
+    )
+    assert out is rows  # same object → byte-identical (no blobs)
+
+
 def test_helper_noop_with_under_two_features() -> None:
     schema = {"columns": [{"name": "period", "type": "str"}, {"name": "x", "type": "float",
               "range_min": 0.0, "range_max": 1.0}], "n_rows": 50}

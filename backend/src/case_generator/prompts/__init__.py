@@ -2451,6 +2451,36 @@ try:
 except Exception as e:
     print(f"⚠️ Error fit clustering: {{e}}")
 
+## Celda 2b-bis — Resumen de métricas JSON (OBLIGATORIA — la consume el executor del Módulo 3)
+## Reproduce esta celda VERBATIM tras el fit (usa el `labels` y `X_scaled` ya calculados). NO inventes
+## cifras: el bloque DEBE derivarse de las variables reales. Emite SIEMPRE la línea del marcador.
+# %%
+# === SECTION:metrics_summary_json ===
+import json as _json
+try:
+    _labels_arr = np.asarray(labels)
+    _uniq = sorted(int(c) for c in set(_labels_arr.tolist()) if c != -1)
+    _n_clusters = len(_uniq)
+    if _n_clusters >= 2:
+        _sizes = [int((_labels_arr == c).sum()) for c in _uniq]
+        _metrics_summary = {{
+            "silhouette": float(silhouette_score(X_scaled, labels)),
+            "davies_bouldin": float(davies_bouldin_score(X_scaled, labels)),
+            "n_clusters": int(_n_clusters),
+            "cluster_sizes": _sizes,
+            "modeling_status": "clustering_completed",
+        }}
+    else:
+        # <2 clusters reales formados: degenerado. NO es un skip intencional → el gate del
+        # executor lo trata como bloqueante (reprompt-then-degrade), no como éxito silencioso.
+        _metrics_summary = {{"n_clusters": int(_n_clusters), "modeling_status": "execution_error",
+                             "execution_warning": "fewer than 2 clusters formed"}}
+except Exception as _e:
+    # Fallo de ejecución (variables del fit ausentes, silhouette NaN, etc.): NO es un skip
+    # intencional → bloqueante → el notebook degrada (m3NotebookDegraded), no shipea vacío.
+    _metrics_summary = {{"modeling_status": "execution_error", "execution_warning": str(_e)[:200]}}
+print("ADAM_M3_METRICS_SUMMARY_JSON=" + _json.dumps(_metrics_summary, ensure_ascii=False, allow_nan=False))
+
 ## Celda 2c — Scatter 2D PCA con colores por cluster (UN plot por celda)
 # %%
 try:

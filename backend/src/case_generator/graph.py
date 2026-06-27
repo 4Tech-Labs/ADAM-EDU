@@ -5418,16 +5418,19 @@ def _enforce_mlds_clustering_structure(
     rangos ``range_min``/``range_max`` declarados.
 
     Gate (fuera de él → la MISMA lista de entrada, byte-idéntica): ``enabled`` (kill-switch
-    ``MLDS_CLUSTERING_STRUCTURE``) AND ``profile == "ml_ds"`` AND
-    ``(primary_family or "clustering") == "clustering"``. business / clasificación / regresión /
-    serie_temporal nunca entran.
+    ``MLDS_CLUSTERING_STRUCTURE``) AND ``profile == "ml_ds"`` AND ``primary_family == "clustering"``
+    (ESTRICTO — NO ``primary_family or "clustering"``: un job ml_ds con algoritmos vacíos/no
+    mapeables resuelve ``primary_family=None`` y el resto del pipeline lo trata como CLASIFICACIÓN
+    [``_effective_family = primary_family or "clasificacion"``], así que coaccionar ``None →
+    clustering`` aquí blobearía el target binario ``categoria`` de ese cohorte). business /
+    clasificación / regresión / serie_temporal / ml_ds-sin-algoritmos nunca entran.
 
     La etiqueta latente del blob es SOLO de generación: no se persiste en ``doc7_dataset`` (no se
     filtra al fit de K-Means). Con ``return_labels=True`` se devuelve aparte ``(rows, labels)``
     para que el oráculo golden mida el ARI contra la estructura inyectada (no es teacher/student
     facing).
     """
-    if not enabled or profile != "ml_ds" or (primary_family or "clustering") != "clustering":
+    if not enabled or profile != "ml_ds" or primary_family != "clustering":
         return (rows, None) if return_labels else rows
     if not isinstance(rows, list) or not rows:
         return (rows, None) if return_labels else rows
@@ -7429,6 +7432,13 @@ _FAMILY_REQUIRED_SENTINELS: dict[str, tuple[str, ...]] = {
         # the same diff as the executor that parses the emitted marker.
         "# === SECTION:metrics_summary_json ===",
     ),
+    # Issue #453 — clustering: the executor parses ADAM_M3_METRICS_SUMMARY_JSON from this cell to
+    # populate m3_metrics_summary (silhouette/n_clusters). Minimal sentinel set (one section) so the
+    # generator's required-content validator rejects a clustering notebook that omits the metrics
+    # marker; the richer per-section structure (scaler/kmeans/profiles) is #454's K-Means-only scope.
+    "clustering": (
+        "# === SECTION:metrics_summary_json ===",
+    ),
 }
 
 _FAMILY_REQUIRED_APIS: dict[str, tuple[str, ...]] = {
@@ -7451,6 +7461,14 @@ _FAMILY_REQUIRED_APIS: dict[str, tuple[str, ...]] = {
         # render visual normalizado por fila. Debe aparecer como import/call en
         # código ejecutable, no solo en markdown.
         "ConfusionMatrixDisplay",
+    ),
+    # Issue #453 — clustering: require the family-universal clustering APIs in EXECUTABLE code
+    # (scanned against the jupytext-stripped text). StandardScaler + silhouette_score are common to
+    # K-Means and DBSCAN, so this does not over-constrain the still-mixed prompt; the K-Means-only
+    # `KMeans` requirement is added by #454 when the prompt is specialised.
+    "clustering": (
+        "StandardScaler",
+        "silhouette_score",
     ),
 }
 
@@ -8091,8 +8109,21 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
         )
 
 
+def _m3_executor_families() -> frozenset[str]:
+    """ml_ds families whose M3 notebook is executed + quality-gated (Issue #453).
+
+    Classification is always executed (#239). Clustering is added when the
+    ``MLDS_CLUSTERING_EXECUTOR`` kill-switch is on. regresion/serie_temporal stay un-executed
+    (no executor support) → byte-identical noop.
+    """
+    families = {"clasificacion"}
+    if settings.mlds_clustering_executor:
+        families.add("clustering")
+    return frozenset(families)
+
+
 def m3_notebook_executor(state: ADAMState, config: RunnableConfig) -> dict:
-    """Execute and validate the M3 classification notebook in a subprocess.
+    """Execute and validate the M3 notebook (classification or clustering) in a subprocess.
 
     Graceful degradation: a notebook that cannot be executed/validated (missing
     dataset, crash after correction, blocking quality gate) degrades to a placeholder
@@ -8108,7 +8139,7 @@ def m3_notebook_executor(state: ADAMState, config: RunnableConfig) -> dict:
         state,
         default_unresolved_ml_ds_to_classification=True,
     )
-    if profile != "ml_ds" or family != "clasificacion":
+    if profile != "ml_ds" or family not in _m3_executor_families():
         return {}
 
     case_id = state.get("case_id") or "unknown"
@@ -8145,8 +8176,8 @@ def _run_m3_notebook_execution(
             extra={"case_id": case_id, "family": family},
         )
         raise RuntimeError(
-            "m3_notebook_executor requiere doc7_dataset para ejecutar el notebook "
-            "de clasificación. Job marcado como fallido para evitar métricas inventadas."
+            "m3_notebook_executor requiere doc7_dataset para ejecutar el notebook M3. "
+            "Job marcado como fallido para evitar métricas inventadas."
         )
 
     notebook_code = str(state.get("m3_notebook_code") or "")
@@ -8173,13 +8204,19 @@ def _run_m3_notebook_execution(
             result = execute_m3_notebook(
                 notebook_code=notebook_code,
                 dataset_rows=cast(list[dict[str, Any]], dataset_rows),
+                family=family,
             )
             # #349 — cross-check the modeled target against the declared contract target.
             # The mismatch warning (blocking) takes precedence over the non-blocking
             # AUC-out-of-range warning; a missing/invalid marker leaves metrics None, so
             # build_target_identity_warning returns None and the marker warning surfaces
-            # unchanged. The AUC gate stays non-blocking.
-            identity_warning = build_target_identity_warning(result.metrics_summary, expected_target)
+            # unchanged. The AUC gate stays non-blocking. Issue #453 — clustering has NO target,
+            # so the identity cross-check is classification-only (the clustering gate is silhouette).
+            identity_warning = (
+                build_target_identity_warning(result.metrics_summary, expected_target)
+                if family == "clasificacion"
+                else None
+            )
             combined_warning = identity_warning or result.quality_warning
             if is_m3_quality_warning_blocking(combined_warning, result.metrics_summary):
                 raise M3NotebookExecutionError(
@@ -8236,10 +8273,10 @@ def _run_m3_notebook_execution(
                 node_name="m3_notebook_executor",
                 execution_correction=correction,
             )
-            if corrected_family != "clasificacion":
+            if corrected_family not in _m3_executor_families():
                 raise RuntimeError(
                     f"m3_notebook_executor recibió corrección para familia {corrected_family!r}; "
-                    "se esperaba 'clasificacion'."
+                    f"se esperaba una de {sorted(_m3_executor_families())}."
                 )
             code_was_corrected = True
 

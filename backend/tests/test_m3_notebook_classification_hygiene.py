@@ -217,9 +217,10 @@ def test_required_patterns_only_populated_for_classification() -> None:
     en el mapa (devolverán () por .get y mantendrán bit-identicidad pre-#236).
     PR #244 review: el mapa ahora se desglosa en sentinels + apis (compat
     alias mantenido para los tests legacy de Issue #233)."""
-    assert set(_FAMILY_REQUIRED_PATTERNS) == {"clasificacion"}
-    assert set(_FAMILY_REQUIRED_SENTINELS) == {"clasificacion"}
-    assert set(_FAMILY_REQUIRED_APIS) == {"clasificacion"}
+    # Issue #453 añadió clustering (executor + métricas reales); clasificación queda intacta.
+    assert set(_FAMILY_REQUIRED_PATTERNS) == {"clasificacion", "clustering"}
+    assert set(_FAMILY_REQUIRED_SENTINELS) == {"clasificacion", "clustering"}
+    assert set(_FAMILY_REQUIRED_APIS) == {"clasificacion", "clustering"}
     # El alias combinado debe ser superset de cada bucket por familia.
     combined = set(_FAMILY_REQUIRED_PATTERNS["clasificacion"])
     assert set(_FAMILY_REQUIRED_SENTINELS["clasificacion"]).issubset(combined)
@@ -290,14 +291,25 @@ def test_validator_rejects_required_apis_only_present_in_comments() -> None:
 
 
 def test_validator_does_not_enforce_classification_tokens_on_other_families() -> None:
-    """No-regresión crítica: regresión / clustering / serie_temporal NUNCA
-    reciben FALTANTE: ... aunque omitan los tokens de clasificación."""
+    """No-regresión crítica: regresión / serie_temporal NUNCA reciben FALTANTE: ...
+    aunque omitan los tokens de clasificación. clustering (Issue #453) SÍ exige los suyos
+    (marcador de métricas + StandardScaler/silhouette_score) pero NINGUNO de clasificación."""
     minimal_code = "from sklearn.linear_model import LinearRegression\n"
-    for family in ("regresion", "clustering", "serie_temporal"):
+    for family in ("regresion", "serie_temporal"):
         violations = _validate_notebook_family_consistency(family, minimal_code)
         assert all(not v.startswith("FALTANTE:") for v in violations), (
             f"familia {family!r} no debe recibir FALTANTE: ... — got {violations!r}"
         )
+    # clustering: sus FALTANTE son SOLO sus tokens propios, no los de clasificación.
+    clustering_faltantes = {
+        v for v in _validate_notebook_family_consistency("clustering", minimal_code)
+        if v.startswith("FALTANTE:")
+    }
+    assert clustering_faltantes <= {
+        "FALTANTE: # === SECTION:metrics_summary_json ===",
+        "FALTANTE: StandardScaler",
+        "FALTANTE: silhouette_score",
+    }, f"clustering recibió FALTANTE inesperado: {clustering_faltantes!r}"
 
 
 def test_prohibited_violations_remain_bare_strings_for_back_compat() -> None:
