@@ -5022,51 +5022,67 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     if _effective_family == "clustering" and not settings.mlds_clustering_structure:
         _schema_prompt = SCHEMA_DESIGNER_PROMPT
 
-    context = _build_base_context(state)
-    context.update({
-        "titulo": state.get("titulo", ""),
-        "financial_data": state.get("doc1_anexo_financiero", ""),
-        "operational_data": state.get("doc1_anexo_operativo", ""),
-        "max_rows": max_rows,
-        "ml_required_families": ml_required_families,
-        # Issue #225 — inyecta contrato dilema↔dataset emitido por case_architect.
-        # Si es None (perfil business legado o architect no lo emitió), el bloque
-        # contiene un mensaje que activa las reglas heurísticas en el LLM.
-        "dataset_contract_block": _format_dataset_contract_block(
-            state.get("dataset_schema_required")
-        ),
-    })
-    prompt = _schema_prompt.format(**context)
+    # Issue #477 — ml_ds + clustering yields a DETERMINISTIC segmentation schema. The clustering
+    # prompt (SCHEMA_DESIGNER_PROMPT_CLUSTERING, #452) emits no `revenue_annual_total`, which is a
+    # REQUIRED field on DatasetConstraints, so a prompt-following LLM output ALWAYS fails
+    # DatasetSchema validation and we fall through to `_build_clustering_fallback_schema` anyway;
+    # a stray LLM schema that DOES validate would silently bypass the #452 determinism guarantee.
+    # Skip the always-wasted Pro call and use the deterministic schema directly. Gated on the SAME
+    # MLDS_CLUSTERING_STRUCTURE switch → OFF stays byte-identical (generic prompt + LLM path runs).
+    _use_deterministic_clustering_schema = (
+        _effective_family == "clustering" and settings.mlds_clustering_structure
+    )
 
-    # Cadena de fallback resiliente alineada con el patrón del case_architect (M1):
-    #   1) Pro thinking_level="medium" — primario (mantiene thinking; subir a "high"
-    #      arriesga truncar el JSON estructurado de 14 columnas por consumo de
-    #      reasoning interno).
-    #   2) Pro thinking_level="low"    — fallback transitorio sin degradar de modelo.
-    #   3) Flash                       — red de seguridad final ante incidente global
-    #      del Pro (sin response_mime_type estructurado, parser tolerante downstream).
-    # max_output_tokens=24576 da margen extra para el JSON (~5-6k tokens) sobre el
-    # reasoning de "medium" (~3-8k), reduciendo riesgo de truncamiento.
-    _common_kwargs = dict(
-        model=resolve_node_model(cfg, NODE_SCHEMA_DESIGNER, cfg.architect_model),
-        temperature=0.2,
-        max_retries=2,
-        max_output_tokens=24576,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-        response_mime_type="application/json",
-    )
-    primary = ChatGoogleGenerativeAI(thinking_level="medium", **_common_kwargs)
-    pro_low_fallback = ChatGoogleGenerativeAI(thinking_level="low", **_common_kwargs)
-    flash_fallback = ChatGoogleGenerativeAI(
-        model="gemini-3-flash-preview",
-        temperature=0.2,
-        max_retries=2,
-        max_output_tokens=24576,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
-    candidates = [primary.with_fallbacks([pro_low_fallback, flash_fallback])]
+    # Build the prompt + resilient LLM chain ONLY when we will actually call the model. For the
+    # deterministic clustering path `candidates` stays empty → the loop below is a no-op and control
+    # falls through to the shared fallback assembly (the single source of the deterministic schema).
+    candidates: list[Any] = []
+    if not _use_deterministic_clustering_schema:
+        context = _build_base_context(state)
+        context.update({
+            "titulo": state.get("titulo", ""),
+            "financial_data": state.get("doc1_anexo_financiero", ""),
+            "operational_data": state.get("doc1_anexo_operativo", ""),
+            "max_rows": max_rows,
+            "ml_required_families": ml_required_families,
+            # Issue #225 — inyecta contrato dilema↔dataset emitido por case_architect.
+            # Si es None (perfil business legado o architect no lo emitió), el bloque
+            # contiene un mensaje que activa las reglas heurísticas en el LLM.
+            "dataset_contract_block": _format_dataset_contract_block(
+                state.get("dataset_schema_required")
+            ),
+        })
+        prompt = _schema_prompt.format(**context)
+
+        # Cadena de fallback resiliente alineada con el patrón del case_architect (M1):
+        #   1) Pro thinking_level="medium" — primario (mantiene thinking; subir a "high"
+        #      arriesga truncar el JSON estructurado de 14 columnas por consumo de
+        #      reasoning interno).
+        #   2) Pro thinking_level="low"    — fallback transitorio sin degradar de modelo.
+        #   3) Flash                       — red de seguridad final ante incidente global
+        #      del Pro (sin response_mime_type estructurado, parser tolerante downstream).
+        # max_output_tokens=24576 da margen extra para el JSON (~5-6k tokens) sobre el
+        # reasoning de "medium" (~3-8k), reduciendo riesgo de truncamiento.
+        _common_kwargs = dict(
+            model=resolve_node_model(cfg, NODE_SCHEMA_DESIGNER, cfg.architect_model),
+            temperature=0.2,
+            max_retries=2,
+            max_output_tokens=24576,
+            api_key=os.getenv("GEMINI_API_KEY"),
+            rate_limiter=_rate_limiter,
+            response_mime_type="application/json",
+        )
+        primary = ChatGoogleGenerativeAI(thinking_level="medium", **_common_kwargs)
+        pro_low_fallback = ChatGoogleGenerativeAI(thinking_level="low", **_common_kwargs)
+        flash_fallback = ChatGoogleGenerativeAI(
+            model="gemini-3-flash-preview",
+            temperature=0.2,
+            max_retries=2,
+            max_output_tokens=24576,
+            api_key=os.getenv("GEMINI_API_KEY"),
+            rate_limiter=_rate_limiter,
+        )
+        candidates = [primary.with_fallbacks([pro_low_fallback, flash_fallback])]
 
     for i, llm in enumerate(candidates):
         # Solo 1 candidato compuesto; el fallback chain (Pro-medium → Pro-low → Flash)
@@ -5170,7 +5186,12 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         except (ValidationError, Exception) as e:
             logger.error("[schema_designer] %s ERROR: %s", model_label, e, exc_info=True)
 
-    print("[schema_designer] todos los intentos fallaron — usando fallback schema")
+    # Issue #477 — distinguish the deterministic clustering skip from a genuine all-attempts
+    # failure so the log is honest (nothing "failed" on the deterministic path).
+    if _use_deterministic_clustering_schema:
+        print("[schema_designer] clustering — usando schema determinista de segmentación")
+    else:
+        print("[schema_designer] todos los intentos fallaron — usando fallback schema")
     fallback_schema = _build_fallback_schema(
         state, max_rows, profile, primary_family=_effective_family,
         clustering_structure_enabled=settings.mlds_clustering_structure,

@@ -1577,6 +1577,11 @@ SCHEMA_DESIGNER_PROMPT_BY_FAMILY: dict[str, str] = {
     "clasificacion": SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
     # Issue #452 — ml_ds + clustering gets a dedicated entity-level segmentation schema
     # (gated at the schema_designer call site by MLDS_CLUSTERING_STRUCTURE).
+    # Issue #477 — NOTE: with MLDS_CLUSTERING_STRUCTURE on, schema_designer now SKIPS the LLM for
+    # clustering and goes straight to the deterministic `_build_clustering_fallback_schema` (this
+    # prompt emits no required `revenue_annual_total`, so it would always fail DatasetSchema
+    # validation). This entry is therefore runtime-unreached today, kept as the canonical home +
+    # revert path for a future family-aware constraints model (and consumed by the #452 dispatch test).
     "clustering": SCHEMA_DESIGNER_PROMPT_CLUSTERING,
     # regresion, serie_temporal — deferred (future iterations)
 }
