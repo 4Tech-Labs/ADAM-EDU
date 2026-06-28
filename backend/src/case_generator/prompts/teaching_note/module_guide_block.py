@@ -260,7 +260,7 @@ def _module_lines(
         )
         verdict = M4_VERDICT_BUSINESS if is_business else M4_VERDICT_MLDS
         formato = (
-            "3 preguntas que citan métricas concretas y opciones A/B/C; la recomendación cierra "
+            "3 preguntas abiertas que citan métricas concretas; la recomendación cierra "
             f"con un veredicto {verdict}."
         )
         return [ve, aprende, formato]
