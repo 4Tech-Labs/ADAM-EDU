@@ -50,6 +50,7 @@ from case_generator.prompts.clustering import (
     CASE_WRITER_PROMPT_CLUSTERING,
     M3_CONTENT_PROMPT_CLUSTERING,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING,
+    M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES,
     M4_CHART_PROMPT_CLUSTERING,
     M4_CONTENT_PROMPT_CLUSTERING,
 )
@@ -2498,6 +2499,26 @@ try:
             "cluster_sizes": _sizes,
             "modeling_status": "clustering_completed",
         }}
+        # Issue #494 — perfiles por cluster al marcador (media por feature, redondeo = tabla impresa).
+        # Try ANIDADO + tipos nativos + filtro no-finito + exclusión del ruido (-1): un fallo de
+        # perfilado NUNCA rompe el silhouette ni el print externo (json.dumps allow_nan=False).
+        try:
+            _prof = X.assign(cluster=labels).groupby("cluster")[feature_cols].mean().round(2)
+            _cp = {{}}
+            for _f in _prof.columns:
+                _col = {{}}
+                for _c in _prof.index:
+                    if int(_c) == -1:
+                        continue
+                    _v = _prof.at[_c, _f]
+                    if _v == _v and abs(float(_v)) != float("inf"):
+                        _col[str(int(_c))] = float(_v)
+                if _col:
+                    _cp[str(_f)] = _col
+            if _cp:
+                _metrics_summary["cluster_profiles"] = _cp
+        except Exception:
+            pass
     else:
         # <2 clusters reales formados: degenerado. NO es un skip intencional → el gate del
         # executor lo trata como bloqueante (reprompt-then-degrade), no como éxito silencioso.
@@ -2725,6 +2746,26 @@ try:
             "cluster_sizes": _sizes,
             "modeling_status": "clustering_completed",
         }}
+        # Issue #494 — perfiles por cluster al marcador (media por feature, redondeo = tabla impresa).
+        # Try ANIDADO + tipos nativos + filtro no-finito + exclusión del ruido (-1): un fallo de
+        # perfilado NUNCA rompe el silhouette ni el print externo (json.dumps allow_nan=False).
+        try:
+            _prof = X.assign(cluster=labels).groupby("cluster")[feature_cols].mean().round(2)
+            _cp = {{}}
+            for _f in _prof.columns:
+                _col = {{}}
+                for _c in _prof.index:
+                    if int(_c) == -1:
+                        continue
+                    _v = _prof.at[_c, _f]
+                    if _v == _v and abs(float(_v)) != float("inf"):
+                        _col[str(int(_c))] = float(_v)
+                if _col:
+                    _cp[str(_f)] = _col
+            if _cp:
+                _metrics_summary["cluster_profiles"] = _cp
+        except Exception:
+            pass
     else:
         # <2 clusters reales formados: degenerado. NO es un skip intencional → el gate del
         # executor lo trata como bloqueante (reprompt-then-degrade), no como éxito silencioso.
@@ -3075,6 +3116,7 @@ __all__ = [
   "M3_CONTENT_PROMPT_CLASSIFICATION_RF_ONLY",
   "M3_CONTENT_PROMPT_CLUSTERING",
   "M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING",
+  "M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES",
   "M3_EXPERIMENT_ENGINEER_PROMPT",
   "M3_EXPERIMENT_PROMPT",
   "M3_EXPERIMENT_QUESTIONS_PROMPT",

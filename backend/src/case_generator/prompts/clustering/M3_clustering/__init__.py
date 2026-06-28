@@ -12,9 +12,11 @@ from case_generator.prompts.clustering.M3_clustering.content import (
 )
 from case_generator.prompts.clustering.M3_clustering.notebook_questions import (
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING,
+    M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES,
 )
 
 __all__ = [
     "M3_CONTENT_PROMPT_CLUSTERING",
     "M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING",
+    "M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES",
 ]

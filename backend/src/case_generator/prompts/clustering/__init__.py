@@ -18,6 +18,7 @@ from case_generator.prompts.clustering.M1_clustering import (
 from case_generator.prompts.clustering.M3_clustering import (
     M3_CONTENT_PROMPT_CLUSTERING,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING,
+    M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES,
 )
 from case_generator.prompts.clustering.M4_clustering import (
     M4_CHART_PROMPT_CLUSTERING,
@@ -30,6 +31,7 @@ __all__ = [
     "CASE_QUESTIONS_PROMPT_CLUSTERING",
     "M3_CONTENT_PROMPT_CLUSTERING",
     "M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING",
+    "M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES",
     "M4_CONTENT_PROMPT_CLUSTERING",
     "M4_CHART_PROMPT_CLUSTERING",
 ]
