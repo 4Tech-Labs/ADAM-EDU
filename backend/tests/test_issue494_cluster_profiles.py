@@ -126,7 +126,7 @@ class TestProfileDetector:
 # 2. detect_unanchored_n_clusters
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 class TestNClustersDetector:
-    VALID = {3, 4}
+    VALID = {3, 4}  # max = 4
 
     def test_real_count_clean(self) -> None:
         assert detect_unanchored_n_clusters("la corrida formó 3 segmentos", self.VALID) == []
@@ -134,23 +134,61 @@ class TestNClustersDetector:
     def test_target_k_clean(self) -> None:
         assert detect_unanchored_n_clusters("el caso se diseñó para 4 clusters", self.VALID) == []
 
-    def test_wrong_count_flags(self) -> None:
+    def test_cluster_id_reference_not_flagged(self) -> None:
+        # #497 review P1 regression: the prompt-mandated P5 answer cites a 0-indexed cluster ID
+        # ("el segmento 2 domina…"). An ID <= the real count is NOT a fabricated count → must be clean.
+        assert detect_unanchored_n_clusters("El segmento 2 domina en monetary_value", {3}) == []
+        assert detect_unanchored_n_clusters("el cluster 2 es el de alto valor", {3}) == []
+        assert detect_unanchored_n_clusters("El segmento 3 es el clave", {3, 4}) == []
+
+    def test_subcount_not_flagged(self) -> None:
+        # P2: a sub-count ("los 2 segmentos restantes") is <= the real count → not a fabrication.
+        assert detect_unanchored_n_clusters("reserva los 2 segmentos restantes", {3}) == []
+        assert detect_unanchored_n_clusters("concentra el presupuesto en 2 grupos clave", {3}) == []
+
+    def test_size_phrasing_not_flagged(self) -> None:
+        # P2: "el segmento de 5 clientes" is size language; the tight keyword→number separator
+        # (no intervening word) means the "de 5" never matches the count arm.
+        assert detect_unanchored_n_clusters("el segmento de 5 clientes premium", {3}) == []
+
+    def test_count_exceeding_real_flags(self) -> None:
+        # Genuine fabrication: a number EXCEEDING the real cluster count is flagged.
         assert detect_unanchored_n_clusters("se formaron 7 segmentos", self.VALID) == [
             "N_CLUSTERS_NO_ANCLADO:7"
         ]
-
-    def test_cluster_size_not_flagged_by_range(self) -> None:
-        # 50 is a cluster SIZE, not a count → outside [2,10] → never flagged.
-        assert detect_unanchored_n_clusters("segmentos de 50 clientes", self.VALID) == []
-
-    def test_keyword_then_count(self) -> None:
-        assert detect_unanchored_n_clusters("segmentos: 5 en total", self.VALID) == [
+        assert detect_unanchored_n_clusters("el segmento 5 domina", {3}) == [
             "N_CLUSTERS_NO_ANCLADO:5"
         ]
+        assert detect_unanchored_n_clusters("segmentos: 9 en total", {3}) == [
+            "N_CLUSTERS_NO_ANCLADO:9"
+        ]
+
+    def test_cluster_size_large_not_flagged_by_band(self) -> None:
+        assert detect_unanchored_n_clusters("segmentos de 50 clientes", self.VALID) == []
+        assert detect_unanchored_n_clusters("el segmento con 250 clientes", self.VALID) == []
 
     def test_empty_valid_counts(self) -> None:
         assert detect_unanchored_n_clusters("7 segmentos", set()) == []
         assert detect_unanchored_n_clusters("7 segmentos", None) == []
+
+
+class TestExtractValidProfiles:
+    """#497 review P2: the load-bearing B4-a/B4-b selection gate was untested."""
+
+    def test_none_when_absent_or_malformed(self) -> None:
+        assert graph_module._extract_valid_cluster_profiles({}) is None
+        assert graph_module._extract_valid_cluster_profiles({"cluster_profiles": None}) is None
+        assert graph_module._extract_valid_cluster_profiles({"cluster_profiles": {}}) is None
+        assert graph_module._extract_valid_cluster_profiles({"cluster_profiles": "notadict"}) is None
+
+    def test_none_when_no_finite_mean(self) -> None:
+        # All means non-finite → no usable anchor → B4-b fallback (returns None).
+        cp = {"f": {"0": float("nan"), "1": float("inf")}}
+        assert graph_module._extract_valid_cluster_profiles({"cluster_profiles": cp}) is None
+
+    def test_returns_dict_when_valid(self) -> None:
+        cp = {"monetary_value": {"0": 4980.0, "1": 110.5}}
+        assert graph_module._extract_valid_cluster_profiles({"cluster_profiles": cp}) is cp
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -476,8 +514,11 @@ _CFG: dict = {"configurable": {}}
 
 
 def _real_p5() -> PreguntaMinimalista:
+    # Cites 0-indexed cluster ID 2 (the prompt-mandated shape) with its REAL monetary_value mean —
+    # this is the #497 P1 end-to-end regression: before the fix, "segmento 2" tripped the n_clusters
+    # guard and BOTH questions were silently omitted; now it must pass grounding in one call.
     return _pm(2, enunciado="Perfila un segmento.",
-               solucion="El segmento 0 lidera en monetary_value = 4980.00 → retención premium.")
+               solucion="El segmento 2 domina en monetary_value = 1500.20 → reactivación.")
 
 
 def _fab_p5() -> PreguntaMinimalista:

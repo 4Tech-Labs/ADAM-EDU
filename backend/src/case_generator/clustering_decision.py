@@ -480,23 +480,34 @@ def detect_unanchored_cluster_profiles(
     return violations
 
 
-# n_clusters / segment-count grounding. The cited cluster count must match the REAL formed count or the
-# designed ``target_k`` (the prompt presents BOTH legitimately, so anchoring to the pair avoids a FP on
-# the design reference). The ``[2, 10]`` range guard is load-bearing: cluster SIZES (≫10 with 1000 rows)
-# fall outside it, so a size cited near "segmentos" never collides with the count. Pure, total.
+# n_clusters / segment grounding (Issue #494, hardened after the #497 review P1). A cited integer
+# adjacent to "cluster/segmento/grupo" is ONLY flagged when it EXCEEDS the real cluster count
+# (``max(valid_counts)`` = the larger of n_clusters / target_k). Any value ``<= max`` is a legitimate
+# reference and must NOT flag: a 0-indexed cluster ID (segments are 0..k-1, exactly the IDs the profile
+# table and the prompt-mandated P5 answer cite — "el segmento 2 domina…"), the count itself, or a
+# sub-count ("los 2 segmentos restantes"). Only an out-of-range value ("se formaron 7 segmentos" when
+# k=3) is a genuine fabrication. Two precision rules keep it zero-FP:
+#   * the keyword→number arm allows ONLY a tight non-alphabetic separator (``[ \t:#=]{0,3}``), so size
+#     phrasing with a preposition ("el segmento de 5 clientes") does NOT match — only a direct
+#     "segmento N" / "segmento: N" id/count reference does;
+#   * the ``[2, 10]`` band excludes realistic cluster SIZES (≫10 with 1000 rows) and bare years/ratios.
+# Pure, total, never raises.
 _NCLUSTERS_COUNT_RE = re.compile(
-    r"(?:clusters?|segmentos?|grupos?)\b[^\d\n]{0,8}?(\d{1,2})(?!\d)"
+    r"(?:clusters?|segmentos?|grupos?)\b[ \t:#=]{0,3}(\d{1,2})(?!\d)"
     r"|(\d{1,2})\s*(?:clusters?|segmentos?|grupos?)\b",
     re.IGNORECASE,
 )
 
 
 def detect_unanchored_n_clusters(prose: str | None, valid_counts: set[int] | None) -> list[str]:
-    """Return ``["N_CLUSTERS_NO_ANCLADO:<raw>", ...]`` for a cited segment count in ``[2, 10]`` that
-    matches none of ``valid_counts`` (Issue #494). ``valid_counts`` = ``{n_clusters, target_k}``.
+    """Return ``["N_CLUSTERS_NO_ANCLADO:<raw>", ...]`` for a cited segment number in ``[2, 10]`` that
+    EXCEEDS the real cluster count (Issue #494). ``valid_counts`` = ``{n_clusters, target_k}``; the
+    threshold is ``max(valid_counts)``.
 
-    ``[]`` when prose is empty or ``valid_counts`` is empty/None (degrade-safe). Pure, total, never
-    raises. The ``[2, 10]`` band keeps cluster SIZES from colliding with the count.
+    A value ``<= max(valid_counts)`` is accepted (0-indexed cluster ID ``0..k-1``, the count, or a
+    sub-count) — this is the #497-review fix that stops a false positive on the prompt-mandated
+    "el segmento N domina" answer. ``[]`` when prose is empty or ``valid_counts`` is empty/None
+    (degrade-safe). Pure, total, never raises.
     """
     if not prose or not valid_counts:
         return []
@@ -510,6 +521,7 @@ def detect_unanchored_n_clusters(prose: str | None, valid_counts: set[int] | Non
             valid.add(int(numeric))
     if not valid:
         return []
+    max_valid = max(valid)
     violations: list[str] = []
     seen: set[str] = set()
     for match in _NCLUSTERS_COUNT_RE.finditer(prose):
@@ -518,9 +530,9 @@ def detect_unanchored_n_clusters(prose: str | None, valid_counts: set[int] | Non
             continue
         count = int(raw)
         if not (2 <= count <= 10):
-            continue  # outside plausible cluster-count band (cluster SIZES live here, not counts)
-        if count in valid:
-            continue
+            continue  # outside plausible cluster band (real cluster SIZES ≫10 live here, not counts/ids)
+        if count <= max_valid:
+            continue  # valid cluster ID (0..k-1), the count itself, or a sub-count — never a fabrication
         if raw in seen:
             continue
         seen.add(raw)
