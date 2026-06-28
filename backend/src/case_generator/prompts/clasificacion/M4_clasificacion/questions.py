@@ -45,7 +45,7 @@ riesgos de producción específicos de modelos de clasificación.
   {{
     "numero": 1,
     "titulo": "string corto (≤8 palabras)",
-    "enunciado": "string (pregunta con métricas numéricas y opciones A/B/C explícitas)",
+    "enunciado": "string (pregunta ABIERTA con métricas numéricas; SIN opciones de respuesta etiquetadas A/B/C)",
     "solucion_esperada": "string (máx 60 palabras)",
     "bloom_level": "analysis|evaluation|synthesis",
     "m4_section_ref": "4.1|4.2|4.3|4.4|4.5"
@@ -61,11 +61,12 @@ riesgos de producción específicos de modelos de clasificación.
 
 # Your Boundaries
 - Solo JSON schema. Las preguntas DEBEN citar métricas numéricas del M4 y del
-  bloque de métricas verificadas (si disponibles), y opciones A/B/C.
-- COHERENCIA OPCIÓN↔SOLUCIÓN: cuando una pregunta presente opciones, el enunciado DEBE
-  listarlas con sus letras (A/B/C) y `solucion_esperada` SOLO puede recomendar una de esas
-  letras presentadas en ese mismo enunciado, nombrándola por su letra. NUNCA recomiendes una
-  opción que el enunciado no presenta, ni una letra fuera de A/B/C.
+  bloque de métricas verificadas (si disponibles). Son preguntas ABIERTAS, sin opciones de respuesta A/B/C.
+- COHERENCIA OPCIÓN↔SOLUCIÓN: las preguntas son ABIERTAS — NO incrustes opciones de respuesta
+  etiquetadas A/B/C (colisionan con las Opción A/B/C estratégicas del caso). Si `solucion_esperada`
+  recomienda una opción estratégica, nómbrala por su LETRA REAL tal como aparece en el M4 §4.5
+  (p.ej. «la Opción A»); PROHIBIDO crear answer-choices A/B/C nuevos, barajar las estratégicas bajo
+  otras letras, o cruzar una letra de respuesta con la estratégica.
 - Citar SOLO números que aparezcan en {m4_content} o en {computed_metrics_block}.
   No fabricar métricas que no figuren en esas fuentes.
 - **Idioma de salida: {output_language}**
@@ -132,7 +133,7 @@ DE VALOR) y con los riesgos de producción específicos de modelos de clasificac
   {{
     "numero": 1,
     "titulo": "string corto (≤8 palabras)",
-    "enunciado": "string (pregunta con métricas numéricas y opciones A/B/C explícitas)",
+    "enunciado": "string (pregunta ABIERTA con métricas numéricas; SIN opciones de respuesta etiquetadas A/B/C)",
     "solucion_esperada": "string (máx 60 palabras)",
     "bloom_level": "analysis|evaluation|synthesis",
     "m4_section_ref": "4.1|4.2|4.3|4.4|4.5"
@@ -148,11 +149,12 @@ DE VALOR) y con los riesgos de producción específicos de modelos de clasificac
 
 # Your Boundaries
 - Solo JSON schema. Las preguntas DEBEN citar métricas numéricas del M4 y del
-  bloque de métricas verificadas (si disponibles), y opciones A/B/C.
-- COHERENCIA OPCIÓN↔SOLUCIÓN: cuando una pregunta presente opciones, el enunciado DEBE
-  listarlas con sus letras (A/B/C) y `solucion_esperada` SOLO puede recomendar una de esas
-  letras presentadas en ese mismo enunciado, nombrándola por su letra. NUNCA recomiendes una
-  opción que el enunciado no presenta, ni una letra fuera de A/B/C.
+  bloque de métricas verificadas (si disponibles). Son preguntas ABIERTAS, sin opciones de respuesta A/B/C.
+- COHERENCIA OPCIÓN↔SOLUCIÓN: las preguntas son ABIERTAS — NO incrustes opciones de respuesta
+  etiquetadas A/B/C (colisionan con las Opción A/B/C estratégicas del caso). Si `solucion_esperada`
+  recomienda una opción estratégica, nómbrala por su LETRA REAL tal como aparece en el M4 §4.5
+  (p.ej. «la Opción A»); PROHIBIDO crear answer-choices A/B/C nuevos, barajar las estratégicas bajo
+  otras letras, o cruzar una letra de respuesta con la estratégica.
 - Citar SOLO números que aparezcan en {m4_content} o en {computed_metrics_block}.
   No fabricar métricas que no figuren en esas fuentes.
 - **Idioma de salida: {output_language}**
