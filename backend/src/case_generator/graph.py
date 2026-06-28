@@ -36,7 +36,8 @@ Modelos (tier por-nodo vía configuration.resolve_node_model + node_model_overri
   Cadenas de fallback (depende del nodo, no es global):
     - _get_writer_llm  / _get_chart_llm    : primary -> gemini-2.5-flash
     - _get_architect_llm                   : Pro -> Pro-medium -> gemini-3-flash-preview
-        - _get_m4_llm / _get_m5_llm            : Pro-medium -> Pro-low -> writer_model -> gemini-2.5-flash
+        - _get_m4_llm (CRÍTICO, always Pro)    : Pro-medium -> Pro-low -> Pro-direct -> gemini-2.5-pro
+        - _get_m5_llm                          : Pro-medium -> Pro-low -> writer_model -> gemini-2.5-flash
     - schema_designer (M2 inline)          : Pro-medium -> Pro-low -> gemini-3-flash-preview
     - m3_content_generator (ml_ds inline)  : Pro-medium -> Pro-low -> gemini-3-flash-preview
     - m3_notebook_generator                : Flash(writer) -> gemini-2.5-flash
@@ -675,36 +676,41 @@ def _get_architect_llm(
 
 def _get_m4_llm(
     model: str = "gemini-3.1-pro-preview",
-    fallback_model: str = "gemini-3-flash-preview",
+    fallback_model: str = "gemini-3.1-pro-preview",
     temperature: float = 0.5,
 ):
     """High-reasoning Pro chain for M4 narrative impact analysis.
 
     M4 has to translate notebook/model evidence into executive ROI, risk, and
-    deployment language. Prefer Gemini Pro, but keep Configuration-driven
-    fallback escape hatches for preview-model outages and rollouts. Do not reuse
-    the architect helper because M4 should not receive Code Execution tools.
+    deployment language. Do not reuse the architect helper because M4 should not
+    receive Code Execution tools.
+
+    CRITICAL NODE — ALWAYS Pro, NEVER Flash. M4 is the terminal executive
+    narrative (the deployment verdict the teacher reads); a Flash fallback would
+    silently ship a lower-quality decision narrative. So the ENTIRE chain stays
+    Pro: the cross-provider net is direct Gemini Pro (``fallback_model``, a Pro id
+    by contract) then the GA-stable Pro ``gemini-2.5-pro``, and an OpenRouter
+    build failure degrades to ``gemini_fallback_model`` = direct Gemini Pro (NOT
+    Flash). The Pro guarantee assumes the resolved ``model`` and ``fallback_model``
+    are Pro tiers (the call site passes ``cfg.architect_model`` for the fallback).
 
     Provider-aware (mirror of ``_get_m5_llm``/``_get_m3_content_llm``): the two
     tiers carrying the resolved ``model`` pass through ``_build_llm`` — a model id
     with ``"/"`` (e.g. ``"google/gemini-3.1-pro-preview"`` via ``NODE_MODEL_OVERRIDES``)
-    runs on OpenRouter, anything else on Gemini. An OpenRouter build failure
-    degrades to ``fallback_model`` (Gemini) DENTRO de ``_build_llm`` → the factory
-    never raises for the alternate provider. The two final tiers are ALWAYS Gemini
-    (the cross-provider net). **Byte-identical** for Gemini ids (sin ``"/"``):
-    ``test_m4_factory_thinking_cut_to_medium`` queda verde.
+    runs on OpenRouter, anything else on Gemini. No override → ``_build_gemini``
+    (``test_m4_factory_thinking_cut_to_medium`` queda verde).
     """
-    # Fase 1 cost cut: primary thinking "high"→"medium". M4 prose stays on Pro
-    # (HIGH-risk terminal narrative), but the extra "high" reasoning tokens were
-    # billed at Pro output rates for marginal quality; "medium" keeps the model.
+    # Fase 1 cost cut: primary thinking "high"→"medium" (still Pro). The Pro net
+    # below trades extra cost-on-fallback for never shipping a Flash narrative.
     # NOTE: ``_build_openrouter`` ignores per-tier ``thinking_level`` — on the
     # OpenRouter path both routed tiers reason at the GLOBAL ``OPENROUTER_REASONING_EFFORT``
     # (so this medium cut applies only on the direct-Gemini path).
     primary = _build_llm(model, gemini_fallback_model=fallback_model, temperature=temperature, thinking_level="medium", max_output_tokens=24576)
     pro_fallback_low = _build_llm(model, gemini_fallback_model=fallback_model, temperature=temperature, thinking_level="low", max_output_tokens=24576)
-    writer_fallback = _build_gemini(fallback_model, temperature=temperature, max_output_tokens=24576)
-    stable_fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=24576)
-    return primary.with_fallbacks([pro_fallback_low, writer_fallback, stable_fallback])
+    # Cross-provider net stays Pro: direct Gemini Pro, then the GA-stable Pro.
+    pro_direct = _build_gemini(fallback_model, temperature=temperature, thinking_level="medium", max_output_tokens=24576)
+    pro_stable = _build_gemini("gemini-2.5-pro", temperature=temperature, max_output_tokens=24576)
+    return primary.with_fallbacks([pro_fallback_low, pro_direct, pro_stable])
 
 
 def _get_chart_llm(
@@ -9658,7 +9664,9 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         cfg = Configuration.from_runnable_config(config)
         llm = _get_m4_llm(
             resolve_node_model(cfg, NODE_M4_CONTENT, cfg.architect_model),
-            cfg.writer_model,
+            # M4 is a critical node: its fallback net must be Pro, never Flash.
+            # Pass the Pro tier (architect_model), NOT writer_model (Flash).
+            cfg.architect_model,
             temperature=0.5,
         )
 
