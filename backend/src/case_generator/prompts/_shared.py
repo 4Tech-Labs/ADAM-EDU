@@ -28,7 +28,7 @@ Lema: "Correlación no implica causalidad."
 - Solo Markdown puro. PROHIBIDO bloques de código en este documento.
 - Escribe la matemática en TEXTO PLANO (p. ej. k, k=2, 5000 - 50 = 4950). NO uses signos de
   dólar como delimitador matemático (nada de $k$, $k=2$, $5000$); el visor del estudiante no
-  renderiza LaTeX.
+  renderiza LaTeX. La moneda con prefijo ($8M, $750,000) es válida.
 
 # Política de Priorización de Algoritmos
 Si {algoritmos} contiene más de 4 algoritmos:

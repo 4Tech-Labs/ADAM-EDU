@@ -84,6 +84,13 @@ class TestPreservesCurrencyAndCode:
             "precio $5 por unidad",                            # bare prefix in prose
             "rango $1.2.3$ raro",                              # malformed multi-dot pair
             "el patrón r\"\\d+$\" termina",                    # regex end-anchor
+            # Paired BARE INTEGER (no decimal, no operator) is the residual currency-FP class — the
+            # Tier-2 decimal-or-operator rule leaves it UNTOUCHED (hardening from the #480 review).
+            "$8$ millones",                                    # malformed paired currency
+            "costo $5000$ mensual",
+            "inversión inicial $100000$",
+            "$250$ mil",
+            "el valor $2$ aislado",                            # accepted FN: bare-integer math value
         ],
     )
     def test_currency_and_code_byte_identical(self, src: str) -> None:
