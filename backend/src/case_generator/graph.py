@@ -59,6 +59,7 @@ import logging
 import os
 import random
 import re
+import textwrap
 import threading
 import time
 import unicodedata
@@ -72,7 +73,7 @@ from pydantic import ValidationError
 from dotenv import load_dotenv
 from langchain_core.exceptions import OutputParserException
 from langchain_core.rate_limiters import InMemoryRateLimiter
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver as LangGraphAsyncPostgresSaver
 from langgraph.graph import StateGraph, START, END
@@ -88,12 +89,14 @@ from case_generator.configuration import (
     NODE_M3_CONTENT,
     NODE_M3_NOTEBOOK,
     NODE_M3_NOTEBOOK_ESCALATION,
+    NODE_M3_QUESTIONS,
     NODE_M4_CONTENT,
     NODE_M5_CONTENT,
     NODE_M5_QUESTIONS,
     M3_NOTEBOOK_MAX_ATTEMPTS,
 )
 from case_generator.prompts import (
+    ARCHITECT_IMPACT_LENS_BLOCK,
     CASE_ARCHITECT_PROMPT,
     CASE_ARCHITECT_PROMPT_BY_FAMILY,
     M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK,
@@ -103,11 +106,14 @@ from case_generator.prompts import (
     CASE_WRITER_PROMPT_BY_FAMILY,
     EDA_ANNOTATE_ONLY_PROMPT,
     EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
+    EDA_ANNOTATE_ONLY_PROMPT_CLUSTERING,
     EDA_CHART_GENERATOR_PROMPT,
     EDA_QUESTIONS_GENERATOR_PROMPT,
+    EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING,
     EDA_QUESTIONS_PROMPT_BY_FAMILY,
     EDA_TEXT_ANALYST_PROMPT,
     EDA_TEXT_ANALYST_PROMPT_BY_FAMILY,
+    EDA_TEXT_ANALYST_PROMPT_CLUSTERING,
     build_cost_matrix_block,
     select_eda_text_blocks,
     CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT,
@@ -115,9 +121,16 @@ from case_generator.prompts import (
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST,
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
     ClassificationNotebookVariant,
+    CLUSTERING_NOTEBOOK_PROMPT_BY_VARIANT,
+    CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY,
+    CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY,
+    ClusteringNotebookVariant,
     TOC_MARKDOWN_CELL_BY_VARIANT,
     M4_QUESTIONS_GENERATOR_PROMPT,
+    M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL,
     M4_QUESTIONS_PROMPT_BY_FAMILY,
+    M4_QUESTIONS_PROMPT_BY_FAMILY_NEUTRAL,
+    M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL,
     M5_QUESTIONS_GENERATOR_PROMPT,
     M5_QUESTIONS_PROMPT_BY_FAMILY,
     # v8 M3 — prompts por perfil (aliases backward-compat también disponibles)
@@ -129,19 +142,29 @@ from case_generator.prompts import (
     M3_NOTEBOOK_BASE_TEMPLATE,
     M3_CONTENT_PROMPT_BY_FAMILY,
     M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
+    M3_CONTENT_PROMPT_CLUSTERING,
+    M4_CHART_PROMPT_CLUSTERING,
+    M4_CONTENT_PROMPT_CLUSTERING,
     M3_CLASSIFICATION_QUESTIONS_BY_VARIANT,
     PROMPT_BY_FAMILY,
     M4_PROMPT_BY_FAMILY,
+    M4_PROMPT_BY_FAMILY_NEUTRAL,
     M4_CONTENT_GENERATOR_PROMPT,
+    M4_CONTENT_GENERATOR_PROMPT_NEUTRAL,
     M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT_NEUTRAL,
     M4_BUSINESS_PROMPT_CLASSIFICATION,
+    M4_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL,
     M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_GENERATOR_PROMPT,
     M4_CHART_GENERATOR_PROMPT_LEGACY,
+    M4_CHART_GENERATOR_PROMPT_NEUTRAL,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY,
+    M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL,
     M4_CHARTS_PROMPT_BY_FAMILY,
     M4_CHARTS_PROMPT_BY_FAMILY_LEGACY,
+    M4_CHARTS_PROMPT_BY_FAMILY_NEUTRAL,
     M5_PROMPT_BY_FAMILY,
     M5_CONTENT_GENERATOR_PROMPT,
     M5_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT,
@@ -162,6 +185,24 @@ from case_generator.suggest_service import (
     get_dispatch_meta,
     resolve_legacy_family,
 )
+from case_generator.impact_lens import (
+    DEFAULT_IMPACT_LENS,
+    IMPACT_LENS_KEYS,
+    build_impact_lens_architect_hint,
+    build_impact_lens_hint,
+    build_impact_lens_m5_hint,
+    normalize_impact_lens,
+)
+from case_generator.clustering_decision import (
+    build_clustering_architect_hint,
+    build_clustering_m1_questions_hint,
+    build_clustering_m3_questions_hint,
+    build_clustering_verdict_hint,
+    detect_unanchored_silhouette,
+    recommended_option_of,
+    validate_m4_verdict_option,
+    validate_verdict_option,
+)
 from case_generator.retention_tokens import (
     RETENTION_CHURN_TOKENS,
     is_retention_match,
@@ -172,6 +213,7 @@ from case_generator.narrative_grounding import (
     contextualize_grounding_violations,
     detect_unselected_model_mentions,
     has_metric_anchors,
+    log_raw_identifier_leak,
     validate_narrative_grounding,
 )
 from case_generator.m1_grounding import (
@@ -182,6 +224,7 @@ from case_generator.m1_grounding import (
     validate_question_option_coherence,
     validate_questions_exhibit_coherence,
 )
+from case_generator.m1_grounding import strip_latex_math as _strip_latex_math
 from case_generator.m2_grounding import validate_eda_questions_coherence
 from case_generator.m3_grounding import (
     allowed_sections_for,
@@ -191,6 +234,7 @@ from case_generator.m5_grounding import validate_m5_questions_coherence
 from case_generator.m6_grounding import log_out_of_roster_mentions
 from case_generator.m4_grounding import (
     build_m4_chart_grounding_reprompt,
+    detect_embedded_mcq_options,
     drop_sensitivity_charts,
     log_chart_benchmark_fabrication,
     log_duplicate_deployment_sections,
@@ -223,6 +267,9 @@ from case_generator.datagen.eda_charts_business import (
 )
 from case_generator.datagen.eda_charts_classification import (
     generate_classification_eda_charts,
+)
+from case_generator.datagen.eda_charts_clustering import (
+    generate_clustering_eda_charts,
 )
 from case_generator.orchestration.frontend_adapter import adapter_canonical_to_legacy
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
@@ -298,6 +345,95 @@ _rate_limiter = InMemoryRateLimiter(
     max_bucket_size=20,  # Burst de hasta 20 llamadas acumuladas
 )
 
+# ─── OpenRouter (proveedor alterno, OpenAI-compatible) ──────────────────────────
+# Se activa SOLO cuando un nodo resuelve a un model id con "/" (p.ej. "minimax/minimax-m3")
+# vía NODE_MODEL_OVERRIDES; reversible sin redeploy. El fallback cross-provider a Gemini vive
+# en las cadenas .with_fallbacks de las factories (ver _build_llm).
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var, falling back to ``default`` on absence or a malformed value.
+
+    Tolerant by design: a fat-fingered OpenRouter tuning env must NEVER crash module import —
+    that would take down EVERY node (all of M1..M6), not just the OpenRouter path, breaking the
+    inert-by-default guarantee.
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("[config] %s=%r no es float válido — usando default %s", name, raw, default)
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an int env var, falling back to ``default`` on absence or a malformed value (see _env_float)."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("[config] %s=%r no es int válido — usando default %s", name, raw, default)
+        return default
+
+
+# Rate limiter DEDICADO (no el de Gemini): los límites de OpenRouter son independientes de los
+# de Gemini; compartir un bucket acoplaría ambos presupuestos y M5 podría starve a otros nodos
+# Gemini. Process-local → el techo real es N_instancias × requests_per_second (igual que el de
+# Gemini); para un burst que pueda exceder el límite de cuenta de OpenRouter, considerar un
+# limiter distribuido o cap de instancias. Tunable por env.
+_openrouter_rate_limiter = InMemoryRateLimiter(
+    requests_per_second=_env_float("OPENROUTER_REQUESTS_PER_SECOND", 5.0),
+    check_every_n_seconds=0.1,
+    max_bucket_size=_env_int("OPENROUTER_MAX_BUCKET_SIZE", 10),
+)
+
+# minimax-m3 es un modelo de RAZONAMIENTO y sus reasoning tokens cuentan contra max_tokens. Sin
+# cap pueden ahogar la salida visible (p.ej. la matriz de decisión de M5). El max_tokens total que
+# enviamos = answer (_M5_MAX_OUTPUT_TOKENS, 32768) + este valor. En modo PRESUPUESTO (effort vacío)
+# se manda como reasoning.max_tokens, así que answer y razonamiento están separados. En modo EFFORT
+# este valor NO se manda como reasoning.max_tokens (excluyentes → 400); solo sube el max_tokens
+# total, del cual OpenRouter toma una fracción para razonar (~80% "high") y deja el resto a la
+# respuesta. Default 4000 → total 36768 (answer ~7.3k bajo "high", de sobra para M5 ~1-4k). Subirlo
+# (p.ej. 16000 → total 48768) da más respuesta+razonamiento; verificado en vivo: 48768 + effort=high
+# → finish_reason=stop, sin truncar, en M5 (minimax y glm). Para respuestas grandes bajo effort,
+# sube este presupuesto.
+_OPENROUTER_REASONING_MAX_TOKENS = _env_int("OPENROUTER_REASONING_MAX_TOKENS", 4000)
+# Niveles de esfuerzo válidos en OpenRouter (mayor→menor). EXCLUYENTE con reasoning.max_tokens
+# (OpenRouter da 400 si se envían ambos): con effort, OpenRouter asigna una FRACCIÓN del max_tokens
+# total al razonamiento (~95% max/xhigh, ~80% high, ~50% medium, ~20% low, ~10% minimal, 0% none) y
+# deja el resto para la respuesta — por eso el max_tokens total (= answer + presupuesto) debe ser
+# holgado: con presupuesto pequeño y effort alto el ~20% de respuesta puede quedar corto.
+_VALID_OPENROUTER_EFFORTS = frozenset({"max", "xhigh", "high", "medium", "low", "minimal", "none"})
+# Nivel de esfuerzo de razonamiento. Vacío = usar el presupuesto de tokens de arriba. Un valor NO
+# vacío pero inválido (typo) cae a presupuesto CON un warning (no se ignora en silencio).
+_OPENROUTER_REASONING_EFFORT = os.getenv("OPENROUTER_REASONING_EFFORT", "").strip().lower()
+# Timeout por request: acota una llamada colgada para que la cadena .with_fallbacks avance a
+# Gemini mucho antes del deadline global del job (~1900s).
+_OPENROUTER_TIMEOUT_SECONDS = _env_float("OPENROUTER_TIMEOUT_SECONDS", 150.0)
+# Routing de proveedor (coma-separado): upstreams capaces de structured-output/tools para
+# minimax-m3 (p.ej. "Together,Parasail,Morph"). Vacío = OpenRouter elige; require_parameters
+# igual filtra a un proveedor capaz. VERIFICAR contra los endpoints vigentes de minimax-m3.
+_OPENROUTER_PROVIDER_ORDER = [
+    p.strip() for p in os.getenv("OPENROUTER_PROVIDER_ORDER", "").split(",") if p.strip()
+]
+# Política de datos del routing. Por DEFECTO NO se envía: muchos modelos (incl. minimax-m3) NO
+# tienen NINGÚN proveedor con data_collection=deny, y enviar "deny" hace que OpenRouter no
+# encuentre endpoint elegible → 404 en CADA llamada (cae todo a Gemini). Pon
+# OPENROUTER_DATA_COLLECTION=deny (o "allow") solo si tu modelo/proveedores lo soportan; vacío =
+# routing normal. data_collection NO es zero-retention (eso es ZDR a nivel de cuenta de OpenRouter).
+_OPENROUTER_DATA_COLLECTION = os.getenv("OPENROUTER_DATA_COLLECTION", "").strip().lower()
+# Filtra a proveedores que soporten los params enviados (necesario para que el structured-output de
+# m5_questions aterrice en un upstream capaz: Together/Parasail/Morph). NO causa 404: sí hay
+# proveedores elegibles. Pon OPENROUTER_REQUIRE_PARAMETERS=false para relajar el routing.
+_OPENROUTER_REQUIRE_PARAMETERS = (
+    os.getenv("OPENROUTER_REQUIRE_PARAMETERS", "true").strip().lower() != "false"
+)
+
 _M5_MODEL = "gemini-3.1-pro-preview"
 _M5_MAX_OUTPUT_TOKENS = 32768
 
@@ -342,6 +478,137 @@ def _build_gemini(
     return ChatGoogleGenerativeAI(**kwargs)
 
 
+def _build_openrouter(
+    model: str,
+    *,
+    temperature: float,
+    max_output_tokens: int,
+    thinking_level: str | None = None,  # Gemini-only → ignorado
+    tools: list[dict[str, Any]] | None = None,  # Gemini code_execution → ignorado
+    response_mime_type: str | None = None,  # → se usa .with_structured_output
+) -> Any:
+    """Build one ChatOpenAI pointed at OpenRouter (OpenAI-compatible).
+
+    ESTRICTO: lanza si falta ``OPENROUTER_API_KEY`` o si ``langchain_openai`` no está instalado
+    (import perezoso). El wrapper ``_build_llm`` captura esos fallos y degrada a Gemini, así que
+    un nodo nunca queda sin cliente por una mala config del proveedor alterno.
+
+    ``thinking_level``/``tools``/``response_mime_type`` son kwargs Gemini-only aceptados por
+    paridad de firma con ``_build_gemini`` y se ignoran: minimax usa ``extra_body.reasoning`` para
+    el razonamiento y ``.with_structured_output`` para JSON. ``max_output_tokens`` se mapea a
+    ``max_tokens`` (nombre de ChatOpenAI) y se le suma el cap de reasoning para no truncar la salida.
+    """
+    from langchain_openai import ChatOpenAI  # lazy: dep ausente → ImportError captado por _build_llm
+
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY no está seteado pero un nodo se enrutó a OpenRouter")
+
+    headers = {
+        k: v
+        for k, v in {
+            "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER"),
+            "X-Title": os.getenv("OPENROUTER_APP_TITLE"),
+        }.items()
+        if v
+    }
+    provider: dict[str, Any] = {"allow_fallbacks": True}
+    if _OPENROUTER_REQUIRE_PARAMETERS:
+        # solo upstreams que soportan los params enviados (tools/json) → garantiza structured-output
+        provider["require_parameters"] = True
+    if _OPENROUTER_DATA_COLLECTION in ("deny", "allow"):
+        # OPT-IN (default = no enviar). "deny" restringe a proveedores zero-collection; si NINGUNO
+        # del modelo lo cumple → 404. NO es zero-retention (eso es ZDR a nivel de cuenta).
+        provider["data_collection"] = _OPENROUTER_DATA_COLLECTION
+    if _OPENROUTER_PROVIDER_ORDER:
+        provider["order"] = _OPENROUTER_PROVIDER_ORDER
+    # reasoning.effort y reasoning.max_tokens son EXCLUYENTES (OpenRouter → 400 si ambos). Si hay un
+    # nivel de esfuerzo configurado, se manda SOLO effort; si no, el presupuesto de tokens.
+    reasoning_cfg: dict[str, Any]
+    if _OPENROUTER_REASONING_EFFORT in _VALID_OPENROUTER_EFFORTS:
+        reasoning_cfg = {"effort": _OPENROUTER_REASONING_EFFORT}
+    else:
+        if _OPENROUTER_REASONING_EFFORT:  # no vacío pero inválido → avisar, no ignorar en silencio
+            logger.warning(
+                "[config] OPENROUTER_REASONING_EFFORT=%r inválido (válidos: %s) — usando reasoning.max_tokens",
+                _OPENROUTER_REASONING_EFFORT,
+                ", ".join(sorted(_VALID_OPENROUTER_EFFORTS)),
+            )
+        reasoning_cfg = {"max_tokens": _OPENROUTER_REASONING_MAX_TOKENS}
+    extra_body: dict[str, Any] = {
+        # CRÍTICO: `max_tokens` va AQUÍ (en extra_body), NO como kwarg de ChatOpenAI. ChatOpenAI
+        # serializa su `max_tokens=` como `max_completion_tokens` (campo nuevo de OpenAI), y con
+        # `provider.require_parameters=true` OpenRouter exige un upstream que soporte ESE parámetro
+        # — los proveedores de minimax-m3 solo listan `max_tokens` → ningún endpoint elegible → 404
+        # ("No endpoints found that can handle the requested parameters"). Enviarlo por extra_body
+        # lo serializa como `max_tokens` (soportado por todos) → 200. (Verificado contra la API.)
+        # El total = answer + presupuesto de reasoning (que con effort actúa como headroom).
+        "max_tokens": max_output_tokens + _OPENROUTER_REASONING_MAX_TOKENS,
+        "provider": provider,
+        "reasoning": reasoning_cfg,
+        "usage": {"include": True},
+    }
+    return ChatOpenAI(
+        model=model,
+        base_url=_OPENROUTER_BASE_URL,
+        api_key=api_key,
+        temperature=temperature,
+        # NO pasar max_tokens aquí: se serializaría como max_completion_tokens → 404 (ver extra_body).
+        max_retries=2,
+        timeout=_OPENROUTER_TIMEOUT_SECONDS,
+        rate_limiter=_openrouter_rate_limiter,
+        default_headers=headers or None,
+        extra_body=extra_body,
+    )
+
+
+def _build_llm(
+    model: str,
+    *,
+    gemini_fallback_model: str = "gemini-3-flash-preview",
+    **kwargs: Any,
+) -> Runnable:
+    """Dispatch a model id to its provider builder, degrading to Gemini on any OpenRouter failure.
+
+    Regla: un id con ``"/"`` (p.ej. ``"minimax/minimax-m3"``) → OpenRouter; cualquier otro →
+    Gemini (incluye los ids Gemini reales y los sintéticos de tests como ``"pro-x"``).
+
+    RESILIENCIA (clave para no romper el fallback): las tier factories construyen sus tiers de
+    forma EAGER antes de ``.with_fallbacks``; si ``_build_openrouter`` lanzara (falta
+    ``OPENROUTER_API_KEY``, ``langchain_openai`` no instalado, error de construcción) la factory
+    entera reventaría ANTES de existir la cadena de fallbacks → Gemini inalcanzable. Por eso aquí
+    degradamos a ``_build_gemini(gemini_fallback_model)`` en vez de propagar: una mala config del
+    proveedor alterno cae limpio a Gemini (el fallback deseado) y el nodo nunca queda sin cliente.
+    """
+    if "/" in model:
+        try:
+            return _build_openrouter(model, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — degradar SIEMPRE a Gemini, nunca romper la factory
+            logger.warning(
+                "[_build_llm] OpenRouter no disponible para model=%s (%s) — degradando a Gemini %s",
+                model,
+                type(exc).__name__,
+                gemini_fallback_model,
+            )
+            return _build_gemini(gemini_fallback_model, **kwargs)
+    return _build_gemini(model, **kwargs)
+
+
+def _is_transient_llm_error(exc: BaseException) -> bool:
+    """Return True if an LLM error is transient (worth a graph-level retry).
+
+    Reconoce los marcadores de Google/Gemini (string-match histórico) Y los de OpenAI/OpenRouter
+    (``openai.*`` expone el código HTTP en ``.status_code``). 402 (sin créditos) NO es transitorio
+    — debe degradar al fallback Gemini, no reintentar.
+    """
+    if any(code in str(exc) for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED")):
+        return True
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status == 429 or 500 <= status < 600
+    return False
+
+
 def _get_writer_llm(
     model: str,
     temperature: float = 0.7,
@@ -349,9 +616,21 @@ def _get_writer_llm(
 ):
     """LLM estándar (Flash) para redacción y structured output.
     Fallback automático a gemini-2.5-flash si el primary falla.
+
+    Provider-aware: el primary pasa por ``_build_llm``, así que un model id con
+    ``"/"`` (p.ej. ``"z-ai/glm-5.2"``, vía ``NODE_MODEL_OVERRIDES``) corre en
+    OpenRouter, y cualquier otro en Gemini. Un fallo de construcción OpenRouter
+    degrada a ``gemini-2.5-flash`` DENTRO de ``_build_llm`` → la factory nunca
+    lanza por el proveedor alterno. **Byte-idéntico** para los callers actuales:
+    ninguno pasa un id con ``"/"`` (lo verifica ``test_writer_factory_parity``),
+    así que la rama OpenRouter es código muerto sin un override explícito.
     """
-    primary = _build_gemini(
-        model, temperature=temperature, thinking_level=thinking_level, max_output_tokens=8192
+    primary = _build_llm(
+        model,
+        gemini_fallback_model="gemini-2.5-flash",
+        temperature=temperature,
+        thinking_level=thinking_level,
+        max_output_tokens=8192,
     )
     # Fallback: modelo anterior estable. Mismos prompts funcionan sin cambios.
     fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=8192)
@@ -449,11 +728,53 @@ def _get_m5_llm(
     fallbacks so operations can route around preview-model incidents.
     """
     _max = _M5_MAX_OUTPUT_TOKENS
-    primary = _build_gemini(model, temperature=temperature, thinking_level="medium", max_output_tokens=_max)
-    pro_fallback_low = _build_gemini(model, temperature=temperature, thinking_level="low", max_output_tokens=_max)
+    # Las dos tiers que llevan el `model` resuelto pasan por el dispatcher: un id con "/" corre en
+    # OpenRouter (minimax), si no en Gemini. Un fallo de construcción OpenRouter degrada a
+    # `fallback_model` (Gemini) DENTRO de `_build_llm`, así que esta factory nunca lanza por el
+    # proveedor alterno. Las dos tiers finales son SIEMPRE Gemini (la red cross-provider del plan).
+    primary = _build_llm(model, gemini_fallback_model=fallback_model, temperature=temperature, thinking_level="medium", max_output_tokens=_max)
+    pro_fallback_low = _build_llm(model, gemini_fallback_model=fallback_model, temperature=temperature, thinking_level="low", max_output_tokens=_max)
     writer_fallback = _build_gemini(fallback_model, temperature=temperature, max_output_tokens=_max)
     stable_fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=_max)
     return primary.with_fallbacks([pro_fallback_low, writer_fallback, stable_fallback])
+
+
+def _get_m3_content_llm(
+    model: str,
+    fallback_model: str = "gemini-3-flash-preview",
+    *,
+    temperature: float = 0.6,
+    max_output_tokens: int = 16384,
+):
+    """Cross-provider Pro chain for the ml_ds M3-content narrative.
+
+    ml_ds: el m3_content alimenta directamente el prompt del notebook generator,
+    así que la calidad de razonamiento aquí reduce ambigüedad en la sección 3.
+    Pro-medium con cadena de fallback (Pro-low → Flash-low).
+
+    Las dos tiers que llevan el ``model`` resuelto pasan por ``_build_llm``: un id
+    con ``"/"`` corre en OpenRouter (GLM), si no en Gemini; un fallo de
+    construcción OpenRouter degrada a ``fallback_model`` (Gemini) DENTRO de
+    ``_build_llm``, así que esta factory nunca lanza por el proveedor alterno. La
+    tier final es SIEMPRE Gemini Flash. **Byte-idéntico** al build inline previo
+    cuando ``model`` es un id Gemini (sin ``"/"``).
+    """
+    primary = _build_llm(
+        model, gemini_fallback_model=fallback_model,
+        temperature=temperature, thinking_level="medium", max_output_tokens=max_output_tokens,
+    )
+    pro_low = _build_llm(
+        model, gemini_fallback_model=fallback_model,
+        temperature=temperature, thinking_level="low", max_output_tokens=max_output_tokens,
+    )
+    # Flash fallback: thinking_level="low" explícito (no dependemos del default del
+    # SDK). "low" basta porque ya estamos en modo degradado por incidente global de
+    # Pro/OpenRouter y queremos minimizar latencia extra.
+    flash_fb = _build_gemini(
+        fallback_model, temperature=temperature, thinking_level="low",
+        max_output_tokens=max_output_tokens,
+    )
+    return primary.with_fallbacks([pro_low, flash_fb])
 
 
 # ─── Utilidades ─────────────────────────────────────────
@@ -487,7 +808,7 @@ def _compute_dataset_summary(dataset: list) -> tuple:
     return json.dumps(summary, ensure_ascii=False), len(dataset)
 
 
-def sanitize_markdown(text: str) -> str:
+def sanitize_markdown(text: str, *, strip_latex_math: bool = True) -> str:
     """Escudo de formato: limpia markdown code blocks y normaliza tablas."""
     if not text:
         return ""
@@ -498,7 +819,14 @@ def sanitize_markdown(text: str) -> str:
     # 3. Normalizar separadores de tablas (prevenir más de 3 guiones que rompen el parser)
     text = re.sub(r'-{4,}', '---', text)
     text = text.strip()
-    # 4. Backstop USD-only (#377): reetiqueta cualquier moneda no-USD pegada a una cifra
+    # 4. Strip de LaTeX matemático (#480): el case-viewer no tiene KaTeX/MathJax, así que un
+    #    `$k$` / `$5000.0 - 50.0$` llega literal al estudiante. Determinista + currency-safe
+    #    (disjunto de `enforce_usd_currency`, que nunca lee un `$` pelado → el orden no importa).
+    #    Kill-switch CASE_STRIP_LATEX_MATH. El M3 NOTEBOOK se EXCLUYE (`strip_latex_math=False`):
+    #    se consume en Colab/Jupyter, que SÍ renderiza math, y su código puede llevar `$` (shell).
+    if strip_latex_math and settings.case_strip_latex_math:
+        text = _strip_latex_math(text)
+    # 5. Backstop USD-only (#377): reetiqueta cualquier moneda no-USD pegada a una cifra
     #    (€/£/EUR/COP/MXN/R$/…) a USD. Punto DRY que cubre TODA la prosa downstream que pasa por
     #    aquí (narrativa M1 del writer, EDA M2, narrativa M4/M5). Byte-idéntico para texto ya en
     #    USD/$. Kill-switch CASE_USD_CURRENCY_ENFORCE. La FUENTE (campos del architect, structured
@@ -725,6 +1053,39 @@ def _extract_json_from_llm_response(raw: str) -> dict | None:
 
 
 # ─────────────────────────────────────────────────────────
+# HELPER — _truncate_risk_text (#470)
+# ─────────────────────────────────────────────────────────
+
+_MAX_RISK_CHARS = 320  # alza modesta desde 200; captura un riesgo típico de 1-2 frases completo
+
+
+def _truncate_risk_text(text: str) -> str:
+    """Colapsa whitespace y trunca en frontera de oración/palabra, de modo que el string de riesgo
+    inyectado en el prompt del memo M5 (``main_risk_from_m3_m4``) nunca quede cortado a media
+    palabra/cláusula (#470 — antes ``text[:200]`` duro dejaba fragmentos crudos como
+    «…(cuyo rango va de 5»).
+
+    El colapso de whitespace es LOAD-BEARING: las secciones de riesgo capturadas por regex (DOTALL)
+    contienen '\\n', y sin normalizar, una oración como "forense.\\nSi el módulo…" no matchearía
+    ". " → el corte por oración fallaría en silencio y caería a una elipsis a media cláusula.
+    """
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= _MAX_RISK_CHARS:
+        return text
+    window = text[: _MAX_RISK_CHARS + 1]  # +1: un terminador justo en el tope cuenta
+    sentence_end = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    if sentence_end >= 40:  # prefiere la última oración completa dentro de la ventana
+        return window[: sentence_end + 1].rstrip()
+    # Sin frontera de oración utilizable → fallback word-safe (stdlib): nunca corta a media palabra.
+    shortened = textwrap.shorten(text, width=_MAX_RISK_CHARS, placeholder="…")
+    if len(shortened) > 1:
+        return shortened
+    # Degenerado: un único token sin espacios > cap (URL/hash/blob) → shorten devolvería solo «…» y
+    # perdería todo el contenido; corte duro conservando el inicio (mejor que un «…» pelado).
+    return text[: _MAX_RISK_CHARS - 1].rstrip() + "…"
+
+
+# ─────────────────────────────────────────────────────────
 # HELPER — _build_base_context (v8)
 # ─────────────────────────────────────────────────────────
 
@@ -806,7 +1167,7 @@ def _build_base_context(state: ADAMState) -> dict:
                 text = _m.group(1).strip()
                 # Strip any leading markdown from captured text
                 text = re.sub(r'^#+\s*', '', text).strip()
-                text = text[:200]
+                text = _truncate_risk_text(text)
                 if len(text) > 30:
                     return text
         # Fallback semántico: buscar párrafo que contenga palabras clave de riesgo.
@@ -818,9 +1179,9 @@ def _build_base_context(state: ADAMState) -> dict:
         # Preferir párrafos con palabras clave de riesgo
         risk_paras = [p for p in paras if _RISK_KEYWORDS.search(p)]
         if risk_paras:
-            return risk_paras[-1][:200]
+            return _truncate_risk_text(risk_paras[-1])
         # Último párrafo sustantivo sin heading
-        return paras[-1][:200] if paras else None
+        return _truncate_risk_text(paras[-1]) if paras else None
 
     m3 = state.get("m3_content", "")
     m4 = state.get("m4_content", "")
@@ -918,8 +1279,33 @@ _BUSINESS_CLF_PERMISSIVE_SUBSTITUTIONS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _assemble_architect_prompt(context: dict) -> str:
+def _resolve_m1_prompt_family(context: dict) -> str:
+    """Resolve the family KEY for M1 prompt dispatch (architect/writer/questions).
+
+    Identity for every family EXCEPT clustering. The clustering M1 segmentation anchor
+    (Issue #455) is gated to ``studentProfile == "ml_ds"`` AND the
+    ``MLDS_CLUSTERING_M1_ANCHOR`` kill-switch. Outside that gate (business profile, or
+    switch off) it returns ``""`` so ``CASE_*_PROMPT_BY_FAMILY.get(key, GENERIC)`` falls
+    back to the generic prompt byte-identically. Strict ``== "clustering"`` so the
+    ml_ds-no-algoritmos cohort (resolved to "clasificacion" upstream) is never affected,
+    and clasificacion/regresion/serie_temporal/business stay byte-identical.
+    """
+    family = str(context.get("primary_family") or "")
+    profile = str(context.get("student_profile") or "")
+    if family == "clustering" and (
+        profile != "ml_ds" or not settings.mlds_clustering_m1_anchor
+    ):
+        return ""
+    return family
+
+
+def _assemble_architect_prompt(context: dict, *, lens_on: bool = False) -> str:
     """Selecciona el prompt M1 por familia y lo formatea con el contexto.
+
+    ``lens_on`` (Issue #437 Fase 2) appends the brace-free ``ARCHITECT_IMPACT_LENS_BLOCK``
+    (value_model emission + lens-aware option dimension). Default ``False`` so the existing SHA
+    snapshot / differential tests keep asserting the byte-identical base+anchor assembly; the
+    production caller passes ``settings.impact_lens_architect``.
 
     Punto único de ensamblado del prompt del architect. El gate por perfil (#301) vive AQUÍ,
     de modo que el prompt ensamblado para ml_ds queda byte-idéntico (el snapshot de Item 4 /
@@ -934,7 +1320,12 @@ def _assemble_architect_prompt(context: dict) -> str:
     """
     family = str(context.get("primary_family") or "")
     profile = str(context.get("student_profile") or "")
-    template = CASE_ARCHITECT_PROMPT_BY_FAMILY.get(family, CASE_ARCHITECT_PROMPT)
+    # Issue #455 — clustering selects its segmentation anchor only for ml_ds + switch on
+    # (helper returns "" otherwise → generic). The business-surgery gate below keeps using
+    # the raw `family` (it fires only for clasificacion, so it is unaffected).
+    template = CASE_ARCHITECT_PROMPT_BY_FAMILY.get(
+        _resolve_m1_prompt_family(context), CASE_ARCHITECT_PROMPT
+    )
     # business + clasificación: exige un target binario de dominio. Primero NEUTRALIZA la
     # permisión `null`/continuo en el texto (Gate 1b) y luego añade el bloque obligatorio
     # (PR2b). Gate por perfil → ml_ds queda byte-idéntico. El bloque no tiene placeholders.
@@ -942,6 +1333,13 @@ def _assemble_architect_prompt(context: dict) -> str:
         for old, new in _BUSINESS_CLF_PERMISSIVE_SUBSTITUTIONS:
             template = template.replace(old, new)
         template = template + M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK
+    # Issue #437 (ADR 0003, Fase 2) — append the Impact Lens block when enabled (value_model
+    # emission + lens-aware option dimension; Exhibit 1 stays a USD P&L per DD3). Purely additive +
+    # brace-free → lens_on=False is byte-identical to pre-#437 (the existing SHA still matches that
+    # path); lens_on=True has its own frozen hash. Default False so callers/tests that omit it (incl.
+    # the existing SHA snapshot) keep the byte-identical assembly.
+    if lens_on:
+        template = template + ARCHITECT_IMPACT_LENS_BLOCK
     return template.format(**context)
 
 
@@ -977,7 +1375,31 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         }, per_field_limit=800, total_limit=2500),
     })
 
-    prompt = _assemble_architect_prompt(context)
+    # Issue #437 Fase 2 — append the Impact Lens block (value_model emission + lens-aware option
+    # dimension) when enabled. lens_on=False is byte-identical to pre-#437 (DD5).
+    prompt = _assemble_architect_prompt(context, lens_on=settings.impact_lens_architect)
+    # Issue #437 Fase 3 — when the teacher set an explicit OVERRIDE, append a brace-free runtime hint
+    # that CONSTRAINS the (otherwise domain-inferred) Fase-2 lens block to the override, so M1 frames
+    # options + emits value_model by the SAME lens M4/M5/M6 take via the resolver (DD1 cross-module
+    # coherence). Fires ONLY on a valid override → no override = byte-identical to Fase 2 (financial AND
+    # non-financial-industry). Appended in the NODE (not in the frozen ARCHITECT_IMPACT_LENS_BLOCK) so
+    # the architect SHA snapshots are untouched; the prompt is already formatted, so no second .format.
+    _lens_override = state.get("impact_lens_override")
+    if settings.impact_lens_architect and _lens_override in IMPACT_LENS_KEYS:
+        prompt = prompt + build_impact_lens_architect_hint(_lens_override)
+
+    # Issue #467 — append the clustering coherence hint (brace-free) so M1 frames option
+    # recommended_option as the recommended one ~= target_k segments. Gated to ml_ds+clustering +
+    # kill-switch + a resolved decision; appended in the NODE (the architect SHA snapshots hash
+    # _assemble_architect_prompt's output, not this post-format append → SHA untouched). No-op
+    # (byte-identical) elsewhere: build_clustering_architect_hint returns "" without a valid decision.
+    _clustering_decision = state.get("clustering_decision")
+    if (
+        settings.mlds_clustering_decision_coherence
+        and _clustering_decision
+        and _is_ml_ds_clustering(state)
+    ):
+        prompt = prompt + build_clustering_architect_hint(_clustering_decision)
 
     try:
         result, profile_resolved, family_resolved, pregunta_eje = (
@@ -1084,20 +1506,45 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             contract=contract_dict,
         )
 
+        # Issue #437 Fase 2 — persist the architect's value_model (prompt-side only; NOT canonical
+        # nor student-facing). It is the D-A hybrid REFINEMENT carrier: _resolve_impact_lens prefers
+        # value_model["lens"] over the intake lens. Gated by the kill-switch (None when off → the
+        # intake lens stands → byte-identical M4 behavior). We DELIBERATELY do NOT write
+        # state["impact_lens"] here: on a resumed job state_input re-injects the intake lens and the
+        # last-write-wins channel would clobber any refinement back to intake (the architect is
+        # skip-short-circuited and never re-emits it). value_model is NOT in state_input, so the
+        # durable checkpoint value SURVIVES resume — making it the resume-robust refinement source.
+        value_model_dict = (
+            result.value_model.model_dump()
+            if (result.value_model is not None and settings.impact_lens_architect)
+            else None
+        )
+
         return {
             "current_agent": "case_architect",
+            "value_model": value_model_dict,
             "titulo": result.titulo,
             "industria": result.industria,
             # Issue #377 — relabel any non-USD currency to USD at the source (structured-output
             # fields bypass sanitize_markdown). Best-effort, magnitude-preserving, kill-switch
             # gated; byte-identical when the field is already USD-only. anexo_operativo uses the
             # POST-#372 value (anexo_operativo_final) so the F1 rate row is already settled.
-            "company_profile": _enforce_usd_currency_field(result.company_profile),
-            "dilema_brief": _enforce_usd_currency_field(result.dilema_brief),
-            "pregunta_eje": (
-                _enforce_usd_currency_field(pregunta_eje) if pregunta_eje else pregunta_eje
+            # #480 — los 4 campos de PROSA también pasan por el strip de LaTeX (composición con
+            # el relabel USD; disjuntos → el orden no importa). Las 3 tablas Exhibit (abajo) NO.
+            "company_profile": _strip_latex_math_field(
+                _enforce_usd_currency_field(result.company_profile)
             ),
-            "doc1_instrucciones": _enforce_usd_currency_field(result.instrucciones_estudiante),
+            "dilema_brief": _strip_latex_math_field(
+                _enforce_usd_currency_field(result.dilema_brief)
+            ),
+            "pregunta_eje": (
+                _strip_latex_math_field(_enforce_usd_currency_field(pregunta_eje))
+                if pregunta_eje
+                else pregunta_eje
+            ),
+            "doc1_instrucciones": _strip_latex_math_field(
+                _enforce_usd_currency_field(result.instrucciones_estudiante)
+            ),
             # #356 — normalize <br> row separators → real newlines BEFORE the USD relabel,
             # so both the frontend GFM parser and the backend .splitlines() anchor parser see
             # a real multi-line table (the architect structured output bypasses sanitize_markdown).
@@ -1167,14 +1614,13 @@ _M1_QUESTIONS_OPTION_REPROMPT_HEADER = (
 )
 _M4_QUESTIONS_OPTION_REPROMPT_HEADER = (
     "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE OPCIONES (Módulo 4)\n"
-    "Algunas preguntas recomiendan en `solucion_esperada` una opción estratégica que NO "
-    "existe en el caso, o que el propio enunciado de esa pregunta no presenta al estudiante. "
-    "El caso define un conjunto cerrado de opciones (A, B, C). Regenera EXACTAMENTE 3 "
-    "preguntas con el MISMO schema y los MISMOS `numero` (1, 2, 3): el enunciado de cada "
-    "pregunta de decisión DEBE presentar las opciones (A/B/C) entre las que el estudiante "
-    "elige, y `solucion_esperada` SOLO puede recomendar una de las opciones presentadas en "
-    "su enunciado, nombrándola por su letra. NUNCA recomiendes una opción inexistente ni "
-    "ausente del enunciado. Incoherencias detectadas:\n"
+    "Las preguntas del Módulo 4 son ABIERTAS: el enunciado NO debe incrustar opciones de "
+    "respuesta etiquetadas A/B/C (colisionan con las opciones estratégicas A/B/C del caso). "
+    "Regenera EXACTAMENTE 3 preguntas con el MISMO schema y los MISMOS `numero` (1, 2, 3): "
+    "reescribe cada enunciado como pregunta abierta SIN answer-choices A/B/C. Si "
+    "`solucion_esperada` recomienda una opción estratégica del caso, nómbrala por su LETRA "
+    "REAL tal como aparece en el análisis del Módulo 4 (§4.5), sin inventar ni cruzar una "
+    "letra de respuesta. NUNCA recomiendes una opción inexistente. Incoherencias detectadas:\n"
 )
 
 
@@ -1379,6 +1825,7 @@ def _apply_m1_questions_option_coherence(
 _M4_VIOLATION_CODES = (
     ("OPTION_NONEXISTENT", "option_nonexistent"),
     ("OPTION_NOT_PRESENTED", "option_not_presented"),
+    ("MCQ_OPCIONES_EMBEBIDAS", "mcq_opciones_embebidas"),
 )
 
 
@@ -1392,33 +1839,50 @@ def _m4_violation_types(violations: list[str]) -> list[str]:
     return codes
 
 
+def _m4_question_violations(preguntas_dict: list[dict]) -> list[str]:
+    """All M4 question option-coherence violations (#481).
+
+    Two pure rules over the same set, so the pass-1 check and the post-reprompt re-validation apply the
+    SAME contract: (1) the shared #416 validator with the FLOOR universe (``dilema_brief=""``) — a
+    ``solucion_esperada`` that recommends a nonexistent / unpresented A/B/C option; (2) the embedded-MCQ
+    detector — an ``enunciado`` that incrusta its OWN answer-choices ("A) … B) … C) …"), which collide
+    and historically cross-map with the strategic Opción A/B/C. The validator is letter-agnostic on the
+    WORD "Opción X"; the detector covers the answer-letter "X)" form it cannot see.
+    """
+    violations = list(validate_question_option_coherence(preguntas_dict, ""))
+    for pregunta in preguntas_dict:
+        if isinstance(pregunta, dict):
+            violations.extend(detect_embedded_mcq_options(pregunta.get("enunciado")))
+    return violations
+
+
 def _apply_m4_questions_option_coherence(
     *, llm: Any, prompt: str, state: ADAMState, preguntas_dict: list[dict]
 ) -> list[dict]:
     """Validate + reprompt-once-then-DEGRADE the M4 (Impacto) question option coherence.
 
-    Reuses the M1 option validator with the FLOOR universe (M4 has no ``dilema_brief``): a
-    ``solucion_esperada`` may only recommend an option the case defines (A/B/C) and that its
-    own ``enunciado`` presents. Gated to the classification family for BOTH profiles
-    (business + ml_ds) behind the ``m4_question_coherence`` kill-switch; a byte-identical
-    no-op otherwise. On a violation it reprompts ONCE (one Flash call); the corrected set is
-    accepted ONLY if it preserves the question count AND the ``numero`` sequence (the grading
-    key ``M4-Q{numero}`` in shared.student_reads/teacher_reads) AND is now coherent —
-    otherwise it degrades to the pass-1 questions. ``GeneradorPreguntasOutput`` (unlike M1's
-    schema) does NOT enforce count/numbering, so the identity guard is load-bearing.
-    Best-effort: ANY throw (including a reprompt ``RuntimeError``) degrades to pass-1. Never
-    raises, so the job always completes.
+    The M4 questions are OPEN (#481): the only A/B/C in a case are the M1 *strategic* options, named by
+    their REAL letter in ``solucion_esperada``. ``_m4_question_violations`` flags both a recommended
+    option that is nonexistent/unpresented (the shared #416 validator) AND an ``enunciado`` that
+    embeds its own answer-choices A/B/C (the #481 detector). Runs for ALL families (the defect is
+    general, not classification-only) behind the ``m4_question_coherence`` kill-switch; a no-op when the
+    switch is off. On a violation it reprompts ONCE (one Flash call); the corrected set is accepted ONLY
+    if it preserves the question count AND the ``numero`` sequence (the grading key ``M4-Q{numero}`` in
+    shared.student_reads/teacher_reads) AND is now coherent — otherwise it degrades to the pass-1
+    questions. ``GeneradorPreguntasOutput`` (unlike M1's schema) does NOT enforce count/numbering, so
+    the identity guard is load-bearing. Best-effort: ANY throw (including a reprompt ``RuntimeError``)
+    degrades to pass-1. Never raises, so the job always completes.
 
-    Known coverage limit (same trade-off as M1, zero false positives): only A/B/C LETTER
-    options are checked. Options named as models/prose ("desplegar Random Forest") or an
-    enunciado that names a single option are not flagged; the M4 questions prompt boundary
-    nudges the LLM to the letter form so the validator covers the reported defect.
+    Known coverage limit (zero false negatives are not promised): only UPPERCASE A/B/C letter forms are
+    checked. A lowercase MCQ, or a pure-``solucion_esperada`` cross-map with no enunciado markers, is
+    not flagged; the prompt fix (open questions, name the real letter) is the primary defense and a
+    detector false positive only degrades to the already-good pass-1 question (never fails a job).
     """
     log_extra = {"node": "m4_questions_generator", "case_id": state.get("case_id")}
     try:
-        if not settings.m4_question_coherence or not _is_classification_family(state):
+        if not settings.m4_question_coherence:
             return preguntas_dict
-        violations = validate_question_option_coherence(preguntas_dict, "")
+        violations = _m4_question_violations(preguntas_dict)
         if not violations:
             return preguntas_dict
         logger.info(
@@ -1451,7 +1915,7 @@ def _apply_m4_questions_option_coherence(
                 extra=log_extra,
             )
             return preguntas_dict
-        residual = validate_question_option_coherence(corrected, "")
+        residual = _m4_question_violations(corrected)
         if not residual:
             logger.info(
                 "[m4_questions] coherencia de opciones M4 corregida por reprompt",
@@ -1602,6 +2066,19 @@ def _enforce_usd_currency_field(text: str) -> str:
     return enforce_usd_currency(text)
 
 
+def _strip_latex_math_field(text: str) -> str:
+    """Strip LaTeX math `$…$` in one architect PROSE field (#480, kill-switch gated).
+
+    Mirror of `_enforce_usd_currency_field`: the architect's structured output bypasses
+    `sanitize_markdown`, so a `$k$` framing in `dilema_brief`/`pregunta_eje` would reach the
+    student/questions untouched. Applied ONLY to the 4 prose fields — NOT the 3 Exhibit tables
+    (currency-dense, zero math) to keep the currency-FP surface minimal. Currency-safe + best-effort.
+    """
+    if not settings.case_strip_latex_math:
+        return text
+    return _strip_latex_math(text)
+
+
 def _normalize_exhibit_field(text: str) -> str:
     """Normalize ``<br>`` → real newlines in one M1 exhibit field (kill-switch gated, #356)."""
     if not settings.m1_exhibit_normalize:
@@ -1657,7 +2134,7 @@ def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
     })
 
     prompt = CASE_WRITER_PROMPT_BY_FAMILY.get(
-        context["primary_family"], CASE_WRITER_PROMPT
+        _resolve_m1_prompt_family(context), CASE_WRITER_PROMPT
     ).format(**context)
 
     try:
@@ -1708,8 +2185,15 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
     })
 
     prompt = CASE_QUESTIONS_PROMPT_BY_FAMILY.get(
-        context["primary_family"], CASE_QUESTIONS_PROMPT
+        _resolve_m1_prompt_family(context), CASE_QUESTIONS_PROMPT
     ).format(**context)
+    # Issue #467 — for ml_ds+clustering, direct P3's answer key to the shared recommended_option
+    # (the architect hint lands in case_architect, NOT here, where P3 is actually authored). Brace-
+    # free → safe after .format. No-op (byte-identical) for every other cohort.
+    if settings.mlds_clustering_decision_coherence and _is_ml_ds_clustering(state):
+        _cq_cd = state.get("clustering_decision")
+        if _cq_cd:
+            prompt = prompt + build_clustering_m1_questions_hint(_cq_cd)
 
     try:
         resultado: GeneradorPreguntasM1Output = llm.with_structured_output(
@@ -1735,6 +2219,11 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
     # Option coherence (clasificación, both profiles) — best-effort, runs after the Exhibit
     # pass; the solución must only recommend options the case defines and the enunciado presents.
     preguntas_dict = _apply_m1_questions_option_coherence(
+        llm=llm, prompt=prompt, state=state, preguntas_dict=preguntas_dict
+    )
+    # Issue #467 — clustering verdict coherence: the M1 decision answer key must recommend the SAME
+    # option as M4/M5 (reprompt-once-then-degrade). No-op (byte-identical) for non ml_ds+clustering.
+    preguntas_dict = _apply_clustering_m1_verdict_coherence(
         llm=llm, prompt=prompt, state=state, preguntas_dict=preguntas_dict
     )
     # No escribe current_agent — nodo paralelo (evita race condition)
@@ -1833,8 +2322,12 @@ def eda_text_analyst(state: ADAMState, config: RunnableConfig) -> dict:
             select_eda_text_blocks(state.get("studentProfile", "business"), target_column_name)
         )
 
-        prompt = EDA_TEXT_ANALYST_PROMPT_BY_FAMILY.get(
-            context.get("primary_family", ""), EDA_TEXT_ANALYST_PROMPT
+        prompt = _select_eda_prompt(
+            state,
+            context.get("primary_family", ""),
+            by_family=EDA_TEXT_ANALYST_PROMPT_BY_FAMILY,
+            generic=EDA_TEXT_ANALYST_PROMPT,
+            clustering_override=EDA_TEXT_ANALYST_PROMPT_CLUSTERING,
         ).format(**context)
 
         # 🚀 LA SOLUCIÓN: Invocación directa sin JSON schema
@@ -2351,6 +2844,47 @@ def _eda_business_python_path(
         return None
 
 
+def _eda_clustering_python_path(
+    state: ADAMState, config: RunnableConfig, contract: dict | None
+) -> dict | None:
+    """Issue #466 — builder determinista DATA-ONLY de los charts EDA de clustering (ml_ds).
+
+    Construye 3 charts PRE-MODELO (distribución/escala → motiva estandarizar, correlación,
+    dispersión 2D SIN etiquetas de cluster) y pide al LLM solo `description`/`notes`. Devuelve el
+    update del nodo o ``None`` en fallo. Profile-agnostic (reutilizable por #317). A diferencia del
+    path ml_ds+clasificación, el caller NO hace fallback al LLM-JSON (mirror business 5A): ``None``
+    → panel vacío, para no reintroducir el chart supervisado que este builder retira.
+    """
+    try:
+        import pandas as pd  # noqa: PLC0415 — local para no penalizar imports globales
+
+        dataset = state.get("doc7_dataset") or []
+        if not dataset:
+            logger.warning(
+                "[eda_chart_generator/clustering] doc7_dataset vacío — panel vacío (sin fallback LLM)"
+            )
+            return None
+        df = pd.DataFrame(dataset)
+        # `correlation_matrix` es data-only en `_calculate_eda_regressions`; la regresión target_vs_X
+        # que también computa es INERTE aquí (el builder data-only no la consume).
+        precalculated = _calculate_eda_regressions(state, dataset)
+
+        charts = generate_clustering_eda_charts(df, contract, precalculated)
+        if not charts:
+            logger.warning(
+                "[eda_chart_generator/clustering] builder devolvió 0 charts — panel vacío (sin fallback LLM)"
+            )
+            return None
+
+        return _annotate_validate_emit(charts, state, config, EDA_ANNOTATE_ONLY_PROMPT_CLUSTERING)
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "[eda_chart_generator/clustering] ERROR no recuperable: %s — panel vacío (sin fallback LLM)",
+            e, exc_info=True,
+        )
+        return None
+
+
 def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """Extrae los charts del reporte EDA (Documento 2 — parte charts).
 
@@ -2400,6 +2934,20 @@ def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 "[eda_chart_generator] business builder no produjo charts — panel vacío (sin fallback LLM)"
             )
             return {"doc2_eda_charts": [], "current_agent": "eda_chart_generator"}
+
+    # Issue #466 — ml_ds + clustering: builder DATA-ONLY determinista (3 charts pre-modelo, sin
+    # target ni etiquetas de cluster). Mirror business: None → panel vacío, SIN fallback LLM-JSON
+    # (para no reintroducir el chart supervisado "feature vs objetivo"). Kill-switch off → cae al
+    # path LLM-JSON byte-idéntico. Builder profile-agnostic; business+clustering es #317.
+    elif primary_family == "clustering" and profile == "ml_ds" and settings.mlds_clustering_charts:
+        contract = state.get("dataset_schema_required")
+        py_update = _eda_clustering_python_path(state, config, contract)
+        if py_update is not None:
+            return py_update
+        logger.warning(
+            "[eda_chart_generator] clustering builder no produjo charts — panel vacío (sin fallback LLM)"
+        )
+        return {"doc2_eda_charts": [], "current_agent": "eda_chart_generator"}
 
     try:
         cfg = Configuration.from_runnable_config(config)
@@ -2638,8 +3186,12 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "chart_manifest": chart_manifest,
         })
 
-        prompt = EDA_QUESTIONS_PROMPT_BY_FAMILY.get(
-            context.get("primary_family", ""), EDA_QUESTIONS_GENERATOR_PROMPT
+        prompt = _select_eda_prompt(
+            state,
+            context.get("primary_family", ""),
+            by_family=EDA_QUESTIONS_PROMPT_BY_FAMILY,
+            generic=EDA_QUESTIONS_GENERATOR_PROMPT,
+            clustering_override=EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING,
         ).format(**context)
 
         # v9 M2-Redesign: EDAQuestionsOutput con EDASocraticQuestion (solucion_esperada = objeto)
@@ -2901,12 +3453,60 @@ def _validate_and_correct_dataset(
     return is_valid, errors, corrected_rows
 
 
+# Entity-level SEGMENTATION feature columns for the ml_ds + clustering fallback schema
+# (Issue #452). Customer-level RFM + behavioural axes (NOT a financial time-series panel), so
+# K-Means clusters interpretable segments. `_enforce_mlds_clustering_structure` injects the
+# latent blob structure over these; the financial Exhibit 1 stays a separate M1 narrative.
+_CLUSTERING_SEGMENTATION_COLUMNS: tuple[dict, ...] = (
+    {"name": "recency_days",      "type": "int",   "description": "Días desde la última actividad de la entidad",         "range_min": 1,    "range_max": 365,  "nullable": False, "trend": None, "dependency": None},
+    {"name": "frequency_count",   "type": "int",   "description": "Número de interacciones/compras en el período",        "range_min": 1,    "range_max": 60,   "nullable": False, "trend": None, "dependency": None},
+    {"name": "monetary_value",    "type": "float", "description": "Valor monetario acumulado de la entidad (USD)",        "range_min": 50.0, "range_max": 5000.0,"nullable": False, "trend": None, "dependency": None},
+    {"name": "tenure_months",     "type": "int",   "description": "Antigüedad de la relación en meses",                   "range_min": 1,    "range_max": 72,   "nullable": False, "trend": None, "dependency": None},
+    {"name": "engagement_score",  "type": "float", "description": "Score de engagement de la entidad (0-1)",             "range_min": 0.0,  "range_max": 1.0,  "nullable": False, "trend": None, "dependency": None},
+    {"name": "support_intensity", "type": "float", "description": "Intensidad de uso de soporte (interacciones/mes)",     "range_min": 0.0,  "range_max": 10.0, "nullable": False, "trend": None, "dependency": None},
+)
+
+# Row count for the ml_ds + clustering dataset (Issue #468). 200 was too few for a 12-D K-Means
+# fit (~50 points/cluster → noisy silhouette, unstable re-seeding) and clashed with the "segment N
+# users" narrative. 1000 entity rows stabilises the clusters; the silhouette band is recalibrated
+# via `_CLUSTERING_BLOB_SPREAD_FRAC` (0.115). Single source shared by `schema_designer` and the
+# deterministic band-lock tests; gated by `MLDS_CLUSTERING_STRUCTURE` (OFF → 200 generic ml_ds).
+_MLDS_CLUSTERING_MAX_ROWS = 1000
+
+
+def _build_clustering_fallback_schema(max_rows: int) -> dict:
+    """Entity-level segmentation fallback schema for ml_ds + clustering (Issue #452).
+
+    ``period`` is kept as a row id (str → excluded from the numeric K-Means fit); the rest are
+    interpretable segmentation features that `_enforce_mlds_clustering_structure` blobs. No
+    revenue/costs/margin/ebitda → the financial scaling + ebitda/margin recompute + outlier
+    target selection in `_generate_dataset_from_schema`/`data_validator` all no-op cleanly.
+    """
+    columns: list[dict] = [
+        {"name": "period", "type": "str", "description": "Identificador de entidad/registro",
+         "range_min": None, "range_max": None, "nullable": False, "trend": None, "dependency": None},
+    ]
+    columns.extend(dict(c) for c in _CLUSTERING_SEGMENTATION_COLUMNS)
+    return {
+        "columns": columns,
+        "n_rows": max_rows,
+        "time_granularity": "monthly",
+        "constraints": {"tolerance_pct": 0.05},
+        "reasoning_summary": "Fallback schema clustering — features de segmentación (Issue #452)",
+    }
+
+
 # ─────────────────────────────────────────────────────────
 # HELPER — _build_fallback_schema (sin LLM, regex sobre Exhibit 1)
 # ─────────────────────────────────────────────────────────
 
 def _build_fallback_schema(
-    state: ADAMState, max_rows: int, profile: str, primary_family: str = "clasificacion"
+    state: ADAMState,
+    max_rows: int,
+    profile: str,
+    primary_family: str = "clasificacion",
+    *,
+    clustering_structure_enabled: bool = True,
 ) -> dict:
     """Schema mínimo si schema_designer falla. Extrae revenue con regex del Exhibit 1.
 
@@ -2914,7 +3514,19 @@ def _build_fallback_schema(
     18-column binary-target schema; all other ml_ds families receive the 12-column
     generic baseline (cols 1–10 + customer_ltv + engagement_score) so their M3
     notebooks do not receive a classification-specific target.
+
+    Issue #452 — for ``ml_ds + clustering`` (with the kill-switch on) it returns a dedicated
+    entity-level SEGMENTATION schema (``period`` + interpretable segmentation features, no
+    churn/retention/financial time-series panel) instead, so K-Means clusters interpretable
+    behavioural axes; ``_enforce_mlds_clustering_structure`` then injects the latent blobs.
     """
+    if (
+        clustering_structure_enabled
+        and profile == "ml_ds"
+        and primary_family == "clustering"
+    ):
+        return _build_clustering_fallback_schema(max_rows)
+
     financial_text = state.get("doc1_anexo_financiero", "")
 
     revenue_match = re.search(r'[\$€]?\s*([\d,]+(?:\.\d+)?)\s*[Mm]', financial_text)
@@ -4317,6 +4929,170 @@ def _enforce_mlds_classification_schema(
     return new_schema
 
 
+# Issue #466 — leaked-target detection for the ml_ds + clustering strip. Clustering is unsupervised →
+# NO target column of ANY kind may exist. Three vectors: (A) an explicit contract `target_column` (any
+# role/shape — clustering has no target); (B) a target-named binary column (a hallucinated
+# `dummy_target`); (C) a cluster-label artifact name (`cluster_id`/`kmeans_*` — a pre-assigned cluster
+# answer that hands the student the result and must never appear pre-model).
+_CLUSTERING_TARGET_NAME_TOKENS: tuple[str, ...] = (
+    "dummy_target", "target", "objetivo", "label", "categoria", "clase", "clasificacion", "churn",
+)
+_CLUSTERING_TARGET_EXACT_NAMES: frozenset[str] = frozenset({"y", "y_true", "y_pred"})
+# Cluster-label artifacts (answer leak): stripped by NAME regardless of shape — no legitimate
+# pre-model segmentation feature is named `cluster*`/`kmeans*` (a k-valued cluster id is NOT binary,
+# so the binary-shape guard of Regla B would otherwise miss it).
+_CLUSTERING_LABEL_NAME_TOKENS: tuple[str, ...] = ("cluster", "kmeans")
+
+
+def _enforce_mlds_clustering_no_target(
+    schema: dict,
+    contract: dict | None,
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+) -> dict:
+    """Strip any leaked SUPERVISED target column from an ml_ds + clustering schema (Issue #466).
+
+    SIBLING determinista de ``_enforce_mlds_classification_schema`` (#382) — NO generalizar esa
+    función. Corre DESPUÉS de ``_align`` + ``_augment`` + los spines de clasificación en
+    ``schema_designer``, sobre el schema ya ensamblado y ANTES de la generación de datos, de modo que
+    la columna nunca se materializa en el CSV. 0 tokens LLM, PURO copy-on-write (no muta el dict de
+    entrada) → determinismo del seed + thread-safety. Idempotente → resume-safe.
+
+    Clustering es no supervisado → no debe existir target. El LLM (schema_designer) puede alucinar un
+    ``dummy_target`` pese a la prohibición del prompt, y ``_augment_schema_with_contract`` es gateless
+    (inyecta un ``target_column`` del contrato para cualquier familia). El strip es la GARANTÍA robusta
+    a ambos orígenes. Detección (anti-FP):
+      * Regla A (contrato, FP-proof): cualquier ``target_column`` declarado (clustering NO tiene
+        target de NINGÚN rol) → elimina su columna, sea cual sea su rol o forma.
+      * Regla B (heurística guardada): nombre tipo-target de clasificación (token o exacto) Y forma
+        binaria/unitaria (rango [0,1]) Y NO en ``protected``.
+      * Regla C (etiqueta de cluster): nombre ``cluster*``/``kmeans*`` (artefacto del modelo/answer
+        leak) → elimina sin importar la forma (un id de cluster k-valuado NO es binario).
+      * ``protected`` (nunca se elimina): ``period`` ∪ ``contract.feature_columns`` ∪ las features de
+        segmentación #452. Un RFM continuo nunca matchea los tokens → FP ≈ 0.
+
+    Gate (fuera de él → MISMO objeto, byte-idéntico):
+      ``enabled`` (kill-switch ``MLDS_CLUSTERING_NO_TARGET``) AND ``profile=="ml_ds"`` AND
+      ``primary_family=="clustering"`` (estricto, espeja ``_enforce_mlds_clustering_structure``).
+    """
+    if not enabled or profile != "ml_ds" or primary_family != "clustering":
+        return schema
+
+    columns = [dict(c) for c in schema.get("columns", [])]
+    if not columns:
+        return schema
+
+    protected = {"period"}
+    for f in (contract or {}).get("feature_columns") or []:
+        fname = (f.get("name") or "").strip()
+        if fname:
+            protected.add(fname)
+    protected |= {c["name"] for c in _CLUSTERING_SEGMENTATION_COLUMNS}
+
+    strip_names: set[str] = set()
+
+    # Regla A (contrato, FP-proof): clustering NO debe tener target_column de NINGÚN rol/forma → si el
+    # contrato declara uno (architect descarriado o inyección del augmenter gateless), elimínalo.
+    tgt = (contract or {}).get("target_column") or {}
+    tgt_name = (tgt.get("name") or "").strip()
+    if tgt_name and tgt_name not in protected:
+        strip_names.add(tgt_name)
+
+    for c in columns:
+        name = (c.get("name") or "").strip()
+        if not name or name in protected:
+            continue
+        lname = name.lower()
+        # Regla C (etiqueta de cluster, cualquier forma): `cluster_id`/`cluster_label`/`kmeans_*` es un
+        # artefacto del modelo (answer leak), nunca una feature pre-modelo → elimina sin guarda de forma.
+        if any(tok in lname for tok in _CLUSTERING_LABEL_NAME_TOKENS):
+            strip_names.add(name)
+            continue
+        # Regla B (heurística guardada): nombre tipo-target de clasificación + forma binaria/unitaria.
+        name_is_target = (
+            lname in _CLUSTERING_TARGET_EXACT_NAMES
+            or any(tok in lname for tok in _CLUSTERING_TARGET_NAME_TOKENS)
+        )
+        # rmin == 0 / rmax == 1 cubre int 0/1 Y float 0.0/1.0 (0 == 0.0). Un str (rango None) → False.
+        binary_shape = c.get("range_min") == 0 and c.get("range_max") == 1
+        if name_is_target and binary_shape:
+            strip_names.add(name)
+
+    if not strip_names:
+        return schema
+
+    stripped = [c.get("name") for c in columns if c.get("name") in strip_names]
+    columns = [c for c in columns if c.get("name") not in strip_names]
+
+    # Reparación de dependencias colgantes: una columna cuyo padre fue eliminado genera independiente
+    # (evita huérfanos → ruido). Defensivo: una feature de segmentación no debería depender del target.
+    remaining = {c.get("name") for c in columns}
+    for c in columns:
+        dep = c.get("dependency")
+        if isinstance(dep, dict) and dep.get("depends_on") not in remaining:
+            c["dependency"] = None
+
+    # Observabilidad LOG-ONLY (no teacher-facing; precedente #336/#382; sin PII, solo nombres).
+    logger.warning(
+        "[_enforce_mlds_clustering_no_target] ml_ds+clustering no supervisado: columnas target "
+        "removidas: %s",
+        stripped,
+        extra={
+            "node": "schema_designer", "family": "clustering",
+            "columns_stripped": stripped, "reason": "unsupervised_family_no_target",
+        },
+    )
+
+    new_schema = dict(schema)
+    new_schema["columns"] = columns
+    return new_schema
+
+
+def _filter_clustering_target_warnings(
+    warnings: list[str],
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+) -> list[str]:
+    """Issue #482 — drop data_gap_warnings que NOMBRAN un target supervisado en ml_ds+clustering.
+
+    Clustering es no supervisado: ``_enforce_mlds_clustering_no_target`` (#466) stripea la COLUMNA
+    target del CSV, pero DOS emisores upstream aún producen un warning que nombra ese target huérfano
+    (``contract.target_column.name``, p. ej. ``dummy_target_ignored_for_clustering``):
+      (1) el architect ``_validate_target_semantic_coherence`` (sembrado en ``data_gap_warnings`` en
+          ``case_architect``; ungated por familia — dispara cuando el TÍTULO trae un keyword de
+          ``_TITLE_TO_TARGET_TOKENS``), y
+      (2) el validador ``_validate_schema_against_contract`` (``"target '<name>' … no fue
+          producido…"``; determinista en todo caso stripeado).
+    Ambos terminan en el ``warnings_payload`` de ``schema_designer`` y de ahí a M2 EDA
+    (``{data_gap_warnings_block}``) y, vía ``contexto_m2``, a M3-content → el estudiante lee una
+    columna ausente del CSV (#482). Este filtro corre en el ÚNICO choke point de ``schema_designer``,
+    DESPUÉS de fusionar todos los warnings, así que cubre ambos emisores (y cualquier futuro).
+
+    Prefix-based sobre las DOS únicas formas que nombran el target en todo el código: ``"target '"``
+    (validador) y ``_TARGET_SEMANTIC_MISMATCH_TOKEN`` (architect). Los warnings de feature-missing
+    (``"feature '…'"``) y de leakage se PRESERVAN → cero falsos positivos (clustering nunca tiene un
+    target legítimo, así que cualquier warning de target es espurio). Fuera de ml_ds+clustering /
+    kill-switch off → devuelve el MISMO objeto (byte-idéntico). Reusa el switch ``MLDS_CLUSTERING_NO_TARGET``.
+    """
+    if not enabled or profile != "ml_ds" or primary_family != "clustering":
+        return warnings
+    return [
+        w
+        for w in warnings
+        if not (
+            isinstance(w, str)
+            and (
+                w.lstrip().startswith("target '")
+                or w.lstrip().startswith(_TARGET_SEMANTIC_MISMATCH_TOKEN)
+            )
+        )
+    ]
+
+
 def _contract_with_enforced_target(contract: dict | None, target_name: str | None) -> dict | None:
     """Reescribe ``target_column`` del contrato al target binario que el spine garantizó.
 
@@ -4382,84 +5158,147 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     _effective_family = (primary_family or "clasificacion") if profile == "ml_ds" else ""
 
     # ml_ds+clasificacion: 600 filas (Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV).
+    # ml_ds+clustering: 1000 filas (Issue #468 — entity-level segmentation needs more points than
+    #   the 12-D K-Means fit had at 200; recalibrated band). Gated por el switch → OFF = 200 genérico.
     # ml_ds+otras familias: 200 filas — el GridSearchCV size cascade es exclusivo del
-    # notebook de clasificacion; regresion/clustering no necesitan 600 filas.
+    # notebook de clasificacion; regresion no necesita 600 filas.
     # business: 100 (midpoint de 80-120; el LLM elige n_rows estrictamente entre 80-120).
     _is_clasificacion_ml = profile == "ml_ds" and _effective_family == "clasificacion"
-    max_rows = 600 if _is_clasificacion_ml else (200 if profile == "ml_ds" else 100)
+    if _is_clasificacion_ml:
+        max_rows = 600
+    elif _effective_family == "clustering" and settings.mlds_clustering_structure:
+        max_rows = _MLDS_CLUSTERING_MAX_ROWS
+    elif profile == "ml_ds":
+        max_rows = 200
+    else:
+        max_rows = 100
 
     _schema_prompt = SCHEMA_DESIGNER_PROMPT_BY_FAMILY.get(
         _effective_family, SCHEMA_DESIGNER_PROMPT
     )
+    # Issue #452 kill-switch — when MLDS_CLUSTERING_STRUCTURE is off, the clustering case reverts
+    # to the generic schema prompt (and the generic ml_ds fallback) byte-identically.
+    if _effective_family == "clustering" and not settings.mlds_clustering_structure:
+        _schema_prompt = SCHEMA_DESIGNER_PROMPT
 
-    context = _build_base_context(state)
-    context.update({
-        "titulo": state.get("titulo", ""),
-        "financial_data": state.get("doc1_anexo_financiero", ""),
-        "operational_data": state.get("doc1_anexo_operativo", ""),
-        "max_rows": max_rows,
-        "ml_required_families": ml_required_families,
-        # Issue #225 — inyecta contrato dilema↔dataset emitido por case_architect.
-        # Si es None (perfil business legado o architect no lo emitió), el bloque
-        # contiene un mensaje que activa las reglas heurísticas en el LLM.
-        "dataset_contract_block": _format_dataset_contract_block(
-            state.get("dataset_schema_required")
-        ),
-    })
-    prompt = _schema_prompt.format(**context)
+    # Issue #477 — ml_ds + clustering yields a DETERMINISTIC segmentation schema. The clustering
+    # prompt (SCHEMA_DESIGNER_PROMPT_CLUSTERING, #452) emits no `revenue_annual_total`, which is a
+    # REQUIRED field on DatasetConstraints, so a prompt-following LLM output ALWAYS fails
+    # DatasetSchema validation and we fall through to `_build_clustering_fallback_schema` anyway;
+    # a stray LLM schema that DOES validate would silently bypass the #452 determinism guarantee.
+    # Skip the always-wasted Pro call and use the deterministic schema directly. Gated on the SAME
+    # MLDS_CLUSTERING_STRUCTURE switch → OFF stays byte-identical (generic prompt + LLM path runs).
+    _use_deterministic_clustering_schema = (
+        _effective_family == "clustering" and settings.mlds_clustering_structure
+    )
 
-    # Cadena de fallback resiliente alineada con el patrón del case_architect (M1):
-    #   1) Pro thinking_level="medium" — primario (mantiene thinking; subir a "high"
-    #      arriesga truncar el JSON estructurado de 14 columnas por consumo de
-    #      reasoning interno).
-    #   2) Pro thinking_level="low"    — fallback transitorio sin degradar de modelo.
-    #   3) Flash                       — red de seguridad final ante incidente global
-    #      del Pro (sin response_mime_type estructurado, parser tolerante downstream).
-    # max_output_tokens=24576 da margen extra para el JSON (~5-6k tokens) sobre el
-    # reasoning de "medium" (~3-8k), reduciendo riesgo de truncamiento.
-    _common_kwargs = dict(
-        model=resolve_node_model(cfg, NODE_SCHEMA_DESIGNER, cfg.architect_model),
-        temperature=0.2,
-        max_retries=2,
-        max_output_tokens=24576,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-        response_mime_type="application/json",
-    )
-    primary = ChatGoogleGenerativeAI(thinking_level="medium", **_common_kwargs)
-    pro_low_fallback = ChatGoogleGenerativeAI(thinking_level="low", **_common_kwargs)
-    flash_fallback = ChatGoogleGenerativeAI(
-        model="gemini-3-flash-preview",
-        temperature=0.2,
-        max_retries=2,
-        max_output_tokens=24576,
-        api_key=os.getenv("GEMINI_API_KEY"),
-        rate_limiter=_rate_limiter,
-    )
-    candidates = [primary.with_fallbacks([pro_low_fallback, flash_fallback])]
+    # Resolve the node model ONCE so the chain construction and the parse path agree on the
+    # provider. A model id with "/" (e.g. "z-ai/glm-5.2" via NODE_MODEL_OVERRIDES) routes the two
+    # model-bearing tiers to OpenRouter; any other id stays on Gemini (byte-identical legacy path).
+    resolved_schema_model = resolve_node_model(cfg, NODE_SCHEMA_DESIGNER, cfg.architect_model)
+    _is_openrouter_schema = "/" in resolved_schema_model
+
+    # Build the prompt + resilient LLM chain ONLY when we will actually call the model. For the
+    # deterministic clustering path `candidates` stays empty → the loop below is a no-op and control
+    # falls through to the shared fallback assembly (the single source of the deterministic schema).
+    candidates: list[Any] = []
+    if not _use_deterministic_clustering_schema:
+        context = _build_base_context(state)
+        context.update({
+            "titulo": state.get("titulo", ""),
+            "financial_data": state.get("doc1_anexo_financiero", ""),
+            "operational_data": state.get("doc1_anexo_operativo", ""),
+            "max_rows": max_rows,
+            "ml_required_families": ml_required_families,
+            # Issue #225 — inyecta contrato dilema↔dataset emitido por case_architect.
+            # Si es None (perfil business legado o architect no lo emitió), el bloque
+            # contiene un mensaje que activa las reglas heurísticas en el LLM.
+            "dataset_contract_block": _format_dataset_contract_block(
+                state.get("dataset_schema_required")
+            ),
+        })
+        prompt = _schema_prompt.format(**context)
+
+        if _is_openrouter_schema:
+            # OpenRouter (GLM): la cadena se construye SIN response_mime_type — el JSON se
+            # GARANTIZA con `.with_structured_output(DatasetSchema)` en el loop. Pasar rmt aquí
+            # entraría en conflicto con el tool de structured-output cuando `_build_llm` degrada un
+            # tier a Gemini (response_mime_type=json + function-calling simultáneos). Las dos tiers
+            # con el `model` resuelto pasan por `_build_llm` (OpenRouter, o Gemini si la build
+            # falla); la tier final es SIEMPRE Gemini Flash (la red cross-provider).
+            primary = _build_llm(
+                resolved_schema_model, gemini_fallback_model="gemini-3-flash-preview",
+                temperature=0.2, thinking_level="medium", max_output_tokens=24576,
+            )
+            pro_low_fallback = _build_llm(
+                resolved_schema_model, gemini_fallback_model="gemini-3-flash-preview",
+                temperature=0.2, thinking_level="low", max_output_tokens=24576,
+            )
+            flash_fallback = _build_gemini(
+                "gemini-3-flash-preview", temperature=0.2, max_output_tokens=24576,
+            )
+            candidates = [primary.with_fallbacks([pro_low_fallback, flash_fallback])]
+        else:
+            # Gemini (sin override por-nodo): build inline byte-idéntico (rmt + parse manual).
+            # Cadena de fallback resiliente alineada con el patrón del case_architect (M1):
+            #   1) Pro thinking_level="medium" — primario (mantiene thinking; subir a "high"
+            #      arriesga truncar el JSON estructurado de 14 columnas por consumo de
+            #      reasoning interno).
+            #   2) Pro thinking_level="low"    — fallback transitorio sin degradar de modelo.
+            #   3) Flash                       — red de seguridad final ante incidente global
+            #      del Pro (sin response_mime_type estructurado, parser tolerante downstream).
+            # max_output_tokens=24576 da margen extra para el JSON (~5-6k tokens) sobre el
+            # reasoning de "medium" (~3-8k), reduciendo riesgo de truncamiento.
+            _common_kwargs = dict(
+                model=resolved_schema_model,
+                temperature=0.2,
+                max_retries=2,
+                max_output_tokens=24576,
+                api_key=os.getenv("GEMINI_API_KEY"),
+                rate_limiter=_rate_limiter,
+                response_mime_type="application/json",
+            )
+            primary = ChatGoogleGenerativeAI(thinking_level="medium", **_common_kwargs)
+            pro_low_fallback = ChatGoogleGenerativeAI(thinking_level="low", **_common_kwargs)
+            flash_fallback = ChatGoogleGenerativeAI(
+                model="gemini-3-flash-preview",
+                temperature=0.2,
+                max_retries=2,
+                max_output_tokens=24576,
+                api_key=os.getenv("GEMINI_API_KEY"),
+                rate_limiter=_rate_limiter,
+            )
+            candidates = [primary.with_fallbacks([pro_low_fallback, flash_fallback])]
 
     for i, llm in enumerate(candidates):
         # Solo 1 candidato compuesto; el fallback chain (Pro-medium → Pro-low → Flash)
         # se resuelve internamente vía .with_fallbacks().
         model_label = "pro-medium-chain" if i == 0 else f"candidate-{i}"
         try:
-            response = llm.invoke(prompt)
-            raw = _extract_text(response)
-            if not raw or not raw.strip():
-                print(f"[schema_designer] {model_label}: respuesta vacía, probando siguiente")
-                continue
+            if _is_openrouter_schema:
+                # OpenRouter (GLM): structured output devuelve un DatasetSchema validado o LANZA
+                # (output malo/truncado → ValidationError → `.with_fallbacks` avanza a Gemini → si
+                # TODA la cadena falla, el `except` de abajo cae al schema determinista). Sin
+                # parse manual ni response_mime_type (ver construcción de la cadena arriba).
+                validated: DatasetSchema = llm.with_structured_output(DatasetSchema).invoke(prompt)
+            else:
+                response = llm.invoke(prompt)
+                raw = _extract_text(response)
+                if not raw or not raw.strip():
+                    print(f"[schema_designer] {model_label}: respuesta vacía, probando siguiente")
+                    continue
 
-            schema_dict = _extract_json_from_llm_response(raw)
+                schema_dict = _extract_json_from_llm_response(raw)
 
-            if not schema_dict:
-                snippet = raw[:200].replace('\n', ' ')
-                logger.warning(
-                    "[schema_designer] %s: no se pudo extraer JSON válido. "
-                    "Primeros 200 chars del raw: %s", model_label, snippet
-                )
-                continue
+                if not schema_dict:
+                    snippet = raw[:200].replace('\n', ' ')
+                    logger.warning(
+                        "[schema_designer] %s: no se pudo extraer JSON válido. "
+                        "Primeros 200 chars del raw: %s", model_label, snippet
+                    )
+                    continue
 
-            validated = DatasetSchema(**schema_dict)
+                validated = DatasetSchema(**schema_dict)
             schema_result = validated.model_dump()
             schema_result = _normalize_ml_ds_columns(schema_result, profile)
 
@@ -4508,6 +5347,13 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 schema_result, contract, profile=profile, primary_family=primary_family,
                 enabled=settings.mlds_dechurn_signal,
             )
+            # Issue #466 — clustering es no supervisado: elimina cualquier target supervisado filtrado
+            # (dummy_target alucinado o target del contrato inyectado por el augmenter gateless) ANTES
+            # de generar datos, para que el CSV no tenga target. No-op fuera de ml_ds+clustering.
+            schema_result = _enforce_mlds_clustering_no_target(
+                schema_result, contract, profile=profile, primary_family=primary_family,
+                enabled=settings.mlds_clustering_no_target,
+            )
             missing, leakage = _validate_schema_against_contract(schema_result, contract)
             # Issue #228 — preserva semillas de data_gap_warnings emitidas por
             # case_architect (ej: target_semantic_mismatch). LangGraph reemplaza
@@ -4519,6 +5365,13 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 warnings_payload.extend(leakage)
             if biz_notes:
                 warnings_payload.extend(biz_notes)
+            # Issue #482 — quita los warnings que nombran el target stripeado de clustering (architect
+            # coherence + validador) antes de persistir; M2 EDA y M3-content dejan de citar una columna
+            # ausente del CSV. No-op byte-idéntico fuera de ml_ds+clustering / switch off.
+            warnings_payload = _filter_clustering_target_warnings(
+                warnings_payload, profile=profile, primary_family=primary_family,
+                enabled=settings.mlds_clustering_no_target,
+            )
             node_out: dict[str, Any] = {
                 "dataset_schema": schema_result,
                 "data_gap_warnings": warnings_payload,
@@ -4531,11 +5384,24 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 node_out["dataset_schema_required"] = updated_contract
             return node_out
         except (ValidationError, Exception) as e:
+            # OpenRouter sin créditos: el 402 solo llega aquí si la cadena Gemini también falló
+            # (el fallback normalmente lo rescata). Aviso explícito para distinguirlo del genérico.
+            if getattr(e, "status_code", None) == 402:
+                logger.warning(
+                    "[schema_designer] OpenRouter SIN CRÉDITOS (402) — degradado a Gemini "
+                    "también falló; recargar saldo. Cayendo al schema determinista."
+                )
             logger.error("[schema_designer] %s ERROR: %s", model_label, e, exc_info=True)
 
-    print("[schema_designer] todos los intentos fallaron — usando fallback schema")
+    # Issue #477 — distinguish the deterministic clustering skip from a genuine all-attempts
+    # failure so the log is honest (nothing "failed" on the deterministic path).
+    if _use_deterministic_clustering_schema:
+        print("[schema_designer] clustering — usando schema determinista de segmentación")
+    else:
+        print("[schema_designer] todos los intentos fallaron — usando fallback schema")
     fallback_schema = _build_fallback_schema(
-        state, max_rows, profile, primary_family=_effective_family
+        state, max_rows, profile, primary_family=_effective_family,
+        clustering_structure_enabled=settings.mlds_clustering_structure,
     )
     # Issue #225 — incluso en fallback respetamos el contrato del architect.
     contract = state.get("dataset_schema_required")
@@ -4554,6 +5420,11 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         fallback_schema, contract, profile=profile, primary_family=primary_family,
         enabled=settings.mlds_dechurn_signal,
     )
+    # Issue #466 — mismo strip de target supervisado en el fallback (red de seguridad).
+    fallback_schema = _enforce_mlds_clustering_no_target(
+        fallback_schema, contract, profile=profile, primary_family=primary_family,
+        enabled=settings.mlds_clustering_no_target,
+    )
     missing, leakage = _validate_schema_against_contract(fallback_schema, contract)
     # Issue #228 — preserva warnings sembrados por case_architect.
     warnings_payload = list(state.get("data_gap_warnings") or [])
@@ -4563,6 +5434,12 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         warnings_payload.extend(leakage)
     if biz_notes:
         warnings_payload.extend(biz_notes)
+    # Issue #482 — mismo filtro de warnings de target stripeado en el fallback. Clustering corre ESTE
+    # path (determinista por #477), así que este es el filtro que actúa en producción.
+    warnings_payload = _filter_clustering_target_warnings(
+        warnings_payload, profile=profile, primary_family=primary_family,
+        enabled=settings.mlds_clustering_no_target,
+    )
     node_out = {
         "dataset_schema": fallback_schema,
         "data_gap_warnings": warnings_payload,
@@ -5024,6 +5901,212 @@ def _generate_dataset_from_schema(
 
 
 # ─────────────────────────────────────────────────────────
+# HELPER — _enforce_mlds_clustering_structure (Issue #452)
+# ─────────────────────────────────────────────────────────
+
+# Within-blob standard deviation as a fraction of each feature's [range_min, range_max] span.
+# Calibrated so StandardScaler + KMeans over the blobbed segmentation features lands the
+# silhouette in the healthy band ~[0.45, 0.70] (neither trivial nor degenerate) and the
+# adjusted Rand index vs. the latent blob label stays ≥ 0.6. Tuned against the deterministic
+# golden oracle (tests/test_issue452_clustering_structure.py); do NOT change without re-running it.
+# Issue #468 — RE-CALIBRATED 0.135 → 0.115 for the 200 → 1000 row bump (`_MLDS_CLUSTERING_MAX_ROWS`):
+# more rows fill in the blob tails and lower the silhouette (k=4 was the worst case, dropping to
+# ~0.44 < 0.45 at 600 rows with 0.135). At n=1000 spread 0.115 the bare fallback lands k3≈0.553 /
+# k4≈0.584, and a 300-contract Monte Carlo over augmented schemas stays in [0.49, 0.67] (0 out of band).
+_CLUSTERING_BLOB_SPREAD_FRAC = 0.115
+# K (number of latent segments) is chosen deterministically per case from this set.
+_CLUSTERING_K_CHOICES: tuple[int, ...] = (3, 4)
+
+
+def _clustering_scalable_feature_columns(schema: dict) -> list[dict]:
+    """Numeric, scalable feature columns a K-Means fit would use (Issue #452).
+
+    Excludes the temporal/index column (``period``/date) — it is a row id the notebook drops
+    from the fit. Everything else of type int/float is a segmentation feature that should carry
+    the latent cluster structure.
+    """
+    feats: list[dict] = []
+    for col in schema.get("columns", []):
+        if col.get("type") not in ("int", "float"):
+            continue
+        name = str(col.get("name", ""))
+        if name == "period" or name.startswith("period") or col.get("type") == "date":
+            continue
+        feats.append(col)
+    return feats
+
+
+def _enforce_mlds_clustering_structure(
+    rows: list,
+    schema: dict,
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+    return_labels: bool = False,
+    target_k: int | None = None,
+):
+    """Inyecta estructura de clusters REAL en el dataset ml_ds + clustering (Issue #452).
+
+    El generador determinista produce columnas UNIMODALES (una sola moda por columna), así que
+    K-Means parte una nube convexa en cuñas arbitrarias y la premisa pedagógica ("descubrir
+    segmentos latentes") queda hueca. Este helper reescribe las features numéricas escalables
+    como una **mezcla de K∈{3,4} blobs gaussianos separables**, de modo que K-Means descubre
+    segmentos genuinos e interpretables.
+
+    Es PURO copy-on-write (no muta el dict/lista de entrada → determinismo del seed +
+    thread-safety bajo jobs concurrentes), preserva el conteo y el ORDEN de filas (los blobs
+    quedan row-aligned a través de ``data_validator``), y conserva nulls intencionales y los
+    rangos ``range_min``/``range_max`` declarados.
+
+    Gate (fuera de él → la MISMA lista de entrada, byte-idéntica): ``enabled`` (kill-switch
+    ``MLDS_CLUSTERING_STRUCTURE``) AND ``profile == "ml_ds"`` AND ``primary_family == "clustering"``
+    (ESTRICTO — NO ``primary_family or "clustering"``: un job ml_ds con algoritmos vacíos/no
+    mapeables resuelve ``primary_family=None`` y el resto del pipeline lo trata como CLASIFICACIÓN
+    [``_effective_family = primary_family or "clasificacion"``], así que coaccionar ``None →
+    clustering`` aquí blobearía el target binario ``categoria`` de ese cohorte). business /
+    clasificación / regresión / serie_temporal / ml_ds-sin-algoritmos nunca entran.
+
+    La etiqueta latente del blob es SOLO de generación: no se persiste en ``doc7_dataset`` (no se
+    filtra al fit de K-Means). Con ``return_labels=True`` se devuelve aparte ``(rows, labels)``
+    para que el oráculo golden mida el ARI contra la estructura inyectada (no es teacher/student
+    facing).
+    """
+    if not enabled or profile != "ml_ds" or primary_family != "clustering":
+        return (rows, None) if return_labels else rows
+    if not isinstance(rows, list) or not rows:
+        return (rows, None) if return_labels else rows
+    feats = _clustering_scalable_feature_columns(schema)
+    if len(feats) < 2:
+        # Sin al menos 2 features escalables no hay espacio donde formar blobs separables.
+        return (rows, None) if return_labels else rows
+
+    import numpy as np
+
+    n = len(rows)
+    # Seed determinista derivado del schema (mismo patrón que `_generate_dataset_from_schema`),
+    # desplazado para no correlacionar con el stream del generador. RNG LOCAL (thread-safe).
+    base_seed = (
+        int(hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(), 16) % (2**31)
+    )
+    rng = np.random.default_rng(base_seed + 452)
+
+    k = _CLUSTERING_K_CHOICES[base_seed % len(_CLUSTERING_K_CHOICES)]
+    # Issue #467 — HONOR the coordinated target_k (capped to {3,4} at resolve time) so the data's
+    # cluster count matches the narrative's framing. When target_k is None (kill-switch off / non-#467
+    # path) the hash choice stands → the blob shape stays seeded by sha256(schema), BYTE-IDENTICAL to
+    # #452. The blob noise/shuffle stream is unchanged either way (target_k only overrides the COUNT).
+    if target_k is not None:
+        try:
+            k = int(target_k)
+        except (TypeError, ValueError):
+            k = _CLUSTERING_K_CHOICES[base_seed % len(_CLUSTERING_K_CHOICES)]
+    _k_clamped = max(2, min(k, n - 1))
+    if target_k is not None and _k_clamped != k:
+        logger.info(
+            "[_enforce_mlds_clustering_structure] target_k=%s clamped to %s (n=%s)",
+            target_k, _k_clamped, n,
+        )
+    k = _k_clamped
+
+    # Asignación de blobs balanceada y determinista (round-robin barajado).
+    labels = np.array([i % k for i in range(n)], dtype=int)
+    rng.shuffle(labels)
+
+    new_rows = [dict(r) for r in rows]
+    for col in feats:
+        name = col["name"]
+        low = float(col["range_min"]) if col.get("range_min") is not None else 0.0
+        high = float(col["range_max"]) if col.get("range_max") is not None else low + 1.0
+        if low >= high:
+            high = low + 1.0
+        span = high - low
+        # Centros por-blob = niveles EQUI-ESPACIADOS en el interior del rango normalizado,
+        # BARAJADOS por feature. Como cada blob recibe un nivel distinto (permutación biyectiva),
+        # cualquier par de blobs difiere en TODA feature por ≥ el gap mínimo → separación fuerte y
+        # consistente (a diferencia de centros uniformes-aleatorios, que pueden caer juntos); la
+        # permutación por-feature evita que los blobs queden colineales (separación isotrópica).
+        centers = rng.permutation(np.linspace(0.18, 0.82, k))
+        vals_norm = np.clip(
+            centers[labels] + rng.normal(0.0, _CLUSTERING_BLOB_SPREAD_FRAC, n), 0.0, 1.0
+        )
+        vals = low + vals_norm * span
+        is_int = col.get("type") == "int"
+        for i, r in enumerate(new_rows):
+            if r.get(name) is None:  # preserva nulls intencionales
+                continue
+            v = float(vals[i])
+            r[name] = int(round(v)) if is_int else round(v, 4)
+
+    if return_labels:
+        return new_rows, labels.tolist()
+    return new_rows
+
+
+def _apply_clustering_entity_index(
+    rows: list,
+    schema: dict,
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+) -> tuple[list, dict]:
+    """Renombra el índice temporal ``period`` → ``user_id`` (entity-level) para ml_ds + clustering (Issue #468).
+
+    El generador genérico rellena ``period`` con etiquetas mensuales (``2023-01``…) porque trata la
+    columna como índice temporal. Para clustering la unidad de análisis es la ENTIDAD (cliente/
+    usuario), no el mes — la narrativa segmenta usuarios. Este post-step (espeja
+    ``_enforce_mlds_clustering_structure``) reescribe la columna a un identificador de entidad
+    determinista ``user_00001``… y la renombra a ``user_id`` en las filas Y en una copia del schema,
+    de modo que el CSV que ve el estudiante es entity-level (no una serie temporal mensual).
+
+    PURO copy-on-write (no muta las entradas → determinismo + thread-safety). ``user_id`` (str, token
+    ``id``) queda excluido del fit K-Means y de los charts (``_select_clustering_feature_columns`` lo
+    descarta por no-numérico y por el token ``id``) y el notebook #454 lo dropea por no-numérico.
+
+    ROBUSTO a un re-feed del schema renombrado (value-idempotente, no solo no-op): la columna índice
+    es ``period`` en la 1ª pasada (el generador genérico la rellena con etiquetas mensuales) o
+    ``user_id`` si se re-genera contra el schema YA renombrado que ``data_generator`` re-emite (un
+    retry de ``data_validator`` o un futuro checkpoint-skip de ``schema_designer`` haría que el
+    generador genérico rellene ``user_id`` con ``cat_N``). En AMBOS casos se (re)deriva
+    ``user_id = user_NNNNN`` de forma determinista, sobrescribiendo cualquier relleno categórico
+    obsoleto → el índice de entidad nunca se corrompe.
+
+    Gate (fuera de él → MISMOS objetos, byte-idéntico): ``enabled`` (kill-switch
+    ``MLDS_CLUSTERING_STRUCTURE``) AND ``profile == "ml_ds"`` AND ``primary_family == "clustering"``
+    (ESTRICTO, espeja ``_enforce_mlds_clustering_structure``).
+    """
+    if not enabled or profile != "ml_ds" or primary_family != "clustering":
+        return rows, schema
+    if not isinstance(rows, list) or not rows:
+        return rows, schema
+    # Normaliza la columna índice (``period`` 1ª pasada / ``user_id`` re-feed) al id de entidad.
+    if "period" in rows[0]:
+        index_key = "period"
+    elif "user_id" in rows[0]:
+        index_key = "user_id"
+    else:
+        return rows, schema
+
+    new_rows: list = []
+    for i, r in enumerate(rows):
+        rest = {k: v for k, v in r.items() if k != index_key}
+        new_rows.append({"user_id": f"user_{i + 1:05d}", **rest})
+
+    new_schema = dict(schema)
+    new_columns: list = []
+    for col in schema.get("columns", []):
+        c = dict(col)
+        if c.get("name") == "period":
+            c["name"] = "user_id"
+            c["type"] = "str"
+            c["description"] = "Identificador único de entidad/usuario"
+        new_columns.append(c)
+    new_schema["columns"] = new_columns
+    return new_rows, new_schema
+
+
+# ─────────────────────────────────────────────────────────
 # NODO 2 — DATA GENERATOR (Python puro, 0 tokens LLM)
 # ─────────────────────────────────────────────────────────
 
@@ -5058,15 +6141,65 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             target_event_rate=target_event_rate,
             target_col_name=target_col_name,
         )
+        # Issue #452 — inyecta estructura de clusters real para ml_ds + clustering (determinista,
+        # gateado por kill-switch). No-op byte-idéntico para business/clasificación/regresión/
+        # serie_temporal. Corre DESPUÉS del generador (sobrescribe las features → neutraliza el
+        # outlier ×3.5 que cayó en la 1ª feature) y ANTES de `data_validator` (que solo corrige
+        # revenue/costs/ebitda/margin/retención → no toca estas features de segmentación).
+        _clustering_family, _ = _resolve_primary_family(_extract_state_algoritmos(state))
+        # Issue #467 — honor the coordinated target_k from clustering_decision (resolved at intake) so
+        # the injected blob count == the k the narrative frames. Gated on the SAME kill-switch as every
+        # other consumer (architect / M1 / M3 / M4 / M5) so a mid-run / resume-time flip of
+        # MLDS_CLUSTERING_DECISION_COHERENCE keeps the data layer consistent with the narrative (no
+        # stale target_k from a durable checkpoint). Absent / off → target_k=None → #452 hash choice
+        # → byte-identical.
+        _clustering_decision = state.get("clustering_decision")
+        _target_k = (
+            _clustering_decision.get("target_k")
+            if settings.mlds_clustering_decision_coherence and isinstance(_clustering_decision, dict)
+            else None
+        )
+        rows = _enforce_mlds_clustering_structure(
+            rows,
+            schema,
+            profile=profile,
+            primary_family=_clustering_family,
+            enabled=settings.mlds_clustering_structure,
+            target_k=_target_k,
+        )
+        # Issue #468 — entity-level index: rename the monthly `period` to a `user_id` (user_00001…)
+        # so the clustering CSV the student reads is per-entity, not a monthly time series. No-op
+        # byte-idéntico fuera de ml_ds+clustering / con el switch off. Copy-on-write, resume-safe.
+        rows, schema = _apply_clustering_entity_index(
+            rows,
+            schema,
+            profile=profile,
+            primary_family=_clustering_family,
+            enabled=settings.mlds_clustering_structure,
+        )
         constraints = schema.get("constraints", {})
         constraints_with_count = {**constraints, "n_rows_expected": schema.get("n_rows", 100)}
 
         print(f"[data_generator] {len(rows)} filas generadas — Python puro, 0 tokens LLM")
-        return {
+        node_out: dict[str, Any] = {
             "doc7_dataset": rows,
             "dataset_constraints": constraints_with_count,
             "current_agent": "data_generator",
         }
+        # Re-emit the entity-indexed schema so `dataset_metadata`/`protected_columns` (and the M2
+        # EDA prompt context) reference `user_id`, not the removed `period`. Gated to ml_ds+clustering
+        # → every other family's return is byte-identical. Re-feed-safe: if this `user_id` schema is
+        # later re-read by `data_generator` (a data_validator retry, or a future schema_designer
+        # checkpoint-skip), the generic generator would fill `user_id` with `cat_N`, but
+        # `_apply_clustering_entity_index` re-derives `user_id = user_NNNNN` from the row index in that
+        # pass too (value-idempotent), so the entity index is never corrupted.
+        if (
+            settings.mlds_clustering_structure
+            and profile == "ml_ds"
+            and _clustering_family == "clustering"
+        ):
+            node_out["dataset_schema"] = schema
+        return node_out
 
     except Exception as e:
         logger.error("[data_generator] ERROR: %s", e, exc_info=True)
@@ -5325,6 +6458,10 @@ def teaching_note_part1(state: ADAMState, config: RunnableConfig) -> dict:
             state.get("m3_notebook_degraded")
         )
         roster_ids = module_guide_roster_ids(is_business, case_type)
+        # Issue #437 Fase 3 — resolve the Impact Lens ONCE (DD1: the SAME _resolve_impact_lens M1/M4/M5
+        # consume) so the M4 synopsis value noun matches the case's value frame. None when the lens
+        # kill-switch is off → byte-identical OFF path; financial_roi is byte-identical regardless.
+        _m6_lens = _resolve_impact_lens(state) if settings.impact_lens else None
 
         # §2 esqueleto (sin anclajes) — baseline que SIEMPRE existe.
         section2 = build_module_guide_block(
@@ -5333,6 +6470,7 @@ def teaching_note_part1(state: ADAMState, config: RunnableConfig) -> dict:
             family=family,
             notebook_present=notebook_present,
             anchors=None,
+            lens=_m6_lens,
         )
         section1 = _m6_fallback_section1(state)
 
@@ -5360,6 +6498,7 @@ def teaching_note_part1(state: ADAMState, config: RunnableConfig) -> dict:
                 family=family,
                 notebook_present=notebook_present,
                 anchors=anchors,
+                lens=_m6_lens,
             )
         except Exception as e:
             logger.warning(
@@ -5446,12 +6585,35 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "computed_metrics_block": build_computed_metrics_block(state.get("m3_metrics_summary")),
         })
 
-        prompt = _resolve_family_prompt(state, M4_QUESTIONS_PROMPT_BY_FAMILY, M4_QUESTIONS_GENERATOR_PROMPT)
+        # Issue #437 (ADR 0003, Fase 1) — NEUTRAL questions set + «MARCO DE VALOR» hint when
+        # settings.impact_lens is on (default); else the FINANCIAL set (byte-identical off-path).
+        _lens_on = settings.impact_lens
+        prompt = _resolve_family_prompt(
+            state,
+            M4_QUESTIONS_PROMPT_BY_FAMILY_NEUTRAL if _lens_on else M4_QUESTIONS_PROMPT_BY_FAMILY,
+            M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL if _lens_on else M4_QUESTIONS_GENERATOR_PROMPT,
+        )
         # Issue #329 — business+clasificación: alinea las preguntas con el arco LR (#306/#319).
         # No-op para ml_ds y para business no-clasificación (mismo gate que el contenido).
         prompt = _maybe_business_classification_prompt(
-            state, prompt, M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
+            state,
+            prompt,
+            M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL
+            if _lens_on else M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
         )
+        if _lens_on:
+            prompt = prompt + build_impact_lens_hint(_resolve_impact_lens(state))
+        # Issue #469 — for ml_ds+clustering, append the decision hint (recommended option + the REAL
+        # silhouette) so the M4 questions don't ask about a fabricated payback/uplift or a fabricated
+        # silhouette threshold and stay coherent with §4.5's verdict. Prompt-only (the questions are
+        # structured output → no reprompt validator). Brace-free → safe before .format. No-op for every
+        # other cohort and when clustering_decision is unresolved (#467 switch off).
+        if settings.mlds_clustering_m4_value_frame and _is_ml_ds_clustering(state):
+            _q_cd = state.get("clustering_decision")
+            if _q_cd:
+                _q_ms = state.get("m3_metrics_summary")
+                _q_real_sil = _q_ms.get("silhouette") if isinstance(_q_ms, dict) else None
+                prompt = prompt + build_clustering_verdict_hint(_q_cd, real_silhouette=_q_real_sil)
         # Render once; the coherence reprompt below reuses this verbatim so it re-grounds on
         # the SAME text the model first saw (mirrors the M1/M2 single-render pattern).
         rendered_prompt = prompt.format(**context)
@@ -5528,6 +6690,233 @@ def _build_m5_coherence_reprompt(
         f"{forbidden_line}"
         f"{metrics_line}"
         "Incoherencias detectadas:\n" + bullet_list
+    )
+
+
+def _apply_clustering_m4_verdict_coherence(
+    *,
+    llm: Any,
+    prompt: str,
+    m4: str,
+    state: ADAMState,
+    metrics_block: str,
+) -> str:
+    """Reprompt-once-then-DEGRADE so M4's §4.5 verdict AND any cited silhouette are coherent for an
+    ml_ds+clustering case (Issues #467 + #469 — the cross-module GUARANTEE behind the M4 hints).
+
+    Two independent checks, each on its own kill-switch, sharing ONE reprompt (so the two corrections
+    never clobber each other — a separate sibling guard would each regenerate from the base prompt and
+    overwrite the other's fix):
+      * **A — verdict option** (``MLDS_CLUSTERING_DECISION_COHERENCE``, #467): §4.5 must recommend the
+        case's shared ``recommended_option``. Active only with a resolved ``clustering_decision``.
+      * **B — silhouette grounding** (``MLDS_CLUSTERING_M4_VALUE_FRAME``, #469): any cited silhouette
+        must match the REAL executed ``m3_metrics_summary["silhouette"]`` (not a fabricated "> 0.55").
+        Active only when that metric is present.
+
+    Gated to ml_ds+clustering; a byte-identical no-op otherwise (and for the #467 fixtures, which carry
+    no ``m3_metrics_summary`` → check B is inert → reprompt = verdict-only). ``prompt`` is the
+    ALREADY-formatted M4 prompt; the reprompt is built by CONCATENATION (never a second ``.format`` —
+    chart/JSON braces). Best-effort: ANY throw degrades to the pass-1 ``m4`` (never fails the job).
+    """
+    log_extra = {"node": "m4_content_generator", "case_id": state.get("case_id")}
+    try:
+        if not _is_ml_ds_clustering(state):
+            return m4
+        # --- Check A: verdict option (#467) ---
+        recommended: str | None = None
+        verdict_active = False
+        if settings.mlds_clustering_decision_coherence:
+            decision = state.get("clustering_decision")
+            if isinstance(decision, dict):
+                recommended = recommended_option_of(decision)
+                verdict_active = True
+        verdict_bad = (
+            verdict_active
+            and recommended is not None
+            and validate_m4_verdict_option(m4, recommended) != []
+        )
+        # --- Check B: silhouette grounding (#469) ---
+        real_sil = None
+        sil_active = False
+        if settings.mlds_clustering_m4_value_frame:
+            _ms = state.get("m3_metrics_summary")
+            real_sil = _ms.get("silhouette") if isinstance(_ms, dict) else None
+            sil_active = real_sil is not None
+        sil_violations = detect_unanchored_silhouette(m4, real_sil) if sil_active else []
+        if not verdict_bad and not sil_violations:
+            return m4
+        # --- Build ONE combined reprompt with only the applicable corrections ---
+        corrections = ["\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA (clustering)\n"]
+        if verdict_bad and recommended is not None:
+            corrections.append(
+                "La recomendación de despliegue (§4.5) DEBE recomendar EXACTAMENTE la Opción "
+                + recommended + " como veredicto final; no recomiendes ninguna otra letra.\n"
+            )
+        if sil_violations and real_sil is not None:
+            corrections.append(
+                "Cita el silhouette REAL ejecutado (" + format(float(real_sil), ".3f")
+                + ") y SOLO ese valor; elimina o corrige cualquier otro valor de silhouette "
+                "(por ejemplo un umbral inventado como '> 0.55').\n"
+            )
+        logger.info(
+            "[m4_content] reprompt de coherencia clustering disparado",
+            extra={
+                **log_extra,
+                "verdict_bad": verdict_bad,
+                "silhouette_violations": sil_violations,
+            },
+        )
+        corrected = _invoke_narrative_with_grounding(
+            node_name="m4_content_generator",
+            llm=llm,
+            prompt=prompt + "".join(corrections),
+            metrics_block=metrics_block,
+            grounding_enabled=False,
+            variant=None,
+        )
+        # Re-validate every ACTIVE check on the regenerated text (the reprompt could break the other
+        # check), accept only if all active checks now pass; otherwise degrade to the pass-1 m4.
+        still_verdict_bad = (
+            verdict_active
+            and recommended is not None
+            and validate_m4_verdict_option(corrected, recommended) != []
+        )
+        still_sil_bad = bool(detect_unanchored_silhouette(corrected, real_sil)) if sil_active else False
+        if not still_verdict_bad and not still_sil_bad:
+            logger.info(
+                "[m4_content] coherencia clustering corregida",
+                extra={**log_extra, "degraded": False},
+            )
+            return corrected
+        logger.warning(
+            "[m4_content] coherencia clustering degradada tras reprompt",
+            extra={**log_extra, "degraded": True},
+        )
+        return m4
+    except Exception as exc:  # best-effort — a coherence pass must never fail the job
+        logger.warning(
+            "[m4_content] validador de coherencia clustering falló (best-effort): %s",
+            exc,
+            extra=log_extra,
+        )
+        return m4
+
+
+def _clustering_solution_verdict_text(preguntas_dict: list[dict]) -> str:
+    """Concatenate each question's ``titulo`` + ``solucion_esperada`` (the model answer key) for the
+    verdict-option check (shared by the M1 and M5 clustering guards). The ``enunciado`` is
+    deliberately EXCLUDED — it PRESENTS the A/B/C options to the student, so scanning it would mask
+    which option the answer key actually recommends."""
+    return " ".join(
+        str(q.get("titulo", "")) + " " + str(q.get("solucion_esperada", ""))
+        for q in preguntas_dict
+    )
+
+
+def _apply_clustering_questions_verdict_coherence(
+    *,
+    llm: Any,
+    prompt: str,
+    state: ADAMState,
+    preguntas_dict: list[dict],
+    output_schema: Any,
+    log_tag: str,
+    reprompt_directive: str,
+) -> list[dict]:
+    """Shared reprompt-once-then-DEGRADE verdict-coherence guard for the M1 and M5 question sets
+    (Issue #467). Both answer keys are authored by their own node (separate from ``case_architect``),
+    so each must independently recommend the case's ``recommended_option`` to stay coherent with the
+    rest of the case (the live run showed M1 Q3 naming A/B while M4/M5 named C). Gated to
+    ml_ds+clustering + the ``MLDS_CLUSTERING_DECISION_COHERENCE`` kill-switch + a resolved decision;
+    byte-identical no-op otherwise. Accepts the correction ONLY if it preserves the ``numero``
+    sequence AND is now coherent; else degrades to pass-1. Best-effort — never raises (a reprompt
+    ``RuntimeError`` degrades instead of escaping the node's ``except RuntimeError: raise``).
+    ``prompt`` is the ALREADY-formatted prompt; the reprompt is built by CONCATENATION (never a second
+    ``.format`` — schema/JSON braces). ``reprompt_directive`` may carry the ``{opt}`` token for the
+    recommended letter (substituted by ``str.replace``, so stray braces never raise)."""
+    log_extra = {"node": log_tag, "case_id": state.get("case_id")}
+    try:
+        if not settings.mlds_clustering_decision_coherence or not _is_ml_ds_clustering(state):
+            return preguntas_dict
+        decision = state.get("clustering_decision")
+        if not isinstance(decision, dict):
+            return preguntas_dict
+        recommended = recommended_option_of(decision)
+        if validate_verdict_option(_clustering_solution_verdict_text(preguntas_dict), recommended) == []:
+            return preguntas_dict
+        numeros = [q.get("numero") for q in preguntas_dict]
+        logger.info(
+            "[%s] reprompt de coherencia de veredicto clustering disparado",
+            log_tag,
+            extra={**log_extra, "recommended_option": recommended},
+        )
+        reprompt = prompt + (
+            "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE DECISIÓN (clustering)\n"
+            + reprompt_directive.replace("{opt}", recommended)
+            + "\n"
+        )
+        try:
+            resultado = llm.with_structured_output(output_schema).invoke(reprompt)
+            corrected = [p.model_dump() for p in resultado.preguntas]
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[%s] reprompt de veredicto clustering inválido — degrada a pass-1: %s",
+                log_tag, exc, extra=log_extra,
+            )
+            return preguntas_dict
+        if [q.get("numero") for q in corrected] != numeros:
+            logger.warning(
+                "[%s] reprompt de veredicto clustering alteró numero — degrada a pass-1",
+                log_tag, extra=log_extra,
+            )
+            return preguntas_dict
+        if validate_verdict_option(_clustering_solution_verdict_text(corrected), recommended) == []:
+            logger.info(
+                "[%s] coherencia de veredicto clustering corregida",
+                log_tag, extra={**log_extra, "degraded": False},
+            )
+            return corrected
+        logger.warning(
+            "[%s] coherencia de veredicto clustering degradada tras reprompt",
+            log_tag, extra={**log_extra, "degraded": True},
+        )
+        return preguntas_dict
+    except Exception as exc:  # best-effort — a coherence pass must never fail the job
+        logger.warning(
+            "[%s] validador de veredicto clustering falló (best-effort): %s",
+            log_tag, exc, extra=log_extra,
+        )
+        return preguntas_dict
+
+
+def _apply_clustering_m1_verdict_coherence(
+    *, llm: Any, prompt: str, state: ADAMState, preguntas_dict: list[dict]
+) -> list[dict]:
+    """M1 decision-question verdict guard (Issue #467) — thin wrapper over the shared guard. The M1 Q3
+    answer key is authored by ``case_questions`` (separate from ``case_architect``); the live run
+    showed it naming A/B while M4/M5 named C, so it needs its own guard."""
+    return _apply_clustering_questions_verdict_coherence(
+        llm=llm, prompt=prompt, state=state, preguntas_dict=preguntas_dict,
+        output_schema=GeneradorPreguntasM1Output, log_tag="case_questions",
+        reprompt_directive=(
+            "La `solucion_esperada` de la pregunta de decisión DEBE recomendar EXACTAMENTE la "
+            "Opción {opt} por su letra; no recomiendes ninguna otra. Mantén el mismo número de "
+            "preguntas y la misma numeración."
+        ),
+    )
+
+
+def _apply_clustering_m5_verdict_coherence(
+    *, llm: Any, prompt: str, preguntas_dict: list[dict], state: ADAMState
+) -> list[dict]:
+    """M5 memo verdict guard (Issue #467) — thin wrapper over the shared guard."""
+    return _apply_clustering_questions_verdict_coherence(
+        llm=llm, prompt=prompt, state=state, preguntas_dict=preguntas_dict,
+        output_schema=GeneradorPreguntasM5Output, log_tag="m5_questions",
+        reprompt_directive=(
+            "El memorándum DEBE recomendar EXACTAMENTE la Opción {opt} como decisión final; no "
+            "recomiendes ninguna otra letra. Mantén la misma estructura y numeración."
+        ),
     )
 
 
@@ -5646,11 +7035,9 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         cfg = Configuration.from_runnable_config(config)
         # temperature=0.5: balance entre creatividad en enunciados y consistencia estructural
         # Usa Gemini Pro medium + fallback Pro low: M5 es evaluación final integrativa.
-        llm = _get_m5_llm(
-            resolve_node_model(cfg, NODE_M5_QUESTIONS, cfg.architect_model),
-            cfg.writer_model,
-            temperature=0.5,
-        )
+        m5_model = resolve_node_model(cfg, NODE_M5_QUESTIONS, cfg.architect_model)
+        logger.info("[m5_questions_generator] llm model=%s", m5_model)
+        llm = _get_m5_llm(m5_model, cfg.writer_model, temperature=0.5)
 
         # Filtrar preguntas complejas de M1 (bloom Level 2/3) como historial de referencia.
         # Prioridad: synthesis → evaluation → analysis. Máx 3 para no saturar el contexto.
@@ -5704,6 +7091,17 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         prompt_text = _maybe_business_classification_prompt(
             state, prompt_text, M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
         )
+        # Issue #467 — for ml_ds+clustering, append the decision hint (recommended option + the REAL
+        # executed silhouette) so the M5 memo recommends the shared option and anchors any silhouette
+        # to reality. Brace-free → safe before .format. No-op (byte-identical) for every other cohort.
+        if settings.mlds_clustering_decision_coherence and _is_ml_ds_clustering(state):
+            _m5_cd = state.get("clustering_decision")
+            if _m5_cd:
+                _m5_ms = state.get("m3_metrics_summary")
+                _m5_real_sil = _m5_ms.get("silhouette") if isinstance(_m5_ms, dict) else None
+                prompt_text = prompt_text + build_clustering_verdict_hint(
+                    _m5_cd, real_silhouette=_m5_real_sil
+                )
         computed_metrics_block = (
             build_computed_metrics_block(state.get("m3_metrics_summary"))
             if family == "clasificacion"
@@ -5734,6 +7132,11 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             metrics_block=computed_metrics_block,
             dilema_brief=str(state.get("dilema_brief") or ""),
         )
+        # Issue #467 — clustering verdict coherence guard (reprompt-once-then-degrade): forces the
+        # memo to recommend the shared option. No-op (byte-identical) for non ml_ds+clustering.
+        preguntas = _apply_clustering_m5_verdict_coherence(
+            llm=llm, prompt=formatted, preguntas_dict=preguntas, state=state,
+        )
         print(f"[m5_questions_generator] {len(preguntas)} memorándum final")
         return {"m5_questions": preguntas, "current_agent": "m5_questions_generator"}
     except RuntimeError:
@@ -5746,9 +7149,11 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # Re-raise errores transitorios → LangGraph RetryPolicy dispara con backoff
         # (max 3 intentos: 1s → 2s → 4s con jitter — ver standard_retry línea ~2805).
         # Sin este re-raise, el RetryPolicy nunca se activa porque el nodo "retorna" en lugar de "lanzar".
-        if any(code in err_msg for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED")):
+        if _is_transient_llm_error(e):
             logger.warning("[m5_questions_generator] ERROR TRANSITORIO (reintentando): %s", err_msg)
             raise
+        if getattr(e, "status_code", None) == 402:
+            logger.warning("[m5_questions_generator] OpenRouter SIN CRÉDITOS (402) — degradado a Gemini falló; recargar saldo")
         logger.error("[m5_questions_generator] ERROR: %s", e, exc_info=True)
         return {"m5_questions": [], "current_agent": "m5_questions_generator"}
 
@@ -5958,6 +7363,31 @@ def _resolve_classification_notebook_variant(
     )
 
 
+def _resolve_clustering_notebook_variant(
+    *,
+    algoritmos: list[str],
+) -> tuple[ClusteringNotebookVariant, str | None]:
+    """Resolve the K-Means-only vs mixed (DBSCAN/contrast) clustering notebook variant (Issue #454).
+
+    Mirrors ``_resolve_classification_notebook_variant`` but keys off the algorithm list ALONE —
+    clustering has no single/contrast axis. ``["K-Means"]`` (and no DBSCAN) → ``kmeans_only`` (the
+    specialised, DBSCAN-free notebook); anything else (DBSCAN present, both, or unresolved) →
+    ``mixed_legacy``, which maps to the byte-identical mixed prompt + family-level validation so
+    historical/replay jobs are unchanged. DBSCAN is hidden from the forward catalog
+    (``ALGORITHM_CATALOG_REDUCED``), so ``mixed_legacy`` is the replay-only fallback.
+    """
+    normalized = {_normalize_algorithm_pick(algo) for algo in algoritmos}
+    has_kmeans = "kmeans" in normalized
+    has_dbscan = "dbscan" in normalized
+    if has_kmeans and not has_dbscan:
+        return CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY, None
+    return (
+        CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY,
+        "Notebook de clustering no resolvió a K-Means único "
+        f"(algoritmos={algoritmos!r}); se usó la plantilla mixta legacy (K-Means + DBSCAN).",
+    )
+
+
 def _resolve_generation_focus(
     state: ADAMState,
     *,
@@ -5975,6 +7405,89 @@ def _resolve_generation_focus(
     ):
         family = "clasificacion"
     return profile, family
+
+
+def _effective_m3_content_prompts(primary_family: str | None) -> dict[str, str]:
+    """M3-content family→prompt map for the ml_ds branch, with the clustering override (Issue #457).
+
+    Pure (no LLM/state) so the kill-switch gate is unit-testable without the node's inline LLM +
+    error-swallowing ``try/except``. Returns the SAME ``M3_CONTENT_PROMPT_BY_FAMILY`` object for every
+    family EXCEPT ``clustering`` under the ``MLDS_CLUSTERING_M3_CONTENT`` switch, where it returns a
+    shallow copy with the ``"clustering"`` key overridden to the dedicated segmentation narrative.
+    The ``clasificacion`` per-variant override stays INLINE in the node (it needs the resolved
+    notebook variant). Off / non-clustering → identity object → byte-identical to the prior behavior.
+    The gate's ``profile == "ml_ds"`` half is the enclosing branch in ``m3_content_generator``;
+    ``business`` never reaches this map (it uses ``M3_AUDIT_PROMPT``), so business+clustering is
+    unaffected.
+    """
+    if primary_family == "clustering" and settings.mlds_clustering_m3_content:
+        return {**M3_CONTENT_PROMPT_BY_FAMILY, "clustering": M3_CONTENT_PROMPT_CLUSTERING}
+    return M3_CONTENT_PROMPT_BY_FAMILY
+
+
+def _effective_m4_clustering_prompts(
+    by_family: dict[str, str],
+    profile: str | None,
+    primary_family: str | None,
+    *,
+    lens_on: bool,
+    clustering_prompt: str,
+) -> dict[str, str]:
+    """Override the ``"clustering"`` key with the dedicated ml_ds+clustering M4 prompt (Issue #469).
+
+    Mirrors ``_effective_m3_content_prompts`` (#457): returns the SAME ``by_family`` object for every
+    cohort EXCEPT ml_ds+clustering on the NEUTRAL path (``lens_on``) under the
+    ``MLDS_CLUSTERING_M4_VALUE_FRAME`` switch, where it returns a shallow copy with ``"clustering"``
+    overridden to the dedicated value-by-segment prompt. Off / non-clustering / business+clustering
+    (``profile != "ml_ds"``) / lens-off → identity object → byte-identical. Pure (no LLM/state) so the
+    gate is unit-testable. Used for BOTH the M4 content and chart dicts (caller passes the prompt).
+    """
+    if (
+        lens_on
+        and profile == "ml_ds"
+        and primary_family == "clustering"
+        and settings.mlds_clustering_m4_value_frame
+    ):
+        return {**by_family, "clustering": clustering_prompt}
+    return by_family
+
+
+def _resolve_impact_lens(state: ADAMState) -> str:
+    """Return the case's resolved Impact Lens (value frame for M4) — Issue #437.
+
+    DD1 single source of truth. Precedence (D-A hybrid):
+      0. ``state["impact_lens_override"]`` — the OPTIONAL teacher override (Fase 3), HIGHEST priority.
+         Validated by MEMBERSHIP in ``IMPACT_LENS_KEYS`` (NOT ``normalize_impact_lens``): an invalid/
+         absent value FALLS THROUGH rather than coercing to the default, so a garbage value from a
+         cached client / direct API call can never forge a ``financial_roi`` override that would beat
+         the architect's ``value_model``. Intake-only (re-injected by ``state_input`` every attempt) ⇒
+         resume-stable; no node writes it (no last-write-wins clobber).
+      1. ``state["value_model"]["lens"]`` — the architect's more-informed refinement (Fase 2). It
+         is WRITTEN only when the architect lens block is enabled (``impact_lens_architect`` at
+         case_architect time), so on the normal flow its presence encodes the kill-switch. (Edge:
+         if the switch is flipped OFF and a job that already persisted value_model is RESUMED,
+         case_architect is skip-short-circuited and never clears it, so the refined lens still
+         wins — benign, since a persisted refinement beats the intake default and it never raises.)
+         It is **resume-robust**: ``value_model`` is NOT re-injected by ``state_input`` on resume,
+         so the durable checkpoint value survives — unlike ``impact_lens``, which ``state_input``
+         re-injects with the intake value on every attempt (last-write-wins), clobbering any
+         refinement back to intake on a resumed job.
+      2. ``state["impact_lens"]`` — the intake-resolved lens (Fase 1, from the constrained industry
+         label; never re-derived from the architect's free-noun ``industria``).
+      3. ``DEFAULT_IMPACT_LENS``.
+
+    Total + safe: any missing/legacy/unknown value coerces to the default; never raises. Every M1/M4/
+    M5/M6 consumer READS this (never re-derives), so all consume the SAME lens even on a resumed job.
+    """
+    override = state.get("impact_lens_override")
+    if override in IMPACT_LENS_KEYS:
+        return override
+    vm = state.get("value_model")
+    if isinstance(vm, dict):
+        vm_lens = vm.get("lens")
+        if vm_lens in IMPACT_LENS_KEYS:
+            return normalize_impact_lens(vm_lens)
+    return normalize_impact_lens(state.get("impact_lens", DEFAULT_IMPACT_LENS))
 
 
 def _maybe_business_classification_prompt(
@@ -6005,6 +7518,40 @@ def _is_ml_ds_classification(
     return profile == "ml_ds" and family == "clasificacion"
 
 
+def _is_ml_ds_clustering(state: ADAMState) -> bool:
+    """True only for ``profile == "ml_ds"`` AND family ``clustering`` (Issue #456).
+
+    STRICT gate (``default_unresolved_ml_ds_to_classification=False``): clustering requires the
+    algorithm picks to resolve to ``clustering`` explicitly. An ml_ds job with empty/unresolved
+    algoritmos is NOT clustering (it is treated as clasificación by the rest of the pipeline) —
+    avoiding the lax ``(primary_family or "clustering")`` footgun. Mirrors the data-layer gate
+    ``_enforce_mlds_clustering_structure`` (#452). business + clustering is deliberately excluded
+    so it stays byte-identical on the generic prompt.
+    """
+    profile, family = _resolve_generation_focus(state)
+    return profile == "ml_ds" and family == "clustering"
+
+
+def _select_eda_prompt(
+    state: ADAMState,
+    primary_family: str,
+    *,
+    by_family: dict[str, str],
+    generic: str,
+    clustering_override: str,
+) -> str:
+    """Pick the M2 EDA prompt template (Issue #456).
+
+    ml_ds + clustering (gated by ``MLDS_CLUSTERING_M2_EDA``) gets the specialized clustering
+    prompt; every other case keeps the existing family dispatch byte-identically (clasificación →
+    its prompt; business + clustering / regresión / serie_temporal → the generic). Pure (modulo the
+    settings read) so the dispatch is unit-testable without an LLM.
+    """
+    if settings.mlds_clustering_m2_eda and _is_ml_ds_clustering(state):
+        return clustering_override
+    return by_family.get(primary_family, generic)
+
+
 def _is_classification_family(state: ADAMState) -> bool:
     """True for ANY profile (business OR ml_ds) when the resolved family is clasificación.
 
@@ -6025,7 +7572,15 @@ def _sanitize_pregunta_eje(
     profile: str,
     family: str | None,
 ) -> str | None:
-    if profile != "ml_ds" or family != "clasificacion":
+    # Issue #455 — ml_ds + clustering keeps a segmentation pregunta_eje when the M1
+    # anchor kill-switch is on (clasificacion is unconditional). Every other cohort
+    # (business, other families, and clustering when the switch is off) stays None →
+    # byte-identical to pre-#455. This is graph-layer post-processing only — it does NOT
+    # touch _assemble_architect_prompt, so the architect SHA snapshot is unaffected.
+    allowed_families = {"clasificacion"}
+    if settings.mlds_clustering_m1_anchor:
+        allowed_families = {"clasificacion", "clustering"}
+    if profile != "ml_ds" or family not in allowed_families:
         return None
     if pregunta_eje is None:
         return None
@@ -6486,7 +8041,10 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
                     "clasificacion": M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT[_variant],
                 }
             else:
-                _effective_prompt_by_family = M3_CONTENT_PROMPT_BY_FAMILY
+                # Issue #457 — ml_ds + clustering selects the dedicated segmentation
+                # narrative (kill-switch-gated, pure helper); regresion/serie_temporal and
+                # the switch-off path keep the generic M3_CONTENT_PROMPT_BY_FAMILY identity.
+                _effective_prompt_by_family = _effective_m3_content_prompts(_primary_family)
             prompt, metrics_block, grounding_enabled, grounding_update = _select_narrative_prompt(
                 state,
                 "m3_content_generator",
@@ -6495,35 +8053,15 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             )
             tag = "m3_experiment_engineer"
             m3_mode = "experiment"
-            # ml_ds: el m3_content alimenta directamente el prompt del notebook
-            # generator. Calidad de razonamiento aquí ⇒ menos ambigüedad en la
-            # sección 3 (hipótesis, criterio de descarte, sesgos). Por eso Pro-
-            # medium con cadena de fallback (Pro-low → Flash-low).
-            # Modelos vía Configuration para respetar overrides por env var
-            # (ARCHITECT_MODEL / WRITER_MODEL) — útil para rollouts y tests.
-            _m3_common = dict(
-                model=resolve_node_model(cfg, NODE_M3_CONTENT, cfg.architect_model),
+            # Modelo vía Configuration / NODE_MODEL_OVERRIDES (rollouts, canary, y el routing a
+            # GLM/OpenRouter — un id con "/" corre en OpenRouter con red de fallback cross-provider
+            # a Gemini). Cadena Pro-medium → Pro-low → Flash-low (ver _get_m3_content_llm). El
+            # razonamiento aquí alimenta el prompt del notebook generator (sección 3).
+            llm = _get_m3_content_llm(
+                resolve_node_model(cfg, NODE_M3_CONTENT, cfg.architect_model),
+                cfg.writer_model,
                 temperature=0.6,
-                max_retries=2,
-                max_output_tokens=16384,
-                api_key=os.getenv("GEMINI_API_KEY"),
-                rate_limiter=_rate_limiter,
             )
-            primary = ChatGoogleGenerativeAI(thinking_level="medium", **_m3_common)
-            pro_low = ChatGoogleGenerativeAI(thinking_level="low", **_m3_common)
-            # Flash fallback: thinking_level="low" explícito (no dependemos del
-            # default del SDK). "low" basta porque ya estamos en modo degradado
-            # por incidente global de Pro y queremos minimizar latencia extra.
-            flash_fb = ChatGoogleGenerativeAI(
-                model=cfg.writer_model,
-                temperature=0.6,
-                thinking_level="low",
-                max_retries=2,
-                max_output_tokens=16384,
-                api_key=os.getenv("GEMINI_API_KEY"),
-                rate_limiter=_rate_limiter,
-            )
-            llm = primary.with_fallbacks([pro_low, flash_fb])
         else:
             prompt = M3_AUDIT_PROMPT
             tag = "m3_audit"
@@ -6557,6 +8095,16 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     except RuntimeError:
         raise
     except Exception as e:
+        # GLM/OpenRouter resilience rides ENTIRELY on the cross-provider `.with_fallbacks` chain
+        # (GLM → Gemini): a transient GLM error falls to Gemini WITHIN this node. We deliberately
+        # keep the original GRACEFUL DEGRADE here (no transient re-raise) so the behavior stays
+        # byte-identical to pre-GLM and honors the M3 graceful-degradation contract — M3 degrades,
+        # it never fails the case. 402 (no credits) gets a distinct observability warning.
+        if getattr(e, "status_code", None) == 402:
+            logger.warning(
+                "[m3_content_generator] OpenRouter SIN CRÉDITOS (402) — degradado a Gemini falló; "
+                "recargar saldo"
+            )
         logger.error("[m3_content_generator] ERROR: %s", e, exc_info=True)
         return {"m3_content": "[M3_NOT_EXECUTED]", "m3_mode": "audit"}
 
@@ -6714,7 +8262,11 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """
     try:
         cfg = Configuration.from_runnable_config(config)
-        llm = _get_writer_llm(cfg.writer_model, temperature=0.5, thinking_level="low")
+        # NODE_M3_QUESTIONS override → puede enrutar este nodo a GLM/OpenRouter (id con "/").
+        # Default = writer_model (Gemini Flash) → byte-idéntico al comportamiento previo. El
+        # primary de _get_writer_llm pasa por _build_llm, así que el id con "/" corre en OpenRouter.
+        m3q_model = resolve_node_model(cfg, NODE_M3_QUESTIONS, cfg.writer_model)
+        llm = _get_writer_llm(m3q_model, temperature=0.5, thinking_level="low")
 
         context = _build_base_context(state)
         context.update({
@@ -6760,6 +8312,17 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # Capture the formatted prompt so the coherence wrapper can CONCATENATE its
         # correction suffix onto it (never a second `.format()` — JSON schema braces).
         formatted = prompt.format(**context)
+        # Issue #467 — for ml_ds+clustering, append a brace-free hint that reframes the (generic
+        # experiment-shaped) M3 questions toward segmentation and kills the two leaks the generic
+        # prompt produced: a contradictory committed k and a fabricated "silhouette > 0.55" success
+        # bar. Anchors the k the solutions reference to target_k. No-op (byte-identical) elsewhere.
+        _m3_clustering_decision = state.get("clustering_decision")
+        if (
+            settings.mlds_clustering_decision_coherence
+            and _m3_clustering_decision
+            and _is_ml_ds_clustering(state)
+        ):
+            formatted = formatted + build_clustering_m3_questions_hint(_m3_clustering_decision)
         resultado: GeneradorPreguntasOutput = llm.with_structured_output(
             GeneradorPreguntasOutput
         ).invoke(formatted)
@@ -6778,6 +8341,15 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     except RuntimeError:
         raise
     except Exception as e:
+        # GLM/OpenRouter resilience rides ENTIRELY on the `_get_writer_llm` cross-provider chain
+        # (GLM → gemini-2.5-flash): a transient GLM error falls to Gemini WITHIN this node. We keep
+        # the original GRACEFUL DEGRADE to [] (no transient re-raise) so the behavior stays
+        # byte-identical to pre-GLM and never fails the case. 402 (no credits) → distinct warning.
+        if getattr(e, "status_code", None) == 402:
+            logger.warning(
+                "[m3_questions_generator] OpenRouter SIN CRÉDITOS (402) — degradado a Gemini falló; "
+                "recargar saldo"
+            )
         logger.error("[m3_questions_generator] ERROR: %s", e, exc_info=True)
         return {"m3_questions": [], "current_agent": "m3_questions_generator"}
 
@@ -6900,6 +8472,13 @@ _FAMILY_REQUIRED_SENTINELS: dict[str, tuple[str, ...]] = {
         # the same diff as the executor that parses the emitted marker.
         "# === SECTION:metrics_summary_json ===",
     ),
+    # Issue #453 — clustering: the executor parses ADAM_M3_METRICS_SUMMARY_JSON from this cell to
+    # populate m3_metrics_summary (silhouette/n_clusters). Minimal sentinel set (one section) so the
+    # generator's required-content validator rejects a clustering notebook that omits the metrics
+    # marker; the richer per-section structure (scaler/kmeans/profiles) is #454's K-Means-only scope.
+    "clustering": (
+        "# === SECTION:metrics_summary_json ===",
+    ),
 }
 
 _FAMILY_REQUIRED_APIS: dict[str, tuple[str, ...]] = {
@@ -6922,6 +8501,14 @@ _FAMILY_REQUIRED_APIS: dict[str, tuple[str, ...]] = {
         # render visual normalizado por fila. Debe aparecer como import/call en
         # código ejecutable, no solo en markdown.
         "ConfusionMatrixDisplay",
+    ),
+    # Issue #453 — clustering: require the family-universal clustering APIs in EXECUTABLE code
+    # (scanned against the jupytext-stripped text). StandardScaler + silhouette_score are common to
+    # K-Means and DBSCAN, so this does not over-constrain the still-mixed prompt; the K-Means-only
+    # `KMeans` requirement is added by #454 when the prompt is specialised.
+    "clustering": (
+        "StandardScaler",
+        "silhouette_score",
     ),
 }
 
@@ -6975,6 +8562,46 @@ _CLASSIFICATION_PROHIBITED_PATTERNS_BY_VARIANT: dict[str, tuple[str, ...]] = {
         "pipe_lr",
         "best_lr",
         "auc_lr",
+    ),
+}
+
+# Issue #454 — clustering per-variant required/prohibited sets (K-Means-only). Mirrors the
+# classification per-variant dicts and is STR-KEYED so the validator's
+# ``.get(notebook_variant: str)`` type-checks without a cast. ``mixed_legacy`` has NO entries →
+# ``.get(..., family_default)`` falls back to the family-level sets (metrics marker only, DBSCAN
+# allowed) → byte-identical to the mixed prompt. The 5 analytical-cell markers + the metrics
+# marker are reliably emitted by the fully-written K-Means prompt cells; ``KMeans(`` is the #454
+# raison d'être.
+_CLUSTERING_REQUIRED_SENTINELS_BY_VARIANT: dict[str, tuple[str, ...]] = {
+    CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY: (
+        "# === SECTION:scaler_features ===",
+        "# === SECTION:elbow ===",
+        "# === SECTION:kmeans_fit ===",
+        "# === SECTION:cluster_profiles ===",
+        "# === SECTION:pca_scatter ===",
+        "# === SECTION:metrics_summary_json ===",
+    ),
+}
+
+_CLUSTERING_REQUIRED_APIS_BY_VARIANT: dict[str, tuple[str, ...]] = {
+    # Scanned against STRIPPED code → must appear as a real call/import. ``PCA(`` and
+    # ``davies_bouldin_score`` are emitted but NOT required (execution-tolerant: a guarded-out
+    # figure/metric must not manufacture a FALTANTE).
+    CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY: (
+        "KMeans(",
+        "StandardScaler",
+        "silhouette_score",
+    ),
+}
+
+_CLUSTERING_PROHIBITED_PATTERNS_BY_VARIANT: dict[str, tuple[str, ...]] = {
+    # Call-site tokens (mirrors the ``train_test_split(`` convention). DBSCAN / NearestNeighbors
+    # are the only DBSCAN-unique APIs; ``eps`` / ``min_samples`` are intentionally NOT prohibited
+    # (false-positive risk on legit identifiers). The family-level prohibited set stays unchanged
+    # → ``mixed_legacy`` (DBSCAN replay) is byte-identical.
+    CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY: (
+        "DBSCAN(",
+        "NearestNeighbors(",
     ),
 }
 
@@ -7080,11 +8707,21 @@ def _validate_notebook_family_consistency(
             notebook_variant,
             (),
         )
+    elif family == "clustering" and notebook_variant:
+        prohibited = prohibited + _CLUSTERING_PROHIBITED_PATTERNS_BY_VARIANT.get(
+            notebook_variant,
+            (),
+        )
     if prohibited:
         violations.extend(p for p in prohibited if p in scannable)
 
     if family == "clasificacion" and notebook_variant:
         sentinels = _CLASSIFICATION_REQUIRED_SENTINELS_BY_VARIANT.get(
+            notebook_variant,
+            _FAMILY_REQUIRED_SENTINELS.get(family, ()),
+        )
+    elif family == "clustering" and notebook_variant:
+        sentinels = _CLUSTERING_REQUIRED_SENTINELS_BY_VARIANT.get(
             notebook_variant,
             _FAMILY_REQUIRED_SENTINELS.get(family, ()),
         )
@@ -7094,6 +8731,11 @@ def _validate_notebook_family_consistency(
 
     if family == "clasificacion" and notebook_variant:
         apis = _CLASSIFICATION_REQUIRED_APIS_BY_VARIANT.get(
+            notebook_variant,
+            _FAMILY_REQUIRED_APIS.get(family, ()),
+        )
+    elif family == "clustering" and notebook_variant:
+        apis = _CLUSTERING_REQUIRED_APIS_BY_VARIANT.get(
             notebook_variant,
             _FAMILY_REQUIRED_APIS.get(family, ()),
         )
@@ -7167,7 +8809,9 @@ class _M3NotebookGenerationContext:
     llm: Any
     escalation_llm: Any
     family: str
-    notebook_variant: ClassificationNotebookVariant | None
+    # Issue #454 — widened from ClassificationNotebookVariant|None: holds classification OR
+    # clustering variant strings (both are str Literals). Downstream consumers already take str|None.
+    notebook_variant: str | None
     base_template: str
     prompt: str
     algoritmos_raw: list[str]
@@ -7202,6 +8846,25 @@ def _get_m3_notebook_escalation_llm(cfg: Configuration) -> Any:
     return pro_high.with_fallbacks([pro_medium, stable_flash])
 
 
+# Issue #466 Frente 3 — la §2.1 "Detección asistida" de `M3_NOTEBOOK_BASE_TEMPLATE` es
+# supervised-flavored ("la categoría a predecir"); clustering es no supervisado → no hay categoría
+# que predecir. Se reescribe SOLO la PROSA §2.1 para family=="clustering" al ensamblar (gateado por
+# el kill-switch), dejando todas las demás familias byte-idénticas (la constante base NO cambia). El
+# código ejecutable de detección queda igual (post-strip de Frente 1 imprime "No detectadas").
+# Drift-lock (test): el original DEBE seguir presente en la base; si cambia, este replace no-opearía
+# en silencio y el test falla.
+_M3_NB_SECTION_2_1_SUPERVISED_PROSE = (
+    "# Sugiere qué columna podría ser la categoría a predecir, la fecha o el texto, a\n"
+    "# partir de sus nombres. Es una guía para orientarte; tú validas que la elección\n"
+    "# sea la correcta."
+)
+_M3_NB_SECTION_2_1_CLUSTERING_PROSE = (
+    "# Identifica las columnas numéricas (variables de segmentación), las fechas y los\n"
+    "# identificadores a partir de sus nombres. En clustering NO hay una categoría a\n"
+    "# predecir: todas las variables numéricas alimentan el agrupamiento por similitud."
+)
+
+
 def _prepare_m3_notebook_generation_context(
     state: ADAMState,
     config: RunnableConfig,
@@ -7230,14 +8893,33 @@ def _prepare_m3_notebook_generation_context(
         )
 
     algorithm_mode = _extract_state_algorithm_mode(state)
-    notebook_variant: ClassificationNotebookVariant | None = None
+    # Issue #454 — ``notebook_variant`` is widened to ``str | None`` because clustering variants are
+    # a different ``Literal`` than classification's. ``toc_cell`` is computed INSIDE the clasificacion
+    # branch (where the local is the classification ``Literal``) so ``TOC_MARKDOWN_CELL_BY_VARIANT.get``
+    # — keyed by ``ClassificationNotebookVariant`` — type-checks; clustering has no TOC (stays "").
+    notebook_variant: str | None = None
+    toc_cell = ""
     prompt_template = PROMPT_BY_FAMILY[family]
     if family == "clasificacion":
-        notebook_variant, variant_warning = _resolve_classification_notebook_variant(
+        cls_variant, variant_warning = _resolve_classification_notebook_variant(
             algorithm_mode=algorithm_mode,
             algoritmos=algoritmos_raw,
         )
-        prompt_template = CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT[notebook_variant]
+        notebook_variant = cls_variant
+        prompt_template = CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT[cls_variant]
+        toc_cell = TOC_MARKDOWN_CELL_BY_VARIANT.get(cls_variant, "")
+        if variant_warning:
+            legacy_warning = f"{legacy_warning}\n{variant_warning}" if legacy_warning else variant_warning
+    elif family == "clustering" and settings.mlds_clustering_kmeans_notebook:
+        # Issue #454 — K-Means-only specialised notebook. ``mixed_legacy`` (DBSCAN/replay) maps to
+        # the SAME mixed prompt object + family-level validation → byte-identical. Kill-switch OFF →
+        # this branch is skipped, ``notebook_variant`` stays None, prompt stays the mixed prompt
+        # (pre-#454), validation falls to the family-level path.
+        clu_variant, variant_warning = _resolve_clustering_notebook_variant(
+            algoritmos=algoritmos_raw,
+        )
+        notebook_variant = clu_variant
+        prompt_template = CLUSTERING_NOTEBOOK_PROMPT_BY_VARIANT[clu_variant]
         if variant_warning:
             legacy_warning = f"{legacy_warning}\n{variant_warning}" if legacy_warning else variant_warning
 
@@ -7285,12 +8967,15 @@ def _prepare_m3_notebook_generation_context(
         data_gap_warnings_block=gaps_block,
         contract_target_name=contract_target_name,
     )
-    # Inject static TOC cell for classification variants — zero LLM overhead.
-    # For non-classification families notebook_variant is None, so we use "".
-    toc_cell = (
-        "" if notebook_variant is None else TOC_MARKDOWN_CELL_BY_VARIANT.get(notebook_variant, "")
-    )
+    # Inject the static TOC cell (classification variants only; computed in the dispatch above).
+    # Non-classification families have no TOC, so toc_cell stays "".
     base_template = base_template.replace("{toc_cell}", toc_cell)
+    # Issue #466 Frente 3 — §2.1 clustering-aware (sin "categoría a predecir"). family-gated +
+    # kill-switch → no-clustering byte-idéntico; NO toca la TOC (clustering no tiene TOC).
+    if family == "clustering" and settings.mlds_clustering_no_target:
+        base_template = base_template.replace(
+            _M3_NB_SECTION_2_1_SUPERVISED_PROSE, _M3_NB_SECTION_2_1_CLUSTERING_PROSE
+        )
     return _M3NotebookGenerationContext(
         llm=llm,
         escalation_llm=escalation_llm,
@@ -7315,7 +9000,10 @@ def _build_m3_notebook_validation_correction(
         if not v.startswith("FALTANTE: ") and not v.startswith("INSEGURO: ")
     ]
     corrective_blocks: list[str] = ["\n\n# CORRECCIÓN OBLIGATORIA"]
-    if notebook_variant:
+    # Issue #454 — skip the variant line for ``mixed_legacy`` so a DBSCAN/replay clustering reprompt
+    # stays byte-identical to pre-#454 (where clustering had notebook_variant=None). kmeans_only and
+    # the classification variants keep it.
+    if notebook_variant and notebook_variant != CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY:
         corrective_blocks.append(
             f"# Variante de notebook requerida: {notebook_variant}. "
             "No agregues secciones, métricas ni imports de modelos fuera de esa variante."
@@ -7362,17 +9050,21 @@ def _validate_m3_notebook_algo_section(
     algo_section: str,
     notebook_variant: str | None,
 ) -> list[str]:
-    """Family-consistency + (clasificacion-only) safety violations as one flat list.
+    """Family-consistency + safety violations as one flat list.
 
-    Safety scrub is scoped to clasificacion — the ONLY family the executor runs and
-    scrubs (m3_notebook_executor gate), the only family the bug occurred in, and the
-    only one with a required-API contract. The other 3 families' notebooks are never
-    executed server-side, so applying the denylist there would be new policy with
-    false-positive risk (e.g. dir()/getattr() in pedagogical code), not a bug fix.
-    Keep blast radius == executor scope.
+    The generation-time safety scrub runs for the families whose notebook the executor actually
+    runs + scrubs (the m3_notebook_executor gate): clasificacion (#239) and, since #453, the
+    clustering K-Means path (#454). Routing a stray ``locals()``/``globals()`` through the
+    generation reprompt (Pro escalation) is cheaper and more recoverable than the execution-time
+    degrade. It is FP-safe: legit K-Means code (KMeans/StandardScaler/PCA/silhouette/groupby) calls
+    no denied builtin, and the scrub inspects executable code only (markdown/comments are stripped).
+    regresion/serie_temporal and the clustering ``mixed_legacy`` replay path are NOT executed
+    server-side, so the denylist is not applied there (avoids new-policy FP risk).
     """
     violations = _validate_notebook_family_consistency(family, algo_section, notebook_variant)
-    if family == "clasificacion":
+    if family == "clasificacion" or (
+        family == "clustering" and notebook_variant == CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY
+    ):
         violations += _detect_unsafe_constructs(algo_section)
     return violations
 
@@ -7409,7 +9101,9 @@ def _invoke_m3_notebook_algo_section(
         active_llm = llm if attempt == 1 else retry_llm
         tier = "flash" if active_llm is llm else "escalated"
         response = active_llm.invoke(current_prompt)
-        algo_section = sanitize_markdown(_extract_text(response))
+        # #480 — el notebook se EXCLUYE del strip de LaTeX: se consume en Colab/Jupyter (que SÍ
+        # renderiza `$k$`) y su código puede contener `$` legítimo (shell `$HOME`, regex `$`).
+        algo_section = sanitize_markdown(_extract_text(response), strip_latex_math=False)
         # Deterministic repair of the sanctioned existence-guard idiom (clasificacion
         # only) — kills the most common INSEGURO cause without burning a reprompt.
         if family == "clasificacion":
@@ -7562,8 +9256,21 @@ def m3_notebook_generator(state: ADAMState, config: RunnableConfig) -> dict:
         )
 
 
+def _m3_executor_families() -> frozenset[str]:
+    """ml_ds families whose M3 notebook is executed + quality-gated (Issue #453).
+
+    Classification is always executed (#239). Clustering is added when the
+    ``MLDS_CLUSTERING_EXECUTOR`` kill-switch is on. regresion/serie_temporal stay un-executed
+    (no executor support) → byte-identical noop.
+    """
+    families = {"clasificacion"}
+    if settings.mlds_clustering_executor:
+        families.add("clustering")
+    return frozenset(families)
+
+
 def m3_notebook_executor(state: ADAMState, config: RunnableConfig) -> dict:
-    """Execute and validate the M3 classification notebook in a subprocess.
+    """Execute and validate the M3 notebook (classification or clustering) in a subprocess.
 
     Graceful degradation: a notebook that cannot be executed/validated (missing
     dataset, crash after correction, blocking quality gate) degrades to a placeholder
@@ -7579,7 +9286,7 @@ def m3_notebook_executor(state: ADAMState, config: RunnableConfig) -> dict:
         state,
         default_unresolved_ml_ds_to_classification=True,
     )
-    if profile != "ml_ds" or family != "clasificacion":
+    if profile != "ml_ds" or family not in _m3_executor_families():
         return {}
 
     case_id = state.get("case_id") or "unknown"
@@ -7616,8 +9323,8 @@ def _run_m3_notebook_execution(
             extra={"case_id": case_id, "family": family},
         )
         raise RuntimeError(
-            "m3_notebook_executor requiere doc7_dataset para ejecutar el notebook "
-            "de clasificación. Job marcado como fallido para evitar métricas inventadas."
+            "m3_notebook_executor requiere doc7_dataset para ejecutar el notebook M3. "
+            "Job marcado como fallido para evitar métricas inventadas."
         )
 
     notebook_code = str(state.get("m3_notebook_code") or "")
@@ -7644,13 +9351,19 @@ def _run_m3_notebook_execution(
             result = execute_m3_notebook(
                 notebook_code=notebook_code,
                 dataset_rows=cast(list[dict[str, Any]], dataset_rows),
+                family=family,
             )
             # #349 — cross-check the modeled target against the declared contract target.
             # The mismatch warning (blocking) takes precedence over the non-blocking
             # AUC-out-of-range warning; a missing/invalid marker leaves metrics None, so
             # build_target_identity_warning returns None and the marker warning surfaces
-            # unchanged. The AUC gate stays non-blocking.
-            identity_warning = build_target_identity_warning(result.metrics_summary, expected_target)
+            # unchanged. The AUC gate stays non-blocking. Issue #453 — clustering has NO target,
+            # so the identity cross-check is classification-only (the clustering gate is silhouette).
+            identity_warning = (
+                build_target_identity_warning(result.metrics_summary, expected_target)
+                if family == "clasificacion"
+                else None
+            )
             combined_warning = identity_warning or result.quality_warning
             if is_m3_quality_warning_blocking(combined_warning, result.metrics_summary):
                 raise M3NotebookExecutionError(
@@ -7707,10 +9420,10 @@ def _run_m3_notebook_execution(
                 node_name="m3_notebook_executor",
                 execution_correction=correction,
             )
-            if corrected_family != "clasificacion":
+            if corrected_family not in _m3_executor_families():
                 raise RuntimeError(
                     f"m3_notebook_executor recibió corrección para familia {corrected_family!r}; "
-                    "se esperaba 'clasificacion'."
+                    f"se esperaba una de {sorted(_m3_executor_families())}."
                 )
             code_was_corrected = True
 
@@ -7748,6 +9461,19 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         _algoritmos_raw = _extract_state_algoritmos(state)
         _algorithm_mode = _extract_state_algorithm_mode(state)
         _profile, _primary_family = _resolve_generation_focus(state)
+        # Issue #437 (ADR 0003, Fase 1) — select the NEUTRAL value-frame-agnostic prompt set
+        # when settings.impact_lens is on (the default); else the original FINANCIAL set, which
+        # makes the kill-switch-off path byte-identical to pre-#437.
+        _lens_on = settings.impact_lens
+        _by_family = M4_PROMPT_BY_FAMILY_NEUTRAL if _lens_on else M4_PROMPT_BY_FAMILY
+        _variant_dict = (
+            M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT_NEUTRAL
+            if _lens_on else M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT
+        )
+        _default_prompt = M4_CONTENT_GENERATOR_PROMPT_NEUTRAL if _lens_on else M4_CONTENT_GENERATOR_PROMPT
+        _business_prompt = (
+            M4_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL if _lens_on else M4_BUSINESS_PROMPT_CLASSIFICATION
+        )
         variant: str | None = None
         if _profile == "ml_ds" and _primary_family == "clasificacion":
             _variant, _variant_warning = _resolve_classification_notebook_variant(
@@ -7762,33 +9488,65 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
                     _variant, _algoritmos_raw, _variant_warning,
                 )
             _effective_prompt_by_family: dict[str, str] = {
-                **M4_PROMPT_BY_FAMILY,
-                "clasificacion": M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT[_variant],
+                **_by_family,
+                "clasificacion": _variant_dict[_variant],
             }
         else:
-            _effective_prompt_by_family = M4_PROMPT_BY_FAMILY
+            _effective_prompt_by_family = _by_family
+        # Issue #469 — ml_ds+clustering selects the dedicated value-by-segment M4 narrative on the
+        # NEUTRAL path (kill-switch MLDS_CLUSTERING_M4_VALUE_FRAME); identity object otherwise →
+        # byte-identical for every other cohort. Mirrors the #457 M3-content clustering override.
+        _effective_prompt_by_family = _effective_m4_clustering_prompts(
+            _effective_prompt_by_family,
+            _profile,
+            _primary_family,
+            lens_on=_lens_on,
+            clustering_prompt=M4_CONTENT_PROMPT_CLUSTERING,
+        )
         prompt_template, metrics_block, grounding_enabled, grounding_update = (
             _select_narrative_prompt(
                 state,
                 "m4_content_generator",
                 _effective_prompt_by_family,
-                M4_CONTENT_GENERATOR_PROMPT,
+                _default_prompt,
             )
         )
         # Issue #306 — business+clasificación cierra el arco LR (probabilidad × valor en riesgo).
         # No-op para ml_ds y para business no-clasificación.
         prompt_template = _maybe_business_classification_prompt(
-            state, prompt_template, M4_BUSINESS_PROMPT_CLASSIFICATION
+            state, prompt_template, _business_prompt
         )
+        # Issue #437 — append the «MARCO DE VALOR» hint for the resolved lens (brace-free, so it is
+        # safe before .format). financial_roi reproduces ROI/Payback/NPV; off-path skips it entirely.
+        if _lens_on:
+            prompt_template = prompt_template + build_impact_lens_hint(_resolve_impact_lens(state))
+        # Issue #467 — for ml_ds+clustering, append the decision hint (recommended option + the REAL
+        # executed silhouette from m3_metrics_summary, available post-executor) so M4's §4.5 verdict
+        # honors the shared option and anchors any silhouette to reality (not a fabricated "0.55").
+        # Brace-free → safe before .format. No-op (byte-identical) for every other cohort.
+        if settings.mlds_clustering_decision_coherence and _is_ml_ds_clustering(state):
+            _m4_cd = state.get("clustering_decision")
+            if _m4_cd:
+                _m4_ms = state.get("m3_metrics_summary")
+                _m4_real_sil = _m4_ms.get("silhouette") if isinstance(_m4_ms, dict) else None
+                prompt_template = prompt_template + build_clustering_verdict_hint(
+                    _m4_cd, real_silhouette=_m4_real_sil
+                )
         context["computed_metrics_block"] = metrics_block
 
+        _m4_formatted = prompt_template.format(**context)
         m4 = _invoke_narrative_with_grounding(
             node_name="m4_content_generator",
             llm=llm,
-            prompt=prompt_template.format(**context),
+            prompt=_m4_formatted,
             metrics_block=metrics_block,
             grounding_enabled=grounding_enabled,
             variant=variant,
+        )
+        # Issue #467 — clustering verdict coherence guard (reprompt-once-then-degrade). The
+        # GUARANTEE behind the hint: forces §4.5 to recommend the shared option. No-op elsewhere.
+        m4 = _apply_clustering_m4_verdict_coherence(
+            llm=llm, prompt=_m4_formatted, m4=m4, state=state, metrics_block=metrics_block,
         )
         print(f"[m4_content_generator] {len(m4)} chars")
         # Logger-only backstop (M4_DEPLOYMENT_DEDUP): flag a residual duplicate deployment
@@ -7805,6 +9563,15 @@ def m4_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # cannot trip this node's outer except that would degrade M4 to an error placeholder).
         if settings.m4_fabrication_guard:
             log_narrative_benchmark_fabrication(
+                m4, node="m4_content_generator", case_id=state.get("case_id")
+            )
+        # Issue #437 follow-up — logger-only backstop: warn if a machine ``word__x`` identifier
+        # (e.g. an sklearn ColumnTransformer ``num__col`` feature name) survived in the narrative.
+        # The deterministic strip in ``build_computed_metrics_block`` is the cure; this is the net
+        # for any other injection path. ALL profiles/families. Best-effort — never reprompts,
+        # mutates, or fails the job (the wrapper swallows all exceptions internally).
+        if settings.case_identifier_leak_guard:
+            log_raw_identifier_leak(
                 m4, node="m4_content_generator", case_id=state.get("case_id")
             )
         return {
@@ -7940,22 +9707,41 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # los prompts LEGACY (3 gráficos) Y desactiva el backstop → comportamiento byte-idéntico al
         # previo, sin redeploy.
         use_legacy_charts = not settings.m4_chart_drop_sensitivity
-        charts_by_family = (
-            M4_CHARTS_PROMPT_BY_FAMILY_LEGACY if use_legacy_charts else M4_CHARTS_PROMPT_BY_FAMILY
-        )
-        default_chart_prompt = (
-            M4_CHART_GENERATOR_PROMPT_LEGACY if use_legacy_charts else M4_CHART_GENERATOR_PROMPT
-        )
-        business_chart_prompt = (
-            M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY
-            if use_legacy_charts
-            else M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
-        )
+        # Issue #437 (ADR 0003, Fase 1) — the Impact Lens applies ONLY on the current 2-chart path;
+        # the 3-chart tornado revert (M4_CHART_DROP_SENSITIVITY=false) skips it entirely (full legacy).
+        _lens_on = settings.impact_lens and not use_legacy_charts
+        if use_legacy_charts:
+            charts_by_family = M4_CHARTS_PROMPT_BY_FAMILY_LEGACY
+            default_chart_prompt = M4_CHART_GENERATOR_PROMPT_LEGACY
+            business_chart_prompt = M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY
+        elif _lens_on:
+            charts_by_family = M4_CHARTS_PROMPT_BY_FAMILY_NEUTRAL
+            default_chart_prompt = M4_CHART_GENERATOR_PROMPT_NEUTRAL
+            business_chart_prompt = M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL
+        else:
+            charts_by_family = M4_CHARTS_PROMPT_BY_FAMILY
+            default_chart_prompt = M4_CHART_GENERATOR_PROMPT
+            business_chart_prompt = M4_CHART_BUSINESS_PROMPT_CLASSIFICATION
 
+        # Issue #469 — ml_ds+clustering selects the dedicated value-by-segment M4 chart prompt on the
+        # NEUTRAL 2-chart path (kill-switch MLDS_CLUSTERING_M4_VALUE_FRAME); identity object otherwise
+        # → byte-identical for every other cohort (and for the legacy 3-chart revert, where _lens_on
+        # is already False). Replaces the financial Gráfico 1 (payback/break-even) for clustering.
+        _chart_profile, _chart_family = _resolve_generation_focus(state)
+        charts_by_family = _effective_m4_clustering_prompts(
+            charts_by_family,
+            _chart_profile,
+            _chart_family,
+            lens_on=_lens_on,
+            clustering_prompt=M4_CHART_PROMPT_CLUSTERING,
+        )
         prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
         # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
         # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
         prompt = _maybe_business_classification_prompt(state, prompt, business_chart_prompt)
+        # Issue #437 — append the «MARCO DE VALOR» hint (brace-free) on the 2-chart lens path.
+        if _lens_on:
+            prompt = prompt + build_impact_lens_hint(_resolve_impact_lens(state))
         formatted_prompt = prompt.format(**context)
         result: EDAChartGeneratorOutput = llm.with_structured_output(
             EDAChartGeneratorOutput
@@ -8112,11 +9898,9 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """
     try:
         cfg = Configuration.from_runnable_config(config)
-        llm = _get_m5_llm(
-            resolve_node_model(cfg, NODE_M5_CONTENT, cfg.architect_model),
-            cfg.writer_model,
-            temperature=0.6,
-        )
+        m5_model = resolve_node_model(cfg, NODE_M5_CONTENT, cfg.architect_model)
+        logger.info("[m5_content_generator] llm model=%s", m5_model)
+        llm = _get_m5_llm(m5_model, cfg.writer_model, temperature=0.6)
 
         context = _build_base_context(state)
         context.update({
@@ -8167,6 +9951,14 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
         prompt_template = _maybe_business_classification_prompt(
             state, prompt_template, M5_BUSINESS_PROMPT_CLASSIFICATION
         )
+        # Issue #437 Fase 3 — append the value-frame hint (brace-free) so the M5 decision matrix's
+        # "KPI esperado" column uses the resolved lens's value metric, not a default business indicator.
+        # Skipped for financial_roi (the matrix's native frame) → byte-identical for the dominant cohort
+        # even with the switch on. The matrix header stays byte-identical (it's in the import-time
+        # constant; the hint is APPENDED). DD1: this consumes the SAME _resolve_impact_lens as M1/M4/M6.
+        _m5_lens = _resolve_impact_lens(state)
+        if settings.impact_lens and _m5_lens != DEFAULT_IMPACT_LENS:
+            prompt_template = prompt_template + build_impact_lens_m5_hint(_m5_lens)
         context["computed_metrics_block"] = metrics_block
 
         m5 = _invoke_m5_content_with_contract(
@@ -8181,6 +9973,14 @@ def m5_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             variant=variant,
         )
         print(f"[m5_content_generator] {len(m5)} chars")
+        # Issue #437 follow-up — logger-only backstop (mirror of m4_content_generator): warn if a
+        # machine ``word__x`` identifier survived in the M5 narrative. M5 shares the same
+        # ``computed_metrics_block`` as M4, so the deterministic strip already cures the known path;
+        # this is the net. Best-effort — never reprompts, mutates, or fails the job.
+        if settings.case_identifier_leak_guard:
+            log_raw_identifier_leak(
+                m5, node="m5_content_generator", case_id=state.get("case_id")
+            )
         return {
             "m5_content": m5,
             "current_agent": "m5_content_generator",

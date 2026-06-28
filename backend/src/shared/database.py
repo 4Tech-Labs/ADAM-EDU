@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     # preview). Kill-switch: set AUTHORING_LIVE_PREVIEW=false to disable the per-node
     # partial-canonical write + /preview endpoint and degrade cleanly to the step loader.
     authoring_live_preview: bool = True
+    # Reduce the forward-facing algorithm catalog (form selector + suggester taxonomy +
+    # intake validation). When true (default) the regresion family and the clustering
+    # challenger (DBSCAN) are hidden: ml_ds sees {Logistic Regression, Random Forest,
+    # K-Means}, business sees {Logistic Regression, K-Means}. Set ALGORITHM_CATALOG_REDUCED=
+    # false to restore the full catalog byte-identically (env-only revert, no redeploy).
+    # Entries stay in ALGORITHM_CATALOG, so historical job replay is unaffected.
+    algorithm_catalog_reduced: bool = True
     # De-churn the ml_ds + clasificación dataset SIGNAL (Issue #382). When true, the
     # deterministic sibling `_enforce_mlds_classification_schema` re-points a NON-retention
     # binary target to a domain driver and strips the churn/SaaS template. Kill-switch: set
@@ -65,6 +72,111 @@ class Settings(BaseSettings):
     # prior behavior byte-identically (instant env-only revert; no redeploy). churn / already-binary
     # cases are unaffected either way (the sibling passes them through unchanged).
     mlds_binary_target_coerce: bool = True
+    # Inject real cluster structure into the ml_ds + clustering synthetic dataset (Issue #452).
+    # When true (default), an ml_ds + clustering case (a) gets a dedicated entity-level SEGMENTATION
+    # schema (period + interpretable segmentation features, instead of the generic churn/SaaS time-
+    # series panel) and (b) the deterministic helper `_enforce_mlds_clustering_structure` rewrites the
+    # scalable numeric features into K∈{3,4} separable Gaussian blobs, so K-Means discovers genuine,
+    # interpretable segments (silhouette ∈ ~[0.45,0.70]) instead of carving a unimodal cloud into
+    # arbitrary wedges. Set MLDS_CLUSTERING_STRUCTURE=false to disable both (the clustering case
+    # reverts to the generic schema + unimodal data byte-identically; instant env-only revert, no
+    # redeploy). clasificación / regresión / serie_temporal / business are unaffected either way
+    # (the gate is profile=="ml_ds" AND family=="clustering").
+    mlds_clustering_structure: bool = True
+    # Execute + quality-gate the ml_ds + clustering M3 notebook (Issue #453, extends #239). When
+    # true (default), the K-Means notebook is run in the executor subprocess (same nbclient/AST-
+    # scrub/timeout path as classification), its real silhouette/n_clusters metrics are parsed into
+    # `m3_metrics_summary`, and a NON-blocking silhouette-floor quality gate degrades cleanly (a low
+    # silhouette flags `m3NotebookDegraded`, never fails the job; a missing marker / degenerate
+    # clustering reprompts once then degrades). Set MLDS_CLUSTERING_EXECUTOR=false to generate the
+    # clustering notebook but NOT execute it (prior behaviour, byte-identical; instant env-only
+    # revert, no redeploy). classification execution (#239) is unaffected either way.
+    mlds_clustering_executor: bool = True
+    # Specialise the ml_ds + clustering M3 notebook in K-Means (Issue #454, EPIC #458). When true
+    # (default), an ml_ds + clustering case whose only algorithm is K-Means gets the K-Means-ONLY
+    # notebook (elbow + silhouette-vs-k, fit, cluster profiling, PCA scatter) with DBSCAN removed
+    # from the executable code, dispatched via CLUSTERING_NOTEBOOK_PROMPT_BY_VARIANT and validated
+    # against the K-Means-only sentinel/API set. Set MLDS_CLUSTERING_KMEANS_NOTEBOOK=false to revert
+    # to the mixed K-Means+DBSCAN prompt + family-level validation byte-identically (instant env-only
+    # revert, no redeploy). DBSCAN/contrast replay jobs keep the mixed prompt either way. Orthogonal
+    # to MLDS_CLUSTERING_EXECUTOR (which decides whether the notebook is executed + quality-gated).
+    mlds_clustering_kmeans_notebook: bool = True
+    # M1 segmentation narrative anchor for ml_ds + clustering (Issue #455). When true (default),
+    # an ml_ds + clustering case selects the dedicated clustering M1 prompts (architect/writer/
+    # questions): the dilemma is framed as a SEGMENTATION decision, the A/B/C options are
+    # segmentation strategies (not classifier thresholds), no business_cost_matrix/target_event_rate
+    # are emitted, and the segmentation `pregunta_eje` survives `_sanitize_pregunta_eje` into the
+    # questions prompt. Set MLDS_CLUSTERING_M1_ANCHOR=false to revert to the generic M1 prompts +
+    # nulled pregunta_eje byte-identically (instant env-only revert; no redeploy). The gate is
+    # profile=="ml_ds" AND family=="clustering"; clasificación / regresión / serie_temporal /
+    # business (including business+clustering) are unaffected either way.
+    mlds_clustering_m1_anchor: bool = True
+    # Specialize the M2 EDA (narrative + 2 Socratic questions) for ml_ds + clustering (Issue #456,
+    # EPIC #458). When true (default), an ml_ds + clustering case gets a data-only, PRE-MODEL,
+    # TARGET-FREE EDA narrative + clustering-specific questions (scale/distance → StandardScaler,
+    # correlation/redundancy → PCA, cluster tendency, silhouette reading) instead of the generic
+    # EDA prompt (which talks about a target/predictive feature engineering). Set
+    # MLDS_CLUSTERING_M2_EDA=false to revert to the generic EDA prompt byte-identically (instant
+    # env-only revert, no redeploy). The gate is profile=="ml_ds" AND family=="clustering", so
+    # clasificación / regresión / serie_temporal / business (including business + clustering, which
+    # stays on the generic prompt — #317's lane) are unaffected either way. EDA charts are
+    # unchanged (still the LLM-JSON path; a deterministic clustering chart builder is a follow-up).
+    mlds_clustering_m2_eda: bool = True
+    # M3-content segmentation narrative for ml_ds + clustering (Issue #457). When true (default),
+    # an ml_ds + clustering case selects the dedicated `M3_CONTENT_PROMPT_CLUSTERING` (K-Means
+    # segmentation: how k is chosen, how to read the silhouette qualitatively, cluster→persona
+    # profiling, action per segment) instead of the generic `M3_EXPERIMENT_PROMPT`. Anti-fabrication
+    # is enforced at the prompt boundary (it forbids citing concrete metric values) because by graph
+    # order the notebook executor runs AFTER this node, so `m3_metrics_summary` is structurally absent
+    # here (the #336 pattern) — a runtime grounding validator cannot fire; real numeric anchoring is a
+    # downstream M4/M5 follow-up. Set MLDS_CLUSTERING_M3_CONTENT=false to revert to the generic prompt
+    # byte-identically (instant env-only revert; no redeploy). The gate is profile=="ml_ds" AND
+    # family=="clustering"; clasificación / regresión / serie_temporal / business (including
+    # business+clustering, which uses the audit prompt) are unaffected either way.
+    mlds_clustering_m3_content: bool = True
+    # Cross-module clustering coherence source of truth (Issue #467). When true (default), an
+    # ml_ds + clustering case resolves a deterministic `clustering_decision`
+    # {target_k∈{3,4}, recommended_option∈{A,B,C}, silhouette_floor} ONCE at intake and propagates it:
+    # the data layer (#452) HONORS target_k (exact blob count), the M1 architect frames option
+    # `recommended_option` as the recommended one ≈ target_k segments, M3-questions/M4/M5 are hinted
+    # to honor it, and a deterministic verdict guard reprompts-once-then-degrades M4/M5 so all modules
+    # recommend the SAME option (kills the data-k≠narrative-k, M4=C-vs-M5=B, and fabricated "0.55"
+    # incoherences). INDEPENDENT of MLDS_CLUSTERING_STRUCTURE. Set MLDS_CLUSTERING_DECISION_COHERENCE
+    # =false to revert byte-identically (no clustering_decision → data falls back to K∈{3,4} by schema
+    # hash, no prompt hints, no verdict guard; instant env-only revert, no redeploy). The gate is
+    # profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
+    mlds_clustering_decision_coherence: bool = True
+    # M4 value-frame for ml_ds + clustering (Issue #469). When true (default), an ml_ds + clustering
+    # case on the NEUTRAL Impact-Lens path selects a dedicated M4 content + chart prompt where the
+    # first chart is value-BY-SEGMENT (not a fabricated payback / break-even "Mes N"), §4.1/§4.2 are
+    # reframed for an exploratory segmentation (no AUC example, no invented "uplift"), the M4 questions
+    # get a coherence hint, and the M4 content guard ALSO anchors any cited silhouette to the REAL
+    # executed `m3_metrics_summary["silhouette"]` (reprompt-once-then-degrade). INDEPENDENT of
+    # MLDS_CLUSTERING_DECISION_COHERENCE. Set MLDS_CLUSTERING_M4_VALUE_FRAME=false to revert
+    # byte-identically (generic M4 prompts + no silhouette check; instant env-only revert, no redeploy).
+    # The gate is profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
+    mlds_clustering_m4_value_frame: bool = True
+    # De-supervise the ml_ds + clustering DATA + notebook prose (Issue #466). When true (default),
+    # (a) `_enforce_mlds_clustering_no_target` deterministically strips any leaked supervised target
+    # column (e.g. an LLM-hallucinated `dummy_target`, or a contract `target_column` injected by the
+    # gateless `_augment_schema_with_contract`) from the clustering schema BEFORE data generation, so
+    # the CSV the student sees carries NO target; and (b) the M3 notebook §2.1 "Detección asistida"
+    # prose drops the supervised "categoría a predecir" framing for clustering. Clustering is
+    # unsupervised → no target. Set MLDS_CLUSTERING_NO_TARGET=false to revert byte-identically (schema
+    # keeps the leaked column + §2.1 stays supervised; instant env-only revert, no redeploy). The gate
+    # is profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
+    mlds_clustering_no_target: bool = True
+    # Deterministic, data-only EDA chart builder for ml_ds + clustering (Issue #466, Frente 2). When
+    # true (default), an ml_ds + clustering case routes M2 charts through `_eda_clustering_python_path`
+    # (3 PRE-MODEL, target-free charts: feature distributions → motivates StandardScaler, correlation
+    # heatmap, 2D feature-pair scatter with NO cluster labels/centroids) — the LLM only annotates
+    # description/notes. This kills the supervised "feature vs Target" regression chart the generic
+    # LLM-JSON path emits (it hardcodes "variable objetivo" for ml_ds). Set MLDS_CLUSTERING_CHARTS=false
+    # to revert to the generic LLM-JSON path byte-identically (instant env-only revert, no redeploy). On
+    # a runtime builder failure it degrades to an empty panel (NOT the LLM-JSON path) so the supervised
+    # chart can never reappear. The gate is profile=="ml_ds" AND family=="clustering"; the builder is
+    # profile-agnostic so business+clustering (#317) is a 1-line dispatch follow-up.
+    mlds_clustering_charts: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign
@@ -73,6 +185,15 @@ class Settings(BaseSettings):
     # env-only revert; no redeploy). The currency LABEL of `business_cost_matrix` stays coerced by
     # #370 regardless of this flag.
     case_usd_currency_enforce: bool = True
+    # LaTeX math delimiter strip (Issue #480). When true, `strip_latex_math` removes inline LaTeX
+    # math delimiters (`$k$`, `$k=2$`, `$5000.0 - 50.0$`) from the architect prose fields + the
+    # downstream narrative (`sanitize_markdown`), because the case-viewer has no KaTeX/MathJax and
+    # would show the literal delimiter to the student. Currency-safe (a `$`-prefix figure like
+    # `$8,000,000 USD` is never touched) and disjoint from `enforce_usd_currency`. The M3 notebook
+    # is excluded (Colab renders math; its code may carry `$`). Byte-identical for any text without
+    # LaTeX. Kill-switch: set CASE_STRIP_LATEX_MATH=false to passthrough exactly (instant env-only
+    # revert; no redeploy).
+    case_strip_latex_math: bool = True
     # Normalize M1 Exhibit tables that the architect emits with literal `<br>` row separators
     # and zero real newlines (Issue #356). When true, `normalize_exhibit_markdown` converts
     # `<br>`/`<br/>`/`<br />` → real newlines on the three `doc1_anexo_*` fields at the
@@ -199,6 +320,39 @@ class Settings(BaseSettings):
     # guard, no redeploy). The deterministic guarantee on the frozen golden set lives in
     # `tests/golden_eval` (`check_m4_narrative_no_fabrication` / `check_m4_charts_no_fabrication`).
     m4_fabrication_guard: bool = True
+    # Impact Lens (Issue #437 / ADR 0003, Fase 1, ALL profiles/families). M4's value frame
+    # (primary metric, §4.5 KPI rows, chart metrics, questions framing) is no longer hardcoded
+    # to ROI/Payback/NPV; it is a lens resolved ONCE from the constrained intake industry and
+    # consumed by the 3 M4 nodes. When true (default), m4_{content,questions,chart}_generator
+    # select the NEUTRAL (value-frame-agnostic) prompt twins and append the «MARCO DE VALOR»
+    # hint for the resolved lens (financial_roi reproduces ROI/Payback/NPV). Set IMPACT_LENS=false
+    # to select the original FINANCIAL prompts and skip the hint → byte-identical to the pre-#437
+    # behavior (instant env-only revert, no redeploy; mirrors M4_CHART_DROP_SENSITIVITY). Costs
+    # always stay USD; the lens reframes only the value side. Charts: the lens applies only on the
+    # 2-chart path (M4_CHART_DROP_SENSITIVITY=true); the 3-chart tornado revert skips it.
+    impact_lens: bool = True
+    # Impact Lens — architect side (Issue #437 / ADR 0003, Fase 2). Separate from `impact_lens`
+    # (the M4 side) for GRANULAR revert: this gates ONLY the architect. When true (default),
+    # `_assemble_architect_prompt` appends the brace-free ARCHITECT_IMPACT_LENS_BLOCK so the
+    # architect emits `value_model` (its more-informed lens, the D-A hybrid secondary signal that
+    # refines the intake-resolved lens) and frames the A/B/C option-superiority dimension by the
+    # lens's value metric (not always "mayor ROI"). DD3: Exhibit 1 stays a USD P&L; only the value
+    # side is reframed. Set IMPACT_LENS_ARCHITECT=false → `lens_on=False` → the architect prompt is
+    # byte-identical to pre-#437 (the existing _MLDS_ARCHITECT_PROMPT_SHA256 still matches) and the
+    # lens refinement is skipped (the intake lens stands). Instant env-only revert, no redeploy.
+    impact_lens_architect: bool = True
+    # Raw-identifier leak guard (Issue #437 follow-up, ALL profiles/families). sklearn
+    # ColumnTransformer feature names (`num__col`/`cat__col`/…) used to leak from the M3
+    # `top_features` into the M4/M5 narrative prose ("...Data Drift sobre num__payment_delay_days").
+    # The DETERMINISTIC fix is `_strip_transformer_prefix` inside `build_computed_metrics_block`
+    # (always on, like the `target_col` strip — a transformer prefix has no legitimate prose use).
+    # When true (default), `m4_content_generator` / `m5_content_generator` ALSO run a best-effort,
+    # LOGGER-ONLY backstop (`detect_raw_identifier_leak`) that emits a structured `logger.warning`
+    # if any residual `<word>__<x>` token survives in the generated prose — it NEVER reprompts,
+    # mutates, or fails a job (mirrors `log_narrative_benchmark_fabrication`). Set
+    # CASE_IDENTIFIER_LEAK_GUARD=false to skip the runtime backstop (no log, no cost); the
+    # deterministic strip stays either way (env-only revert of the backstop, no redeploy).
+    case_identifier_leak_guard: bool = True
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

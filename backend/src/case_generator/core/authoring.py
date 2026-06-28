@@ -14,10 +14,13 @@ from typing import Any, Literal, Mapping, cast
 from case_generator.core.artifact_manager import ArtifactManager
 from case_generator.core.storage import get_storage_provider
 from case_generator.cost_metrics import CostCallbackHandler
+from case_generator.impact_lens import resolve_impact_lens_from_industry
+from case_generator.clustering_decision import resolve_clustering_decision
 from case_generator.graph import (
     DurableCheckpointUnavailableError,
     M3NotebookValidationError,
     RESUME_CACHE_STATE_KEY,
+    _resolve_primary_family,
     get_graph,
     m3_notebook_executor,
     m3_notebook_generator,
@@ -996,6 +999,21 @@ class AuthoringService:
                 "asignatura": payload.get("asignatura", "Default Subject"),
                 "nivel": payload.get("nivel", "pregrado"),
                 "industria": payload.get("industria", "General"),
+                # Issue #437 (ADR 0003, F1) — resolve the INTAKE Impact Lens here, from the
+                # CONSTRAINED intake industry label, BEFORE case_architect overwrites
+                # state["industria"] with its free-form noun. This is the deterministic, resume-
+                # stable BASELINE. The architect's Fase 2 refinement does NOT live here: it rides
+                # state["value_model"] (which state_input does NOT re-inject), so the refinement
+                # survives resume while `_resolve_impact_lens` prefers value_model over this key.
+                # case_architect must NOT emit "impact_lens" (state_input re-injects this intake
+                # value every attempt → a last-write-wins clobber on resume). Downstream nodes READ
+                # via _resolve_impact_lens, never re-derive from state["industria"].
+                "impact_lens": resolve_impact_lens_from_industry(payload.get("industria", "General")),
+                # Issue #437 Fase 3 — the OPTIONAL teacher override (passthrough; may be None, mirrors
+                # algorithm_mode). Intake-only ⇒ re-injected every attempt ⇒ resume-stable. The
+                # VALIDATION (membership ∈ IMPACT_LENS_KEYS) lives in _resolve_impact_lens, which prefers
+                # this over value_model and the industry default.
+                "impact_lens_override": payload.get("impact_lens_override"),
                 "studentProfile": payload.get("studentProfile", "business"),
                 "algoritmos": selected_techniques,
                 "algorithm_mode": payload.get("algorithm_mode"),
@@ -1026,6 +1044,28 @@ class AuthoringService:
             }
             if grounding_context is not None:
                 state_input["ai_grounding_context"] = grounding_context
+
+            # Issue #467 — resolve the ml_ds + clustering coherence source of truth ONCE here, from
+            # STABLE intake fields (NOT the per-attempt case_id uuid, which can be regenerated on
+            # resume), so it is re-injected identically every attempt → resume-stable, and NO node
+            # writes it (no clobber / no fan-out merge hazard) — the impact_lens lifecycle, not
+            # value_model. Returns None for every non ml_ds+clustering cohort and when the
+            # MLDS_CLUSTERING_DECISION_COHERENCE kill-switch is off → no key set → byte-identical.
+            _cd_family, _ = _resolve_primary_family(selected_techniques)
+            _clustering_decision = resolve_clustering_decision(
+                profile=payload.get("studentProfile", "business"),
+                family=_cd_family,
+                seed_source="|".join([
+                    str(payload.get("asignatura", "")),
+                    str(payload.get("industria", "")),
+                    str(payload.get("studentProfile", "")),
+                    str(scenario_description),
+                    ",".join(str(t) for t in selected_techniques),
+                ]),
+                enabled=settings.mlds_clustering_decision_coherence,
+            )
+            if _clustering_decision is not None:
+                state_input["clustering_decision"] = _clustering_decision
 
             # Inject hydrated artifacts into initial graph state so downstream nodes
             # keep context even when upstream generation is skipped.

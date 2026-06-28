@@ -128,21 +128,44 @@ def configure_auth_env(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None,
     get_supabase_admin_auth_client.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_node_model_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests must not inherit a developer's local ``NODE_MODEL_OVERRIDES`` (loaded from .env via
+    ``load_dotenv``). That env var has precedence over ``run_config`` and would route nodes to an
+    OpenRouter model, breaking model-tier assertions (e.g. ``test_overrides_via_configurable_dict``
+    and the M5 dedicated-Pro-LLM test). Tests that need it set it explicitly with
+    ``monkeypatch.setenv``, which runs in the test body — after this autouse fixture.
+    """
+    monkeypatch.delenv("NODE_MODEL_OVERRIDES", raising=False)
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip live LLM tests unless they are explicitly enabled."""
+    """Skip live LLM tests unless they are explicitly enabled.
+
+    ``live_llm`` needs RUN_LIVE_LLM_TESTS=1 + GEMINI_API_KEY. ``live_openrouter`` ALSO needs
+    OPENROUTER_API_KEY (and still GEMINI_API_KEY, since the cross-provider fallback is Gemini).
+    """
     run_live = os.getenv("RUN_LIVE_LLM_TESTS") == "1"
     has_gemini_key = bool(os.getenv("GEMINI_API_KEY"))
+    has_openrouter_key = bool(os.getenv("OPENROUTER_API_KEY"))
 
-    skip_live = pytest.mark.skip(reason="Set RUN_LIVE_LLM_TESTS=1 to run live Gemini tests.")
+    skip_live = pytest.mark.skip(reason="Set RUN_LIVE_LLM_TESTS=1 to run live LLM tests.")
     skip_missing_key = pytest.mark.skip(reason="GEMINI_API_KEY is required for live Gemini tests.")
+    skip_missing_openrouter = pytest.mark.skip(
+        reason="OPENROUTER_API_KEY is required for live OpenRouter tests."
+    )
 
     for item in items:
-        if "live_llm" not in item.keywords:
+        is_live = "live_llm" in item.keywords
+        is_openrouter = "live_openrouter" in item.keywords
+        if not (is_live or is_openrouter):
             continue
         if not run_live:
             item.add_marker(skip_live)
         elif not has_gemini_key:
             item.add_marker(skip_missing_key)
+        elif is_openrouter and not has_openrouter_key:
+            item.add_marker(skip_missing_openrouter)
 
 
 def pytest_configure(config: pytest.Config) -> None:

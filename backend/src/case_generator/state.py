@@ -74,6 +74,25 @@ class ADAMState(CanonicalInputState):
     nivel: str   # "pregrado" | "posgrado"
     horas: int
     industria: str
+    # Issue #437 (ADR 0003) — the resolved Impact Lens (value frame for M4). Resolved
+    # ONCE at intake from the constrained industry label, REFINED by case_architect's value_model
+    # (Fase 2, D-A hybrid), and consumed by the M4 nodes; NotRequired so legacy/resumed states
+    # default to "financial_roi" via _resolve_impact_lens.
+    impact_lens: NotRequired[str]
+    # Issue #437 Fase 3 — the OPTIONAL teacher override (intake-only). When a valid lens key, it has
+    # the HIGHEST precedence in _resolve_impact_lens (above value_model). Intake-only ⇒ state_input
+    # re-injects it every attempt ⇒ resume-stable; no node writes it (no clobber). Absent/invalid →
+    # falls through (NOT coerced to default) so it can never forge a financial override.
+    impact_lens_override: NotRequired[str]
+    # Issue #437 Fase 2 — the architect's value_model {lens, primary_metric_name, kpi_rows};
+    # prompt-side only (NOT canonical / student-facing). None when the architect lens block is off.
+    value_model: NotRequired[dict]
+    # Issue #467 — the ml_ds+clustering coherence source of truth {target_k, recommended_option,
+    # silhouette_floor}. Resolved ONCE at intake (state_input) from a stable seed, re-injected every
+    # attempt (resume-stable, the impact_lens lifecycle) and NEVER written by a node (no clobber, no
+    # fan-out merge hazard). Absent for every non ml_ds+clustering cohort and when the
+    # MLDS_CLUSTERING_DECISION_COHERENCE kill-switch is off → byte-identical to pre-#467.
+    clustering_decision: NotRequired[dict]
     descripcion: str
     algoritmos: list[str]    # técnicas ML/analíticas seleccionadas
     algorithm_mode: NotRequired[str]  # "single" | "contrast" — selección docente Issue #230

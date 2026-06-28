@@ -15,17 +15,43 @@ VARIABLES GLOBALES NUEVAS AÑADIDAS:
   {industry_cagr_range} → CAGR histórico del sector (ej: "5-8%"). Default: "5-8%"
 """
 
-from case_generator.prompts._architect_base import CASE_ARCHITECT_PROMPT
+from typing import Final, Literal
+
+from case_generator.prompts._architect_base import (
+    ARCHITECT_IMPACT_LENS_BLOCK,
+    CASE_ARCHITECT_PROMPT,
+)
 from case_generator.prompts._questions_base import CASE_QUESTIONS_PROMPT
 from case_generator.prompts._shared import (
     M3_EXPERIMENT_ENGINEER_PROMPT,
     M3_EXPERIMENT_PROMPT,
     M3_EXPERIMENT_QUESTIONS_PROMPT,
     M4_CONTENT_GENERATOR_PROMPT,
+    M4_CONTENT_GENERATOR_PROMPT_NEUTRAL,
     M5_CONTENT_GENERATOR_PROMPT,
     M5_QUESTIONS_GENERATOR_PROMPT,
 )
+# Issue #437 (ADR 0003, Fase 1) — NEUTRAL clf twins imported directly from the leaf
+# modules (the financial twins still come through the clasificacion hub below).
+from case_generator.prompts.clasificacion.M4_clasificacion.charts import (
+    M4_CHART_PROMPT_CLASSIFICATION_NEUTRAL,
+)
+from case_generator.prompts.clasificacion.M4_clasificacion.narrative import (
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_BY_VARIANT_NEUTRAL,
+    M4_NARRATIVE_PROMPT_CLASSIFICATION_NEUTRAL,
+)
+from case_generator.prompts.clasificacion.M4_clasificacion.questions import (
+    M4_QUESTIONS_PROMPT_CLASSIFICATION_NEUTRAL,
+)
 from case_generator.prompts._writer_base import CASE_WRITER_PROMPT
+from case_generator.prompts.clustering import (
+    CASE_ARCHITECT_PROMPT_CLUSTERING,
+    CASE_QUESTIONS_PROMPT_CLUSTERING,
+    CASE_WRITER_PROMPT_CLUSTERING,
+    M3_CONTENT_PROMPT_CLUSTERING,
+    M4_CHART_PROMPT_CLUSTERING,
+    M4_CONTENT_PROMPT_CLUSTERING,
+)
 from case_generator.prompts.clasificacion import (
     CASE_ARCHITECT_PROMPT_CLASSIFICATION,
     CASE_QUESTIONS_PROMPT_CLASSIFICATION,
@@ -69,6 +95,11 @@ from case_generator.prompts.clasificacion import (
     ClassificationNotebookVariant,
     build_cost_matrix_block,
     select_eda_text_blocks,
+)
+from case_generator.prompts.clustering.M2_clustering import (
+    EDA_ANNOTATE_ONLY_PROMPT_CLUSTERING,
+    EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING,
+    EDA_TEXT_ANALYST_PROMPT_CLUSTERING,
 )
 from case_generator.prompts.teaching_note import (
     build_module_guide_block,
@@ -253,6 +284,65 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
 
 ## Exhibits del caso
 ### Exhibit 1 — Financiero (extrae revenue_annual_total de aquí)
+{financial_data}
+
+### Exhibit 2 — Operativo
+{operational_data}
+"""
+
+
+# ── SCHEMA_DESIGNER_PROMPT_CLUSTERING (Issue #452) ──────────────────────────────
+# Dedicated entity-level SEGMENTATION schema for ml_ds + clustering. Standalone (NOT appended to
+# the generic prompt, whose rigid "12 fixed churn-panel columns" rule would contradict it). The
+# deterministic `_enforce_mlds_clustering_structure` injects the latent blob structure over the
+# declared numeric features; the architect's financial Exhibit 1 stays a separate M1 narrative.
+SCHEMA_DESIGNER_PROMPT_CLUSTERING = """\
+Diseña el schema de un dataset sintético de SEGMENTACIÓN (clustering NO supervisado) para el caso.
+Perfil: {student_profile} | Industria: {industria}
+
+## Contrato dataset_schema_required
+{dataset_contract_block}
+
+OBJETIVO PEDAGÓGICO: el estudiante descubrirá segmentos latentes con K-Means. El dataset es una
+tabla A NIVEL DE ENTIDAD (cliente, producto, cuenta…), UNA fila por entidad, con features NUMÉRICAS
+de comportamiento INTERPRETABLES y en escalas distintas (para motivar la estandarización).
+
+REGLAS DURAS (clustering):
+- NO hay variable target supervisada. NO incluyas `categoria`/`label` ni un target binario.
+- NO incluyas un panel financiero de serie temporal (revenue/costs/margin_pct/ebitda) ni columnas de
+  churn/retención (churn_rate/nps/retention_mX). Este caso NO es de retención.
+- Genera `period` SOLO como identificador de fila (type "str", row id), nunca como eje temporal.
+- Genera entre 5 y 8 features numéricas de segmentación interpretables (elige nombres y rangos
+  coherentes con la industria; espíritu RFM + comportamiento): recency_days (int),
+  frequency_count (int), monetary_value (float), tenure_months (int), engagement_score (float 0-1),
+  support_intensity (float), avg_ticket_value (float)…
+- Cada feature numérica: range_min/range_max coherentes, nullable=false, trend=null, dependency=null.
+  (La estructura latente de segmentos la inyecta el pipeline determinista; tú SOLO declaras las
+  features y sus rangos.)
+- Si el contrato declara `feature_columns`, INCLÚYELAS con su `name` y `dtype` exactos.
+
+## ESTRUCTURA DE OUTPUT OBLIGATORIA (JSON puro, sin markdown, sin claves extra)
+{{
+  "columns": [
+    {{"name": "period", "type": "str", "description": "Identificador de entidad", "range_min": null, "range_max": null, "nullable": false, "trend": null, "dependency": null}},
+    {{"name": "recency_days", "type": "int", "description": "Días desde la última actividad", "range_min": 1, "range_max": 365, "nullable": false, "trend": null, "dependency": null}},
+    {{"name": "frequency_count", "type": "int", "description": "Interacciones en el período", "range_min": 1, "range_max": 60, "nullable": false, "trend": null, "dependency": null}},
+    {{"name": "monetary_value", "type": "float", "description": "Valor monetario acumulado (USD)", "range_min": 50, "range_max": 5000, "nullable": false, "trend": null, "dependency": null}}
+    ... 2 a 5 features de segmentación más, mismas reglas ...
+  ],
+  "n_rows": {max_rows},
+  "time_granularity": "monthly",
+  "constraints": {{"tolerance_pct": 0.05}},
+  "reasoning_summary": "<justificación en 1 línea>"
+}}
+
+## Reglas para columnas
+- type DEBE ser exactamente "int" o "float" para las features (y "str" solo para `period`).
+- range_min/range_max: números para columnas numéricas; null para `period`.
+- n_rows: usa exactamente {max_rows}.
+
+## Exhibits del caso (solo CONTEXTO de negocio; NO los conviertas en columnas financieras)
+### Exhibit 1 — Financiero
 {financial_data}
 
 ### Exhibit 2 — Operativo
@@ -996,6 +1086,96 @@ Industria: {industria}
 case_id: {case_id} | student_profile: {student_profile} | output_language: {output_language}
 """
 
+# ── Issue #437 (ADR 0003, Fase 1) — NEUTRAL generic chart prompt ───────────────
+# Value-locked parts neutralized (identity, Gráfico 2 metric set, source); "EXACTAMENTE 2"
+# and the "NUNCA inventes" honesty boundary preserved verbatim. The Gráfico-2 VALUE metrics
+# come from the concatenated «MARCO DE VALOR (IMPACT LENS)» hint. Selected by
+# m4_chart_generator when settings.impact_lens is on (default, 2-chart path); the financial
+# twin above is the byte-identical kill-switch-off path. Costs stay USD (DD3).
+M4_CHART_GENERATOR_PROMPT_NEUTRAL = """\
+# Your Identity
+Eres el Visualizador de Impacto de ADAM, un analista que traduce proyecciones
+de impacto en gráficos ejecutivos de calidad boardroom.
+
+# Your Mission
+Generar EXACTAMENTE 2 gráficos de impacto Plotly.js para el Módulo 4.
+Estos gráficos permiten al estudiante (y al profesor) VER el impacto
+cuantitativo de las opciones A, B y C del caso.
+
+# How You Work (Workflow)
+1. **Lee M4 Content:** Extrae las proyecciones numéricas de cada opción del {m4_content}.
+2. **Lee Exhibits:** Usa los datos base del {anexo_financiero} como punto de partida.
+3. **Lee el MARCO DE VALOR** (bloque al final): define la métrica de valor primaria del caso.
+4. **Construye 2 gráficos** siguiendo la estructura obligatoria (ver abajo).
+5. **Verifica:** Los números de los gráficos DEBEN coincidir con los del texto M4.
+
+# Estructura OBLIGATORIA de los 2 gráficos
+
+## Gráfico 1: Flujo de Caja y Punto de Equilibrio (Payback)
+- **chart_type:** `"waterfall"` (business) o `"bar"` + `"line"` composed (ml_ds)
+- **Concepto:** Mostrar inversión inicial (negativa) → flujos netos por período → punto
+  donde el acumulado cruza cero ("Valle de la Muerte"). Costos en USD; el "retorno" es el
+  VALOR del MARCO DE VALOR monetizado.
+- **Traces:**
+  - business: waterfall con measure ["absolute", "relative", ...,"total"]
+  - ml_ds: bar (flujo neto por período) + line (acumulado)
+- **Datos:** Extraer inversión de Exhibit 1, proyectar flujos netos según la opción
+  recomendada en M4 content. Usar el horizonte temporal del caso.
+- **academic_rationale:** "El payback period visualiza cuándo la inversión se recupera,
+  dato crítico para la decisión del comité directivo."
+
+## Gráfico 2: Comparativa de Escenarios (A vs B vs C)
+- **chart_type:** `"bar"` agrupado
+- **Concepto:** Comparar las 3 opciones (A, B, C) en 3-4 métricas clave de VALOR.
+- **Traces:** 3 traces (Opción A, B, C), una barra por métrica.
+- **Categories:** usa las métricas de VALOR del MARCO DE VALOR (bloque al final) más,
+  opcionalmente, un Score de Riesgo (1-5). Normaliza valores monetarios (USD) a escala 0-100
+  para que sean comparables visualmente.
+- **academic_rationale:** "La comparativa permite al estudiante ver en una sola vista
+  qué opción domina en qué dimensión, reforzando que no existe solución perfecta."
+
+# Your Boundaries
+- Los números de los gráficos DEBEN coincidir con las proyecciones del {m4_content}.
+  Si M4 dice "Opción A genera un valor de X", el gráfico DEBE mostrar X para Opción A.
+- Usa SOLO cifras presentes en {m4_content} o en el Exhibit 1 ({anexo_financiero}), o derivadas
+  aritméticamente de ellas (p. ej. flujo mensual = anual / 12, acumulado = suma). Si {m4_content}
+  no tiene números suficientes, omite esa serie o exprésala de forma CUALITATIVA; NUNCA inventes
+  valores ni los justifiques con "benchmarks", "estimaciones del sector" o cifras externas al caso.
+- `library`: siempre `"plotly"`.
+- `source`: `"Análisis de Impacto — {case_id}"`.
+- **Idioma de títulos y etiquetas: {output_language}**
+
+# JSON Schema (idéntico a M2 — campos OBLIGATORIOS):
+{{
+  "id": "m4_chart_01",
+  "title": "string (orientado al insight de valor)",
+  "subtitle": "string",
+  "library": "plotly",
+  "chart_type": "waterfall|bar|line",
+  "traces": [{{ "type": "...", "x": [...], "y": [...], "name": "..." }}],
+  "layout": {{ "xaxis": {{"title": "..."}}, "yaxis": {{"title": "..."}}, "showlegend": true, "template": "plotly_white" }},
+  "source": "Análisis de Impacto — {case_id}",
+  "notes": "string (insight + método de cálculo)",
+  "academic_rationale": "string"
+}}
+
+# Perfil del estudiante: {student_profile}
+- Si es "business":
+  Títulos en lenguaje ejecutivo ("Punto de Equilibrio: Mes 14").
+  Sin jerga técnica de modelos.
+- Si es "ml_ds":
+  Gráfico 1 puede incluir costo de infraestructura ML (cloud, GPUs) en los flujos.
+  Títulos técnicos ("Recuperación del Pipeline ML vs Inversión en Infra").
+
+# Context
+Análisis de impacto M4: {m4_content}
+Exhibit 1 (financiero): {anexo_financiero}
+Industria: {industria}
+
+# Metadatos del sistema
+case_id: {case_id} | student_profile: {student_profile} | output_language: {output_language}
+"""
+
 M4_QUESTIONS_GENERATOR_PROMPT = """\
 # Your Identity
 Eres el Evaluador del Módulo 4 en ADAM, especializado en preguntas que conectan análisis
@@ -1010,7 +1190,7 @@ conecta hallazgos con impacto real y sopesa trade-offs ejecutivos.
   {{
     "numero": 1,
     "titulo": "string corto (≤8 palabras)",
-    "enunciado": "string (pregunta con métricas numéricas y opciones A/B/C explícitas)",
+    "enunciado": "string (pregunta ABIERTA con métricas numéricas; SIN opciones de respuesta etiquetadas A/B/C)",
     "solucion_esperada": "string (máx 60 palabras)",
     "bloom_level": "analysis|evaluation|synthesis",
     "m4_section_ref": "4.1|4.2|4.3|4.4|4.5"
@@ -1025,7 +1205,10 @@ conecta hallazgos con impacto real y sopesa trade-offs ejecutivos.
    por el M4 y el razonamiento esperado del estudiante para llegar a ella.
 
 # Your Boundaries
-- Solo JSON schema. Las preguntas DEBEN citar métricas numéricas del M4 y opciones A/B/C.
+- Solo JSON schema. Las preguntas DEBEN citar métricas numéricas del M4. Son preguntas ABIERTAS:
+  NO incrustes opciones de respuesta etiquetadas A/B/C (colisionan con las Opción A/B/C estratégicas
+  del caso). Si recomiendas una opción estratégica en `solucion_esperada`, nómbrala por su LETRA REAL
+  del análisis del M4 (§4.5), sin inventar ni cruzar una letra de respuesta.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}
@@ -1040,6 +1223,71 @@ conecta hallazgos con impacto real y sopesa trade-offs ejecutivos.
   "business" → Comparar las 2 opciones con mayor ROI usando los cálculos del M4.
   "ml_ds" → Beneficio proyectado del modelo (§4.2) vs costo de deploy + operación anual.
   ¿El ROI justifica la inversión dado el veredicto de M3?
+- **P3 (synthesis — ref: 4.4):**
+  Cómo mitigar el mayor riesgo de implementación identificado en §4.4.
+  El estudiante debe proponer una acción concreta, no solo nombrarlo.
+
+# Context
+{m4_content}
+Exhibit 1: {anexo_financiero}
+Nombre empresa: {nombre_empresa}
+
+# Metadatos del sistema
+case_id: {case_id} | student_profile: {student_profile} | output_language: {output_language}
+"""
+
+# ── Issue #437 (ADR 0003, Fase 1) — NEUTRAL generic questions prompt ───────────
+# H1 fix: P1's "línea final de ingresos/costos" + P2's "¿El ROI justifica?" reframed to
+# the case's VALUE frame (MARCO DE VALOR). "EXACTAMENTE 3", m4_section_ref and the A/B/C
+# requirement are preserved. Selected by m4_questions_generator when settings.impact_lens
+# is on (default); the financial twin above is the byte-identical kill-switch-off path.
+M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL = """\
+# Your Identity
+Eres el Evaluador del Módulo 4 en ADAM, especializado en preguntas que conectan análisis
+técnico con el VALOR del caso y trade-offs ejecutivos.
+
+# Your Mission
+Generar EXACTAMENTE 3 preguntas usando el JSON schema provisto, que evalúen si el estudiante
+conecta hallazgos con impacto real de VALOR (según el MARCO DE VALOR) y sopesa trade-offs ejecutivos.
+
+# JSON Schema Obligatorio (claves EXACTAS)
+[
+  {{
+    "numero": 1,
+    "titulo": "string corto (≤8 palabras)",
+    "enunciado": "string (pregunta ABIERTA con métricas numéricas; SIN opciones de respuesta etiquetadas A/B/C)",
+    "solucion_esperada": "string (máx 60 palabras)",
+    "bloom_level": "analysis|evaluation|synthesis",
+    "m4_section_ref": "4.1|4.2|4.3|4.4|4.5"
+  }},
+  ...
+]
+
+# How You Work (Workflow)
+1. **Analiza:** Lee la Evaluación de Impacto (M4) completa.
+2. **Diseña:** Fuerza al estudiante a elegir y sacrificar. No hay soluciones perfectas.
+3. **Redacta:** `solucion_esperada` máx 60 palabras. Nombrar la opción recomendada
+   por el M4 y el razonamiento esperado del estudiante para llegar a ella.
+
+# Your Boundaries
+- Solo JSON schema. Las preguntas DEBEN citar métricas numéricas del M4. Son preguntas ABIERTAS:
+  NO incrustes opciones de respuesta etiquetadas A/B/C (colisionan con las Opción A/B/C estratégicas
+  del caso). Si recomiendas una opción estratégica en `solucion_esperada`, nómbrala por su LETRA REAL
+  del análisis del M4 (§4.5), sin inventar ni cruzar una letra de respuesta.
+- **Idioma de salida: {output_language}**
+
+# Perfil del estudiante: {student_profile}
+- Si es "business": valor del MARCO DE VALOR, viabilidad operativa, trade-off entre opciones.
+- Si es "ml_ds": Costo infra (USD) vs valor del modelo, MLOps, fallos algorítmicos en producción.
+
+# Estructura de las 3 preguntas
+- **P1 (analysis — ref: 4.1 o 4.2):**
+  Cómo un hallazgo específico del M2 (nombrado con métrica exacta) impacta
+  el VALOR del caso (según el MARCO DE VALOR) de {nombre_empresa}.
+- **P2 (evaluation — ref: 4.2):**
+  "business" → Comparar las 2 opciones con mayor valor usando los cálculos del M4.
+  "ml_ds" → Valor proyectado del modelo (§4.2) vs costo de deploy + operación anual (USD).
+  ¿El valor proyectado justifica la inversión dado el veredicto de M3?
 - **P3 (synthesis — ref: 4.4):**
   Cómo mitigar el mayor riesgo de implementación identificado en §4.4.
   El estudiante debe proponer una acción concreta, no solo nombrarlo.
@@ -1244,10 +1492,11 @@ negocio.
   probabilidad puede dirigir el presupuesto al lugar equivocado; pide una mitigación concreta en
   términos de negocio (a quién priorizar, con qué presupuesto, cómo confirmar el supuesto), no una
   receta técnica del modelo.
-- **Coherencia opción↔solución:** si una pregunta plantea opciones, enúncialas con letras
-  (A/B/C) y en `solucion_esperada` recomienda SOLO una de las letras presentadas en ese mismo
-  enunciado, nombrándola por su letra; nunca una opción ausente del enunciado ni una letra fuera
-  de A/B/C.
+- **Coherencia opción↔solución:** las preguntas son ABIERTAS — NO incrustes opciones de respuesta
+  etiquetadas A/B/C (colisionan con las Opción A/B/C estratégicas del caso). Si `solucion_esperada`
+  recomienda una opción estratégica del caso, nómbrala por su LETRA REAL tal como aparece en el M4;
+  PROHIBIDO crear answer-choices A/B/C nuevos, barajar las estratégicas bajo otras letras, o cruzar
+  una letra de respuesta con la estratégica.
 - **Honestidad:** usa únicamente cifras del caso (Exhibits, M2, M4). NO inventes probabilidades,
   tasas ni valores nuevos; razona sobre la lógica de priorización, no sobre métricas del modelo.
 """
@@ -1291,6 +1540,41 @@ M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION = (
     M5_QUESTIONS_GENERATOR_PROMPT + M5_QUESTIONS_LR_BUSINESS_BLOCK
 )
 
+# ── Issue #437 (ADR 0003, Fase 1) — NEUTRAL twins of the M4 dispatch tables ─────
+# Same composition as the financial tables above but on the NEUTRAL bases. The
+# LR-business blocks are REUSED unchanged (probability × value-at-risk framing is
+# value-neutral). m4_{content,questions,chart}_generator select the *_NEUTRAL set
+# when settings.impact_lens is on (the default); the financial tables are the
+# byte-identical kill-switch-off path. M5 is untouched (Fase 3).
+M4_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL = (
+    M4_CONTENT_GENERATOR_PROMPT_NEUTRAL + M4_LR_BUSINESS_BLOCK
+)
+M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL = (
+    M4_CHART_GENERATOR_PROMPT_NEUTRAL + M4_CHART_LR_BUSINESS_BLOCK
+)
+M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL = (
+    M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL + M4_QUESTIONS_LR_BUSINESS_BLOCK
+)
+
+M4_PROMPT_BY_FAMILY_NEUTRAL: dict[str, str] = {
+    "clasificacion": M4_NARRATIVE_PROMPT_CLASSIFICATION_NEUTRAL,
+    "regresion": M4_CONTENT_GENERATOR_PROMPT_NEUTRAL,
+    "clustering": M4_CONTENT_GENERATOR_PROMPT_NEUTRAL,
+    "serie_temporal": M4_CONTENT_GENERATOR_PROMPT_NEUTRAL,
+}
+M4_QUESTIONS_PROMPT_BY_FAMILY_NEUTRAL: dict[str, str] = {
+    "clasificacion": M4_QUESTIONS_PROMPT_CLASSIFICATION_NEUTRAL,
+    "regresion": M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL,
+    "clustering": M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL,
+    "serie_temporal": M4_QUESTIONS_GENERATOR_PROMPT_NEUTRAL,
+}
+M4_CHARTS_PROMPT_BY_FAMILY_NEUTRAL: dict[str, str] = {
+    "clasificacion": M4_CHART_PROMPT_CLASSIFICATION_NEUTRAL,
+    "regresion": M4_CHART_GENERATOR_PROMPT_NEUTRAL,
+    "clustering": M4_CHART_GENERATOR_PROMPT_NEUTRAL,
+    "serie_temporal": M4_CHART_GENERATOR_PROMPT_NEUTRAL,
+}
+
 # ── SCHEMA_DESIGNER_PROMPT_BY_FAMILY — dispatch table consumed by
 # graph.py::schema_designer.  Keys MUST match values returned by
 # ``family_of(name)`` / ``resolve_legacy_family(name)`` in suggest_service.py.
@@ -1298,7 +1582,15 @@ M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION = (
 # until their specialised prompts are authored in future iterations.
 SCHEMA_DESIGNER_PROMPT_BY_FAMILY: dict[str, str] = {
     "clasificacion": SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
-    # regresion, clustering, serie_temporal — deferred (future iterations)
+    # Issue #452 — ml_ds + clustering gets a dedicated entity-level segmentation schema
+    # (gated at the schema_designer call site by MLDS_CLUSTERING_STRUCTURE).
+    # Issue #477 — NOTE: with MLDS_CLUSTERING_STRUCTURE on, schema_designer now SKIPS the LLM for
+    # clustering and goes straight to the deterministic `_build_clustering_fallback_schema` (this
+    # prompt emits no required `revenue_annual_total`, so it would always fail DatasetSchema
+    # validation). This entry is therefore runtime-unreached today, kept as the canonical home +
+    # revert path for a future family-aware constraints model (and consumed by the #452 dispatch test).
+    "clustering": SCHEMA_DESIGNER_PROMPT_CLUSTERING,
+    # regresion, serie_temporal — deferred (future iterations)
 }
 
 
@@ -2186,6 +2478,36 @@ try:
 except Exception as e:
     print(f"⚠️ Error fit clustering: {{e}}")
 
+## Celda 2b-bis — Resumen de métricas JSON (OBLIGATORIA — la consume el executor del Módulo 3)
+## Reproduce esta celda VERBATIM tras el fit (usa el `labels` y `X_scaled` ya calculados). NO inventes
+## cifras: el bloque DEBE derivarse de las variables reales. Emite SIEMPRE la línea del marcador.
+# %%
+# === SECTION:metrics_summary_json ===
+import json as _json
+try:
+    _labels_arr = np.asarray(labels)
+    _uniq = sorted(int(c) for c in set(_labels_arr.tolist()) if c != -1)
+    _n_clusters = len(_uniq)
+    if _n_clusters >= 2:
+        _sizes = [int((_labels_arr == c).sum()) for c in _uniq]
+        _metrics_summary = {{
+            "silhouette": float(silhouette_score(X_scaled, labels)),
+            "davies_bouldin": float(davies_bouldin_score(X_scaled, labels)),
+            "n_clusters": int(_n_clusters),
+            "cluster_sizes": _sizes,
+            "modeling_status": "clustering_completed",
+        }}
+    else:
+        # <2 clusters reales formados: degenerado. NO es un skip intencional → el gate del
+        # executor lo trata como bloqueante (reprompt-then-degrade), no como éxito silencioso.
+        _metrics_summary = {{"n_clusters": int(_n_clusters), "modeling_status": "execution_error",
+                             "execution_warning": "fewer than 2 clusters formed"}}
+except Exception as _e:
+    # Fallo de ejecución (variables del fit ausentes, silhouette NaN, etc.): NO es un skip
+    # intencional → bloqueante → el notebook degrada (m3NotebookDegraded), no shipea vacío.
+    _metrics_summary = {{"modeling_status": "execution_error", "execution_warning": str(_e)[:200]}}
+print("ADAM_M3_METRICS_SUMMARY_JSON=" + _json.dumps(_metrics_summary, ensure_ascii=False, allow_nan=False))
+
 ## Celda 2c — Scatter 2D PCA con colores por cluster (UN plot por celda)
 # %%
 try:
@@ -2218,6 +2540,256 @@ Familias con metadata: {familias_meta}
 Algoritmos detectados: {algoritmos}
 Contexto M3 (extracto): {m3_content}
 """
+
+
+# Issue #454 — prompt K-Means-ONLY (despachado por-variante para ml_ds + clustering cuando el
+# único algoritmo es K-Means). Separa K-Means de DBSCAN: cero `DBSCAN/eps/k-distance/min_samples/
+# NearestNeighbors` en código ejecutable. Celdas TOTALMENTE escritas con marcadores
+# `# === SECTION:... ===` que el validador exige (lockstep con `_CLUSTERING_*_BY_VARIANT` en
+# graph.py). La celda `metrics_summary_json` es VERBATIM de M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING
+# (contrato del executor #453). El prompt mixto se conserva como fallback `mixed_legacy`.
+M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING_KMEANS = """\
+Eres un ML Engineer generando la Sección 3 de un notebook Jupytext Percent para Google Colab.
+El notebook resuelve un problema de CLUSTERING NO SUPERVISADO con K-Means (UN solo algoritmo).
+Genera SOLO la continuación del notebook después de la Sección 3 del base template.
+
+# Contrato dataset_schema_required
+{dataset_contract_block}
+
+# Brechas de datos detectadas por el validador
+{data_gap_warnings_block}
+
+# Reglas CONTRACT-FIRST
+* Clustering NO usa target. Si el contrato declara un `target_column`, IGNÓRALO en el fit
+  (puedes mostrarlo a posteriori para colorear los clusters como diagnóstico, pero NO lo uses como `y`).
+* Sin contrato: usa todas las columnas numéricas de `df` como features de segmentación.
+
+# Reglas absolutas
+1. NUNCA uses np.random, pd.DataFrame() fabricado, columnas inventadas ni placeholders.
+2. SOLO trabaja con columnas reales de `df`. Las features se derivan de las columnas numéricas reales.
+3. Formato SOLO Jupytext Percent: `# %%` y `# %% [markdown]`.
+4. NO redefinas funciones del base template.
+5. Idioma de salida: {output_language}.
+6. Cada bloque de código falla de forma aislada — encapsula en try/except local.
+7. Reproduce CADA celda de la sección "Estructura del notebook" VERBATIM, adaptando SOLO los
+   nombres de columnas reales de `df`. NO renombres ni omitas los marcadores `# === SECTION:... ===`.
+
+# Reglas de API estable (SOLO K-Means)
+A. Usa SOLO API documentada y estable de scikit-learn >= 1.0:
+   - sklearn.cluster.KMeans(n_clusters=k, n_init=10, random_state=42)
+   - sklearn.preprocessing.StandardScaler()  <- OBLIGATORIO antes de fit
+   - sklearn.decomposition.PCA(n_components=2, random_state=42)
+   - sklearn.metrics: silhouette_score, davies_bouldin_score
+B. Lista NEGRA explícita (PROHIBIDOS — pertenecen a otras familias o a otro algoritmo de clustering):
+   - sklearn.cluster.DBSCAN, eps, min_samples, k-distance, sklearn.neighbors.NearestNeighbors
+     (este notebook es K-Means; NO uses DBSCAN ni su selección de epsilon).
+   - `from sklearn.model_selection import train_test_split`  <- clustering NO usa split
+   - `from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, f1_score`
+   - `from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error`
+   - `import statsmodels`, `import pmdarima`, `auto_arima`, `import prophet`
+   Si los detectas en tu salida, REESCRIBE — este prompt es solo K-Means.
+C. NO importes nada fuera de: numpy, pandas, matplotlib, seaborn,
+   sklearn.{{cluster,preprocessing,decomposition,metrics}}, scipy.stats.
+
+# StandardScaler OBLIGATORIO
+- TODO el clustering trabaja sobre `X_scaled` (StandardScaler), no sobre `X` cruda. Las distancias
+  sin escalar hacen que las features de mayor magnitud dominen y los clusters resulten arbitrarios.
+
+# Higiene de feature_cols
+1. Candidatas = SOLO columnas numéricas de `df` (sin one-hot de categóricas, para mantener interpretabilidad de PCA).
+2. Drop ID-like (cardinalidad == n_filas), near-constants y high-null (>50% NaN).
+3. Drop el target del contrato (si existe) — clustering NO supervisado.
+4. `X = df[feature_cols].dropna()` (sin imputación con la media — el clustering es sensible a ella).
+5. Si `X.shape[1] < 2` o `X.shape[0] < 10`: imprime "REQUISITO FALTANTE..." pero emite igualmente la celda de métricas.
+
+# Atomic Cell Charting
+- Cada celda de visualización contiene EXACTAMENTE UNA `plt.figure(...)` y UN `plt.show()`.
+- Hay SOLO DOS figuras: (1) selección de k (codo + silhouette) y (2) scatter PCA. El perfilado es una TABLA (sin figura).
+
+# EDA Express (Sección 3.0) OBLIGATORIA antes del bloque de K-Means
+
+## El base template ya abrió `## Sección 3: Módulos Experimentales`; aquí emite un H3.
+# %% [markdown]
+# ### 3.0 EDA Express
+# Antes de hacer clustering, validamos calidad y forma del dataset.
+
+# %%
+try:
+    num_cols = df.select_dtypes(include=np.number).columns.tolist()
+    print(f"Columnas numéricas disponibles: {{len(num_cols)}}")
+    print(num_cols)
+    if len(num_cols) < 2:
+        print("⚠️ REQUISITO FALTANTE: clustering requiere ≥2 columnas numéricas.")
+    if len(df) < 10:
+        print(f"⚠️ Dataset muy pequeño (n={{len(df)}}): clustering no representativo.")
+    print("\\nTop 10 columnas por % missing:")
+    print(df.isna().mean().sort_values(ascending=False).head(10).round(3))
+except Exception as e:
+    print(f"⚠️ EDA Express falló: {{e}}")
+
+# Estructura del notebook (reproduce VERBATIM cada celda, adaptando solo nombres de columnas reales)
+
+## Celda concepto (markdown)
+# %% [markdown]
+# ### clustering — K-Means
+# **¿Qué es K-Means y cómo agrupa?** K-Means elige un número fijo de grupos (k) y asigna cada
+# registro al grupo cuyo centro promedio le queda más cerca, recalculando los centros hasta que
+# los grupos se estabilizan. Por eso necesitamos (a) decidir cuántos grupos buscar y (b) poner
+# todas las variables en la misma escala para que ninguna domine por su tamaño.
+# **Hipótesis experimental:** [extraída de {m3_content}, 1-2 líneas]
+# **Prerequisitos:** [campo "prerequisito" del entry en {familias_meta}]
+
+## Celda higiene + escalado (código)
+# %%
+# === SECTION:scaler_features ===
+try:
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.cluster import KMeans
+    from sklearn.decomposition import PCA
+    from sklearn.metrics import silhouette_score, davies_bouldin_score
+    num_cols = df.select_dtypes(include=np.number).columns.tolist()
+    feature_cols = [
+        c for c in num_cols
+        if df[c].nunique(dropna=True) > 1
+        and df[c].isna().mean() <= 0.5
+        and not (df[c].dtype.kind in "iu" and df[c].nunique(dropna=True) == len(df))
+    ]
+    X = df[feature_cols].dropna()
+    if X.shape[1] < 2 or X.shape[0] < 10:
+        print("⚠️ REQUISITO FALTANTE: se requieren ≥2 columnas numéricas y ≥10 filas para clustering.")
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    print(f"Features de segmentación ({{len(feature_cols)}}): {{feature_cols}}")
+except Exception as e:
+    print(f"⚠️ Error en higiene/escalado: {{e}}")
+
+## Celda selección de k — codo + silhouette (UNA figura)
+# %%
+# === SECTION:elbow ===
+try:
+    _ks = list(range(2, min(11, len(X_scaled))))
+    _inertias = []
+    _silhouettes = []
+    for _k in _ks:
+        _km = KMeans(n_clusters=_k, n_init=10, random_state=42).fit(X_scaled)
+        _inertias.append(_km.inertia_)
+        _silhouettes.append(silhouette_score(X_scaled, _km.labels_))
+    best_k = _ks[int(np.argmax(_silhouettes))] if _silhouettes else 3
+    plt.figure(figsize=(8, 5))
+    ax1 = plt.gca()
+    ax1.plot(_ks, _inertias, marker="o", color="tab:blue", label="Inercia (codo)")
+    ax1.set_xlabel("Número de clusters (k)")
+    ax1.set_ylabel("Inercia", color="tab:blue")
+    ax2 = ax1.twinx()
+    ax2.plot(_ks, _silhouettes, marker="s", color="tab:red", label="Silhouette")
+    ax2.set_ylabel("Silhouette", color="tab:red")
+    ax1.axvline(best_k, color="gray", linestyle="--", alpha=0.7)
+    plt.title(f"Selección de k — codo (inercia) y silhouette · k* = {{best_k}}")
+    plt.tight_layout(); plt.show()
+except Exception as e:
+    print(f"⚠️ Error en la selección de k: {{e}}")
+
+## Celda fit final (código, SIN figura). Reelige k por mayor silhouette y ajusta K-Means.
+# %%
+# === SECTION:kmeans_fit ===
+try:
+    _sil_by_k = {{}}
+    for _k in range(2, min(11, len(X_scaled))):
+        _lab = KMeans(n_clusters=_k, n_init=10, random_state=42).fit_predict(X_scaled)
+        _sil_by_k[_k] = silhouette_score(X_scaled, _lab)
+    best_k = max(_sil_by_k, key=_sil_by_k.get) if _sil_by_k else 3
+    kmeans = KMeans(n_clusters=best_k, n_init=10, random_state=42)
+    labels = kmeans.fit_predict(X_scaled)
+    print(f"k seleccionado (mejor silhouette): {{best_k}}")
+    print(f"Silhouette: {{silhouette_score(X_scaled, labels):.4f}}")
+    print(f"Davies-Bouldin: {{davies_bouldin_score(X_scaled, labels):.4f}}")
+    print("Tamaño por cluster:", pd.Series(labels).value_counts().sort_index().to_dict())
+except Exception as e:
+    print(f"⚠️ Error en el ajuste de K-Means: {{e}}")
+
+## Celda métricas JSON (OBLIGATORIA — la consume el executor del Módulo 3). Reproduce VERBATIM.
+# %%
+# === SECTION:metrics_summary_json ===
+import json as _json
+try:
+    _labels_arr = np.asarray(labels)
+    _uniq = sorted(int(c) for c in set(_labels_arr.tolist()) if c != -1)
+    _n_clusters = len(_uniq)
+    if _n_clusters >= 2:
+        _sizes = [int((_labels_arr == c).sum()) for c in _uniq]
+        _metrics_summary = {{
+            "silhouette": float(silhouette_score(X_scaled, labels)),
+            "davies_bouldin": float(davies_bouldin_score(X_scaled, labels)),
+            "n_clusters": int(_n_clusters),
+            "cluster_sizes": _sizes,
+            "modeling_status": "clustering_completed",
+        }}
+    else:
+        # <2 clusters reales formados: degenerado. NO es un skip intencional → el gate del
+        # executor lo trata como bloqueante (reprompt-then-degrade), no como éxito silencioso.
+        _metrics_summary = {{"n_clusters": int(_n_clusters), "modeling_status": "execution_error",
+                             "execution_warning": "fewer than 2 clusters formed"}}
+except Exception as _e:
+    # Fallo de ejecución (variables del fit ausentes, silhouette NaN, etc.): NO es un skip
+    # intencional → bloqueante → el notebook degrada (m3NotebookDegraded), no shipea vacío.
+    _metrics_summary = {{"modeling_status": "execution_error", "execution_warning": str(_e)[:200]}}
+print("ADAM_M3_METRICS_SUMMARY_JSON=" + _json.dumps(_metrics_summary, ensure_ascii=False, allow_nan=False))
+
+## Celda perfilado de segmentos (TABLA — sin figura). Es la interpretación accionable.
+# %%
+# === SECTION:cluster_profiles ===
+try:
+    _profile = X.assign(cluster=labels).groupby("cluster")[feature_cols].mean().round(2)
+    print("Perfil de cada segmento (media de cada feature por cluster):")
+    print(_profile.to_string())
+    print("\\nTamaño de cada segmento:", pd.Series(labels).value_counts().sort_index().to_dict())
+except Exception as e:
+    print(f"⚠️ Error en el perfilado de segmentos: {{e}}")
+
+## Celda scatter PCA (UNA figura)
+# %%
+# === SECTION:pca_scatter ===
+try:
+    plt.figure(figsize=(8, 6))
+    pca = PCA(n_components=2, random_state=42)
+    X_pca = pca.fit_transform(X_scaled)
+    plt.scatter(X_pca[:, 0], X_pca[:, 1], c=labels, cmap="tab10", alpha=0.7, s=20)
+    plt.xlabel(f"PC1 ({{pca.explained_variance_ratio_[0]:.0%}})")
+    plt.ylabel(f"PC2 ({{pca.explained_variance_ratio_[1]:.0%}})")
+    plt.title("Segmentos proyectados en 2D (PCA)")
+    plt.tight_layout(); plt.show()
+except Exception as e:
+    print(f"⚠️ Error en el scatter PCA: {{e}}")
+
+## Celda acción de negocio (markdown)
+# %% [markdown]
+# **Explicación pedagógica:** [qué muestran el silhouette y el scatter PCA; qué distingue a cada segmento, 2 líneas]
+# **Acción de negocio:** [próximo paso concreto sobre los segmentos descubiertos, 1 línea]
+
+# Sección final OBLIGATORIA
+# %% [markdown]
+# ## Evaluación M3 — Diseño Experimental
+# Responde en la plataforma ADAM las preguntas del Módulo 3 sobre hipótesis, sesgos y descarte.
+
+---
+Caso: {case_title}
+Familias con metadata: {familias_meta}
+Algoritmos detectados: {algoritmos}
+Contexto M3 (extracto): {m3_content}
+"""
+
+
+ClusteringNotebookVariant = Literal["kmeans_only", "mixed_legacy"]
+
+CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY: Final[ClusteringNotebookVariant] = "kmeans_only"
+CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY: Final[ClusteringNotebookVariant] = "mixed_legacy"
+
+# Issue #454 — dispatch por-variante de clustering (espejo de CLASSIFICATION_NOTEBOOK_PROMPT_BY_VARIANT).
+# `mixed_legacy` apunta al MISMO objeto que PROMPT_BY_FAMILY["clustering"] → byte-idéntico al mixto.
+CLUSTERING_NOTEBOOK_PROMPT_BY_VARIANT: dict[ClusteringNotebookVariant, str] = {
+    CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY: M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING_KMEANS,
+    CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY: M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING,
+}
 
 
 M3_NOTEBOOK_ALGO_PROMPT_TIMESERIES = """\
@@ -2431,14 +3003,20 @@ Contexto M3 (extracto): {m3_content}
 # preserves the pre-Issue-#245 generic behaviour for all non-clasificacion families.
 CASE_ARCHITECT_PROMPT_BY_FAMILY: dict[str, str] = {
     "clasificacion": CASE_ARCHITECT_PROMPT_CLASSIFICATION,
+    # Issue #455 — clustering (segmentation) M1 anchor. Runtime selection is gated
+    # to ml_ds + kill-switch in graph._resolve_m1_prompt_family; the dict is a pure
+    # family→prompt map.
+    "clustering": CASE_ARCHITECT_PROMPT_CLUSTERING,
 }
 
 CASE_WRITER_PROMPT_BY_FAMILY: dict[str, str] = {
     "clasificacion": CASE_WRITER_PROMPT_CLASSIFICATION,
+    "clustering": CASE_WRITER_PROMPT_CLUSTERING,
 }
 
 CASE_QUESTIONS_PROMPT_BY_FAMILY: dict[str, str] = {
     "clasificacion": CASE_QUESTIONS_PROMPT_CLASSIFICATION,
+    "clustering": CASE_QUESTIONS_PROMPT_CLUSTERING,
 }
 
 # ── PROMPT_BY_FAMILY — dispatch table consumed by graph.py::m3_notebook_generator
@@ -2460,21 +3038,27 @@ __all__ = [
   "CASE_ARCHITECT_PROMPT",
   "CASE_ARCHITECT_PROMPT_BY_FAMILY",
   "CASE_ARCHITECT_PROMPT_CLASSIFICATION",
+  "CASE_ARCHITECT_PROMPT_CLUSTERING",
   "M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK",
   "CASE_QUESTIONS_PROMPT",
   "CASE_QUESTIONS_PROMPT_BY_FAMILY",
   "CASE_QUESTIONS_PROMPT_CLASSIFICATION",
+  "CASE_QUESTIONS_PROMPT_CLUSTERING",
   "build_cost_matrix_block",
   "CASE_WRITER_PROMPT",
   "CASE_WRITER_PROMPT_BY_FAMILY",
   "CASE_WRITER_PROMPT_CLASSIFICATION",
+  "CASE_WRITER_PROMPT_CLUSTERING",
   "EDA_ANNOTATE_ONLY_PROMPT",
   "EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION",
+  "EDA_ANNOTATE_ONLY_PROMPT_CLUSTERING",
   "EDA_CHART_GENERATOR_PROMPT",
   "EDA_QUESTIONS_GENERATOR_PROMPT",
+  "EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING",
   "EDA_QUESTIONS_PROMPT_BY_FAMILY",
   "EDA_TEXT_ANALYST_PROMPT",
   "EDA_TEXT_ANALYST_PROMPT_BY_FAMILY",
+  "EDA_TEXT_ANALYST_PROMPT_CLUSTERING",
   "M3_AUDIT_LR_BUSINESS_BLOCK",
   "M3_AUDIT_PROMPT",
   "M3_AUDIT_QUESTIONS_PROMPT",
@@ -2488,6 +3072,7 @@ __all__ = [
   "M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT",
   "M3_CONTENT_PROMPT_CLASSIFICATION_LR_ONLY",
   "M3_CONTENT_PROMPT_CLASSIFICATION_RF_ONLY",
+  "M3_CONTENT_PROMPT_CLUSTERING",
   "M3_EXPERIMENT_ENGINEER_PROMPT",
   "M3_EXPERIMENT_PROMPT",
   "M3_EXPERIMENT_QUESTIONS_PROMPT",
@@ -2497,6 +3082,7 @@ __all__ = [
   "M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_LR_RF_CONTRAST",
   "M3_NOTEBOOK_ALGO_PROMPT_CLASSIFICATION_RF_ONLY",
   "M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING",
+  "M3_NOTEBOOK_ALGO_PROMPT_CLUSTERING_KMEANS",
   "M3_NOTEBOOK_ALGO_PROMPT_REGRESSION",
   "M3_NOTEBOOK_ALGO_PROMPT_TIMESERIES",
   "M3_NOTEBOOK_BASE_TEMPLATE",
@@ -2510,9 +3096,11 @@ __all__ = [
   "M4_CHART_LR_BUSINESS_BLOCK_LEGACY",
   "M4_CHART_PROMPT_CLASSIFICATION",
   "M4_CHART_PROMPT_CLASSIFICATION_LEGACY",
+  "M4_CHART_PROMPT_CLUSTERING",
   "M4_CHARTS_PROMPT_BY_FAMILY",
   "M4_CHARTS_PROMPT_BY_FAMILY_LEGACY",
   "M4_CONTENT_GENERATOR_PROMPT",
+  "M4_CONTENT_PROMPT_CLUSTERING",
   "M4_LR_BUSINESS_BLOCK",
   "M4_NARRATIVE_PROMPT_CLASSIFICATION",
   "M4_NARRATIVE_PROMPT_CLASSIFICATION_LR_ONLY",
@@ -2546,10 +3134,15 @@ __all__ = [
   "CLASSIFICATION_NOTEBOOK_VARIANT_LR_RF_CONTRAST",
   "CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY",
   "ClassificationNotebookVariant",
+  "CLUSTERING_NOTEBOOK_PROMPT_BY_VARIANT",
+  "CLUSTERING_NOTEBOOK_VARIANT_KMEANS_ONLY",
+  "CLUSTERING_NOTEBOOK_VARIANT_MIXED_LEGACY",
+  "ClusteringNotebookVariant",
   "TOC_MARKDOWN_CELL_BY_VARIANT",
   "PROMPT_BY_FAMILY",
   "SCHEMA_DESIGNER_PROMPT",
   "SCHEMA_DESIGNER_PROMPT_BY_FAMILY",
+  "SCHEMA_DESIGNER_PROMPT_CLUSTERING",
   "SCHEMA_DESIGNER_PROMPT_CLASSIFICATION",
   "TEACHING_NOTE_PART1_PROMPT",
   "TEACHING_NOTE_PART1_PROMPT_LEGACY",

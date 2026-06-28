@@ -14,11 +14,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from case_generator.impact_lens import IMPACT_LENS_KEYS
 from case_generator.prompts.teaching_note.module_guide_block import (
     M1_NARRATIVE_WORDS,
     M2_EDA_WORDS,
     M4_VERDICT_BUSINESS,
     M4_VERDICT_MLDS,
+    _M4_VALUE_FRAME_BY_LENS,
     build_module_guide_block,
     build_roster_allowlist,
     module_guide_roster_ids,
@@ -96,14 +98,16 @@ def test_unknown_caseType_defaults_to_three_modules():
 # ─────────────────────────────────────────────────────────────
 
 def test_notebook_clause_present_for_mlds_regression():
-    # The M3 notebook GENERATOR is family-agnostic — regresión ships a real notebook too.
-    block = _block(family="regresion", notebook_present=True)
-    assert "notebook" in block
+    # The M3 notebook GENERATOR is family-agnostic — regresión AND clustering ship a real notebook.
+    assert "notebook" in _block(family="regresion", notebook_present=True)
+    # The clustering M3 branch must keep the DRY notebook clause working.
+    assert "notebook" in _block(family="clustering", notebook_present=True)
 
 
 def test_notebook_clause_suppressed_when_degraded_or_absent():
     assert "notebook" not in _block(family="clasificacion", notebook_present=False)
     assert "notebook" not in _block(family="regresion", notebook_present=False)
+    assert "notebook" not in _block(family="clustering", notebook_present=False)
 
 
 def test_notebook_clause_never_for_business():
@@ -121,15 +125,84 @@ def test_m2_line_classification_topics():
 
 
 def test_m2_line_generic_for_non_classification():
-    block = _block(family="clustering")
-    assert "correlación y causalidad" in block
-    assert "Paradoja de la Exactitud" not in block
+    # regresión / serie_temporal are the GENERIC-else families (clustering now has its OWN line).
+    for fam in ("regresion", "serie_temporal"):
+        block = _block(family=fam)
+        assert "correlación y causalidad" in block
+        assert "Paradoja de la Exactitud" not in block
+        assert "silhouette" not in block  # must NOT pick up the clustering line either
 
 
 def test_m4_verdict_profile_aware():
     assert M4_VERDICT_BUSINESS in _block(is_business=True, case_type="harvard_only")
     assert M4_VERDICT_MLDS not in _block(is_business=True, case_type="harvard_only")
     assert M4_VERDICT_MLDS in _block(is_business=False, case_type="harvard_only")
+
+
+# ─────────────────────────────────────────────────────────────
+# 3b. Clustering family (ml_ds-only, Issue #471): M1/M2/M3 segmentation framing
+#     mirrors _is_ml_ds_clustering — business+clustering stays byte-identical/generic.
+# ─────────────────────────────────────────────────────────────
+
+def test_m1_clustering_drops_target_variable():
+    # Unsupervised clustering has NO target → the M1 "define la variable objetivo" claim is wrong.
+    block = _block(family="clustering")
+    assert "variable objetivo" not in block
+    assert "segmentos latentes" in block
+    assert "no supervisado" in block
+    assert "datos sin etiquetar" in block
+    # clf / regression keep the supervised wording (byte-identical).
+    assert "define la variable objetivo" in _block(family="clasificacion")
+    assert "define la variable objetivo" in _block(family="regresion")
+
+
+def test_m2_clustering_mirrors_issue456():
+    # M2 line must mirror EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING (#456): P1 standardize-before-
+    # K-Means (scale/distance), P2 feature correlation + silhouette reading.
+    block = _block(family="clustering")
+    assert "estandarizar" in block
+    assert "K-Means" in block
+    assert "silhouette" in block
+    assert "correlación y causalidad" not in block   # not the generic else
+    assert "Paradoja de la Exactitud" not in block   # not the clf line
+
+
+def test_m3_clustering_segmentation_framing():
+    # M3 must NOT describe a supervised experiment for unsupervised clustering (#457 is segmentation).
+    block = _block(family="clustering")
+    assert "diseño de segmentación" in block
+    assert "cohesión" in block
+    assert "prueba la causalidad" not in block
+    assert "experimentos rigurosos" not in block
+    # clf / regression keep the supervised experiment wording (byte-identical).
+    for fam in ("clasificacion", "regresion"):
+        assert "prueba la causalidad" in _block(family=fam)
+        assert "experimentos rigurosos" in _block(family=fam)
+
+
+def test_business_clustering_stays_generic():
+    # #456/#455/#457 are ml_ds-only (mirror _is_ml_ds_clustering); business+clustering keeps the
+    # generic M2 line + the business M1/M3 branches → byte-identical to today.
+    block = _block(is_business=True, family="clustering")
+    assert "correlación y causalidad" in block          # generic M2, not the clustering line
+    assert "silhouette" not in block and "K-Means" not in block
+    assert "segmentos latentes" not in block            # M1 is the business branch
+    assert "datos sin etiquetar" not in block
+    assert "diseño de segmentación" not in block        # M3 is the business audit branch
+
+
+def test_clustering_block_placeholder_and_currency_free():
+    # The clustering copy must stay placeholder-free and introduce no currency token
+    # (enforce_usd_currency, #377, must be a byte-identical no-op).
+    from case_generator.m1_grounding import enforce_usd_currency
+
+    for is_business in (False, True):
+        block = build_module_guide_block(
+            is_business=is_business, case_type="harvard_with_eda", family="clustering",
+            notebook_present=True, anchors=None,
+        )
+        assert "{" not in block and "}" not in block
+        assert enforce_usd_currency(block) == block
 
 
 # ─────────────────────────────────────────────────────────────
@@ -192,6 +265,51 @@ def test_m4_verdict_literals_bound_to_source():
     ).read_text(encoding="utf-8").replace("**", "")
     assert M4_VERDICT_BUSINESS in src, "M4 business verdict drifted from _shared.py"
     assert M4_VERDICT_MLDS in src, "M4 ml_ds verdict drifted from _shared.py"
+
+
+# ─────────────────────────────────────────────────────────
+# 4b. Impact Lens (Issue #437 Fase 3): M4 synopsis value frame
+# ─────────────────────────────────────────────────────────
+
+
+def test_value_frame_keys_match_lens_catalog() -> None:
+    # Drift lock: the per-lens M4 value frame must cover EXACTLY the 4 canonical lens keys.
+    assert set(_M4_VALUE_FRAME_BY_LENS) == IMPACT_LENS_KEYS
+
+
+def test_lens_none_and_financial_are_byte_identical_to_today() -> None:
+    # DD5: no lens / financial_roi reproduces today's exact wording for both profiles.
+    for is_business in (True, False):
+        base = _block(is_business=is_business, lens=None)
+        assert _block(is_business=is_business, lens="financial_roi") == base
+        if is_business:
+            assert "Traduce la evidencia en valor de negocio, cuantifica los trade-offs" in base
+        else:
+            assert "en valor de negocio (retorno, factibilidad de despliegue)" in base
+
+
+def test_non_financial_lens_reframes_only_the_m4_aprende_line() -> None:
+    clinical = _block(is_business=False, lens="clinical_outcomes")
+    assert "en valor clínico (outcomes evitados, factibilidad de despliegue)" in clinical
+    # The drift-locked LABEL keeps "valor de negocio"; only the aprende line is reframed.
+    assert "Convierte el modelo en valor de negocio" in clinical
+    # Business path reframes its (structurally different) sentence too.
+    b = _block(is_business=True, lens="learning_outcomes")
+    assert "Traduce la evidencia en valor educativo, cuantifica los trade-offs" in b
+
+
+def test_every_lens_keeps_block_currency_token_free() -> None:
+    # The curated value nouns must NOT introduce a currency token (enforce_usd_currency no-op).
+    from case_generator.m1_grounding import enforce_usd_currency
+
+    for lens in IMPACT_LENS_KEYS:
+        for is_business in (True, False):
+            block = build_module_guide_block(
+                is_business=is_business, case_type="harvard_with_eda", family="clasificacion",
+                notebook_present=True, anchors=None, lens=lens,
+            )
+            assert enforce_usd_currency(block) == block
+            assert "{" not in block and "}" not in block
 
 
 # ─────────────────────────────────────────────────────────────

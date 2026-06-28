@@ -27,6 +27,10 @@ NODE_M3_NOTEBOOK = "m3_notebook_generator"
 # (e.g. force it back to Flash, or point it at a different Pro model) by % of jobs
 # without redeploy. See _get_m3_notebook_escalation_llm in graph.py.
 NODE_M3_NOTEBOOK_ESCALATION = "m3_notebook_generator_escalation"
+# M3 questions generator. Previously had no per-node override hook (it hardcoded
+# writer_model); added so the node can be routed to an alternate provider/model
+# (e.g. GLM via OpenRouter) the same way the M5 nodes are.
+NODE_M3_QUESTIONS = "m3_questions_generator"
 NODE_M4_CONTENT = "m4_content_generator"
 NODE_M5_CONTENT = "m5_content_generator"
 NODE_M5_QUESTIONS = "m5_questions_generator"

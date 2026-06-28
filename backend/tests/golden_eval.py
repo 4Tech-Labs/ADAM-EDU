@@ -70,6 +70,13 @@ class NodeEvalInputs:
     # enunciado). True (n/a) for non-classification jobs. Computed via
     # ``check_m4_question_option_coherence`` (reuses the production validator).
     m4_questions_coherence_ok: bool = True
+    # M4 questions are OPEN (#481): no question ``enunciado`` may embed its own answer-choices A/B/C
+    # (which collide / cross-map with the strategic Opción A/B/C). True (n/a) when a job carries no M4
+    # questions. Computed via ``check_m4_questions_no_embedded_mcq`` (reuses the production
+    # ``m4_grounding.detect_embedded_mcq_options``), so a future M4-questions prompt or tier regression
+    # that re-embeds MCQ answer-choices fails the golden gate. Applies to ALL families (the defect is
+    # general, not classification-only).
+    m4_questions_no_embedded_mcq_ok: bool = True
     # M5 memorándum coherence: every classification golden job's M5 memo must be coherent (does not
     # name the unselected model; cites no model metric absent from the executed M3 metrics; does not
     # recommend a strategic option that does not exist in the case). True (n/a) for non-classification
@@ -110,6 +117,117 @@ class NodeEvalInputs:
     # re-invites benchmark estimates fails the golden gate (DETERMINISTIC guarantee behind the
     # logger-only runtime backstop).
     m4_narrative_no_fabrication_ok: bool = True
+    # M4 §4.5 KPI rows match the resolved Impact Lens (Issue #437 / ADR 0003): a NON-financial lens
+    # must NOT emit the forced financial rows ("ROI proyectado" / "NPV estimado"). True (n/a) for the
+    # financial_roi lens, the business profile, an absent lens, or an empty narrative — the financial
+    # lens legitimately keeps ROI/NPV; the lens only swaps the value rows. Computed via
+    # ``check_m4_lens_kpi_coherence``, so a future M4-node downgrade that ignores the lens block fails
+    # the gate. (Full per-lens semantic coverage is phased to Fase 3, R9.)
+    m4_lens_kpi_coherence_ok: bool = True
+    # The architect's value_model (Issue #437 Fase 2) carries a VALID Impact Lens key. True (n/a)
+    # when value_model is absent (lens-off / business). Computed via
+    # ``check_architect_value_model_lens_valid``; gate-protects a case_architect downgrade that
+    # would emit a raw, un-normalized value_model. (Semantic lens↔domain coherence is live-eval.)
+    architect_value_model_lens_valid_ok: bool = True
+    # The M4/M5 narrative carries no machine ``word__x`` identifier (e.g. an sklearn
+    # ColumnTransformer ``num__col`` feature name) leaked into prose (Issue #437 follow-up). True
+    # (n/a) when the narrative is empty/absent. Computed via ``check_no_raw_identifier_leak`` (reuses
+    # the production ``narrative_grounding.detect_raw_identifier_leak``), so a future M4/M5 downgrade
+    # that reintroduces the leak fails the gate. The DETERMINISTIC cure is the strip in
+    # ``build_computed_metrics_block``; this gate-protects it on the frozen golden set.
+    narrative_no_raw_identifier_ok: bool = True
+    # ml_ds + clustering synthetic dataset carries REAL latent structure (Issue #452): K-Means over
+    # the StandardScaler-ed segmentation features must land the silhouette in ~[0.45, 0.70] AND
+    # recover the injected blobs (adjusted Rand index ≥ 0.6). True (n/a) for non-clustering jobs.
+    # Computed via ``check_clustering_structure``. The RED control (kill-switch off → unimodal data →
+    # silhouette ≈ 0.12 / ARI ≈ 0) proves non-tautology; gate-protects against a future data-layer
+    # regression that ships unimodal clustering data.
+    clustering_structure_ok: bool = True
+    # ml_ds + clustering K-Means notebook is K-Means-ONLY and DBSCAN-free (Issue #454). Computed via
+    # ``check_kmeans_notebook_shape``, which DELEGATES to the production validator
+    # ``_validate_notebook_family_consistency('clustering', code, 'kmeans_only')`` (so the oracle
+    # tracks the runtime contract automatically) plus a stripped ``DBSCAN(`` / ``NearestNeighbors(``
+    # absence check. True (n/a) for non-K-Means jobs. The RED control feeds the mixed/DBSCAN notebook
+    # (real DBSCAN call sites → False); gate-protects a future generator regression that drops a
+    # required cell or reintroduces DBSCAN on the K-Means path.
+    kmeans_notebook_shape_ok: bool = True
+    # ml_ds + clustering M1 architect output carries NO supervised anchor (Issue #455): clustering is
+    # unsupervised, so the `dataset_schema_required` contract must not emit a `target_column`,
+    # `business_cost_matrix`, or `target_event_rate`. True (n/a) for non-clustering jobs / no contract.
+    # Computed via ``check_clustering_m1_no_target_anchors``; gate-protects against an M1 regression
+    # that frames clustering as supervised. RED control: a contract with any anchor fails.
+    clustering_m1_no_target_ok: bool = True
+    # The ml_ds + clustering M2 EDA narrative stays TARGET-FREE (Issue #456): clustering is
+    # unsupervised, so the EDA must not cite a target column / "churn" / "categoria". True (n/a) for
+    # non-clustering jobs and when the narrative is empty/absent. Computed via
+    # ``check_clustering_eda_no_target``. NOTE: the frozen golden set carries no clustering EDA
+    # narrative fixture yet, so this is n/a today — the deterministic teeth live in the unit RED/GREEN
+    # (the pure oracle + the kill-switch dispatch test); this gate wiring is future-proofing for when
+    # such a fixture (or an eda_text_analyst downgrade) lands.
+    clustering_eda_no_target_ok: bool = True
+    # ml_ds + clustering M3-content narrative cites NO fabricated cluster-metric value (Issue #457):
+    # the narrative is written pre-execution (the executor runs AFTER m3_content_generator), so a
+    # concrete silhouette / Davies-Bouldin value would be invented. True (n/a) for non-clustering jobs
+    # or empty narrative. Computed via ``check_clustering_m3_content_no_metric_numbers``; gate-protects
+    # a future m3_content_generator Pro->Flash downgrade that starts fabricating reported metrics. RED
+    # control: prose with a metric keyword adjacent to a >=2-decimal value fails.
+    clustering_m3_content_no_metric_ok: bool = True
+    # ml_ds + clustering data↔narrative cluster-count coherence (Issue #467): the data layer must inject
+    # EXACTLY the coordinated ``target_k`` blobs (so the k the student measures == the k the narrative
+    # frames) AND that data must still carry real latent structure (silhouette in band + ARI). True
+    # (n/a) for non-clustering jobs / when no target_k is coordinated. Computed via
+    # ``check_clustering_decision_coherence``. RED control: a dataset whose injected blob count differs
+    # from target_k (the pre-#467 hash-chosen k, or the kill-switch-off path) fails. gate-protects a
+    # future data-layer regression that stops honoring target_k.
+    clustering_decision_coherence_ok: bool = True
+    # ml_ds + clustering M4 first chart is NOT a payback / break-even chart (Issue #469): an exploratory
+    # segmentation has no cash-flow model, so a "Punto de Equilibrio: Mes N" chart is fabricated. The
+    # dedicated clustering M4 chart prompt replaces it with a value-by-segment chart. True (n/a) for
+    # non-clustering jobs / empty charts. Computed via ``check_m4_clustering_no_payback_chart``. RED
+    # control: kill-switch off → generic chart prompt → payback chart present → fails.
+    m4_clustering_no_payback_ok: bool = True
+    # ml_ds + clustering M4 narrative cites NO unanchored silhouette (Issue #469): any cited silhouette
+    # must match the REAL executed ``m3_metrics_summary["silhouette"]`` (not a fabricated "> 0.55"). True
+    # (n/a) when the real silhouette is absent / non-clustering. Computed via
+    # ``check_m4_clustering_silhouette_grounded``. RED control: a narrative citing a divergent silhouette
+    # fails. gate-protects a future m4_content_generator Pro->Flash downgrade that starts fabricating.
+    m4_clustering_silhouette_ok: bool = True
+    # ml_ds + clustering dataset carries NO supervised target column (Issue #466, Frente 1): clustering
+    # is unsupervised, so a leaked `dummy_target` (LLM-hallucinated or contract-injected) must be
+    # stripped before data generation. True (n/a) for non-clustering jobs / empty rows. Computed via
+    # ``check_clustering_no_target``; gate-protects against a data-layer regression that ships a target
+    # column. RED control: rows with a target-named binary column (kill-switch off) fail.
+    clustering_no_target_ok: bool = True
+    # ml_ds + clustering M2 EDA charts are DATA-ONLY and PRE-MODEL (Issue #466, Frente 2): the
+    # deterministic builder emits only `data_source="python_builder"` charts with NO supervised target
+    # framing ("objetivo"/"target"/regression) and NO model outputs (cluster labels/centroids/elbow/
+    # silhouette/k). True (n/a) for an empty chart set. Computed via
+    # ``check_clustering_eda_no_target_charts``; gate-protects against a chart regression that reopens
+    # the LLM-JSON supervised path. RED control: an LLM-JSON chart with "vs objetivo"/regression fails.
+    clustering_eda_no_target_charts_ok: bool = True
+    # ml_ds + clustering dataset is ENTITY-level, not a monthly time series (Issue #468): the unit of
+    # analysis is the entity (user/customer), so the index column must be a `user_id` (`user_00001`…),
+    # NOT a sequential monthly `period` (`2023-01`…). True (n/a) for non-clustering jobs / empty rows.
+    # Computed via ``check_clustering_entity_index``; gate-protects against a data-layer regression that
+    # reverts to the monthly period index. RED control: rows with a monthly `period` column fail.
+    clustering_entity_index_ok: bool = True
+    # Narrative carries NO literal LaTeX math delimiter (Issue #480), for ALL profiles/families: the
+    # case-viewer has no KaTeX/MathJax, so a ``$k$`` / ``$5000.0 - 50.0$`` would reach the student as a
+    # literal delimiter. True (n/a) when the narrative is empty/absent. Computed via
+    # ``check_no_latex_math`` (reuses the production ``m1_grounding.strip_latex_math``: a text is clean
+    # iff stripping is a no-op), so a future narrative-node regression (or a kill-switch-off downgrade)
+    # that ships LaTeX math fails the gate. The DETERMINISTIC cure is the strip in ``sanitize_markdown``;
+    # this gate-protects it on the frozen golden set.
+    narrative_no_latex_math_ok: bool = True
+    # ml_ds + clustering data_gap_warnings NAME no supervised target (Issue #482): #466 strips the
+    # leaked target COLUMN from the CSV, but the architect coherence check and the schema validator
+    # still emit a warning naming the orphan target, which leaks into M2 EDA / M3-content (the student
+    # reads a column absent from the CSV). ``_filter_clustering_target_warnings`` drops both at the
+    # schema_designer choke point. True (n/a) for non-clustering jobs / empty warnings. Computed via
+    # ``check_clustering_no_target_warnings``; gate-protects against a regression that re-introduces a
+    # target-naming warning. RED control: a warnings list with a ``target '…'`` or
+    # ``target_semantic_mismatch`` entry fails.
+    clustering_no_target_warning_ok: bool = True
 
 
 @dataclass
@@ -142,6 +260,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M3 question coherence failure: section_ref or unselected-model leak")
     if not r.m4_questions_coherence_ok:
         reasons.append("M4 question option coherence failure: nonexistent or unpresented option")
+    if not r.m4_questions_no_embedded_mcq_ok:
+        reasons.append("M4 question coherence failure: enunciado embeds MCQ answer-choices A/B/C")
     if not r.m5_questions_coherence_ok:
         reasons.append(
             "M5 memorándum coherence failure: unselected-model leak, unanchored metric, or "
@@ -157,6 +277,70 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M4 chart coherence failure: invented benchmark figure in chart prose")
     if not r.m4_narrative_no_fabrication_ok:
         reasons.append("M4 narrative coherence failure: invented benchmark figure in narrative prose")
+    if not r.m4_lens_kpi_coherence_ok:
+        reasons.append("M4 lens coherence failure: non-financial lens emitted forced ROI/NPV KPI rows")
+    if not r.narrative_no_raw_identifier_ok:
+        reasons.append("narrative coherence failure: raw machine identifier (word__x) leaked into M4/M5 prose")
+    if not r.architect_value_model_lens_valid_ok:
+        reasons.append("architect value_model failure: emitted an unknown/missing Impact Lens key")
+    if not r.clustering_structure_ok:
+        reasons.append("clustering structure failure: unimodal data (silhouette/ARI below band)")
+    if not r.kmeans_notebook_shape_ok:
+        reasons.append(
+            "K-Means notebook shape failure: missing required cell/API or DBSCAN on the K-Means path"
+        )
+    if not r.clustering_m1_no_target_ok:
+        reasons.append(
+            "clustering M1 failure: architect emitted a supervised target_column / "
+            "business_cost_matrix / target_event_rate"
+        )
+    if not r.clustering_eda_no_target_ok:
+        reasons.append("clustering M2 EDA coherence failure: narrative cites a target column on an unsupervised job")
+    if not r.clustering_m3_content_no_metric_ok:
+        reasons.append(
+            "clustering M3-content failure: narrative cites a fabricated cluster-metric value "
+            "(silhouette / Davies-Bouldin) pre-execution"
+        )
+    if not r.clustering_decision_coherence_ok:
+        reasons.append(
+            "clustering decision coherence failure: injected blob count != coordinated target_k "
+            "(data k would contradict the narrative's framed k)"
+        )
+    if not r.m4_clustering_no_payback_ok:
+        reasons.append(
+            "M4 clustering chart coherence failure: payback / break-even chart emitted for an "
+            "exploratory segmentation (no cash-flow model derives it)"
+        )
+    if not r.m4_clustering_silhouette_ok:
+        reasons.append(
+            "M4 clustering narrative coherence failure: cited silhouette diverges from the real "
+            "executed value (fabricated threshold)"
+        )
+    if not r.clustering_no_target_ok:
+        reasons.append(
+            "clustering data failure: a supervised target column (dummy_target) leaked into the "
+            "unsupervised clustering dataset"
+        )
+    if not r.clustering_eda_no_target_charts_ok:
+        reasons.append(
+            "clustering M2 chart failure: a supervised 'feature vs target' / model-output chart "
+            "leaked into the data-only pre-model EDA panel"
+        )
+    if not r.clustering_entity_index_ok:
+        reasons.append(
+            "clustering data failure: dataset is time-indexed (monthly `period`) instead of "
+            "entity-level (`user_id`) — analysis unit contradicts the segmentation narrative"
+        )
+    if not r.narrative_no_latex_math_ok:
+        reasons.append(
+            "narrative coherence failure: literal LaTeX math delimiter ($k$ / $5000 - 50$) "
+            "leaked into prose (the case-viewer has no math renderer)"
+        )
+    if not r.clustering_no_target_warning_ok:
+        reasons.append(
+            "clustering narrative failure: a data_gap_warning names a stripped supervised target, "
+            "leaking a column absent from the CSV into M2 EDA / M3-content"
+        )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -166,6 +350,25 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             f"pairwise Pro-win {r.pairwise_pro_win_rate:.2f} > {PAIRWISE_MAX_PRO_WIN:.2f}"
         )
     return GateResult(node=r.node, passed=not reasons, reasons=reasons)
+
+
+# ── Issue #480 — deterministic LaTeX-math-free narrative oracle ───
+
+
+def check_no_latex_math(text: str | None) -> bool:
+    """Pure oracle: is ``text`` free of literal LaTeX math delimiters (``$k$`` / ``$5000 - 50$``)?
+
+    Reuses the production strip (single source of truth): a narrative is clean iff
+    ``strip_latex_math`` is a no-op on it. The case-viewer has no KaTeX/MathJax, so any surviving
+    ``$…$`` math pair would reach the student literally. Currency ($-prefix figures) is never matched
+    by the strip, so a normal financial narrative is trivially clean. ``None``/empty is True (n/a).
+    The import is function-level so this support module stays light at import time.
+    """
+    if not text:
+        return True
+    from case_generator.m1_grounding import strip_latex_math
+
+    return strip_latex_math(text) == text
 
 
 # ── Issue #351 — deterministic domain-coherence oracle ───
@@ -258,6 +461,22 @@ def check_m4_question_option_coherence(preguntas: list[dict]) -> bool:
     return not validate_question_option_coherence(preguntas, "")
 
 
+def check_m4_questions_no_embedded_mcq(preguntas: list[dict]) -> bool:
+    """Pure oracle: do the M4 questions avoid embedding MCQ answer-choices A/B/C (#481)?
+
+    Reuses the production detector ``m4_grounding.detect_embedded_mcq_options`` (single source of
+    truth), so a future M4-questions prompt or tier regression that re-embeds answer-choices A/B/C in an
+    ``enunciado`` (colliding / cross-mapping with the strategic Opción A/B/C) fails the golden gate.
+    Applies to ALL families. Function-level import keeps this support module lightweight.
+    """
+    from case_generator.m4_grounding import detect_embedded_mcq_options
+
+    for pregunta in preguntas:
+        if isinstance(pregunta, dict) and detect_embedded_mcq_options(pregunta.get("enunciado")):
+            return False
+    return True
+
+
 def check_m4_deployment_section_unique(m4_content: str) -> bool:
     """Pure oracle: does the M4 narrative carry a SINGLE deployment recommendation (§4.5)?
 
@@ -284,6 +503,40 @@ def check_m4_charts_no_sensitivity(charts: list[dict]) -> bool:
     from case_generator.m4_grounding import is_sensitivity_chart
 
     return not any(is_sensitivity_chart(c) for c in charts or [])
+
+
+def check_m4_clustering_no_payback_chart(charts: list[dict], *, is_clustering: bool) -> bool:
+    """Pure oracle (Issue #469): for an ml_ds + clustering case, does the M4 chart set OMIT a
+    payback / break-even chart?
+
+    An exploratory segmentation has no cash-flow model, so a "Punto de Equilibrio: Mes N" chart is a
+    fabrication; the dedicated clustering M4 chart prompt replaces it with a value-by-segment chart.
+    Reuses the production detector ``m4_grounding.is_payback_chart`` (single source of truth). True
+    (n/a) for non-clustering jobs or an empty/absent chart set — only a CLUSTERING case must be free of
+    the payback chart. RED control: with the kill-switch off, clustering falls back to the generic
+    chart prompt → Gráfico 1 is the payback chart → fails.
+    """
+    if not is_clustering:
+        return True
+    from case_generator.m4_grounding import is_payback_chart
+
+    return not any(is_payback_chart(c) for c in charts or [])
+
+
+def check_m4_clustering_silhouette_grounded(
+    narrative: str | None, real_silhouette: float | None
+) -> bool:
+    """Pure oracle (Issue #469): does the ml_ds + clustering M4 narrative cite ONLY the REAL silhouette?
+
+    Reuses the production detector ``clustering_decision.detect_unanchored_silhouette`` (single source
+    of truth): a cited silhouette value that diverges from the real executed
+    ``m3_metrics_summary["silhouette"]`` beyond tolerance (e.g. a fabricated "> 0.55" when the real
+    value is 0.498) fails. True (n/a) when ``real_silhouette`` is absent (no anchor) or the narrative is
+    empty. gate-protects a future m4_content_generator Pro->Flash downgrade that starts fabricating.
+    """
+    from case_generator.clustering_decision import detect_unanchored_silhouette
+
+    return not detect_unanchored_silhouette(narrative, real_silhouette)
 
 
 def check_m4_charts_no_fabrication(charts: list[dict]) -> bool:
@@ -314,6 +567,71 @@ def check_m4_narrative_no_fabrication(narrative: str | None) -> bool:
     return not detect_benchmark_fabrication(narrative)
 
 
+def check_no_raw_identifier_leak(narrative: str | None) -> bool:
+    """Pure oracle (Issue #437 follow-up): the narrative carries no machine ``word__x`` identifier.
+
+    Reuses the production detector ``narrative_grounding.detect_raw_identifier_leak`` (single source
+    of truth), so a future M4/M5 downgrade that reintroduces an sklearn ColumnTransformer feature
+    name (``num__col``/``cat__col``) — or any ``<word>__<x>`` internal identifier — into prose fails
+    the golden gate. Scope: M4 + M5 narratives (both profiles, all families); empty/absent → True.
+    """
+    from case_generator.narrative_grounding import detect_raw_identifier_leak
+
+    return not detect_raw_identifier_leak(narrative or "")
+
+
+def check_m4_lens_kpi_coherence(narrative: str | None, *, lens: str | None) -> bool:
+    """Pure oracle (Issue #437): a NON-financial Impact Lens must not emit the forced
+    financial KPI rows (``ROI proyectado`` / ``NPV estimado``) in the M4 §4.5 table.
+
+    Reuses the production lens keys (``impact_lens.normalize_impact_lens``) as the single source
+    of truth. ``financial_roi`` / absent lens / empty narrative are trivially True (n/a) — the
+    financial lens legitimately keeps ROI/NPV; the lens swaps only the value rows. Matches the
+    exact §4.5 row labels (not bare "ROI"/"NPV") to stay zero-FP against prose that merely
+    mentions a financial term. Full per-lens semantic coverage is phased to Fase 3 (R9).
+    """
+    from case_generator.impact_lens import DEFAULT_IMPACT_LENS, normalize_impact_lens
+
+    if not narrative or lens is None:
+        return True
+    if normalize_impact_lens(lens) == DEFAULT_IMPACT_LENS:
+        return True
+    lowered = narrative.lower()
+    return "roi proyectado" not in lowered and "npv estimado" not in lowered
+
+
+def check_architect_value_model_lens_valid(value_model: dict | None) -> bool:
+    """Pure oracle (Issue #437 Fase 2): if the architect emitted a ``value_model``, its ``lens`` is a
+    known Impact Lens key. True (n/a) when ``value_model`` is absent (lens-off / business). A present
+    ``value_model`` with a missing/unknown lens FAILS — the ValueModel coerce should have normalized
+    it, so a failure here means a case_architect downgrade emitted a raw, un-normalized value_model.
+    Reuses the production ``impact_lens.IMPACT_LENS_KEYS`` (single source of truth)."""
+    from case_generator.impact_lens import IMPACT_LENS_KEYS
+
+    if value_model is None:
+        return True
+    return value_model.get("lens") in IMPACT_LENS_KEYS
+
+
+def check_clustering_m1_no_target_anchors(contract: dict | None) -> bool:
+    """Pure oracle (Issue #455): an ml_ds + clustering M1 ``dataset_schema_required`` contract
+    carries NO supervised anchor — clustering is unsupervised.
+
+    True iff the contract has NO supervised ``target_column``, NO ``business_cost_matrix``, and NO
+    ``target_event_rate`` (all three are contract-nested keys the classification architect anchor
+    emits). True (n/a) when the contract is None (architect emitted no contract). A clustering case
+    that populates any of them FAILS — the clustering M1 prompt forbids them and the clf-gated
+    validators no-op for clustering, so a populated anchor means the generic/classification framing
+    leaked in. RED control: a contract with any anchor returns False (non-tautological)."""
+    if not isinstance(contract, dict):
+        return True
+    return (
+        contract.get("target_column") is None
+        and contract.get("business_cost_matrix") is None
+        and contract.get("target_event_rate") is None
+    )
+
+
 def check_m5_questions_coherence(
     preguntas: list[dict], *, variant: str | None, metrics_block: str, dilema_brief: str
 ) -> bool:
@@ -330,6 +648,328 @@ def check_m5_questions_coherence(
     return not validate_m5_questions_coherence(
         preguntas, variant=variant, metrics_block=metrics_block, dilema_brief=dilema_brief
     )
+
+
+# ── Issue #452 — deterministic clustering-structure oracle ───
+
+
+def check_clustering_structure(
+    rows: list,
+    latent_labels: list | None = None,
+    *,
+    silhouette_band: tuple[float, float] = (0.45, 0.70),
+    ari_floor: float = 0.6,
+) -> bool:
+    """Pure oracle (Issue #452): does the ml_ds+clustering dataset carry REAL latent structure?
+
+    Runs StandardScaler + KMeans (deterministic, ``random_state=42``) over the numeric
+    segmentation features and requires the silhouette ∈ ``silhouette_band``. When
+    ``latent_labels`` (the injected blob labels) are provided, also requires
+    ``adjusted_rand_score(KMeans, latent) >= ari_floor`` — a much stronger, separation-robust
+    discriminator than an absolute floor alone. No LLM / network / API key (scikit-learn is a
+    backend dependency). Returns False on a unimodal dataset (the RED control), so the oracle is
+    provably non-tautological. ``period``/id and non-numeric columns are excluded from the fit.
+    """
+    import numpy as np
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import adjusted_rand_score, silhouette_score
+    from sklearn.preprocessing import StandardScaler
+
+    if not rows:
+        return False
+    feat_names = [
+        name
+        for name in rows[0].keys()
+        if name != "period"
+        and not str(name).startswith("period")
+        and all(
+            isinstance(r.get(name), (int, float)) and not isinstance(r.get(name), bool)
+            for r in rows
+        )
+    ]
+    if len(feat_names) < 2:
+        return False
+    X = np.array([[float(r[name]) for name in feat_names] for r in rows], dtype=float)
+    if X.shape[0] < 6:
+        return False
+    X_scaled = StandardScaler().fit_transform(X)
+    k = len(set(latent_labels)) if latent_labels else 3
+    k = max(2, min(k, X.shape[0] - 1))
+    labels = KMeans(n_clusters=k, n_init=10, random_state=42).fit_predict(X_scaled)
+    if len(set(labels.tolist())) < 2:
+        return False
+    sil = float(silhouette_score(X_scaled, labels))
+    lo, hi = silhouette_band
+    if not (lo <= sil <= hi):
+        return False
+    if latent_labels is not None:
+        if float(adjusted_rand_score(latent_labels, labels)) < ari_floor:
+            return False
+    return True
+
+
+def _is_monthly_period(value: object) -> bool:
+    """True for a sequential monthly index label shaped ``YYYY-MM`` (e.g. ``2023-01``)."""
+    return (
+        isinstance(value, str)
+        and len(value) == 7
+        and value[:4].isdigit()
+        and value[4] == "-"
+        and value[5:].isdigit()
+    )
+
+
+def check_clustering_entity_index(rows: list) -> bool:
+    """Pure oracle (Issue #468): is the ml_ds+clustering dataset ENTITY-level, not time-indexed?
+
+    The unit of analysis for a segmentation case is the entity (user/customer), so the index column
+    must be a ``user_id`` (``user_00001``…), NOT a sequential monthly ``period`` (``2023-01``…).
+    Returns False when a row still carries a monthly ``period``-shaped index (the RED control / a
+    data-layer regression that reverts to the time series). True (n/a) when rows are empty. No LLM /
+    network / API key.
+    """
+    if not rows:
+        return True
+    first = rows[0]
+    if _is_monthly_period(first.get("period")):
+        return False
+    uid = first.get("user_id")
+    return isinstance(uid, str) and uid.startswith("user_")
+
+
+# ── Issue #467 — deterministic clustering data↔narrative k coherence oracle ───
+
+
+def check_clustering_decision_coherence(
+    rows: list,
+    latent_labels: list | None,
+    target_k: int | None,
+) -> bool:
+    """Pure oracle (Issue #467): does the injected clustering data carry EXACTLY ``target_k`` blobs?
+
+    The root incoherence of #467 is data k != narrative k. With the coordination on, the data layer
+    HONORS the coordinated ``target_k`` (so the k the student measures == the k the narrative frames).
+    This oracle requires (a) the injected ``latent_labels`` have exactly ``target_k`` distinct values
+    AND (b) the data still carries real latent structure (delegates to ``check_clustering_structure``:
+    silhouette in band + ARI >= floor). True (n/a) when ``target_k``/``latent_labels`` are absent
+    (non-clustering job / no coordination). RED control: the pre-#467 hash-chosen k (or the
+    kill-switch-off path) injects a blob count that differs from ``target_k`` → distinct-count
+    mismatch → False. No LLM / network / API key. Never raises on well-formed input.
+    """
+    if target_k is None or latent_labels is None:
+        return True
+    if len(set(latent_labels)) != int(target_k):
+        return False
+    return check_clustering_structure(rows, latent_labels)
+
+
+# ── Issue #454 — deterministic K-Means notebook shape oracle ───
+
+
+def check_kmeans_notebook_shape(code: str) -> bool:
+    """Pure oracle (Issue #454): is a generated ml_ds+clustering notebook K-Means-ONLY + DBSCAN-free?
+
+    DELEGATES to the production validator so the oracle tracks the runtime contract automatically
+    (no drift): ``_validate_notebook_family_consistency('clustering', code, 'kmeans_only')`` must
+    return no violations (the 6 required cell sentinels + KMeans/StandardScaler/silhouette_score, and
+    no prohibited cross-family / DBSCAN call site). Plus a belt-and-suspenders stripped-code check
+    that no ``DBSCAN(`` / ``NearestNeighbors(`` call survives in EXECUTABLE code (the validator
+    already enforces this for the kmeans_only variant; repeated here so the RED control is explicit
+    and robust to a future contract edit). The DBSCAN check runs on the SAME jupytext-stripped view
+    the validator uses, so a pedagogical mention of DBSCAN in markdown/comments does NOT false-RED.
+    No LLM / network / API key. GREEN on a real K-Means notebook; RED on the mixed/DBSCAN notebook.
+    """
+    from case_generator.graph import (
+        _strip_jupytext_for_validation,
+        _validate_notebook_family_consistency,
+    )
+
+    if _validate_notebook_family_consistency("clustering", code, "kmeans_only"):
+        return False
+    stripped = _strip_jupytext_for_validation(code)
+    if "DBSCAN(" in stripped or "NearestNeighbors(" in stripped:
+        return False
+    return True
+
+
+def check_clustering_eda_no_target(narrative: str | None) -> bool:
+    """Pure oracle (Issue #456): is an ml_ds+clustering M2 EDA narrative TARGET-FREE?
+
+    Clustering is unsupervised — there is no target column. The specialized EDA prompt forbids any
+    target framing, so a generated narrative must not cite ``churn`` / ``categoria`` / a target
+    column (the markers a generic, classification-oriented EDA would leak). Pure, deterministic, no
+    LLM / network / API key. Empty/absent → True (n/a). GREEN on a clustering EDA narrative; RED on
+    a narrative that names a target/churn column (e.g. the generic prompt's output on a clustering
+    job). NOTE: n/a on the frozen golden set today (no clustering EDA narrative fixture) — the unit
+    RED/GREEN tests carry the deterministic teeth.
+    """
+    if not narrative:
+        return True
+    lowered = narrative.lower()
+    return (
+        "churn" not in lowered
+        and "categoria" not in lowered
+        and "variable objetivo" not in lowered
+    )
+
+
+# ── Issue #466 — deterministic clustering no-target (data) + data-only charts oracles ───
+
+_CLUSTERING_TARGET_NAME_TOKENS = (
+    "dummy_target", "target", "objetivo", "label", "categoria", "clase", "clasificacion", "churn",
+)
+_CLUSTERING_TARGET_EXACT_NAMES = frozenset({"y", "y_true", "y_pred"})
+# Cluster-label artifacts (answer leak) — flagged by NAME regardless of values (a k-valued cluster id
+# is not binary, so the binary check below would miss it). Mirrors the strip's Regla C.
+_CLUSTERING_LABEL_NAME_TOKENS = ("cluster", "kmeans")
+
+
+def check_clustering_no_target(rows: list | None) -> bool:
+    """Pure oracle (Issue #466, Frente 1): does the ml_ds+clustering dataset carry NO leaked target?
+
+    Clustering is unsupervised — a leaked target (LLM-hallucinated or contract-injected) must be
+    stripped before data generation. True iff NO column is (a) a cluster-label artifact (name contains
+    ``cluster``/``kmeans`` — flagged at ANY values, the worst answer leak) NOR (b) a classification-
+    target-named binary: name token {dummy_target/target/objetivo/label/categoria/clase/clasificacion/
+    churn} or exact {y/y_true/y_pred} AND values ⊆ {0,1}. The binary guard on (b) mirrors the strip and
+    avoids a FP on a continuous feature with a target-ish name. Pure, deterministic, no LLM/network/API
+    key. Empty/absent → True (n/a). RED controls: rows with a ``dummy_target`` 0/1 column OR a k-valued
+    ``cluster_id`` column (the kill-switch-off path) fail.
+    """
+    if not rows:
+        return True
+    for name in rows[0].keys():
+        lname = str(name).lower()
+        # (a) cluster-label artifact → leak at any values.
+        if any(t in lname for t in _CLUSTERING_LABEL_NAME_TOKENS):
+            return False
+        # (b) classification-target-named binary.
+        if lname not in _CLUSTERING_TARGET_EXACT_NAMES and not any(
+            t in lname for t in _CLUSTERING_TARGET_NAME_TOKENS
+        ):
+            continue
+        non_null = {r.get(name) for r in rows if r.get(name) is not None}
+        # 0/1 con True/False/0.0/1.0 colapsando por igualdad (0==0.0==False, 1==1.0==True).
+        if non_null and non_null <= {0, 1}:
+            return False
+    return True
+
+
+def check_clustering_no_target_warnings(data_gap_warnings: list | None) -> bool:
+    """Pure oracle (Issue #482): do the ml_ds+clustering data_gap_warnings NAME no supervised target?
+
+    #466 strips the leaked target COLUMN from the CSV, but two upstream emitters still produce a
+    warning that names the orphan ``contract.target_column.name`` — the architect coherence check
+    (``target_semantic_mismatch: … target_column.name='…'``) and the schema validator
+    (``target '<name>' … no fue producido…``). Both reach M2 EDA and, via ``contexto_m2``, M3-content,
+    so the student reads a column absent from the downloaded CSV. ``_filter_clustering_target_warnings``
+    drops both at the schema_designer choke point. True iff NO warning starts with ``target '``
+    (validator) nor ``target_semantic_mismatch`` (architect). Feature-missing / leakage warnings
+    (``feature '…'``) are NOT target warnings → never flagged. Pure, deterministic, no LLM/network/API
+    key. Empty/absent → True (n/a). RED control: a list with either target-warning shape fails.
+    """
+    if not data_gap_warnings:
+        return True
+    return not any(
+        isinstance(w, str)
+        and (w.lstrip().startswith("target '") or w.lstrip().startswith("target_semantic_mismatch"))
+        for w in data_gap_warnings
+    )
+
+
+def check_clustering_eda_no_target_charts(charts: list | None) -> bool:
+    """Pure oracle (Issue #466, Frente 2): is the ml_ds+clustering M2 EDA chart panel DATA-ONLY?
+
+    The deterministic builder emits charts that visualize ONLY the natural data structure — NO
+    supervised target framing and NO model output (M2 is pre-model). True iff EVERY chart (a) carries
+    ``data_source == "python_builder"`` AND (b) has no supervised FRAMING ("vs objetivo"/"variable
+    objetivo"/"vs target"/"regres") NOR model-output marker (cluster/centroid/elbow/codo/silhouette/
+    silueta/"k=") in its title/subtitle, and no regression/cluster trace name. The supervised markers
+    are PHRASE-based (not bare "target"/"fit" substrings) so a legitimate feature name embedded in a
+    title/trace (e.g. ``profit_margin`` → "fit", ``target_segment_value`` → "target") does NOT trip a
+    false positive — the box builder names each trace after its raw column. Pure, deterministic. Empty
+    → True (n/a). RED control: an LLM-JSON "feature vs objetivo" chart (data_source != "python_builder"
+    or a supervised title) fails.
+    """
+    if not charts:
+        return True
+    supervised_markers = ("vs objetivo", "variable objetivo", "vs target", "regres")
+    model_markers = (
+        "cluster", "centroid", "centroide", "elbow", "codo", "silhouette", "silueta", "k=",
+    )
+    for c in charts:
+        if not isinstance(c, dict):
+            return False
+        if c.get("data_source") != "python_builder":
+            return False
+        text = " ".join(str(c.get(k, "") or "") for k in ("title", "subtitle")).lower()
+        if any(m in text for m in supervised_markers) or any(m in text for m in model_markers):
+            return False
+        for tr in c.get("traces") or []:
+            tname = str((tr.get("name") if isinstance(tr, dict) else "") or "").lower()
+            # Regression/cluster trace markers only (NO bare "fit" — collides with "profit_*").
+            if any(m in tname for m in ("regres", "cluster")):
+                return False
+    return True
+
+
+# ── Issue #457 — deterministic clustering M3-content fabrication oracle ───
+
+
+def check_clustering_m3_content_no_metric_numbers(prose: str) -> bool:
+    """Pure oracle (Issue #457): does the ml_ds+clustering M3-content narrative AVOID citing a
+    fabricated cluster-metric VALUE?
+
+    The M3-content narrative is written BEFORE the notebook executor runs (graph order), so no real
+    ``silhouette`` / ``Davies-Bouldin`` exists yet — the prompt forbids any concrete metric value and
+    frames everything as design intent. This zero-FP detector returns ``False`` only when a clustering-
+    metric keyword (``silhouette`` / ``silueta`` / ``davies[- ]bouldin``) is DIRECTLY BOUND (only
+    whitespace + up to two copula/preposition/hedge connectors + optional ``:``/``=``/``~``) to a value
+    IN THE METRIC RANGE ``-?[01]\\.\\d{2,}`` (integer part 0 or 1, >=2 fractional digits — e.g. ``0.62``
+    / ``0.715`` / ``1.24`` / ``-0.30``). It catches ``silueta de 0.62`` / ``silhouette = 0.55`` /
+    ``silhouette alcanza 0.715`` / ``Davies-Bouldin de 1.24`` / ``silhouette será de aproximadamente 0.80``.
+
+    Two layers give the zero-FP guarantee against the figures the prompt INVITES from M1/M2: (1) the
+    integer-part-0/1 value range excludes business magnitudes (``2.500.000`` / ``4.50 millones`` /
+    ``35.00``), which never have an integer part of 0/1; (2) the connector-only binder means a content
+    noun in the gap breaks the bind, so a small business PROPORTION co-located with a silhouette word
+    (``la tasa de conversión 0.30 y la silueta será clara``) is NOT flagged. This mirrors the adjacency
+    approach of ``narrative_grounding.detect_unanchored_adjacent_metrics``.
+
+    Round illustrative thresholds (``0.5`` — one fractional digit) and integer ``k`` (``3 segmentos``)
+    are NOT flagged. Pure, no LLM/network, linear-time / ReDoS-safe (single-digit integer part + bounded
+    connector repetition). The prompt boundary is the real guard; this gate-protects a future
+    m3_content_generator Pro->Flash downgrade that fabricates reported cluster metrics on the frozen set.
+    Honest, accepted FNs: a 1-decimal value, a value separated from the keyword by a content word, or a
+    Davies-Bouldin value >= 2.00 (DB is the secondary metric; the prompt forbids it anyway and the gate
+    is deliberately conservative).
+    """
+    import re
+
+    if not prose:
+        return True
+    keyword = r"(?:silhouette|silueta|davies[\s-]?bouldin)"
+    # Tight binder: the value must be DIRECTLY attached to the metric keyword — only whitespace, up to
+    # two copula/preposition/hedge connectors, and optional :/=/~ punctuation may sit between them. A
+    # content noun in the gap (e.g. "la tasa de conversión 0.30 ... la silueta") breaks the bind, so a
+    # small business proportion co-located with a silhouette word is NOT flagged (the dominant residual
+    # false-positive class). This mirrors `narrative_grounding.detect_unanchored_adjacent_metrics`.
+    connector = (
+        r"(?:de\s+aproximadamente|aproximadamente|alrededor\s+de|cercan[oa]\s+a|"
+        r"pr[oó]xim[oa]\s+a|llega\s+a|rondar[ií]a|ronda|alcanza|de|del|es|son|fue|"
+        r"ser[aá]|da|casi|unos)"
+    )
+    bind = r"\s*(?:" + connector + r"\s*){0,2}[:=~≈]?\s*"
+    # Metric-range value only: integer part 0/1 → excludes business magnitudes (4.50, 2.500, 35.00).
+    # Leading (?<![\d.,]) rejects the tail of a multi-digit/grouped figure (the "0" in "10.50" /
+    # "500.000"); trailing (?!\.\d) rejects a grouped continuation ("0.715.000") but allows an ordinary
+    # trailing comma/period. Single-digit integer part → no `\d+\.` backtracking → linear / ReDoS-safe.
+    value = r"(?<![\d.,])-?[01]\.\d{2,}(?!\.\d)"
+    pattern = re.compile(
+        keyword + bind + value + r"|" + value + bind + keyword,
+        re.IGNORECASE,
+    )
+    return pattern.search(prose) is None
 
 
 # ── frozen golden set ────────────────────────────────────

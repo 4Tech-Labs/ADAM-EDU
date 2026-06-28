@@ -219,3 +219,36 @@ course_level: {course_level}
 max_investment_pct: {max_investment_pct}
 primary_family: {primary_family}
 """
+
+# ── Issue #437 (ADR 0003, Fase 2) — Impact Lens block for the architect ─────────
+# APPENDED (not edited in) by ``_assemble_architect_prompt`` ONLY when
+# ``settings.impact_lens_architect`` is on (the default). Being purely additive keeps the
+# kill-switch-OFF assembled prompt byte-identical to pre-#437 (the existing
+# ``_MLDS_ARCHITECT_PROMPT_SHA256`` still matches the lens_on=False path); the lens_on=True
+# prompt gets its OWN frozen hash + differential. BRACE-FREE (zero ``{}``) → safe to concatenate
+# before ``str.format`` (no new placeholder). DD3-bounded: Exhibit 1 stays a USD P&L; only the
+# VALUE side (value_model + the option-superiority dimension) becomes lens-aware. Costs stay USD.
+ARCHITECT_IMPACT_LENS_BLOCK = """
+
+# ── Marco de valor del caso (Impact Lens) ─────────────────────────────────────
+# El "valor" de un caso NO es siempre ROI financiero: identifica el marco de valor del DOMINIO
+# del caso y reencuádralo SIN tocar el lado del COSTO (que sigue SIEMPRE en USD).
+
+1. Emite el campo `value_model` con:
+   - `lens`: uno de financial_roi, operational_efficiency, clinical_outcomes, learning_outcomes —
+     elige el que mejor refleje el DOMINIO del caso (salud → clinical_outcomes; educación →
+     learning_outcomes; manufactura/logística → operational_efficiency; comercial/financiero/
+     fintech/retail/telecom → financial_roi).
+   - `primary_metric_name`: la métrica de VALOR primaria del caso en lenguaje gerencial
+     (p.ej. "ROI", "readmisiones evitadas", "retención de estudiantes", "tasa de defecto").
+   - `kpi_rows`: 2-3 etiquetas de KPI de valor acordes a la lente.
+2. REGLA DE OPCIONES acorde a la lente (REFINA la REGLA DE BALANCE DE OPCIONES A/B/C de arriba):
+   la dimensión donde la Opción A supera a las demás debe reflejar la métrica de VALOR de la lente,
+   NO siempre "mayor ROI". Para `financial_roi` la dimensión de A sigue siendo el ROI; para una
+   lente no financiera usa su métrica de valor (p.ej. clinical_outcomes → "mejor resultado clínico
+   por costo"; learning_outcomes → "mayor retención de estudiantes"; operational_efficiency →
+   "mayor eficiencia/menor tasa de defecto"). B = menor riesgo y C = mayor velocidad se mantienen.
+3. COSTOS EN USD (no negociable, DD3): Exhibit 1 sigue siendo un P&L en USD (Ingresos, Costos,
+   EBITDA, Margen, Caja, Inversión). La lente reencuadra solo la NARRATIVA de valor y las opciones,
+   NUNCA convierte el P&L ni los Exhibits a unidades no monetarias.
+"""

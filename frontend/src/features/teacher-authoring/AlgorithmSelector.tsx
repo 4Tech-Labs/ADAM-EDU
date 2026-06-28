@@ -125,7 +125,10 @@ export function AlgorithmSelector({
     const catalogQuery = useQuery<AlgorithmCatalog>({
         queryKey: queryKeys.authoring.algorithmCatalog(profile, caseType),
         queryFn: () => api.authoring.getAlgorithmCatalog(profile, caseType),
-        staleTime: 5 * 60 * 1000,
+        // Short staleTime so an open form refetches the catalog on focus/mount and the
+        // coercion effect drops any now-hidden pick before submit (avoids a deploy-time
+        // 422 if the catalog shrank under the teacher). Backend intake stays authoritative.
+        staleTime: 30 * 1000,
         gcTime: 30 * 60 * 1000,
     });
 

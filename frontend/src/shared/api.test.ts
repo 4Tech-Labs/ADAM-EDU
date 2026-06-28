@@ -77,6 +77,7 @@ describe("api auth + stream glue", () => {
             subject: "Case",
             academic_level: "MBA",
             industry: "FinTech",
+            impact_lens: null,
             student_profile: "business",
             case_type: "harvard_only",
             syllabus_module: "M1",

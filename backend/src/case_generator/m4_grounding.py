@@ -175,6 +175,39 @@ def drop_sensitivity_charts(charts: list[dict]) -> tuple[list[dict], int]:
     return kept, len(charts) - len(kept)
 
 
+# ── M4 payback-chart detector (Issue #469 — ml_ds + clustering value frame) ───────────────────────
+# For ml_ds + clustering, M4's first chart must NOT be a payback / break-even ("Punto de Equilibrio:
+# Mes N") — a fabricated cash-flow milestone for an EXPLORATORY segmentation (no cash-flow model
+# derives it). The dedicated clustering M4 chart prompt (#469) replaces it with a value-by-segment
+# chart; this detector is the deterministic golden-oracle backstop (reused by
+# ``tests/golden_eval.check_m4_clustering_no_payback_chart``) so a regression that re-emits the payback
+# chart for a clustering case fails the gate. Scans TITLE + SUBTITLE only (accent-insensitive) — the
+# headline fields a chart names itself with, never the free-form rationale. Pure, total, never raises.
+_PAYBACK_MARKERS = (
+    "payback",
+    "punto de equilibrio",
+    "break even",
+    "breakeven",
+    "valle de la muerte",
+    "flujo de caja",
+)
+_PAYBACK_MARKER_RE = re.compile("|".join(re.escape(marker) for marker in _PAYBACK_MARKERS))
+
+
+def is_payback_chart(chart: object) -> bool:
+    """True iff ``chart`` is an M4 payback / cash-flow / break-even chart (Issue #469).
+
+    Scans ``title`` + ``subtitle`` only (accent-normalized). Any non-dict / missing fields → ``False``.
+    Used by the clustering golden oracle to assert the dedicated clustering chart prompt replaced the
+    financial payback chart with a value-by-segment one. ``flujo de caja`` is included because the
+    generic Gráfico 1 title is "Flujo de Caja y Punto de Equilibrio (Payback)".
+    """
+    if not isinstance(chart, dict):
+        return False
+    blob = " ".join(_normalize_chart_text(chart.get(field)) for field in ("title", "subtitle"))
+    return bool(_PAYBACK_MARKER_RE.search(blob))
+
+
 # ── M4 chart grounding (ml_ds+clf · business+clf) ─────────────────────────────────────────────────
 # Deterministic, pure validator so the M4 financial charts can NEVER ship a false/unverified model
 # metric or an invented "benchmark" figure. It closes the gap the repo documents verbatim ("los
@@ -435,3 +468,46 @@ def build_m4_chart_grounding_reprompt(
         "\nMétricas verificadas del modelo (única fuente válida para métricas del modelo):\n"
         f"{metrics_block}\n"
     )
+
+
+# ── Issue #481 — embedded-MCQ answer-choice backstop (M4 questions, ALL families) ──────────────────
+# The PROMPT fix (the 5 M4-question prompt surfaces) is the CURE — it stops mandating embedded
+# "opciones A/B/C" answer-choices in the question ``enunciado``. This is the deterministic BACKSTOP:
+# M4 questions are meant to be OPEN, and the only A/B/C in a case are the M1 *strategic* options (cited
+# by their REAL letter in ``solucion_esperada``). A question whose ``enunciado`` still embeds its OWN
+# answer-choice markers ("A) … B) … C) …") collides — and historically CROSS-MAPS — with the strategic
+# Opción A/B/C (the #481 LIVE defect). The #416 validator cannot see it (it captures the word
+# "Opción X", not the answer-letter "X)" form). Wired into the existing reprompt-once-then-DEGRADE M4
+# guard (``graph._apply_m4_questions_option_coherence``); a residual violation only degrades to the
+# pass-1 question, so a FALSE POSITIVE costs one wasted reprompt and NEVER degrades quality or fails a
+# job.
+#
+# Marker shape: an UPPERCASE letter A-D immediately followed by ")" at the start of a line or after
+# whitespace (so a parenthetical cross-reference "(A)" — preceded by "(" — and an inline "wordA)" are
+# NOT markers). The defect needs an enumerated answer set, so the rule fires only on >=2 DISTINCT such
+# letters. Scans the ``enunciado`` ONLY (the solucion's "Opción C" word-form is the legit strategic
+# reference, covered by ``validate_question_option_coherence``). Bounded quantifiers → no ReDoS.
+_MCQ_OPTION_MARKER_RE = re.compile(r"(?:^|(?<=\s))([A-D])\)", re.MULTILINE)
+
+
+def detect_embedded_mcq_options(enunciado: str | None) -> list[str]:
+    """Return ``["MCQ_OPCIONES_EMBEBIDAS: …"]`` when *enunciado* embeds an A/B/C answer-choice set.
+
+    Pure and total: any non-str / None / internal error degrades to ``[]`` (never raises). Fires only
+    when >=2 DISTINCT uppercase ``A)``/``B)``/``C)``/``D)`` markers appear, so a single parenthetical
+    reference never trips it. Near-zero false positives; a false positive is degrade-safe at the call
+    site (reprompt-once-then-keep-pass-1).
+    """
+    if not isinstance(enunciado, str) or not enunciado:
+        return []
+    try:
+        letters = {m.group(1) for m in _MCQ_OPTION_MARKER_RE.finditer(enunciado)}
+        if len(letters) >= 2:
+            joined = ", ".join(f"{letter})" for letter in sorted(letters))
+            return [
+                "MCQ_OPCIONES_EMBEBIDAS: el enunciado incrusta opciones de respuesta "
+                f"etiquetadas ({joined}) que colisionan con las opciones estratégicas A/B/C del caso"
+            ]
+        return []
+    except Exception:  # pragma: no cover - defensive; never fail a job
+        return []

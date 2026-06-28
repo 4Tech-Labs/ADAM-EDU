@@ -1,0 +1,168 @@
+"""Unit tests for the pure Impact Lens module (Issue #437 / ADR 0003, Fase 1).
+
+No DB / no graph imports — this is a pure module (mirrors ``m4_grounding``).
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from typing import get_args
+
+from case_generator.impact_lens import (
+    DEFAULT_IMPACT_LENS,
+    IMPACT_LENS_CATALOG,
+    IMPACT_LENS_CLINICAL_OUTCOMES,
+    IMPACT_LENS_FINANCIAL_ROI,
+    IMPACT_LENS_KEYS,
+    IMPACT_LENS_LEARNING_OUTCOMES,
+    IMPACT_LENS_OPERATIONAL_EFFICIENCY,
+    ImpactLensLiteral,
+    build_impact_lens_architect_hint,
+    build_impact_lens_hint,
+    build_impact_lens_m5_hint,
+    normalize_impact_lens,
+    resolve_impact_lens_from_industry,
+)
+
+# The contract with the frontend dropdown. Keep in sync with INDUSTRIAS_OPTIONS in
+# frontend/src/features/teacher-authoring/authoringFormConfig.ts — this list IS the
+# drift lock (F2: the form persists the LABEL, the resolver must map it).
+_INDUSTRIAS_OPTIONS: list[tuple[str, str, str]] = [
+    # (value, label, expected_lens)
+    ("retail", "Retail & E-commerce", IMPACT_LENS_FINANCIAL_ROI),
+    ("fintech", "FinTech & Banca", IMPACT_LENS_FINANCIAL_ROI),
+    ("salud", "Salud & Medicina", IMPACT_LENS_CLINICAL_OUTCOMES),
+    ("logistica", "Logística & Supply Chain", IMPACT_LENS_OPERATIONAL_EFFICIENCY),
+    ("educacion", "Educación", IMPACT_LENS_LEARNING_OUTCOMES),
+    ("telecomunicaciones", "Telecomunicaciones", IMPACT_LENS_FINANCIAL_ROI),
+    ("manufactura", "Manufactura", IMPACT_LENS_OPERATIONAL_EFFICIENCY),
+]
+
+
+def test_catalog_has_exactly_four_lenses_with_required_fields() -> None:
+    assert IMPACT_LENS_KEYS == {
+        IMPACT_LENS_FINANCIAL_ROI,
+        IMPACT_LENS_OPERATIONAL_EFFICIENCY,
+        IMPACT_LENS_CLINICAL_OUTCOMES,
+        IMPACT_LENS_LEARNING_OUTCOMES,
+    }
+    for spec in IMPACT_LENS_CATALOG.values():
+        assert isinstance(spec["label"], str) and spec["label"]
+        assert isinstance(spec["primary_metric_name"], str) and spec["primary_metric_name"]
+        rows = spec["kpi_rows"]
+        assert isinstance(rows, list) and 2 <= len(rows) <= 3
+        assert all(isinstance(r, str) and r for r in rows)
+
+
+def test_non_financial_kpi_labels_are_natural_language_not_token_shorthand() -> None:
+    # Issue #437 follow-up — the §4.5 KPI labels are forced VERBATIM into the rendered table
+    # (build_impact_lens_hint: "usar EXACTAMENTE estas filas"), so the catalog string IS the
+    # student-facing label. Forbid spreadsheet/token shorthand (Δ delta, "$/" cost-per slug) in
+    # every NON-financial lens row + primary metric. financial_roi keeps its own ROI/Payback/NPV
+    # phrasing. This makes a tokenized label impossible to reintroduce without breaking CI.
+    for lens, spec in IMPACT_LENS_CATALOG.items():
+        if lens == IMPACT_LENS_FINANCIAL_ROI:
+            continue
+        fields = [str(spec["primary_metric_name"]), *[str(r) for r in spec["kpi_rows"]]]
+        for text in fields:
+            assert "Δ" not in text, f"{lens}: delta shorthand in {text!r}"
+            assert "$/" not in text, f"{lens}: '$/' cost-per slug in {text!r}"
+
+
+def test_learning_lens_uses_clarified_kpi_labels() -> None:
+    # The exact labels the user flagged are gone; the natural-language replacements are present.
+    rows = [str(r) for r in IMPACT_LENS_CATALOG[IMPACT_LENS_LEARNING_OUTCOMES]["kpi_rows"]]
+    assert "Δ retención/graduación (%)" not in rows
+    assert "$/estudiante-retenido (USD)" not in rows
+    assert "Costo por estudiante retenido (USD)" in rows
+    assert "Cambio en retención/graduación (puntos %)" in rows
+
+
+@pytest.mark.parametrize("value,label,expected", _INDUSTRIAS_OPTIONS)
+def test_every_dropdown_value_and_label_maps(value: str, label: str, expected: str) -> None:
+    # F2 drift lock — both the value and the persisted LABEL resolve to the lens.
+    assert resolve_impact_lens_from_industry(value) == expected
+    assert resolve_impact_lens_from_industry(label) == expected
+    # Case/accent robustness.
+    assert resolve_impact_lens_from_industry(label.upper()) == expected
+
+
+def test_general_default_and_unknown_default_to_financial_roi() -> None:
+    assert resolve_impact_lens_from_industry("General") == IMPACT_LENS_FINANCIAL_ROI
+    assert resolve_impact_lens_from_industry("") == DEFAULT_IMPACT_LENS
+    assert resolve_impact_lens_from_industry(None) == DEFAULT_IMPACT_LENS
+    assert resolve_impact_lens_from_industry("SaaS B2B para PYMES") == DEFAULT_IMPACT_LENS
+    assert DEFAULT_IMPACT_LENS == IMPACT_LENS_FINANCIAL_ROI
+
+
+def test_normalize_impact_lens_coerces_unknown() -> None:
+    assert normalize_impact_lens(IMPACT_LENS_CLINICAL_OUTCOMES) == IMPACT_LENS_CLINICAL_OUTCOMES
+    assert normalize_impact_lens("nonexistent") == DEFAULT_IMPACT_LENS
+    assert normalize_impact_lens(None) == DEFAULT_IMPACT_LENS
+
+
+def test_hint_is_brace_free_for_every_lens() -> None:
+    # H3 — the hint is concatenated BEFORE str.format; a stray brace would KeyError.
+    for lens in IMPACT_LENS_KEYS:
+        hint = build_impact_lens_hint(lens)
+        assert "{" not in hint and "}" not in hint
+        # It must be .format-safe even with no args present.
+        hint.format()
+
+
+def test_financial_hint_reproduces_roi_payback_npv() -> None:
+    # H6 — financial cohort stays close to today's output.
+    hint = build_impact_lens_hint(IMPACT_LENS_FINANCIAL_ROI)
+    assert "ROI" in hint and "Payback" in hint and "NPV" in hint
+    assert "USD" in hint  # DD3
+
+
+def test_non_financial_hint_drops_roi_npv() -> None:
+    clinical = build_impact_lens_hint(IMPACT_LENS_CLINICAL_OUTCOMES)
+    assert "Costo por evento evitado" in clinical
+    assert "ROI proyectado" not in clinical and "NPV estimado" not in clinical
+    learning = build_impact_lens_hint(IMPACT_LENS_LEARNING_OUTCOMES)
+    assert "retención" in learning.lower()
+
+
+def test_hint_default_on_unknown_lens() -> None:
+    assert build_impact_lens_hint("bogus") == build_impact_lens_hint(IMPACT_LENS_FINANCIAL_ROI)
+
+
+# ── Fase 3 — ImpactLensLiteral + M5 / architect hints ──────────────────────────
+
+
+def test_impact_lens_literal_matches_keys() -> None:
+    # Drift lock: the intake-override Literal can never skew from the catalog keys.
+    assert set(get_args(ImpactLensLiteral)) == IMPACT_LENS_KEYS
+
+
+def test_m5_and_architect_hints_brace_free_for_every_lens() -> None:
+    for lens in IMPACT_LENS_KEYS:
+        for hint in (build_impact_lens_m5_hint(lens), build_impact_lens_architect_hint(lens)):
+            assert "{" not in hint and "}" not in hint
+            hint.format()  # .format-safe with no args
+
+
+def test_m5_hint_does_not_mention_section_45() -> None:
+    # The M5 hint is the decision-matrix surface, NOT M4's §4.5 KPI table.
+    for lens in IMPACT_LENS_KEYS:
+        hint = build_impact_lens_m5_hint(lens)
+        assert "§4.5" not in hint and "4.5" not in hint
+        assert "KPI esperado" in hint and "USD" in hint  # value framing + DD3
+
+
+def test_m5_hint_carries_lens_metric() -> None:
+    clinical = build_impact_lens_m5_hint(IMPACT_LENS_CLINICAL_OUTCOMES)
+    assert "Costo por evento evitado" in clinical or "readmisiones" in clinical
+    learning = build_impact_lens_m5_hint(IMPACT_LENS_LEARNING_OUTCOMES)
+    assert "retención" in learning.lower()
+
+
+def test_architect_hint_is_override_authoritative_and_names_the_key() -> None:
+    # The architect hint must (a) tell the LLM to IGNORE domain inference and (b) pin value_model.lens.
+    hint = build_impact_lens_architect_hint(IMPACT_LENS_CLINICAL_OUTCOMES)
+    assert "OVERRIDE" in hint and "value_model.lens" in hint
+    assert IMPACT_LENS_CLINICAL_OUTCOMES in hint  # the canonical key, so the LLM emits it verbatim
+    assert "USD" in hint  # DD3 — costs stay USD

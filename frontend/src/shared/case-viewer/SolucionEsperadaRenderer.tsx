@@ -1,35 +1,12 @@
 import { Marked } from "marked";
 
-// Local marked instance that strips unsafe HTML from LLM-generated content.
-// - renderer.html: strips raw HTML blocks and inline HTML (e.g. <script>, <iframe>).
-// - renderer.link: allows only http/https and site-relative (single slash or anchor) links.
-//   - Protocol-relative (//domain) and unsafe protocols (javascript:, data:, vbscript:) become plain text.
-//   - href and title are HTML-attribute-escaped to prevent attribute injection XSS.
-//   - External links get rel="noopener noreferrer" and open in a new tab.
-// Using a local instance avoids mutating the global marked config used by M1–M6 modules.
+import { SAFE_MARKDOWN_RENDERER } from "./safeMarkdown";
 
-// Encode HTML special characters safe for use inside a double-quoted attribute value.
-const _esc = (s: string): string =>
-    s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-// Allow http/https and site-relative paths. Deliberately excludes protocol-relative (//domain)
-// as LLM-generated academic prose has no legitimate use for them.
-const _SAFE_LINK_RE = /^https?:|^\/(?!\/)|^#/;
-const _md = new Marked({
-    renderer: {
-        html: () => "",
-        link({ href, title, text }) {
-            if (!_SAFE_LINK_RE.test(href ?? "")) {
-                // Unsafe protocol (javascript:, data:, vbscript:, //, etc.) — render as plain text.
-                return text;
-            }
-            const safeHref = _esc(href ?? "");
-            const titleAttr = title ? ` title="${_esc(title)}"` : "";
-            const externalAttrs = /^https?:/.test(href ?? "") ? ' target="_blank" rel="noopener noreferrer"' : "";
-            return `<a href="${safeHref}"${titleAttr}${externalAttrs}>${text}</a>`;
-        },
-    },
-});
+// Local marked instance hardened against XSS in LLM-generated content. The hardening
+// (strip raw HTML, neutralize unsafe link/image URLs) lives in ./safeMarkdown as the single
+// source of truth shared with the global CaseContentRenderer instance. A separate instance
+// keeps this renderer's config independent of the global one.
+const _md = new Marked({ renderer: SAFE_MARKDOWN_RENDERER });
 
 export function SolucionEsperadaRenderer({ solucion }: { solucion: string | Record<string, unknown> | undefined }) {
     if (solucion === undefined || solucion === null) {
