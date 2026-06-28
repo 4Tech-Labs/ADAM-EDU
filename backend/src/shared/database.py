@@ -185,6 +185,15 @@ class Settings(BaseSettings):
     # env-only revert; no redeploy). The currency LABEL of `business_cost_matrix` stays coerced by
     # #370 regardless of this flag.
     case_usd_currency_enforce: bool = True
+    # LaTeX math delimiter strip (Issue #480). When true, `strip_latex_math` removes inline LaTeX
+    # math delimiters (`$k$`, `$k=2$`, `$5000.0 - 50.0$`) from the architect prose fields + the
+    # downstream narrative (`sanitize_markdown`), because the case-viewer has no KaTeX/MathJax and
+    # would show the literal delimiter to the student. Currency-safe (a `$`-prefix figure like
+    # `$8,000,000 USD` is never touched) and disjoint from `enforce_usd_currency`. The M3 notebook
+    # is excluded (Colab renders math; its code may carry `$`). Byte-identical for any text without
+    # LaTeX. Kill-switch: set CASE_STRIP_LATEX_MATH=false to passthrough exactly (instant env-only
+    # revert; no redeploy).
+    case_strip_latex_math: bool = True
     # Normalize M1 Exhibit tables that the architect emits with literal `<br>` row separators
     # and zero real newlines (Issue #356). When true, `normalize_exhibit_markdown` converts
     # `<br>`/`<br/>`/`<br />` → real newlines on the three `doc1_anexo_*` fields at the

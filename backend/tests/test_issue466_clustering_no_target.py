@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -35,13 +36,17 @@ from case_generator.graph import (
     _enforce_business_classification_schema,
     _enforce_mlds_classification_schema,
     _enforce_mlds_clustering_no_target,
+    _filter_clustering_target_warnings,
     _generate_dataset_from_schema,
+    _validate_schema_against_contract,
+    _validate_target_semantic_coherence,
 )
 from case_generator.prompts import EDA_ANNOTATE_ONLY_PROMPT_CLUSTERING, M3_NOTEBOOK_BASE_TEMPLATE
 from golden_eval import (
     NodeEvalInputs,
     check_clustering_eda_no_target_charts,
     check_clustering_no_target,
+    check_clustering_no_target_warnings,
     evaluate_downgrade_gate,
 )
 
@@ -457,3 +462,202 @@ def test_gate_blocks_on_clustering_chart_leak() -> None:
 def test_gate_passes_clean_defaults() -> None:
     ok = NodeEvalInputs(node="schema_designer", deterministic_pass=True)
     assert evaluate_downgrade_gate(ok).passed is True
+
+
+# ─────────────────────────── Issue #482 — target-warning leak to M2/M3 ───────────────────────────
+#
+# #466 strips the leaked target COLUMN from the clustering CSV, but the orphan
+# `contract.target_column.name` still leaks into the M2 EDA / M3-content NARRATIVE via TWO
+# data_gap_warning emitters that both end up in schema_designer's warnings_payload:
+#   (1) ARCHITECT  — `_validate_target_semantic_coherence` (fires when the TITLE has a keyword)
+#   (2) VALIDATOR  — `_validate_schema_against_contract` ("target '<name>' … no fue producido…")
+# `_filter_clustering_target_warnings` drops BOTH at the single schema_designer choke point.
+
+_ORPHAN_TARGET = "dummy_target_ignored_for_clustering"
+
+
+def _orphan_contract() -> dict:
+    """A clustering contract carrying an LLM-hallucinated supervised target (the #482 root)."""
+    return {
+        "target_column": {
+            "name": _ORPHAN_TARGET, "role": "classification_target", "dtype": "int",
+        },
+        # features present in the clustering fallback schema → no spurious feature-missing warning.
+        "feature_columns": [{"name": "recency_days"}, {"name": "monetary_value"}],
+    }
+
+
+def test_filter_drops_both_target_channels_red_then_green() -> None:
+    """RED→GREEN over the TWO REAL emitters: a churn-titled clustering case triggers the architect
+    coherence warning AND the validator missing-target warning, both naming the orphan target; the
+    filter drops both so the name disappears from the narrative-facing warnings (name-based, decoupled
+    from the filter's prefix mechanism)."""
+    schema = _clustering_schema()  # no orphan target column (clustering fallback)
+    contract = _orphan_contract()
+
+    # Channel 2 (validator): the orphan target is absent from the schema → missing-target warning.
+    missing, _leak = _validate_schema_against_contract(schema, contract)
+    # Channel 1 (architect): a title keyword ("churn") + a non-matching target → coherence warning.
+    coherence = _validate_target_semantic_coherence(
+        "Segmentación para reducir el churn", contract["target_column"]
+    )
+    # schema_designer merges the architect seed first, then the validator output (graph.py:5184-5186).
+    warnings_payload = list(coherence) + list(missing)
+
+    # RED: BOTH channels are present and name the orphan before the filter.
+    assert any(w.startswith("target_semantic_mismatch") for w in warnings_payload), "architect channel"
+    assert any(w.startswith("target '") for w in warnings_payload), "validator channel"
+    assert any(_ORPHAN_TARGET in w for w in warnings_payload)
+    assert check_clustering_no_target_warnings(warnings_payload) is False
+
+    # GREEN: the filter removes every warning that names the target.
+    filtered = _filter_clustering_target_warnings(
+        warnings_payload, profile="ml_ds", primary_family="clustering", enabled=True
+    )
+    assert not any(_ORPHAN_TARGET in w for w in filtered)
+    assert check_clustering_no_target_warnings(filtered) is True
+
+
+def test_filter_preserves_feature_and_leakage_warnings() -> None:
+    """FP guard: feature-missing and leakage warnings (prefix `feature '`) are NOT target warnings →
+    they survive the filter even alongside the dropped target warnings."""
+    feature_warning = "feature 'recency_days' (dtype=int) no fue producido por schema_designer"
+    leakage_warning = (
+        "feature 'churn_flag' marcada con riesgo de leakage (temporal_offset_months=3, "
+        "is_leakage_risk=True). El notebook M3 debe excluirla del entrenamiento."
+    )
+    target_warning = (
+        f"target '{_ORPHAN_TARGET}' (rol=classification_target, dtype=int) "
+        "no fue producido por schema_designer"
+    )
+    out = _filter_clustering_target_warnings(
+        [feature_warning, target_warning, leakage_warning],
+        profile="ml_ds", primary_family="clustering", enabled=True,
+    )
+    assert out == [feature_warning, leakage_warning]  # target dropped, features preserved
+
+
+@pytest.mark.parametrize(
+    "profile,family,enabled",
+    [
+        ("ml_ds", "clustering", False),    # kill-switch off → byte-idéntico a pre-#466
+        ("business", "clustering", True),   # business+clustering (#317 lane)
+        ("ml_ds", "clasificacion", True),   # otra familia
+        ("ml_ds", "regresion", True),       # otra familia
+    ],
+)
+def test_filter_noop_returns_same_object(profile: str, family: str, enabled: bool) -> None:
+    warnings = [
+        f"target '{_ORPHAN_TARGET}' (rol=classification_target) no fue producido por schema_designer",
+        f"target_semantic_mismatch: el título sugiere [churn] … target_column.name='{_ORPHAN_TARGET}'.",
+        "feature 'x' (dtype=int) no fue producido por schema_designer",
+    ]
+    out = _filter_clustering_target_warnings(
+        warnings, profile=profile, primary_family=family, enabled=enabled
+    )
+    assert out is warnings  # mismo objeto → byte-idéntico
+
+
+def test_check_clustering_no_target_warnings_red_green() -> None:
+    assert check_clustering_no_target_warnings(None) is True
+    assert check_clustering_no_target_warnings([]) is True
+    assert check_clustering_no_target_warnings(
+        ["feature 'recency_days' (dtype=int) no fue producido por schema_designer"]
+    ) is True
+    assert check_clustering_no_target_warnings(
+        [f"target '{_ORPHAN_TARGET}' (rol=…) no fue producido por schema_designer"]
+    ) is False
+    assert check_clustering_no_target_warnings(
+        [f"target_semantic_mismatch: … target_column.name='{_ORPHAN_TARGET}' …"]
+    ) is False
+
+
+def test_gate_blocks_on_clustering_target_warning_leak() -> None:
+    fail = NodeEvalInputs(
+        node="schema_designer", deterministic_pass=True, clustering_no_target_warning_ok=False
+    )
+    res = evaluate_downgrade_gate(fail)
+    assert res.passed is False
+    assert any("names a stripped supervised target" in r for r in res.reasons)
+
+
+def test_filter_handles_whitespace_and_non_str_elements() -> None:
+    """Defensive branches: a leading-whitespace target warning is still dropped (`lstrip()`), and a
+    non-str element is kept without throwing (the `isinstance(w, str)` guard)."""
+    warnings: list = [
+        "  target 'dummy' no fue producido por schema_designer",  # leading ws → still dropped
+        "feature 'recency_days' no fue producido",                # kept
+        None,                                                      # non-str → kept, never throws
+    ]
+    out = _filter_clustering_target_warnings(
+        warnings, profile="ml_ds", primary_family="clustering", enabled=True
+    )
+    assert out == ["feature 'recency_days' no fue producido", None]
+    # The oracle shares the same defensive shape: a non-str / clean-feature list is n/a (True),
+    # a leading-whitespace target warning is still flagged.
+    assert check_clustering_no_target_warnings([None, "feature 'x' no fue producido"]) is True
+    assert check_clustering_no_target_warnings(["  target 'dummy' no fue producido"]) is False
+
+
+# ── Node-level integration: the REAL schema_designer wiring (closes the helper-isolation gap) ──
+#
+# The helper tests above exercise `_filter_clustering_target_warnings` and the two emitters in
+# isolation, then hand-build `warnings_payload`. These drive the ACTUAL `schema_designer` node
+# (deterministic clustering path, no LLM/DB per #477) to prove the production wiring: the architect
+# seed in `state["data_gap_warnings"]` is merged AND the call-site filter removes it before persist.
+
+
+def _clustering_node_state(seed_warning: str) -> dict:
+    """ml_ds+clustering state with an architect-seeded target warning (the #228 seed path)."""
+    return {
+        "studentProfile": "ml_ds",
+        "algoritmos": ["K-Means"],
+        "titulo": "Segmentación para reducir el churn",
+        "doc1_anexo_financiero": "",
+        "doc1_anexo_operativo": "",
+        "dataset_schema_required": _orphan_contract(),
+        "data_gap_warnings": [seed_warning],
+    }
+
+
+def test_schema_designer_node_filters_architect_seed_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GREEN: the real node persists data_gap_warnings with NO orphan target name — proving the
+    fallback-path call-site filter + the state-seed merge, not just the helper in isolation."""
+    monkeypatch.setattr(graph.settings, "mlds_clustering_structure", True)
+    monkeypatch.setattr(graph.settings, "mlds_clustering_no_target", True)
+    # Clustering skips the Pro LLM (#477); patch the class so an accidental construction is inert.
+    monkeypatch.setattr(graph, "ChatGoogleGenerativeAI", MagicMock())
+    # Use the REAL architect coherence warning (the seed the node merges from state).
+    seed = _validate_target_semantic_coherence(
+        "Segmentación para reducir el churn",
+        {"name": _ORPHAN_TARGET, "role": "classification_target"},
+    )[0]
+    assert _ORPHAN_TARGET in seed  # the seed genuinely names the orphan
+
+    out = graph.schema_designer(_clustering_node_state(seed), {"configurable": {}})
+
+    warnings = out.get("data_gap_warnings") or []
+    assert all(_ORPHAN_TARGET not in w for w in warnings)  # orphan gone from every channel
+    # The deterministic clustering schema also carries no target column (strip ran end-to-end).
+    assert _ORPHAN_TARGET not in {c["name"] for c in out["dataset_schema"]["columns"]}
+
+
+def test_schema_designer_node_red_control_switch_off_keeps_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED control: with MLDS_CLUSTERING_NO_TARGET off the filter is skipped, so the architect-seeded
+    target warning survives in the persisted data_gap_warnings (byte-identical to pre-#482)."""
+    monkeypatch.setattr(graph.settings, "mlds_clustering_structure", True)
+    monkeypatch.setattr(graph.settings, "mlds_clustering_no_target", False)
+    monkeypatch.setattr(graph, "ChatGoogleGenerativeAI", MagicMock())
+    seed = _validate_target_semantic_coherence(
+        "Segmentación para reducir el churn",
+        {"name": _ORPHAN_TARGET, "role": "classification_target"},
+    )[0]
+
+    out = graph.schema_designer(_clustering_node_state(seed), {"configurable": {}})
+
+    warnings = out.get("data_gap_warnings") or []
+    assert any(_ORPHAN_TARGET in w for w in warnings)  # seed survives (filter off)
