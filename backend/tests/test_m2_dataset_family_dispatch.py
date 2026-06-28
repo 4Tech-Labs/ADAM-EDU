@@ -311,8 +311,10 @@ _CLUSTERING_REQUIRED_PLACEHOLDERS = [
 
 @pytest.mark.parametrize("placeholder", _CLUSTERING_REQUIRED_PLACEHOLDERS)
 def test_clustering_prompt_contains_required_placeholders(placeholder: str) -> None:
-    """SCHEMA_DESIGNER_PROMPT_CLUSTERING must contain every placeholder schema_designer injects,
-    or .format() would KeyError at runtime. (It must NOT require {ml_required_families}.)"""
+    """SCHEMA_DESIGNER_PROMPT_CLUSTERING must contain every placeholder schema_designer would inject.
+    (It must NOT require {ml_required_families}.) Since #477 the LLM is skipped for clustering (the
+    deterministic schema is used), so this constant is runtime-unreached today; this guard keeps it
+    `.format()`-safe as the canonical home + revert path for a future family-aware constraints model."""
     assert placeholder in SCHEMA_DESIGNER_PROMPT_CLUSTERING
 
 
