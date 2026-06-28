@@ -89,6 +89,7 @@ from case_generator.configuration import (
     NODE_M3_CONTENT,
     NODE_M3_NOTEBOOK,
     NODE_M3_NOTEBOOK_ESCALATION,
+    NODE_M3_QUESTIONS,
     NODE_M4_CONTENT,
     NODE_M5_CONTENT,
     NODE_M5_QUESTIONS,
@@ -613,9 +614,21 @@ def _get_writer_llm(
 ):
     """LLM estándar (Flash) para redacción y structured output.
     Fallback automático a gemini-2.5-flash si el primary falla.
+
+    Provider-aware: el primary pasa por ``_build_llm``, así que un model id con
+    ``"/"`` (p.ej. ``"z-ai/glm-5.2"``, vía ``NODE_MODEL_OVERRIDES``) corre en
+    OpenRouter, y cualquier otro en Gemini. Un fallo de construcción OpenRouter
+    degrada a ``gemini-2.5-flash`` DENTRO de ``_build_llm`` → la factory nunca
+    lanza por el proveedor alterno. **Byte-idéntico** para los callers actuales:
+    ninguno pasa un id con ``"/"`` (lo verifica ``test_writer_factory_parity``),
+    así que la rama OpenRouter es código muerto sin un override explícito.
     """
-    primary = _build_gemini(
-        model, temperature=temperature, thinking_level=thinking_level, max_output_tokens=8192
+    primary = _build_llm(
+        model,
+        gemini_fallback_model="gemini-2.5-flash",
+        temperature=temperature,
+        thinking_level=thinking_level,
+        max_output_tokens=8192,
     )
     # Fallback: modelo anterior estable. Mismos prompts funcionan sin cambios.
     fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=8192)
@@ -722,6 +735,44 @@ def _get_m5_llm(
     writer_fallback = _build_gemini(fallback_model, temperature=temperature, max_output_tokens=_max)
     stable_fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=_max)
     return primary.with_fallbacks([pro_fallback_low, writer_fallback, stable_fallback])
+
+
+def _get_m3_content_llm(
+    model: str,
+    fallback_model: str = "gemini-3-flash-preview",
+    *,
+    temperature: float = 0.6,
+    max_output_tokens: int = 16384,
+):
+    """Cross-provider Pro chain for the ml_ds M3-content narrative.
+
+    ml_ds: el m3_content alimenta directamente el prompt del notebook generator,
+    así que la calidad de razonamiento aquí reduce ambigüedad en la sección 3.
+    Pro-medium con cadena de fallback (Pro-low → Flash-low).
+
+    Las dos tiers que llevan el ``model`` resuelto pasan por ``_build_llm``: un id
+    con ``"/"`` corre en OpenRouter (GLM), si no en Gemini; un fallo de
+    construcción OpenRouter degrada a ``fallback_model`` (Gemini) DENTRO de
+    ``_build_llm``, así que esta factory nunca lanza por el proveedor alterno. La
+    tier final es SIEMPRE Gemini Flash. **Byte-idéntico** al build inline previo
+    cuando ``model`` es un id Gemini (sin ``"/"``).
+    """
+    primary = _build_llm(
+        model, gemini_fallback_model=fallback_model,
+        temperature=temperature, thinking_level="medium", max_output_tokens=max_output_tokens,
+    )
+    pro_low = _build_llm(
+        model, gemini_fallback_model=fallback_model,
+        temperature=temperature, thinking_level="low", max_output_tokens=max_output_tokens,
+    )
+    # Flash fallback: thinking_level="low" explícito (no dependemos del default del
+    # SDK). "low" basta porque ya estamos en modo degradado por incidente global de
+    # Pro/OpenRouter y queremos minimizar latencia extra.
+    flash_fb = _build_gemini(
+        fallback_model, temperature=temperature, thinking_level="low",
+        max_output_tokens=max_output_tokens,
+    )
+    return primary.with_fallbacks([pro_low, flash_fb])
 
 
 # ─── Utilidades ─────────────────────────────────────────
@@ -5049,6 +5100,12 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         _effective_family == "clustering" and settings.mlds_clustering_structure
     )
 
+    # Resolve the node model ONCE so the chain construction and the parse path agree on the
+    # provider. A model id with "/" (e.g. "z-ai/glm-5.2" via NODE_MODEL_OVERRIDES) routes the two
+    # model-bearing tiers to OpenRouter; any other id stays on Gemini (byte-identical legacy path).
+    resolved_schema_model = resolve_node_model(cfg, NODE_SCHEMA_DESIGNER, cfg.architect_model)
+    _is_openrouter_schema = "/" in resolved_schema_model
+
     # Build the prompt + resilient LLM chain ONLY when we will actually call the model. For the
     # deterministic clustering path `candidates` stays empty → the loop below is a no-op and control
     # falls through to the shared fallback assembly (the single source of the deterministic schema).
@@ -5070,58 +5127,86 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         })
         prompt = _schema_prompt.format(**context)
 
-        # Cadena de fallback resiliente alineada con el patrón del case_architect (M1):
-        #   1) Pro thinking_level="medium" — primario (mantiene thinking; subir a "high"
-        #      arriesga truncar el JSON estructurado de 14 columnas por consumo de
-        #      reasoning interno).
-        #   2) Pro thinking_level="low"    — fallback transitorio sin degradar de modelo.
-        #   3) Flash                       — red de seguridad final ante incidente global
-        #      del Pro (sin response_mime_type estructurado, parser tolerante downstream).
-        # max_output_tokens=24576 da margen extra para el JSON (~5-6k tokens) sobre el
-        # reasoning de "medium" (~3-8k), reduciendo riesgo de truncamiento.
-        _common_kwargs = dict(
-            model=resolve_node_model(cfg, NODE_SCHEMA_DESIGNER, cfg.architect_model),
-            temperature=0.2,
-            max_retries=2,
-            max_output_tokens=24576,
-            api_key=os.getenv("GEMINI_API_KEY"),
-            rate_limiter=_rate_limiter,
-            response_mime_type="application/json",
-        )
-        primary = ChatGoogleGenerativeAI(thinking_level="medium", **_common_kwargs)
-        pro_low_fallback = ChatGoogleGenerativeAI(thinking_level="low", **_common_kwargs)
-        flash_fallback = ChatGoogleGenerativeAI(
-            model="gemini-3-flash-preview",
-            temperature=0.2,
-            max_retries=2,
-            max_output_tokens=24576,
-            api_key=os.getenv("GEMINI_API_KEY"),
-            rate_limiter=_rate_limiter,
-        )
-        candidates = [primary.with_fallbacks([pro_low_fallback, flash_fallback])]
+        if _is_openrouter_schema:
+            # OpenRouter (GLM): la cadena se construye SIN response_mime_type — el JSON se
+            # GARANTIZA con `.with_structured_output(DatasetSchema)` en el loop. Pasar rmt aquí
+            # entraría en conflicto con el tool de structured-output cuando `_build_llm` degrada un
+            # tier a Gemini (response_mime_type=json + function-calling simultáneos). Las dos tiers
+            # con el `model` resuelto pasan por `_build_llm` (OpenRouter, o Gemini si la build
+            # falla); la tier final es SIEMPRE Gemini Flash (la red cross-provider).
+            primary = _build_llm(
+                resolved_schema_model, gemini_fallback_model="gemini-3-flash-preview",
+                temperature=0.2, thinking_level="medium", max_output_tokens=24576,
+            )
+            pro_low_fallback = _build_llm(
+                resolved_schema_model, gemini_fallback_model="gemini-3-flash-preview",
+                temperature=0.2, thinking_level="low", max_output_tokens=24576,
+            )
+            flash_fallback = _build_gemini(
+                "gemini-3-flash-preview", temperature=0.2, max_output_tokens=24576,
+            )
+            candidates = [primary.with_fallbacks([pro_low_fallback, flash_fallback])]
+        else:
+            # Gemini (sin override por-nodo): build inline byte-idéntico (rmt + parse manual).
+            # Cadena de fallback resiliente alineada con el patrón del case_architect (M1):
+            #   1) Pro thinking_level="medium" — primario (mantiene thinking; subir a "high"
+            #      arriesga truncar el JSON estructurado de 14 columnas por consumo de
+            #      reasoning interno).
+            #   2) Pro thinking_level="low"    — fallback transitorio sin degradar de modelo.
+            #   3) Flash                       — red de seguridad final ante incidente global
+            #      del Pro (sin response_mime_type estructurado, parser tolerante downstream).
+            # max_output_tokens=24576 da margen extra para el JSON (~5-6k tokens) sobre el
+            # reasoning de "medium" (~3-8k), reduciendo riesgo de truncamiento.
+            _common_kwargs = dict(
+                model=resolved_schema_model,
+                temperature=0.2,
+                max_retries=2,
+                max_output_tokens=24576,
+                api_key=os.getenv("GEMINI_API_KEY"),
+                rate_limiter=_rate_limiter,
+                response_mime_type="application/json",
+            )
+            primary = ChatGoogleGenerativeAI(thinking_level="medium", **_common_kwargs)
+            pro_low_fallback = ChatGoogleGenerativeAI(thinking_level="low", **_common_kwargs)
+            flash_fallback = ChatGoogleGenerativeAI(
+                model="gemini-3-flash-preview",
+                temperature=0.2,
+                max_retries=2,
+                max_output_tokens=24576,
+                api_key=os.getenv("GEMINI_API_KEY"),
+                rate_limiter=_rate_limiter,
+            )
+            candidates = [primary.with_fallbacks([pro_low_fallback, flash_fallback])]
 
     for i, llm in enumerate(candidates):
         # Solo 1 candidato compuesto; el fallback chain (Pro-medium → Pro-low → Flash)
         # se resuelve internamente vía .with_fallbacks().
         model_label = "pro-medium-chain" if i == 0 else f"candidate-{i}"
         try:
-            response = llm.invoke(prompt)
-            raw = _extract_text(response)
-            if not raw or not raw.strip():
-                print(f"[schema_designer] {model_label}: respuesta vacía, probando siguiente")
-                continue
+            if _is_openrouter_schema:
+                # OpenRouter (GLM): structured output devuelve un DatasetSchema validado o LANZA
+                # (output malo/truncado → ValidationError → `.with_fallbacks` avanza a Gemini → si
+                # TODA la cadena falla, el `except` de abajo cae al schema determinista). Sin
+                # parse manual ni response_mime_type (ver construcción de la cadena arriba).
+                validated: DatasetSchema = llm.with_structured_output(DatasetSchema).invoke(prompt)
+            else:
+                response = llm.invoke(prompt)
+                raw = _extract_text(response)
+                if not raw or not raw.strip():
+                    print(f"[schema_designer] {model_label}: respuesta vacía, probando siguiente")
+                    continue
 
-            schema_dict = _extract_json_from_llm_response(raw)
+                schema_dict = _extract_json_from_llm_response(raw)
 
-            if not schema_dict:
-                snippet = raw[:200].replace('\n', ' ')
-                logger.warning(
-                    "[schema_designer] %s: no se pudo extraer JSON válido. "
-                    "Primeros 200 chars del raw: %s", model_label, snippet
-                )
-                continue
+                if not schema_dict:
+                    snippet = raw[:200].replace('\n', ' ')
+                    logger.warning(
+                        "[schema_designer] %s: no se pudo extraer JSON válido. "
+                        "Primeros 200 chars del raw: %s", model_label, snippet
+                    )
+                    continue
 
-            validated = DatasetSchema(**schema_dict)
+                validated = DatasetSchema(**schema_dict)
             schema_result = validated.model_dump()
             schema_result = _normalize_ml_ds_columns(schema_result, profile)
 
@@ -5200,6 +5285,13 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 node_out["dataset_schema_required"] = updated_contract
             return node_out
         except (ValidationError, Exception) as e:
+            # OpenRouter sin créditos: el 402 solo llega aquí si la cadena Gemini también falló
+            # (el fallback normalmente lo rescata). Aviso explícito para distinguirlo del genérico.
+            if getattr(e, "status_code", None) == 402:
+                logger.warning(
+                    "[schema_designer] OpenRouter SIN CRÉDITOS (402) — degradado a Gemini "
+                    "también falló; recargar saldo. Cayendo al schema determinista."
+                )
             logger.error("[schema_designer] %s ERROR: %s", model_label, e, exc_info=True)
 
     # Issue #477 — distinguish the deterministic clustering skip from a genuine all-attempts
@@ -7856,35 +7948,15 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
             )
             tag = "m3_experiment_engineer"
             m3_mode = "experiment"
-            # ml_ds: el m3_content alimenta directamente el prompt del notebook
-            # generator. Calidad de razonamiento aquí ⇒ menos ambigüedad en la
-            # sección 3 (hipótesis, criterio de descarte, sesgos). Por eso Pro-
-            # medium con cadena de fallback (Pro-low → Flash-low).
-            # Modelos vía Configuration para respetar overrides por env var
-            # (ARCHITECT_MODEL / WRITER_MODEL) — útil para rollouts y tests.
-            _m3_common = dict(
-                model=resolve_node_model(cfg, NODE_M3_CONTENT, cfg.architect_model),
+            # Modelo vía Configuration / NODE_MODEL_OVERRIDES (rollouts, canary, y el routing a
+            # GLM/OpenRouter — un id con "/" corre en OpenRouter con red de fallback cross-provider
+            # a Gemini). Cadena Pro-medium → Pro-low → Flash-low (ver _get_m3_content_llm). El
+            # razonamiento aquí alimenta el prompt del notebook generator (sección 3).
+            llm = _get_m3_content_llm(
+                resolve_node_model(cfg, NODE_M3_CONTENT, cfg.architect_model),
+                cfg.writer_model,
                 temperature=0.6,
-                max_retries=2,
-                max_output_tokens=16384,
-                api_key=os.getenv("GEMINI_API_KEY"),
-                rate_limiter=_rate_limiter,
             )
-            primary = ChatGoogleGenerativeAI(thinking_level="medium", **_m3_common)
-            pro_low = ChatGoogleGenerativeAI(thinking_level="low", **_m3_common)
-            # Flash fallback: thinking_level="low" explícito (no dependemos del
-            # default del SDK). "low" basta porque ya estamos en modo degradado
-            # por incidente global de Pro y queremos minimizar latencia extra.
-            flash_fb = ChatGoogleGenerativeAI(
-                model=cfg.writer_model,
-                temperature=0.6,
-                thinking_level="low",
-                max_retries=2,
-                max_output_tokens=16384,
-                api_key=os.getenv("GEMINI_API_KEY"),
-                rate_limiter=_rate_limiter,
-            )
-            llm = primary.with_fallbacks([pro_low, flash_fb])
         else:
             prompt = M3_AUDIT_PROMPT
             tag = "m3_audit"
@@ -7918,6 +7990,16 @@ def m3_content_generator(state: ADAMState, config: RunnableConfig) -> dict:
     except RuntimeError:
         raise
     except Exception as e:
+        # GLM/OpenRouter resilience rides ENTIRELY on the cross-provider `.with_fallbacks` chain
+        # (GLM → Gemini): a transient GLM error falls to Gemini WITHIN this node. We deliberately
+        # keep the original GRACEFUL DEGRADE here (no transient re-raise) so the behavior stays
+        # byte-identical to pre-GLM and honors the M3 graceful-degradation contract — M3 degrades,
+        # it never fails the case. 402 (no credits) gets a distinct observability warning.
+        if getattr(e, "status_code", None) == 402:
+            logger.warning(
+                "[m3_content_generator] OpenRouter SIN CRÉDITOS (402) — degradado a Gemini falló; "
+                "recargar saldo"
+            )
         logger.error("[m3_content_generator] ERROR: %s", e, exc_info=True)
         return {"m3_content": "[M3_NOT_EXECUTED]", "m3_mode": "audit"}
 
@@ -8075,7 +8157,11 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """
     try:
         cfg = Configuration.from_runnable_config(config)
-        llm = _get_writer_llm(cfg.writer_model, temperature=0.5, thinking_level="low")
+        # NODE_M3_QUESTIONS override → puede enrutar este nodo a GLM/OpenRouter (id con "/").
+        # Default = writer_model (Gemini Flash) → byte-idéntico al comportamiento previo. El
+        # primary de _get_writer_llm pasa por _build_llm, así que el id con "/" corre en OpenRouter.
+        m3q_model = resolve_node_model(cfg, NODE_M3_QUESTIONS, cfg.writer_model)
+        llm = _get_writer_llm(m3q_model, temperature=0.5, thinking_level="low")
 
         context = _build_base_context(state)
         context.update({
@@ -8150,6 +8236,15 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     except RuntimeError:
         raise
     except Exception as e:
+        # GLM/OpenRouter resilience rides ENTIRELY on the `_get_writer_llm` cross-provider chain
+        # (GLM → gemini-2.5-flash): a transient GLM error falls to Gemini WITHIN this node. We keep
+        # the original GRACEFUL DEGRADE to [] (no transient re-raise) so the behavior stays
+        # byte-identical to pre-GLM and never fails the case. 402 (no credits) → distinct warning.
+        if getattr(e, "status_code", None) == 402:
+            logger.warning(
+                "[m3_questions_generator] OpenRouter SIN CRÉDITOS (402) — degradado a Gemini falló; "
+                "recargar saldo"
+            )
         logger.error("[m3_questions_generator] ERROR: %s", e, exc_info=True)
         return {"m3_questions": [], "current_agent": "m3_questions_generator"}
 
