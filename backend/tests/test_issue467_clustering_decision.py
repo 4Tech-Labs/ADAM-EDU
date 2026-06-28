@@ -229,12 +229,13 @@ def test_validate_m4_scopes_to_recommendation_section():
 
 def _clustering_rows(target_k):
     from case_generator.graph import (
+        _MLDS_CLUSTERING_MAX_ROWS,
         _build_clustering_fallback_schema,
         _enforce_mlds_clustering_structure,
         _generate_dataset_from_schema,
     )
 
-    schema = _build_clustering_fallback_schema(200)
+    schema = _build_clustering_fallback_schema(_MLDS_CLUSTERING_MAX_ROWS)
     rows = _generate_dataset_from_schema(schema, profile="ml_ds")
     out, labels = _enforce_mlds_clustering_structure(
         list(rows),
@@ -282,12 +283,13 @@ def test_target_k_none_reproduces_hash_chosen_k():
 
     from case_generator.graph import (
         _CLUSTERING_K_CHOICES,
+        _MLDS_CLUSTERING_MAX_ROWS,
         _build_clustering_fallback_schema,
         _enforce_mlds_clustering_structure,
         _generate_dataset_from_schema,
     )
 
-    schema = _build_clustering_fallback_schema(200)
+    schema = _build_clustering_fallback_schema(_MLDS_CLUSTERING_MAX_ROWS)
     rows = _generate_dataset_from_schema(schema, profile="ml_ds")
     base_seed = int(hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(), 16) % (2**31)
     expected_k = _CLUSTERING_K_CHOICES[base_seed % len(_CLUSTERING_K_CHOICES)]
