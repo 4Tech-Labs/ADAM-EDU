@@ -211,6 +211,15 @@ class NodeEvalInputs:
     # Computed via ``check_clustering_entity_index``; gate-protects against a data-layer regression that
     # reverts to the monthly period index. RED control: rows with a monthly `period` column fail.
     clustering_entity_index_ok: bool = True
+    # ml_ds + clustering data_gap_warnings NAME no supervised target (Issue #482): #466 strips the
+    # leaked target COLUMN from the CSV, but the architect coherence check and the schema validator
+    # still emit a warning naming the orphan target, which leaks into M2 EDA / M3-content (the student
+    # reads a column absent from the CSV). ``_filter_clustering_target_warnings`` drops both at the
+    # schema_designer choke point. True (n/a) for non-clustering jobs / empty warnings. Computed via
+    # ``check_clustering_no_target_warnings``; gate-protects against a regression that re-introduces a
+    # target-naming warning. RED control: a warnings list with a ``target '…'`` or
+    # ``target_semantic_mismatch`` entry fails.
+    clustering_no_target_warning_ok: bool = True
 
 
 @dataclass
@@ -313,6 +322,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "clustering data failure: dataset is time-indexed (monthly `period`) instead of "
             "entity-level (`user_id`) — analysis unit contradicts the segmentation narrative"
+        )
+    if not r.clustering_no_target_warning_ok:
+        reasons.append(
+            "clustering narrative failure: a data_gap_warning names a stripped supervised target, "
+            "leaking a column absent from the CSV into M2 EDA / M3-content"
         )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
@@ -807,6 +821,28 @@ def check_clustering_no_target(rows: list | None) -> bool:
         if non_null and non_null <= {0, 1}:
             return False
     return True
+
+
+def check_clustering_no_target_warnings(data_gap_warnings: list | None) -> bool:
+    """Pure oracle (Issue #482): do the ml_ds+clustering data_gap_warnings NAME no supervised target?
+
+    #466 strips the leaked target COLUMN from the CSV, but two upstream emitters still produce a
+    warning that names the orphan ``contract.target_column.name`` — the architect coherence check
+    (``target_semantic_mismatch: … target_column.name='…'``) and the schema validator
+    (``target '<name>' … no fue producido…``). Both reach M2 EDA and, via ``contexto_m2``, M3-content,
+    so the student reads a column absent from the downloaded CSV. ``_filter_clustering_target_warnings``
+    drops both at the schema_designer choke point. True iff NO warning starts with ``target '``
+    (validator) nor ``target_semantic_mismatch`` (architect). Feature-missing / leakage warnings
+    (``feature '…'``) are NOT target warnings → never flagged. Pure, deterministic, no LLM/network/API
+    key. Empty/absent → True (n/a). RED control: a list with either target-warning shape fails.
+    """
+    if not data_gap_warnings:
+        return True
+    return not any(
+        isinstance(w, str)
+        and (w.lstrip().startswith("target '") or w.lstrip().startswith("target_semantic_mismatch"))
+        for w in data_gap_warnings
+    )
 
 
 def check_clustering_eda_no_target_charts(charts: list | None) -> bool:
