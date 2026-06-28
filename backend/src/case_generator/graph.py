@@ -2849,8 +2849,9 @@ def _eda_clustering_python_path(
 ) -> dict | None:
     """Issue #466 — builder determinista DATA-ONLY de los charts EDA de clustering (ml_ds).
 
-    Construye 3 charts PRE-MODELO (distribución/escala → motiva estandarizar, correlación,
-    dispersión 2D SIN etiquetas de cluster) y pide al LLM solo `description`/`notes`. Devuelve el
+    Construye 4 charts PRE-MODELO (distribución/escala cruda + distribución estandarizada z-score
+    → motivan estandarizar [#487], correlación, dispersión 2D SIN etiquetas de cluster) y pide al
+    LLM solo `description`/`notes`. Devuelve el
     update del nodo o ``None`` en fallo. Profile-agnostic (reutilizable por #317). A diferencia del
     path ml_ds+clasificación, el caller NO hace fallback al LLM-JSON (mirror business 5A): ``None``
     → panel vacío, para no reintroducir el chart supervisado que este builder retira.
@@ -2935,7 +2936,7 @@ def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
             )
             return {"doc2_eda_charts": [], "current_agent": "eda_chart_generator"}
 
-    # Issue #466 — ml_ds + clustering: builder DATA-ONLY determinista (3 charts pre-modelo, sin
+    # Issue #466 — ml_ds + clustering: builder DATA-ONLY determinista (4 charts pre-modelo [#487], sin
     # target ni etiquetas de cluster). Mirror business: None → panel vacío, SIN fallback LLM-JSON
     # (para no reintroducir el chart supervisado "feature vs objetivo"). Kill-switch off → cae al
     # path LLM-JSON byte-idéntico. Builder profile-agnostic; business+clustering es #317.
