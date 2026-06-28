@@ -4950,6 +4950,49 @@ def _enforce_mlds_clustering_no_target(
     return new_schema
 
 
+def _filter_clustering_target_warnings(
+    warnings: list[str],
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+) -> list[str]:
+    """Issue #482 — drop data_gap_warnings que NOMBRAN un target supervisado en ml_ds+clustering.
+
+    Clustering es no supervisado: ``_enforce_mlds_clustering_no_target`` (#466) stripea la COLUMNA
+    target del CSV, pero DOS emisores upstream aún producen un warning que nombra ese target huérfano
+    (``contract.target_column.name``, p. ej. ``dummy_target_ignored_for_clustering``):
+      (1) el architect ``_validate_target_semantic_coherence`` (sembrado en ``data_gap_warnings`` en
+          ``case_architect``; ungated por familia — dispara cuando el TÍTULO trae un keyword de
+          ``_TITLE_TO_TARGET_TOKENS``), y
+      (2) el validador ``_validate_schema_against_contract`` (``"target '<name>' … no fue
+          producido…"``; determinista en todo caso stripeado).
+    Ambos terminan en el ``warnings_payload`` de ``schema_designer`` y de ahí a M2 EDA
+    (``{data_gap_warnings_block}``) y, vía ``contexto_m2``, a M3-content → el estudiante lee una
+    columna ausente del CSV (#482). Este filtro corre en el ÚNICO choke point de ``schema_designer``,
+    DESPUÉS de fusionar todos los warnings, así que cubre ambos emisores (y cualquier futuro).
+
+    Prefix-based sobre las DOS únicas formas que nombran el target en todo el código: ``"target '"``
+    (validador) y ``_TARGET_SEMANTIC_MISMATCH_TOKEN`` (architect). Los warnings de feature-missing
+    (``"feature '…'"``) y de leakage se PRESERVAN → cero falsos positivos (clustering nunca tiene un
+    target legítimo, así que cualquier warning de target es espurio). Fuera de ml_ds+clustering /
+    kill-switch off → devuelve el MISMO objeto (byte-idéntico). Reusa el switch ``MLDS_CLUSTERING_NO_TARGET``.
+    """
+    if not enabled or profile != "ml_ds" or primary_family != "clustering":
+        return warnings
+    return [
+        w
+        for w in warnings
+        if not (
+            isinstance(w, str)
+            and (
+                w.lstrip().startswith("target '")
+                or w.lstrip().startswith(_TARGET_SEMANTIC_MISMATCH_TOKEN)
+            )
+        )
+    ]
+
+
 def _contract_with_enforced_target(contract: dict | None, target_name: str | None) -> dict | None:
     """Reescribe ``target_column`` del contrato al target binario que el spine garantizó.
 
@@ -5188,6 +5231,13 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 warnings_payload.extend(leakage)
             if biz_notes:
                 warnings_payload.extend(biz_notes)
+            # Issue #482 — quita los warnings que nombran el target stripeado de clustering (architect
+            # coherence + validador) antes de persistir; M2 EDA y M3-content dejan de citar una columna
+            # ausente del CSV. No-op byte-idéntico fuera de ml_ds+clustering / switch off.
+            warnings_payload = _filter_clustering_target_warnings(
+                warnings_payload, profile=profile, primary_family=primary_family,
+                enabled=settings.mlds_clustering_no_target,
+            )
             node_out: dict[str, Any] = {
                 "dataset_schema": schema_result,
                 "data_gap_warnings": warnings_payload,
@@ -5243,6 +5293,12 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         warnings_payload.extend(leakage)
     if biz_notes:
         warnings_payload.extend(biz_notes)
+    # Issue #482 — mismo filtro de warnings de target stripeado en el fallback. Clustering corre ESTE
+    # path (determinista por #477), así que este es el filtro que actúa en producción.
+    warnings_payload = _filter_clustering_target_warnings(
+        warnings_payload, profile=profile, primary_family=primary_family,
+        enabled=settings.mlds_clustering_no_target,
+    )
     node_out = {
         "dataset_schema": fallback_schema,
         "data_gap_warnings": warnings_payload,
