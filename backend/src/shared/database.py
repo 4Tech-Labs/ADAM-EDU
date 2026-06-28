@@ -156,6 +156,20 @@ class Settings(BaseSettings):
     # byte-identically (generic M4 prompts + no silhouette check; instant env-only revert, no redeploy).
     # The gate is profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
     mlds_clustering_m4_value_frame: bool = True
+    # 2 ADDITIONAL "output-grounded" M3 questions (Issue #489). When true (default), an
+    # ml_ds + clustering case whose M3 notebook EXECUTED (output_depth=="visual_plus_notebook",
+    # not degraded, a finite `m3_metrics_summary["silhouette"]`) runs the dedicated POST-executor
+    # node `m3_notebook_questions_generator` (on GLM `z-ai/glm-5.2`, Gemini fallback) to add 2
+    # questions (numero 4/5) that make the student interpret THEIR real notebook output: Q4 reads
+    # the real silhouette / justifies k; Q5 profiles a segment → business action tied to the M1
+    # dilemma. `solucion_esperada` is anchored to the REAL executed metrics (deterministic notebook),
+    # and a silhouette grounding guard reprompts-once-then-omits a fabricated value. The 3 existing
+    # M3 questions + their #415 guard are untouched (separate node + separate `m3_notebook_questions`
+    # state key, merged into `m3Questions` only at the canonical adapter). Set
+    # M3_NOTEBOOK_QUESTIONS=false to skip the node → byte-identical to the 3 questions (instant
+    # env-only revert, no redeploy). Gate: profile=="ml_ds" AND family=="clustering" AND executed
+    # notebook; every other cohort / depth is unaffected (the node noops).
+    m3_notebook_questions: bool = True
     # De-supervise the ml_ds + clustering DATA + notebook prose (Issue #466). When true (default),
     # (a) `_enforce_mlds_clustering_no_target` deterministically strips any leaked supervised target
     # column (e.g. an LLM-hallucinated `dummy_target`, or a contract `target_column` injected by the

@@ -192,6 +192,13 @@ class NodeEvalInputs:
     # ``check_m4_clustering_silhouette_grounded``. RED control: a narrative citing a divergent silhouette
     # fails. gate-protects a future m4_content_generator Pro->Flash downgrade that starts fabricating.
     m4_clustering_silhouette_ok: bool = True
+    # ml_ds + clustering M3 output-grounded questions cite ONLY the real executed silhouette (Issue
+    # #489): the 2 extra notebook questions (numero 4/5) make the student interpret THEIR run, so a
+    # cited silhouette that diverges from the REAL `m3_metrics_summary["silhouette"]` is a fabrication.
+    # True (n/a) when the real silhouette is absent / no extra questions. Computed via
+    # ``check_m3_notebook_questions_grounded``. RED control: a question whose solucion cites a divergent
+    # silhouette fails. Gate-protects a future m3_notebook_questions_generator model downgrade.
+    m3_notebook_questions_grounded_ok: bool = True
     # ml_ds + clustering dataset carries NO supervised target column (Issue #466, Frente 1): clustering
     # is unsupervised, so a leaked `dummy_target` (LLM-hallucinated or contract-injected) must be
     # stripped before data generation. True (n/a) for non-clustering jobs / empty rows. Computed via
@@ -315,6 +322,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "M4 clustering narrative coherence failure: cited silhouette diverges from the real "
             "executed value (fabricated threshold)"
+        )
+    if not r.m3_notebook_questions_grounded_ok:
+        reasons.append(
+            "M3 notebook-question coherence failure: an output-grounded question cites a silhouette "
+            "that diverges from the real executed value (fabricated)"
         )
     if not r.clustering_no_target_ok:
         reasons.append(
@@ -537,6 +549,27 @@ def check_m4_clustering_silhouette_grounded(
     from case_generator.clustering_decision import detect_unanchored_silhouette
 
     return not detect_unanchored_silhouette(narrative, real_silhouette)
+
+
+def check_m3_notebook_questions_grounded(
+    notebook_questions: list[dict] | None, real_silhouette: float | None
+) -> bool:
+    """Pure oracle (Issue #489): do the M3 output-grounded questions cite ONLY the real silhouette?
+
+    Reuses the production detector ``clustering_decision.detect_unanchored_silhouette`` (single source
+    of truth) over each extra question's ``solucion_esperada`` + ``enunciado``: a cited silhouette
+    diverging from the real executed ``m3_metrics_summary["silhouette"]`` is a fabrication. True (n/a)
+    when ``real_silhouette`` is absent (no anchor) or there are no extra questions. gate-protects a
+    future ``m3_notebook_questions_generator`` model downgrade that starts fabricating.
+    """
+    from case_generator.clustering_decision import detect_unanchored_silhouette
+
+    for q in notebook_questions or []:
+        if detect_unanchored_silhouette(q.get("solucion_esperada", ""), real_silhouette):
+            return False
+        if detect_unanchored_silhouette(q.get("enunciado", ""), real_silhouette):
+            return False
+    return True
 
 
 def check_m4_charts_no_fabrication(charts: list[dict]) -> bool:

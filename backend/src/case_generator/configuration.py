@@ -31,6 +31,12 @@ NODE_M3_NOTEBOOK_ESCALATION = "m3_notebook_generator_escalation"
 # writer_model); added so the node can be routed to an alternate provider/model
 # (e.g. GLM via OpenRouter) the same way the M5 nodes are.
 NODE_M3_QUESTIONS = "m3_questions_generator"
+# M3 notebook-output questions generator (Issue #489). Dedicated POST-executor node that
+# generates 2 ADDITIONAL "output-grounded" M3 questions (the student interprets THEIR real
+# notebook output: silhouette + cluster profiles) for ml_ds + clustering. Unlike the other
+# GLM nodes (#486) it DEFAULTS to GLM (`z-ai/glm-5.2`) at its call site — so it runs on GLM
+# out-of-the-box; Gemini stays as the resilience fallback inside `_get_writer_llm`.
+NODE_M3_NOTEBOOK_QUESTIONS = "m3_notebook_questions_generator"
 NODE_M4_CONTENT = "m4_content_generator"
 NODE_M5_CONTENT = "m5_content_generator"
 NODE_M5_QUESTIONS = "m5_questions_generator"
