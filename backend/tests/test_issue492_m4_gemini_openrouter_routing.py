@@ -62,6 +62,10 @@ def test_m4_slash_id_routes_primary_to_openrouter(monkeypatch: pytest.MonkeyPatc
     assert fallbacks[0].model == _M4_OPENROUTER_MODEL
     assert fallbacks[1].model == _M4_GEMINI_FALLBACK
     assert fallbacks[2].model == "gemini-2.5-flash"
+    # The Gemini net keeps the m4 token budget on the slash-id path too (regression
+    # guard: a future change that drops the net's budget would be caught here).
+    assert fallbacks[1].max_output_tokens == 24576
+    assert fallbacks[2].max_output_tokens == 24576
 
 
 # ── parity: non-slash id is byte-identical to today (restates the lock) ──
