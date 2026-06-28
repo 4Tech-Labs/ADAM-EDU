@@ -553,10 +553,21 @@ def test_graph_topology_places_executor_after_generator_without_standard_retry()
     source = inspect.getsource(graph_module)
 
     assert 'm3_builder.add_edge("m3_notebook_generator", "m3_notebook_executor")' in source
-    assert 'm3_builder.add_edge("m3_notebook_executor", "m3_sync")' in source
+    # Issue #489 — the executor no longer feeds m3_sync directly; the dedicated post-executor
+    # node m3_notebook_questions_generator sits between them.
+    assert (
+        'm3_builder.add_edge("m3_notebook_executor", "m3_notebook_questions_generator")' in source
+    )
+    assert (
+        'm3_builder.add_edge("m3_notebook_questions_generator", "m3_sync")' in source
+    )
+    assert 'm3_builder.add_edge("m3_notebook_executor", "m3_sync")' not in source
     assert 'm3_builder.add_edge("m3_notebook_generator", "m3_sync")' not in source
 
+    # The executor node itself still carries NO standard_retry (its reprompt-then-degrade loop is
+    # internal). Slice only the executor's add_node block — stop at the next add_node so the new
+    # m3_notebook_questions_generator's retry_policy is not captured here.
     node_start = source.index('m3_builder.add_node(\n    "m3_notebook_executor"')
-    node_end = source.index('m3_builder.add_node("m3_sync", m3_sync)', node_start)
+    node_end = source.index('m3_builder.add_node(\n    "m3_notebook_questions_generator"', node_start)
     executor_node_block = source[node_start:node_end]
     assert "retry_policy=standard_retry" not in executor_node_block

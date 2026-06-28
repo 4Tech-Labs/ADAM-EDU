@@ -10,5 +10,11 @@ happens at the ``m3_content_generator`` node via ``_effective_m3_content_prompts
 from case_generator.prompts.clustering.M3_clustering.content import (
     M3_CONTENT_PROMPT_CLUSTERING,
 )
+from case_generator.prompts.clustering.M3_clustering.notebook_questions import (
+    M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING,
+)
 
-__all__ = ["M3_CONTENT_PROMPT_CLUSTERING"]
+__all__ = [
+    "M3_CONTENT_PROMPT_CLUSTERING",
+    "M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING",
+]

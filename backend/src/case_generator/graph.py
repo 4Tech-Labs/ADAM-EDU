@@ -90,6 +90,7 @@ from case_generator.configuration import (
     NODE_M3_NOTEBOOK,
     NODE_M3_NOTEBOOK_ESCALATION,
     NODE_M3_QUESTIONS,
+    NODE_M3_NOTEBOOK_QUESTIONS,
     NODE_M4_CONTENT,
     NODE_M5_CONTENT,
     NODE_M5_QUESTIONS,
@@ -143,6 +144,7 @@ from case_generator.prompts import (
     M3_CONTENT_PROMPT_BY_FAMILY,
     M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
     M3_CONTENT_PROMPT_CLUSTERING,
+    M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING,
     M4_CHART_PROMPT_CLUSTERING,
     M4_CONTENT_PROMPT_CLUSTERING,
     M3_CLASSIFICATION_QUESTIONS_BY_VARIANT,
@@ -244,6 +246,7 @@ from case_generator.m4_grounding import (
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
     _bounded_diagnostic,
+    _finite_metric,
     build_target_identity_warning,
     execute_m3_notebook,
     format_execution_failure_for_prompt,
@@ -8356,6 +8359,208 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Issue #489 — M3 output-grounded notebook questions (ml_ds + clustering, POST-executor)
+# ══════════════════════════════════════════════════════════════════════════════
+def _coerce_notebook_questions(preguntas: list[dict]) -> list[dict]:
+    """Take exactly the first 2 well-formed questions and force ``numero`` 4/5 (Issue #489).
+
+    Deterministic guarantee of collision-free grading keys ``M3-Q4`` / ``M3-Q5`` regardless of
+    what the LLM returned. Returns 0, 1, or 2 dicts (the caller omits the block when != 2).
+    """
+    out: list[dict] = []
+    for q in preguntas[:2]:
+        if not isinstance(q, dict):
+            continue
+        coerced = dict(q)
+        coerced["numero"] = 4 + len(out)
+        out.append(coerced)
+    return out
+
+
+def _build_m3_notebook_questions_context(
+    state: ADAMState, *, real_silhouette: float, metrics: dict
+) -> dict[str, Any]:
+    """Dedicated, KeyError-safe context for ``M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING`` (Issue #489).
+
+    INJECTS the REAL executed metrics so the LLM reproduces the true silhouette (the grounding
+    guard then enforces it). Q5 is qualitative (B4-b): per-cluster means are NOT in
+    ``m3_metrics_summary``, so it anchors the real n_clusters / cluster_sizes / target_k and the
+    segmentation feature names; the student reads the per-feature domination from their own table.
+    Pure read of state with fallbacks — never raises on missing fields.
+    """
+    base = _build_base_context(state)
+    decision = state.get("clustering_decision") or {}
+    n_clusters = _finite_metric(metrics, "n_clusters")
+    sizes = metrics.get("cluster_sizes")
+    target_k = decision.get("target_k") if isinstance(decision, dict) else None
+    schema = state.get("dataset_schema", {}) or {}
+    feature_names = [
+        str(col.get("name", ""))
+        for col in _clustering_scalable_feature_columns(schema)
+        if col.get("name")
+    ]
+    n_clusters_int = int(n_clusters) if n_clusters is not None else None
+    sizes_display = sizes if isinstance(sizes, list) else "—"
+    return {
+        "output_language": base.get("output_language", "es"),
+        "nombre_empresa": base.get("nombre_empresa", "la empresa del caso"),
+        "dilema": base.get("dilema_hypotheses", ""),
+        "pregunta_eje": base.get("pregunta_eje", ""),
+        "silhouette": f"{real_silhouette:.3f}",
+        "n_clusters": n_clusters_int if n_clusters_int is not None
+        else (len(sizes) if isinstance(sizes, list) else "—"),
+        "cluster_sizes": sizes_display,
+        "target_k": int(target_k) if isinstance(target_k, int)
+        else (n_clusters_int if n_clusters_int is not None else "—"),
+        "feature_names": ", ".join(feature_names) if feature_names
+        else "las features de comportamiento del dataset",
+        "case_id": base.get("case_id", state.get("case_id", "no-id")),
+    }
+
+
+def _apply_m3_notebook_questions_grounding(
+    *,
+    llm: Any,
+    prompt: str,
+    preguntas: list[dict],
+    real_silhouette: float,
+    case_id: Any,
+) -> list[dict]:
+    """Reprompt-once-then-OMIT the silhouette grounding of the 2 notebook questions (Issue #489).
+
+    Reuses #469 ``detect_unanchored_silhouette`` over each question's ``solucion_esperada`` +
+    ``enunciado``: a cited silhouette that diverges from the REAL executed value is a fabrication.
+    On a violation it reprompts ONCE (concatenated correction, never re-``.format``); if the
+    corrected set still fabricates (or is not exactly 2) the 2 questions are OMITTED (``[]``) — the
+    case ships the 3 conceptual questions, never a fabricated value, never a job failure.
+    Best-effort: ANY throw degrades to ``[]``. ``prompt`` is the ALREADY-formatted string.
+    """
+    log_extra = {"node": "m3_notebook_questions_generator", "case_id": case_id}
+
+    def _violations(qs: list[dict]) -> list[str]:
+        out: list[str] = []
+        for q in qs:
+            out.extend(detect_unanchored_silhouette(q.get("solucion_esperada", ""), real_silhouette))
+            out.extend(detect_unanchored_silhouette(q.get("enunciado", ""), real_silhouette))
+        return out
+
+    try:
+        if not _violations(preguntas):
+            return preguntas
+        logger.info(
+            "[m3_notebook_questions] reprompt grounding silhouette disparado", extra=log_extra
+        )
+        reprompt = prompt + (
+            "\n\n# CORRECCIÓN OBLIGATORIA — SILHOUETTE\n"
+            f"El ÚNICO valor de silhouette permitido es {real_silhouette:.3f} (el real de la corrida). "
+            "Regenera EXACTAMENTE 2 preguntas (numero 4 y 5) con el MISMO schema; en `enunciado` y "
+            f"`solucion_esperada` cita SOLO {real_silhouette:.3f} o ningún número de silhouette. NUNCA "
+            "inventes otro valor ni fijes un umbral arbitrario."
+        )
+        try:
+            resultado: GeneradorPreguntasOutput = llm.with_structured_output(
+                GeneradorPreguntasOutput
+            ).invoke(reprompt)
+            corrected = _coerce_notebook_questions([p.model_dump() for p in resultado.preguntas])
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[m3_notebook_questions] reprompt inválido — omite las 2: %s", exc, extra=log_extra
+            )
+            return []
+        if len(corrected) != 2 or _violations(corrected):
+            logger.warning(
+                "[m3_notebook_questions] grounding no resuelto tras reprompt — omite las 2",
+                extra={**log_extra, "degraded": True},
+            )
+            return []
+        logger.info(
+            "[m3_notebook_questions] grounding silhouette corregido por reprompt",
+            extra={**log_extra, "degraded": False},
+        )
+        return corrected
+    except Exception as exc:  # best-effort — el guard NUNCA falla el job
+        logger.warning(
+            "[m3_notebook_questions] guard de grounding falló (best-effort) — omite: %s",
+            exc,
+            extra=log_extra,
+        )
+        return []
+
+
+def m3_notebook_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
+    """Genera 2 preguntas M3 ADICIONALES "output-grounded" (Issue #489), POST-executor.
+
+    Gate (todo AND; fuera = noop limpio ``{}`` → 0 preguntas extra, el job NUNCA falla):
+    kill-switch ``m3_notebook_questions`` + ``_is_ml_ds_clustering`` + depth
+    ``visual_plus_notebook`` + notebook no degradado + silhouette finito en ``m3_metrics_summary``.
+    El estudiante interpreta SU resultado real (silhouette + perfiles del notebook DETERMINISTA).
+    Corre sobre GLM (``z-ai/glm-5.2`` por DEFAULT; Gemini como fallback de resiliencia en
+    ``_get_writer_llm``). Escribe la clave SEPARADA ``m3_notebook_questions`` (1 escritor → sin
+    fan-in hazard con las 3 de ``m3_questions_generator``); se mergean en ``m3Questions`` solo en
+    el adapter canónico. Cualquier fallo de generación → omite (``[]``), nunca falla el job.
+    """
+    if not settings.m3_notebook_questions:
+        return {}
+    if state.get("output_depth") != "visual_plus_notebook":
+        return {}
+    if state.get("m3_notebook_degraded"):
+        return {}
+    if not _is_ml_ds_clustering(state):
+        return {}
+    metrics = state.get("m3_metrics_summary")
+    if not isinstance(metrics, dict):
+        return {}
+    real_silhouette = _finite_metric(metrics, "silhouette")
+    if real_silhouette is None:
+        return {}
+
+    try:
+        cfg = Configuration.from_runnable_config(config)
+        # DEFAULTEA a GLM (a diferencia de los otros nodos GLM de #486, que defaultean Gemini +
+        # override): corre en GLM out-of-the-box. _get_writer_llm enruta el id con "/" a OpenRouter
+        # y conserva Gemini como fallback de resiliencia dentro de _build_llm.
+        model = resolve_node_model(cfg, NODE_M3_NOTEBOOK_QUESTIONS, "z-ai/glm-5.2")
+        llm = _get_writer_llm(model, temperature=0.5, thinking_level="low")
+        context = _build_m3_notebook_questions_context(
+            state, real_silhouette=real_silhouette, metrics=metrics
+        )
+        formatted = M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING.format(**context)
+        resultado: GeneradorPreguntasOutput = llm.with_structured_output(
+            GeneradorPreguntasOutput
+        ).invoke(formatted)
+        preguntas = _coerce_notebook_questions([p.model_dump() for p in resultado.preguntas])
+        if len(preguntas) != 2:
+            logger.warning(
+                "[m3_notebook_questions_generator] LLM devolvió %d preguntas (≠2) — omite",
+                len(preguntas),
+                extra={"case_id": state.get("case_id")},
+            )
+            return {"m3_notebook_questions": [], "current_agent": "m3_notebook_questions_generator"}
+        preguntas = _apply_m3_notebook_questions_grounding(
+            llm=llm,
+            prompt=formatted,
+            preguntas=preguntas,
+            real_silhouette=real_silhouette,
+            case_id=state.get("case_id"),
+        )
+        print(f"[m3_notebook_questions_generator] {len(preguntas)} preguntas output-grounded")
+        return {"m3_notebook_questions": preguntas, "current_agent": "m3_notebook_questions_generator"}
+    except RuntimeError:
+        raise
+    except Exception as e:
+        # Resiliencia GLM/OpenRouter en la cadena de fallbacks de _get_writer_llm (GLM → Gemini):
+        # un error transitorio cae a Gemini DENTRO del nodo. Degrada a [] (nunca falla el job; las 3
+        # preguntas conceptuales quedan intactas). 402 (sin créditos) → warning distinto para ops.
+        if getattr(e, "status_code", None) == 402:
+            logger.warning(
+                "[m3_notebook_questions_generator] OpenRouter SIN CRÉDITOS (402) — degradado a "
+                "Gemini falló; recargar saldo"
+            )
+        logger.error("[m3_notebook_questions_generator] ERROR: %s", e, exc_info=True)
+        return {"m3_notebook_questions": [], "current_agent": "m3_notebook_questions_generator"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Issue #233 — Post-LLM family-consistency validator
 # Catches the rare case where the specialized prompt strays into another
 # family's API surface (e.g. a clustering notebook emitting `train_test_split`
@@ -10019,6 +10224,7 @@ _RESUME_NODE_REQUIRED_OUTPUTS: dict[str, tuple[str, ...]] = {
     "eda_questions_generator": ("doc2_preguntas_eda",),
     "m3_content_generator": ("m3_content", "m3_mode"),
     "m3_questions_generator": ("m3_questions",),
+    "m3_notebook_questions_generator": ("m3_notebook_questions",),
     "m3_notebook_generator": ("m3_notebook_code",),
     "m3_notebook_executor": ("m3_metrics_summary",),
     "m4_content_generator": ("m4_content",),
@@ -10179,6 +10385,15 @@ m3_builder.add_node(
     "m3_notebook_executor",
     _with_resume_skip("m3_notebook_executor", m3_notebook_executor),
 )
+# Issue #489 — POST-executor node: 2 output-grounded questions (ml_ds + clustering). Noop for
+# every other cohort/depth. Sits on the notebook branch BETWEEN executor and the m3_sync barrier
+# so it reliably reads the executor's `m3_metrics_summary`; the parallel m3_questions_generator
+# branch (the 3 conceptual questions) is untouched.
+m3_builder.add_node(
+    "m3_notebook_questions_generator",
+    _with_resume_skip("m3_notebook_questions_generator", m3_notebook_questions_generator),
+    retry_policy=standard_retry,
+)
 m3_builder.add_node("m3_sync", m3_sync)
 
 m3_builder.add_edge(START, "m3_content_generator")
@@ -10186,7 +10401,8 @@ m3_builder.add_edge("m3_content_generator", "m3_questions_generator")
 m3_builder.add_edge("m3_content_generator", "m3_notebook_generator")
 m3_builder.add_edge("m3_questions_generator", "m3_sync")
 m3_builder.add_edge("m3_notebook_generator", "m3_notebook_executor")
-m3_builder.add_edge("m3_notebook_executor", "m3_sync")
+m3_builder.add_edge("m3_notebook_executor", "m3_notebook_questions_generator")
+m3_builder.add_edge("m3_notebook_questions_generator", "m3_sync")
 m3_builder.add_edge("m3_sync", END)
 
 m3_graph = m3_builder.compile()

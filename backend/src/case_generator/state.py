@@ -161,6 +161,12 @@ class ADAMState(CanonicalInputState):
     m3_mode: NotRequired[str]            # "audit" (business) | "experiment" (ml_ds)
     m3_charts: NotRequired[list[dict]]   # Solo ml_ds — gráficos de validación algorítmica (pendiente implementación)
     m3_questions: NotRequired[list[dict]]
+    # Issue #489 — 2 preguntas M3 ADICIONALES "output-grounded" (ml_ds + clustering): el
+    # estudiante interpreta SU resultado real del notebook (silhouette + perfiles). Las escribe
+    # SOLO `m3_notebook_questions_generator` (post-executor) → 1 escritor, reducer overwrite, sin
+    # fan-in hazard con `m3_questions` (rama paralela). Se MERGEAN en `m3Questions` solo en el
+    # adapter canónico; clave interna (no allowlisted → no se filtra al estudiante).
+    m3_notebook_questions: NotRequired[list[dict]]
     m3_notebook_code: NotRequired[str]   # Jupytext Percent — Experiment Engineer (ml_ds + visual_plus_notebook ÚNICAMENTE)
     # Graceful degradation: the notebook could not be generated/executed after all
     # retries, so the case ships with the other 5 modules + a placeholder. The job
