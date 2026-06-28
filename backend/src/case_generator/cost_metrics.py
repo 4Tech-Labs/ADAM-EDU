@@ -84,6 +84,11 @@ _MINIMAX_M3_RATES = LLMCostRates(input_per_1m=0.30, output_per_1m=1.20, cached_i
 # valor representativo APROXIMADO (los token counts son exactos; solo la escala USD depende de esto).
 # cached_input==input (OpenRouter no expone cache-read estilo Gemini).
 _GLM_RATES = LLMCostRates(input_per_1m=1.0, output_per_1m=4.0, cached_input_per_1m=1.0)
+# OpenRouter google/gemini-3.1-pro-preview ($2/M in · $12/M out) — Gemini Pro vía OpenRouter es MÁS caro
+# que la API directa ($1.25/$10). cached_input==input (conservador; OpenRouter aplica descuentos de cache
+# en el routing → sobre-reporta levemente el costo de cache, pero los token counts son exactos). Confirmar
+# contra el pricing vigente de OpenRouter.
+_OPENROUTER_GEMINI_PRO_RATES = LLMCostRates(input_per_1m=2.0, output_per_1m=12.0, cached_input_per_1m=2.0)
 
 PRICE_MAP: dict[str, LLMCostRates] = {
     "gemini-3.1-pro-preview": _PRO_RATES,
@@ -92,6 +97,7 @@ PRICE_MAP: dict[str, LLMCostRates] = {
     "gemini-2.5-flash": _FLASH_RATES,
     "minimax/minimax-m3": _MINIMAX_M3_RATES,
     "z-ai/glm-5.2": _GLM_RATES,
+    "google/gemini-3.1-pro-preview": _OPENROUTER_GEMINI_PRO_RATES,
 }
 
 _UNKNOWN_MODELS_WARNED: set[str] = set()
@@ -115,6 +121,12 @@ def _rates_for_model(model_id: str) -> LLMCostRates:
         return _MINIMAX_M3_RATES
     if "glm" in lowered:
         return _GLM_RATES
+    # Gemini Pro vía OpenRouter ("google/gemini-3.1-pro-preview" y slugs versionados/sufijados como
+    # "...:vertex"/"...-20260101"). ANTES del brazo "pro" (que lo cobraría a la tarifa Gemini directa
+    # $1.25/$10). El prefijo "google/" lo distingue de los ids Gemini directos (sin prefijo de proveedor);
+    # exigir además "pro" deja que un futuro "google/gemini-3-flash" caiga correcto al brazo "flash".
+    if "google/" in lowered and "pro" in lowered:
+        return _OPENROUTER_GEMINI_PRO_RATES
     if "pro" in lowered:
         return _PRO_RATES
     if "flash" in lowered:
