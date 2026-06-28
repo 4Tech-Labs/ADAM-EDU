@@ -199,6 +199,12 @@ class NodeEvalInputs:
     # ``check_m3_notebook_questions_grounded``. RED control: a question whose solucion cites a divergent
     # silhouette fails. Gate-protects a future m3_notebook_questions_generator model downgrade.
     m3_notebook_questions_grounded_ok: bool = True
+    # ml_ds + clustering M3 output-grounded Q5 cites ONLY REAL per-cluster profile means (Issue #494,
+    # B4-a): once the metrics cell exports `cluster_profiles`, Q5 anchors the per-feature domination, so a
+    # cited per-feature mean matching NO real mean of that feature is a fabrication. True (n/a) when
+    # `cluster_profiles` is absent / no extra questions. Computed via ``check_m3_notebook_profiles_grounded``.
+    # RED control: a question whose solucion cites a divergent per-feature mean fails.
+    m3_notebook_profiles_grounded_ok: bool = True
     # ml_ds + clustering dataset carries NO supervised target column (Issue #466, Frente 1): clustering
     # is unsupervised, so a leaked `dummy_target` (LLM-hallucinated or contract-injected) must be
     # stripped before data generation. True (n/a) for non-clustering jobs / empty rows. Computed via
@@ -327,6 +333,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "M3 notebook-question coherence failure: an output-grounded question cites a silhouette "
             "that diverges from the real executed value (fabricated)"
+        )
+    if not r.m3_notebook_profiles_grounded_ok:
+        reasons.append(
+            "M3 notebook-question profile coherence failure: an output-grounded question cites a "
+            "per-cluster feature mean that diverges from the real cluster_profiles (fabricated)"
         )
     if not r.clustering_no_target_ok:
         reasons.append(
@@ -568,6 +579,29 @@ def check_m3_notebook_questions_grounded(
         if detect_unanchored_silhouette(q.get("solucion_esperada", ""), real_silhouette):
             return False
         if detect_unanchored_silhouette(q.get("enunciado", ""), real_silhouette):
+            return False
+    return True
+
+
+def check_m3_notebook_profiles_grounded(
+    notebook_questions: list[dict] | None, cluster_profiles: dict | None
+) -> bool:
+    """Pure oracle (Issue #494): do the M3 output-grounded questions cite ONLY real per-cluster means?
+
+    Reuses the production detector ``clustering_decision.detect_unanchored_cluster_profiles`` (single
+    source of truth) over each extra question's ``solucion_esperada`` + ``enunciado``: a per-feature mean
+    that matches NO real mean of that feature in ``cluster_profiles`` is a fabrication. True (n/a) when
+    ``cluster_profiles`` is absent (no anchor) or there are no extra questions. Gate-protects a future
+    ``m3_notebook_questions_generator`` model downgrade that starts fabricating profile means.
+    """
+    from case_generator.clustering_decision import detect_unanchored_cluster_profiles
+
+    if not cluster_profiles:
+        return True
+    for q in notebook_questions or []:
+        if detect_unanchored_cluster_profiles(q.get("solucion_esperada", ""), cluster_profiles):
+            return False
+        if detect_unanchored_cluster_profiles(q.get("enunciado", ""), cluster_profiles):
             return False
     return True
 

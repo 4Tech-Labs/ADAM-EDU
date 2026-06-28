@@ -393,6 +393,153 @@ def detect_unanchored_silhouette(
     return violations
 
 
+# ── Issue #494 — per-cluster profile grounding (the B4-a guarantee) ──────────────────────────────
+# Q5 of the M3 output-grounded notebook questions (ml_ds + clustering) now cites the REAL per-feature
+# per-cluster means emitted to ``m3_metrics_summary["cluster_profiles"]`` (the metrics cell exports
+# them). ``detect_unanchored_cluster_profiles`` is the deterministic GUARANTEE (mirrors
+# ``detect_unanchored_silhouette``): a per-feature mean cited in the memo that matches NO real mean of
+# that feature is a fabrication → the M3-notebook-questions guard reprompts once, then OMITS the 2.
+#
+# Zero-FP-leaning, by four precision rules baked into the regex/scan (an FP costs at most one reprompt,
+# never a wrong value, never a job failure):
+#   * WORD-BOUNDED feature name — ``\bfrequency\b`` never matches inside ``frequency_count`` (snake_case
+#     underscores are word chars, so the boundary also protects substrings).
+#   * DECIMAL shape only — ``\d{1,7}[.,]\d{1,2}`` with a trailing ``(?!\d)``. A bare integer (cluster id,
+#     count, year) has no decimal point → never matched; a thousands-grouped ``4,980.00`` fails the
+#     ``(?!\d)`` guard → accepted FN (the prompt renders plain ``f"{v:.2f}"``, so the happy path is
+#     matchable).
+#   * TIGHT window — at most 8 non-digit chars between the feature keyword and the number, so a distant
+#     business figure in the same sentence is not bound to the feature.
+#   * CURRENCY / PERCENT skip — a number prefixed by ``$``/``€``/``£``/``¥`` or suffixed by ``%`` is a
+#     business figure (ROI/revenue), never a raw segmentation mean.
+# Tolerance is GENEROUS (rel 15% + small abs floor) so the LLM rounding the table value never FPs;
+# only a wildly off (fabricated) number flags. Accepted FN: integer-rounded citation, translated feature
+# name, value-before-keyword, mis-attribution (right number, wrong cluster — value membership only,
+# exactly like the silhouette guard). Pure, total, never raises.
+_PROFILE_GROUND_REL_TOL: float = 0.15
+_PROFILE_GROUND_ABS_TOL: float = 0.05
+_PROFILE_CURRENCY_PREFIXES: tuple[str, ...] = ("$", "€", "£", "¥")
+
+
+def detect_unanchored_cluster_profiles(
+    prose: str | None,
+    cluster_profiles: dict | None,
+    *,
+    rel_tol: float = _PROFILE_GROUND_REL_TOL,
+    abs_tol: float = _PROFILE_GROUND_ABS_TOL,
+) -> list[str]:
+    """Return ``["PERFIL_NO_ANCLADO:<feature>:<raw>", ...]`` for per-feature means cited in ``prose``
+    that diverge from EVERY real mean of that feature in ``cluster_profiles`` (Issue #494).
+
+    ``cluster_profiles`` shape: ``{feature_name: {cluster_id: mean}}`` (the dict emitted to
+    ``m3_metrics_summary``). ``[]`` when prose/profiles is empty or malformed (degrade-safe). See the
+    module comment above for the four precision rules that keep it zero-FP-leaning.
+    """
+    if not prose or not isinstance(cluster_profiles, dict):
+        return []
+    violations: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for feature, per_cluster in cluster_profiles.items():
+        if not isinstance(per_cluster, dict):
+            continue
+        feat = str(feature)
+        if not feat:
+            continue
+        reals: list[float] = []
+        for value in per_cluster.values():
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(numeric):
+                reals.append(numeric)
+        if not reals:
+            continue
+        pattern = re.compile(
+            r"\b" + re.escape(feat) + r"\b[^\d\n]{0,8}?(\d{1,7}[.,]\d{1,2})(?!\d)",
+            re.IGNORECASE,
+        )
+        for match in pattern.finditer(prose):
+            num_start = match.start(1)
+            if num_start > 0 and prose[num_start - 1] in _PROFILE_CURRENCY_PREFIXES:
+                continue  # business currency figure ($1.5), not a raw segmentation mean
+            if prose[match.end(1) : match.end(1) + 1] == "%":
+                continue  # business percentage (ROI 22.5%), not a raw mean
+            raw = match.group(1)
+            try:
+                cited = float(raw.replace(",", "."))
+            except ValueError:
+                continue
+            if any(abs(cited - real) <= max(rel_tol * abs(real), abs_tol) for real in reals):
+                continue  # matches a real mean of this feature (within rounding tolerance)
+            key = (feat, raw)
+            if key in seen:
+                continue
+            seen.add(key)
+            violations.append(f"PERFIL_NO_ANCLADO:{feat}:{raw}")
+    return violations
+
+
+# n_clusters / segment grounding (Issue #494, hardened after the #497 review P1). A cited integer
+# adjacent to "cluster/segmento/grupo" is ONLY flagged when it EXCEEDS the real cluster count
+# (``max(valid_counts)`` = the larger of n_clusters / target_k). Any value ``<= max`` is a legitimate
+# reference and must NOT flag: a 0-indexed cluster ID (segments are 0..k-1, exactly the IDs the profile
+# table and the prompt-mandated P5 answer cite — "el segmento 2 domina…"), the count itself, or a
+# sub-count ("los 2 segmentos restantes"). Only an out-of-range value ("se formaron 7 segmentos" when
+# k=3) is a genuine fabrication. Two precision rules keep it zero-FP:
+#   * the keyword→number arm allows ONLY a tight non-alphabetic separator (``[ \t:#=]{0,3}``), so size
+#     phrasing with a preposition ("el segmento de 5 clientes") does NOT match — only a direct
+#     "segmento N" / "segmento: N" id/count reference does;
+#   * the ``[2, 10]`` band excludes realistic cluster SIZES (≫10 with 1000 rows) and bare years/ratios.
+# Pure, total, never raises.
+_NCLUSTERS_COUNT_RE = re.compile(
+    r"(?:clusters?|segmentos?|grupos?)\b[ \t:#=]{0,3}(\d{1,2})(?!\d)"
+    r"|(\d{1,2})\s*(?:clusters?|segmentos?|grupos?)\b",
+    re.IGNORECASE,
+)
+
+
+def detect_unanchored_n_clusters(prose: str | None, valid_counts: set[int] | None) -> list[str]:
+    """Return ``["N_CLUSTERS_NO_ANCLADO:<raw>", ...]`` for a cited segment number in ``[2, 10]`` that
+    EXCEEDS the real cluster count (Issue #494). ``valid_counts`` = ``{n_clusters, target_k}``; the
+    threshold is ``max(valid_counts)``.
+
+    A value ``<= max(valid_counts)`` is accepted (0-indexed cluster ID ``0..k-1``, the count, or a
+    sub-count) — this is the #497-review fix that stops a false positive on the prompt-mandated
+    "el segmento N domina" answer. ``[]`` when prose is empty or ``valid_counts`` is empty/None
+    (degrade-safe). Pure, total, never raises.
+    """
+    if not prose or not valid_counts:
+        return []
+    valid: set[int] = set()
+    for count in valid_counts:
+        try:
+            numeric = float(count)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric) and numeric.is_integer():
+            valid.add(int(numeric))
+    if not valid:
+        return []
+    max_valid = max(valid)
+    violations: list[str] = []
+    seen: set[str] = set()
+    for match in _NCLUSTERS_COUNT_RE.finditer(prose):
+        raw = match.group(1) or match.group(2)
+        if raw is None:
+            continue
+        count = int(raw)
+        if not (2 <= count <= 10):
+            continue  # outside plausible cluster band (real cluster SIZES ≫10 live here, not counts/ids)
+        if count <= max_valid:
+            continue  # valid cluster ID (0..k-1), the count itself, or a sub-count — never a fabrication
+        if raw in seen:
+            continue
+        seen.add(raw)
+        violations.append(f"N_CLUSTERS_NO_ANCLADO:{raw}")
+    return violations
+
+
 __all__ = [
     "resolve_clustering_decision",
     "recommended_option_of",
@@ -403,4 +550,6 @@ __all__ = [
     "validate_verdict_option",
     "validate_m4_verdict_option",
     "detect_unanchored_silhouette",
+    "detect_unanchored_cluster_profiles",
+    "detect_unanchored_n_clusters",
 ]

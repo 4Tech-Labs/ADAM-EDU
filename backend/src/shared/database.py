@@ -170,6 +170,18 @@ class Settings(BaseSettings):
     # env-only revert, no redeploy). Gate: profile=="ml_ds" AND family=="clustering" AND executed
     # notebook; every other cohort / depth is unaffected (the node noops).
     m3_notebook_questions: bool = True
+    # Anchor M3 output-grounded Q5 to the REAL per-cluster profiles (Issue #494, B4-a). When true
+    # (default), the M3 metrics cell ALSO exports `cluster_profiles` (per-feature means per cluster) to
+    # `m3_metrics_summary`, the `m3_notebook_questions_generator` node selects the B4-a prompt that makes
+    # Q5 cite the REAL per-feature domination (format `feature_name = NN.NN`), and a deterministic guard
+    # (`detect_unanchored_cluster_profiles` + `detect_unanchored_n_clusters`) reprompts-once-then-omits a
+    # fabricated mean / segment count. This closes the residual hallucination risk #489 left open (Q5 was
+    # qualitative, B4-b). Set MLDS_CLUSTERING_NOTEBOOK_PROFILES=false to revert Q5 to B4-b
+    # (byte-identical question behavior to #489; the emission stays on but is inert/never consumed; no
+    # redeploy). Gate: profile=="ml_ds" AND family=="clustering" AND profiles present; every other cohort
+    # is unaffected. The profile emission itself is defensive (nested try, finite-filter) and never
+    # breaks the metrics marker.
+    mlds_clustering_notebook_profiles: bool = True
     # De-supervise the ml_ds + clustering DATA + notebook prose (Issue #466). When true (default),
     # (a) `_enforce_mlds_clustering_no_target` deterministically strips any leaked supervised target
     # column (e.g. an LLM-hallucinated `dummy_target`, or a contract `target_column` injected by the

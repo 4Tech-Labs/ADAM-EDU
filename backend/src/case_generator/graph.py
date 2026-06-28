@@ -146,6 +146,7 @@ from case_generator.prompts import (
     M3_CONTENT_PROMPT_CLASSIFICATION_BY_VARIANT,
     M3_CONTENT_PROMPT_CLUSTERING,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING,
+    M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES,
     M4_CHART_PROMPT_CLUSTERING,
     M4_CONTENT_PROMPT_CLUSTERING,
     M3_CLASSIFICATION_QUESTIONS_BY_VARIANT,
@@ -201,6 +202,8 @@ from case_generator.clustering_decision import (
     build_clustering_m1_questions_hint,
     build_clustering_m3_questions_hint,
     build_clustering_verdict_hint,
+    detect_unanchored_cluster_profiles,
+    detect_unanchored_n_clusters,
     detect_unanchored_silhouette,
     recommended_option_of,
     validate_m4_verdict_option,
@@ -8436,6 +8439,64 @@ def _build_m3_notebook_questions_context(
     }
 
 
+def _finite_float(value: Any) -> float | None:
+    """Return ``value`` as a finite float, or ``None`` (no ``math`` import; Issue #494 helper)."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric != numeric or numeric in (float("inf"), float("-inf")):
+        return None
+    return numeric
+
+
+def _extract_valid_cluster_profiles(metrics: dict) -> dict | None:
+    """Return ``m3_metrics_summary['cluster_profiles']`` iff it is a non-empty mapping with at least one
+    feature carrying at least one finite mean (Issue #494). Else ``None`` → the node falls back to the
+    B4-b qualitative prompt (byte-identical to #489). Pure/total — never raises.
+    """
+    cp = metrics.get("cluster_profiles") if isinstance(metrics, dict) else None
+    if not isinstance(cp, dict) or not cp:
+        return None
+    for per_cluster in cp.values():
+        if isinstance(per_cluster, dict):
+            for value in per_cluster.values():
+                if _finite_float(value) is not None:
+                    return cp
+    return None
+
+
+def _render_cluster_profiles_table(cluster_profiles: dict) -> str:
+    """Render ``{feature: {cluster: mean}}`` as a compact deterministic text table (Issue #494).
+
+    Passed as a ``.format`` VALUE (its braces/pipes are not re-interpreted by the template). Values are
+    formatted ``{:.2f}`` to MATCH the rounded table the student reads (so the anchor coincides with the
+    citation). Pure/total — never raises.
+    """
+    features = [str(f) for f, pc in cluster_profiles.items() if isinstance(pc, dict) and pc]
+    if not features:
+        return "(perfiles no disponibles)"
+    clusters: list[str] = []
+    for feat in features:
+        for cluster_id in cluster_profiles[feat]:
+            if str(cluster_id) not in clusters:
+                clusters.append(str(cluster_id))
+    try:
+        clusters.sort(key=int)
+    except ValueError:
+        clusters.sort()
+    header = "| segmento | " + " | ".join(features) + " |"
+    separator = "| --- | " + " | ".join(["---"] * len(features)) + " |"
+    rows = [header, separator]
+    for cluster_id in clusters:
+        cells: list[str] = []
+        for feat in features:
+            value = _finite_float(cluster_profiles[feat].get(cluster_id))
+            cells.append(f"{value:.2f}" if value is not None else "—")
+        rows.append(f"| {cluster_id} | " + " | ".join(cells) + " |")
+    return "\n".join(rows)
+
+
 def _apply_m3_notebook_questions_grounding(
     *,
     llm: Any,
@@ -8443,14 +8504,19 @@ def _apply_m3_notebook_questions_grounding(
     preguntas: list[dict],
     real_silhouette: float,
     case_id: Any,
+    cluster_profiles: dict | None = None,
+    valid_counts: set[int] | None = None,
 ) -> list[dict]:
-    """Reprompt-once-then-OMIT the silhouette grounding of the 2 notebook questions (Issue #489).
+    """Reprompt-once-then-OMIT the grounding of the 2 notebook questions (Issue #489, extended #494).
 
-    Reuses #469 ``detect_unanchored_silhouette`` over each question's ``solucion_esperada`` +
-    ``enunciado``: a cited silhouette that diverges from the REAL executed value is a fabrication.
-    On a violation it reprompts ONCE (concatenated correction, never re-``.format``); if the
-    corrected set still fabricates (or is not exactly 2) the 2 questions are OMITTED (``[]``) — the
-    case ships the 3 conceptual questions, never a fabricated value, never a job failure.
+    Always reuses #469 ``detect_unanchored_silhouette`` over each question's ``solucion_esperada`` +
+    ``enunciado``: a cited silhouette diverging from the REAL executed value is a fabrication. When
+    ``cluster_profiles`` is provided (B4-a, Issue #494) it ALSO runs
+    ``detect_unanchored_cluster_profiles`` (per-feature means) and ``detect_unanchored_n_clusters``
+    (segment count vs ``valid_counts``). On a violation it reprompts ONCE (concatenated correction,
+    never re-``.format``); if the corrected set still fabricates (or is not exactly 2) the 2 questions
+    are OMITTED (``[]``) — the case ships the 3 conceptual questions, never a fabricated value, never a
+    job failure. With ``cluster_profiles=None`` the behavior is BYTE-IDENTICAL to #489 (B4-b).
     Best-effort: ANY throw degrades to ``[]``. ``prompt`` is the ALREADY-formatted string.
     """
     log_extra = {"node": "m3_notebook_questions_generator", "case_id": case_id}
@@ -8458,8 +8524,16 @@ def _apply_m3_notebook_questions_grounding(
     def _violations(qs: list[dict]) -> list[str]:
         out: list[str] = []
         for q in qs:
-            out.extend(detect_unanchored_silhouette(q.get("solucion_esperada", ""), real_silhouette))
-            out.extend(detect_unanchored_silhouette(q.get("enunciado", ""), real_silhouette))
+            sol = q.get("solucion_esperada", "")
+            enu = q.get("enunciado", "")
+            out.extend(detect_unanchored_silhouette(sol, real_silhouette))
+            out.extend(detect_unanchored_silhouette(enu, real_silhouette))
+            if cluster_profiles is not None:
+                out.extend(detect_unanchored_cluster_profiles(sol, cluster_profiles))
+                out.extend(detect_unanchored_cluster_profiles(enu, cluster_profiles))
+            if valid_counts:
+                out.extend(detect_unanchored_n_clusters(sol, valid_counts))
+                out.extend(detect_unanchored_n_clusters(enu, valid_counts))
         return out
 
     try:
@@ -8475,6 +8549,13 @@ def _apply_m3_notebook_questions_grounding(
             f"`solucion_esperada` cita SOLO {real_silhouette:.3f} o ningún número de silhouette. NUNCA "
             "inventes otro valor ni fijes un umbral arbitrario."
         )
+        if cluster_profiles is not None:
+            reprompt += (
+                "\n\n# CORRECCIÓN OBLIGATORIA — PERFILES POR SEGMENTO\n"
+                "En la P5, cita las medias por feature EXACTAMENTE como aparecen en la tabla real de "
+                "perfiles (formato `feature_name = NN.NN`); NUNCA inventes una media ausente de la "
+                "tabla, y cita SOLO el número de segmentos REAL."
+            )
         try:
             resultado: GeneradorPreguntasOutput = llm.with_structured_output(
                 GeneradorPreguntasOutput
@@ -8542,7 +8623,33 @@ def m3_notebook_questions_generator(state: ADAMState, config: RunnableConfig) ->
         context = _build_m3_notebook_questions_context(
             state, real_silhouette=real_silhouette, metrics=metrics
         )
-        formatted = M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING.format(**context)
+        # Issue #494 — B4-a (Q5 anclada a perfiles REALES) SOLO si el kill-switch está ON y la celda
+        # exportó perfiles bien formados; si no, B4-b (#489) byte-idéntico.
+        cluster_profiles = (
+            _extract_valid_cluster_profiles(metrics)
+            if settings.mlds_clustering_notebook_profiles
+            else None
+        )
+        valid_counts: set[int] | None = None
+        if cluster_profiles is not None:
+            decision = state.get("clustering_decision") or {}
+            target_k = decision.get("target_k") if isinstance(decision, dict) else None
+            n_clusters_real = _finite_metric(metrics, "n_clusters")
+            valid_counts = set()
+            if n_clusters_real is not None:
+                valid_counts.add(int(n_clusters_real))
+            if isinstance(target_k, int):
+                valid_counts.add(target_k)
+            feature_names = ", ".join(str(f) for f in cluster_profiles) or context["feature_names"]
+            context = {
+                **context,
+                "feature_names": feature_names,
+                "cluster_profiles_table": _render_cluster_profiles_table(cluster_profiles),
+            }
+            prompt_template = M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES
+        else:
+            prompt_template = M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING
+        formatted = prompt_template.format(**context)
         resultado: GeneradorPreguntasOutput = llm.with_structured_output(
             GeneradorPreguntasOutput
         ).invoke(formatted)
@@ -8560,6 +8667,8 @@ def m3_notebook_questions_generator(state: ADAMState, config: RunnableConfig) ->
             preguntas=preguntas,
             real_silhouette=real_silhouette,
             case_id=state.get("case_id"),
+            cluster_profiles=cluster_profiles,
+            valid_counts=valid_counts,
         )
         print(f"[m3_notebook_questions_generator] {len(preguntas)} preguntas output-grounded")
         return {"m3_notebook_questions": preguntas, "current_agent": "m3_notebook_questions_generator"}
