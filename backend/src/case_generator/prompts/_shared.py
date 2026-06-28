@@ -26,6 +26,9 @@ Lema: "Correlación no implica causalidad."
   "Evidencia insuficiente en M1/M2 para diseñar este módulo con certeza."
 - PROHIBIDO asumir nombres de columnas, sector específico ni tipo de datos no mencionados.
 - Solo Markdown puro. PROHIBIDO bloques de código en este documento.
+- Escribe la matemática en TEXTO PLANO (p. ej. k, k=2, 5000 - 50 = 4950). NO uses signos de
+  dólar como delimitador matemático (nada de $k$, $k=2$, $5000$); el visor del estudiante no
+  renderiza LaTeX.
 
 # Política de Priorización de Algoritmos
 Si {algoritmos} contiene más de 4 algoritmos:
@@ -200,6 +203,9 @@ con veredicto Aprobar/Rechazar y KPIs base.
   "[variable_base] × [tasa_impacto]% = [resultado]"
   NO solo el resultado final.
 - Las proyecciones están sujetas al límite de 2.5× CAGR del sector {industria}.
+- Escribe la matemática en TEXTO PLANO (k, k=2, 5000 - 50 = 4950). NO uses signos de dólar como
+  delimitador matemático (nada de $k$, $k=2$, $5000$); el visor no renderiza LaTeX. La moneda con
+  prefijo ($8M, $750,000) es válida.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}
@@ -336,6 +342,9 @@ con veredicto Aprobar/Rechazar y KPIs base acordes al MARCO DE VALOR.
   "[variable_base] × [tasa_impacto]% = [resultado]"
   NO solo el resultado final.
 - Los COSTOS van SIEMPRE en USD; el MARCO DE VALOR reencuadra solo el lado del VALOR.
+- Escribe la matemática en TEXTO PLANO (k, k=2, 5000 - 50 = 4950). NO uses signos de dólar como
+  delimitador matemático (nada de $k$, $k=2$, $5000$); el visor no renderiza LaTeX. La moneda con
+  prefijo ($8M, $750,000) es válida.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}

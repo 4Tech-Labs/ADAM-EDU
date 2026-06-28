@@ -117,6 +117,37 @@ _RE_ISO_SUFFIX = re.compile(
     r"\b(?:" + _NON_USD_ISO + r")\b"
 )
 
+# ── LaTeX math delimiter strip (Issue #480) ───────────────────────────────────
+# The case-viewer renders narrative with ``marked()`` and NO KaTeX/MathJax, so inline
+# LaTeX math ``$…$`` reaches the student as a literal delimiter ("valores de $k$",
+# "$5000.0 - 50.0$"). This strips the ``$…$`` delimiters from UNAMBIGUOUS math while
+# NEVER touching currency, which in this product is ALWAYS a ``$``-PREFIX token the LLM
+# emits SEPARATELY ($8,000,000 USD / $64.8M / $25,000) — never a paired ``$…$``.
+#
+# The discriminator is encoded INSIDE the regex (two LaTeX-shaped content tiers) so the
+# engine SKIPS a currency ``$`` and finds the real LaTeX pair (kills the ``$8M y $k$``
+# interleave false-negative). A ``$…$`` is stripped only when ALL hold:
+#  * Tier 1 — content starts with a LETTER (variable): k / k=2 / F_1 / x^2. Currency
+#    never starts with a letter.
+#  * Tier 2 — content is pure numeric/arithmetic with NO comma (thousands), NO magnitude
+#    letter (K/M/MM) and NO ``USD``: 5000.0 - 50.0 / 4950.0. The absence of comma/magnitude
+#    separates math from ``$8,000,000`` / ``$64.8M``; a euro-grouped ``$1.200.000$`` (multi-dot)
+#    fails the single-decimal grammar and is preserved.
+#  * the closing ``$`` sits IMMEDIATELY after the token (no trailing space → ``$HOME $PATH``
+#    shell vars stay intact) AND is NOT followed by a digit (``(?!\d)`` → ``$50 $100`` adjacency).
+# All quantifiers are BOUNDED → LINEAR matching (no ReDoS), mirroring #377. Operators include
+# the Unicode ``×`` (U+00D7) and minus ``−`` (U+2212) the M4 arithmetic uses.
+_LX_VAR = (
+    r"[A-Za-z][A-Za-z0-9]{0,30}"
+    r"(?:[_^][A-Za-z0-9]{1,10})?"
+    r"(?:\s{0,3}=\s{0,3}-?\d{1,18}(?:\.\d{1,9})?)?"
+)
+_LX_NUM = (
+    r"-?\d{1,18}(?:\.\d{1,9})?"
+    r"(?:\s{0,3}[-+*/=×−]\s{0,3}-?\d{1,18}(?:\.\d{1,9})?){0,40}"
+)
+_RE_LATEX_MATH = re.compile(r"\$(" + _LX_VAR + r"|" + _LX_NUM + r")\$(?!\d)")
+
 # ``(Exhibit 1)``, ``(ver Exhibit 1)``, ``(Exhibit 1, …)``, ``(Exhibit 1 y 2)``,
 # ``(Exhibits 1 y 2)``, ``(Exhibit 1 y Exhibit 2)`` — the second number may repeat the
 # (possibly plural) word ``Exhibit``; without that the second anexo would be lost and a
@@ -233,6 +264,37 @@ def _usd_prefix_repl(match: re.Match[str]) -> str:
 
 def _usd_suffix_repl(match: re.Match[str]) -> str:
     return match.group("num") + (match.group("mag") or "") + " USD"
+
+
+def strip_latex_math(text: str) -> str:
+    """Strip inline LaTeX math delimiters ``$…$`` from prose, currency-safe (Issue #480).
+
+    The case-viewer has no KaTeX/MathJax, so ``$k$`` / ``$5000.0 - 50.0$`` reach the student as
+    literal delimiters. This removes the delimiters around UNAMBIGUOUS math (a letter-led variable,
+    or pure numeric/arithmetic with no thousands comma / magnitude letter / USD) whose closing
+    ``$`` neither trails a space nor precedes a digit, leaving the inner content.
+
+    Currency is NEVER touched: in this product every figure is a ``$``-PREFIX token emitted
+    separately ($8,000,000 USD / $64.8M / $25,000), never a paired ``$…$``, and the two content
+    tiers reject commas / magnitude letters / USD. Disjoint from ``enforce_usd_currency`` (which
+    never reads a bare ``$``) → the order between them is irrelevant.
+
+    Pure, total, **best-effort** (any internal error returns the text unchanged), profile-agnostic,
+    never imports graph. Bounded quantifiers → LINEAR in ``len(text)``. Idempotent; the ≤2-pass
+    loop also collapses display ``$$…$$`` → ``$…$`` → clean.
+    """
+    if not text:
+        return text
+    try:
+        out = text
+        for _ in range(2):  # 2 passes collapse $$…$$ → $…$ → clean; idempotent thereafter
+            new = _RE_LATEX_MATH.sub(lambda m: m.group(1), out)
+            if new == out:
+                break
+            out = new
+        return out
+    except Exception:  # best-effort — a detector bug must never corrupt/fail a case
+        return text
 
 
 def parse_exhibit_anchors(raw_anexo: str) -> list[float]:

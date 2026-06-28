@@ -204,6 +204,14 @@ class NodeEvalInputs:
     # Computed via ``check_clustering_entity_index``; gate-protects against a data-layer regression that
     # reverts to the monthly period index. RED control: rows with a monthly `period` column fail.
     clustering_entity_index_ok: bool = True
+    # Narrative carries NO literal LaTeX math delimiter (Issue #480), for ALL profiles/families: the
+    # case-viewer has no KaTeX/MathJax, so a ``$k$`` / ``$5000.0 - 50.0$`` would reach the student as a
+    # literal delimiter. True (n/a) when the narrative is empty/absent. Computed via
+    # ``check_no_latex_math`` (reuses the production ``m1_grounding.strip_latex_math``: a text is clean
+    # iff stripping is a no-op), so a future narrative-node regression (or a kill-switch-off downgrade)
+    # that ships LaTeX math fails the gate. The DETERMINISTIC cure is the strip in ``sanitize_markdown``;
+    # this gate-protects it on the frozen golden set.
+    narrative_no_latex_math_ok: bool = True
 
 
 @dataclass
@@ -305,6 +313,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             "clustering data failure: dataset is time-indexed (monthly `period`) instead of "
             "entity-level (`user_id`) — analysis unit contradicts the segmentation narrative"
         )
+    if not r.narrative_no_latex_math_ok:
+        reasons.append(
+            "narrative coherence failure: literal LaTeX math delimiter ($k$ / $5000 - 50$) "
+            "leaked into prose (the case-viewer has no math renderer)"
+        )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -314,6 +327,25 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             f"pairwise Pro-win {r.pairwise_pro_win_rate:.2f} > {PAIRWISE_MAX_PRO_WIN:.2f}"
         )
     return GateResult(node=r.node, passed=not reasons, reasons=reasons)
+
+
+# ── Issue #480 — deterministic LaTeX-math-free narrative oracle ───
+
+
+def check_no_latex_math(text: str | None) -> bool:
+    """Pure oracle: is ``text`` free of literal LaTeX math delimiters (``$k$`` / ``$5000 - 50$``)?
+
+    Reuses the production strip (single source of truth): a narrative is clean iff
+    ``strip_latex_math`` is a no-op on it. The case-viewer has no KaTeX/MathJax, so any surviving
+    ``$…$`` math pair would reach the student literally. Currency ($-prefix figures) is never matched
+    by the strip, so a normal financial narrative is trivially clean. ``None``/empty is True (n/a).
+    The import is function-level so this support module stays light at import time.
+    """
+    if not text:
+        return True
+    from case_generator.m1_grounding import strip_latex_math
+
+    return strip_latex_math(text) == text
 
 
 # ── Issue #351 — deterministic domain-coherence oracle ───
