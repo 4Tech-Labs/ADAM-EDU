@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -578,3 +579,85 @@ def test_gate_blocks_on_clustering_target_warning_leak() -> None:
     res = evaluate_downgrade_gate(fail)
     assert res.passed is False
     assert any("names a stripped supervised target" in r for r in res.reasons)
+
+
+def test_filter_handles_whitespace_and_non_str_elements() -> None:
+    """Defensive branches: a leading-whitespace target warning is still dropped (`lstrip()`), and a
+    non-str element is kept without throwing (the `isinstance(w, str)` guard)."""
+    warnings: list = [
+        "  target 'dummy' no fue producido por schema_designer",  # leading ws → still dropped
+        "feature 'recency_days' no fue producido",                # kept
+        None,                                                      # non-str → kept, never throws
+    ]
+    out = _filter_clustering_target_warnings(
+        warnings, profile="ml_ds", primary_family="clustering", enabled=True
+    )
+    assert out == ["feature 'recency_days' no fue producido", None]
+    # The oracle shares the same defensive shape: a non-str / clean-feature list is n/a (True),
+    # a leading-whitespace target warning is still flagged.
+    assert check_clustering_no_target_warnings([None, "feature 'x' no fue producido"]) is True
+    assert check_clustering_no_target_warnings(["  target 'dummy' no fue producido"]) is False
+
+
+# ── Node-level integration: the REAL schema_designer wiring (closes the helper-isolation gap) ──
+#
+# The helper tests above exercise `_filter_clustering_target_warnings` and the two emitters in
+# isolation, then hand-build `warnings_payload`. These drive the ACTUAL `schema_designer` node
+# (deterministic clustering path, no LLM/DB per #477) to prove the production wiring: the architect
+# seed in `state["data_gap_warnings"]` is merged AND the call-site filter removes it before persist.
+
+
+def _clustering_node_state(seed_warning: str) -> dict:
+    """ml_ds+clustering state with an architect-seeded target warning (the #228 seed path)."""
+    return {
+        "studentProfile": "ml_ds",
+        "algoritmos": ["K-Means"],
+        "titulo": "Segmentación para reducir el churn",
+        "doc1_anexo_financiero": "",
+        "doc1_anexo_operativo": "",
+        "dataset_schema_required": _orphan_contract(),
+        "data_gap_warnings": [seed_warning],
+    }
+
+
+def test_schema_designer_node_filters_architect_seed_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GREEN: the real node persists data_gap_warnings with NO orphan target name — proving the
+    fallback-path call-site filter + the state-seed merge, not just the helper in isolation."""
+    monkeypatch.setattr(graph.settings, "mlds_clustering_structure", True)
+    monkeypatch.setattr(graph.settings, "mlds_clustering_no_target", True)
+    # Clustering skips the Pro LLM (#477); patch the class so an accidental construction is inert.
+    monkeypatch.setattr(graph, "ChatGoogleGenerativeAI", MagicMock())
+    # Use the REAL architect coherence warning (the seed the node merges from state).
+    seed = _validate_target_semantic_coherence(
+        "Segmentación para reducir el churn",
+        {"name": _ORPHAN_TARGET, "role": "classification_target"},
+    )[0]
+    assert _ORPHAN_TARGET in seed  # the seed genuinely names the orphan
+
+    out = graph.schema_designer(_clustering_node_state(seed), {"configurable": {}})
+
+    warnings = out.get("data_gap_warnings") or []
+    assert all(_ORPHAN_TARGET not in w for w in warnings)  # orphan gone from every channel
+    # The deterministic clustering schema also carries no target column (strip ran end-to-end).
+    assert _ORPHAN_TARGET not in {c["name"] for c in out["dataset_schema"]["columns"]}
+
+
+def test_schema_designer_node_red_control_switch_off_keeps_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED control: with MLDS_CLUSTERING_NO_TARGET off the filter is skipped, so the architect-seeded
+    target warning survives in the persisted data_gap_warnings (byte-identical to pre-#482)."""
+    monkeypatch.setattr(graph.settings, "mlds_clustering_structure", True)
+    monkeypatch.setattr(graph.settings, "mlds_clustering_no_target", False)
+    monkeypatch.setattr(graph, "ChatGoogleGenerativeAI", MagicMock())
+    seed = _validate_target_semantic_coherence(
+        "Segmentación para reducir el churn",
+        {"name": _ORPHAN_TARGET, "role": "classification_target"},
+    )[0]
+
+    out = graph.schema_designer(_clustering_node_state(seed), {"configurable": {}})
+
+    warnings = out.get("data_gap_warnings") or []
+    assert any(_ORPHAN_TARGET in w for w in warnings)  # seed survives (filter off)
