@@ -217,12 +217,21 @@ class TestDegradation:
         assert out == {"m3_notebook_questions": [], "current_agent": "m3_notebook_questions_generator"}
 
     def test_402_no_credits_degrades(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Mock the module logger (more robust than caplog with the structured logger) so the
+        # 402-SPECIFIC ops warning branch is genuinely exercised — not just the shared []-degrade
+        # (which `test_llm_exception_degrades_to_empty` already covers). Deleting the 402 branch
+        # would now fail this test.
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            graph_module.logger, "warning", lambda msg, *a, **k: warnings.append(str(msg))
+        )
         err = Exception("payment required")
         setattr(err, "status_code", 402)
         fake = _FakeStructuredLLM([err])
         monkeypatch.setattr(graph_module, "_get_writer_llm", lambda *a, **k: fake)
         out = graph.m3_notebook_questions_generator(_clustering_state(), _CFG)
         assert out["m3_notebook_questions"] == []
+        assert any("SIN CRÉDITOS (402)" in w for w in warnings)
 
     def test_runtime_error_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # A bare RuntimeError is intentionally re-raised (mirror m3_questions_generator policy).
