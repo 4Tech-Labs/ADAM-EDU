@@ -66,6 +66,58 @@ describe("sanitizeTraces — dense heatmap per-cell text handling", () => {
     });
 });
 
+describe("sanitizeTraces — pre-computed box traces (Issue #487)", () => {
+    // El builder de clustering (#487) emite box plots con estadísticas pre-computadas
+    // (q1/median/q3/lowerfence/upperfence) en vez de los ~N puntos crudos `y`. sanitizeTraces
+    // hace `{...trace}` (passthrough) y su rama no-heatmap solo toca arrays `x`/`y` → debe
+    // preservar los stats intactos y NO vaciar la caja (un box vacío sería peor que el actual).
+    it("preserves pre-computed box-stat fields and emits no `y`/`z`", () => {
+        const [out] = sanitizeTraces([
+            {
+                type: "box",
+                name: "monetary_value",
+                q1: [1200],
+                median: [2500],
+                q3: [3800],
+                lowerfence: [50],
+                upperfence: [5000],
+                boxpoints: false,
+            },
+        ]);
+
+        expect(out.type).toBe("box");
+        expect(out.name).toBe("monetary_value");
+        expect(out.q1).toEqual([1200]);
+        expect(out.median).toEqual([2500]);
+        expect(out.q3).toEqual([3800]);
+        expect(out.lowerfence).toEqual([50]);
+        expect(out.upperfence).toEqual([5000]);
+        expect(out.boxpoints).toBe(false);
+        // El box pre-computado no lleva puntos crudos ni se le inyecta una `z` (eso es heatmap-only).
+        expect(out.y).toBeUndefined();
+        expect(out.z).toBeUndefined();
+    });
+
+    it("preserves the categorical `x` label so boxes keep their feature names", () => {
+        // El builder posiciona cada caja con `x: [feature]` (categoría). La rama no-heatmap
+        // mapea `x` con `?? 0`; un label string es no-null → se conserva (si se volviera 0, las
+        // cajas perderían su nombre en el eje, el bug #487 que estamos arreglando).
+        const input = {
+            type: "box",
+            name: "engagement_score",
+            x: ["engagement_score"],
+            q1: [-0.8],
+            median: [0.1],
+            q3: [0.9],
+            lowerfence: [-1.7],
+            upperfence: [1.8],
+        };
+        const [out] = sanitizeTraces([{ ...input }]);
+        expect(out.x).toEqual(["engagement_score"]);
+        expect(out).toEqual(input);
+    });
+});
+
 describe("sanitizeTraces — heatmap zmin/zmax range", () => {
     it("respects the backend zmin/zmax on a constant (all-zero) missingness matrix", () => {
         const [out] = sanitizeTraces([

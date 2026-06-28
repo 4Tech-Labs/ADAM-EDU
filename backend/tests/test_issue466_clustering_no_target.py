@@ -26,7 +26,11 @@ from unittest.mock import MagicMock
 import pytest
 
 import case_generator.graph as graph
-from case_generator.datagen.eda_charts_clustering import generate_clustering_eda_charts
+from case_generator.datagen.eda_charts_clustering import (
+    _MAX_SCATTER_POINTS,
+    _box_stats,
+    generate_clustering_eda_charts,
+)
 from case_generator.graph import (
     _M3_NB_SECTION_2_1_CLUSTERING_PROSE,
     _M3_NB_SECTION_2_1_SUPERVISED_PROSE,
@@ -246,12 +250,18 @@ def _real_clustering_df():
     return pd.DataFrame(rows)
 
 
-def test_builder_emits_three_data_only_python_builder_charts() -> None:
+def test_builder_emits_four_data_only_python_builder_charts() -> None:
+    # Issue #487 — panel 3→4: se añadió `feature_distributions_scaled` (box z-score).
     charts = generate_clustering_eda_charts(_real_clustering_df(), {}, None)
-    assert len(charts) == 3
+    assert len(charts) == 4
     assert all(c["data_source"] == "python_builder" for c in charts)
     ids = {c["id"] for c in charts}
-    assert ids == {"feature_distributions", "correlation_structure", "data_dispersion_2d"}
+    assert ids == {
+        "feature_distributions",
+        "feature_distributions_scaled",
+        "correlation_structure",
+        "data_dispersion_2d",
+    }
     assert check_clustering_eda_no_target_charts(charts) is True
 
 
@@ -273,8 +283,9 @@ def test_builder_under_two_features_degrades_to_empty_chart() -> None:
 
     df = pd.DataFrame({"period": ["a", "b", "c"], "only_feature": [1.0, 2.0, 3.0]})
     charts = generate_clustering_eda_charts(df, {}, None)
-    # Sigue habiendo 3 slots, todos python_builder y data-only (correlación/scatter → empty_chart).
-    assert len(charts) == 3
+    # Issue #487 — 4 slots, todos python_builder y data-only: los dos box (crudo + z-score) se
+    # construyen con la única feature; correlación/scatter degradan a empty_chart (necesitan ≥2).
+    assert len(charts) == 4
     assert all(c["data_source"] == "python_builder" for c in charts)
     assert check_clustering_eda_no_target_charts(charts) is True
 
@@ -333,6 +344,105 @@ def test_charts_oracle_no_fp_on_target_named_continuous_feature_in_title() -> No
         "data_source": "python_builder",
     }
     assert check_clustering_eda_no_target_charts([chart]) is True
+
+
+# ── Issue #487 — box pre-computado (trim) + box estandarizado (legibilidad) ──
+
+
+def test_feature_distributions_box_is_precomputed_not_raw_points() -> None:
+    """El box crudo emite estadísticas pre-computadas (q1/median/q3 + bigotes), NO los ~N puntos
+    crudos: cierra el trim de payload (`task_c4e404f4`)."""
+    df = _real_clustering_df()
+    charts = generate_clustering_eda_charts(df, {}, None)
+    fd = next(c for c in charts if c["id"] == "feature_distributions")
+    box_traces = [t for t in fd["traces"] if t.get("type") == "box"]
+    assert box_traces, "debe haber box traces"
+    for t in box_traces:
+        for k in ("q1", "median", "q3", "lowerfence", "upperfence"):
+            assert k in t, f"falta el stat pre-computado {k}"
+        assert "y" not in t, "no debe emitir los puntos crudos (clave `y`)"
+        # `x` (categoría) es load-bearing: sin él el box pre-computado colapsa todas las cajas en
+        # x=0 (sin nombres en el eje) — verificado con render-test #487. Cada caja lleva su feature.
+        assert t.get("x") == [t["name"]], "el box pre-computado debe posicionarse por su categoría `x`"
+    # nº de cajas == nº de features mostradas (≤8), NUNCA 1 caja por fila → trim real.
+    n_boxes = sum(len(t["q1"]) for t in box_traces)
+    assert 1 <= n_boxes <= 8
+    assert n_boxes < len(df)
+
+
+def test_feature_distributions_scaled_chart_present_and_standardized() -> None:
+    """El 2º box (z-score) existe, comparte las mismas features que el crudo, y sus valores están
+    estandarizados (|z| acotado) mientras el crudo conserva la escala grande (disparidad)."""
+    df = _real_clustering_df()
+    charts = generate_clustering_eda_charts(df, {}, None)
+    ids = {c["id"] for c in charts}
+    assert "feature_distributions_scaled" in ids
+
+    raw = next(c for c in charts if c["id"] == "feature_distributions")
+    scaled = next(c for c in charts if c["id"] == "feature_distributions_scaled")
+    raw_boxes = [t for t in raw["traces"] if t.get("type") == "box"]
+    scaled_boxes = [t for t in scaled["traces"] if t.get("type") == "box"]
+    assert scaled_boxes, "el box estandarizado debe tener cajas"
+    # Mismas features (mismo nº de cajas).
+    assert sum(len(t["q1"]) for t in scaled_boxes) == sum(len(t["q1"]) for t in raw_boxes)
+
+    def _all_vals(boxes: list[dict]) -> list[float]:
+        return [
+            v
+            for t in boxes
+            for key in ("q1", "median", "q3", "lowerfence", "upperfence")
+            for v in t[key]
+        ]
+
+    # Estandarizado: todos los stats O(1) (z-scores acotados ~[-6,6]).
+    assert all(abs(v) < 6.0 for v in _all_vals(scaled_boxes))
+    # Crudo: conserva la escala grande (monetary_value 50–5000 → q3 en cientos/miles).
+    assert max(abs(v) for v in _all_vals(raw_boxes)) > 100
+    # Invariante #466 data-only intacto (sin markers de cluster).
+    assert check_clustering_eda_no_target_charts(charts) is True
+
+
+def test_scatter_respects_reduced_cap() -> None:
+    """Issue #487 — el cap del scatter bajó a 500 (era 1000, inerte con 1000 filas) y downsamplea."""
+    assert _MAX_SCATTER_POINTS == 500
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "period": [f"u{i}" for i in range(600)],
+            "feat_a": [float(i % 97) for i in range(600)],
+            "feat_b": [float((i * 7) % 53) for i in range(600)],
+        }
+    )
+    charts = generate_clustering_eda_charts(df, {}, None)
+    scatter = next(c for c in charts if c["id"] == "data_dispersion_2d")
+    assert len(scatter["traces"][0]["x"]) == _MAX_SCATTER_POINTS == 500
+
+
+def test_box_stats_reproduces_quartiles_and_tukey_whiskers() -> None:
+    """`_box_stats` = cuartiles lineales de pandas (= `quartilemethod:"linear"` por defecto de
+    Plotly) + bigotes Tukey (= render de `boxpoints:False`, excluye outliers)."""
+    import pandas as pd
+
+    s = pd.Series([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], dtype=float)
+    q1, med, q3, lf, uf = _box_stats(s)
+    assert (q1, med, q3) == (3.25, 5.5, 7.75)
+    assert (lf, uf) == (1.0, 10.0)  # sin outliers → bigotes = min/max
+
+    # 100 cae fuera de q3 + 1.5·IQR → el bigote superior llega a 5 (el outlier no se dibuja).
+    s2 = pd.Series([1, 2, 3, 4, 5, 100], dtype=float)
+    *_, uf2 = _box_stats(s2)
+    assert uf2 == 5.0
+
+
+def test_box_stats_degenerate_inputs_do_not_throw() -> None:
+    """Constante (IQR=0) → caja plana; NaN → dropna; ninguno lanza."""
+    import numpy as np
+    import pandas as pd
+
+    assert _box_stats(pd.Series([5.0, 5.0, 5.0])) == (5.0, 5.0, 5.0, 5.0, 5.0)
+    q1, med, q3, lf, uf = _box_stats(pd.Series([1.0, 2.0, np.nan, 4.0]))
+    assert lf == 1.0 and uf == 4.0
 
 
 # ── Frente 2 dispatch ──
