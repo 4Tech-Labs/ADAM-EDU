@@ -195,7 +195,7 @@ export function AuthCallbackPage() {
                 <p className="text-sm text-danger">
                     No se pudo completar el inicio de sesión. Intenta de nuevo.
                 </p>
-                <a href="/app/" className="text-sm underline hover:opacity-80">
+                <a href="/" className="text-sm underline hover:opacity-80">
                     Volver al inicio
                 </a>
             </div>
@@ -208,7 +208,7 @@ export function AuthCallbackPage() {
                 <p className="text-sm text-danger">{activationError}</p>
                 {activationFlow === "teacher_activate" ? (
                     <a
-                        href="/app/teacher/activate"
+                        href="/teacher/activate"
                         className="text-sm underline hover:opacity-80"
                     >
                         Volver a activación

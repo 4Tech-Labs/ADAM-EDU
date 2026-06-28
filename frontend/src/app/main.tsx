@@ -14,7 +14,7 @@ import { AuthProvider } from "./auth/AuthContext.tsx";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <BrowserRouter basename="/app/">
+    <BrowserRouter basename="/">
       {/*
        * QueryClientProvider debe envolver a AuthProvider.
        * Issue #6 migrará AuthContext para usar useQueryClient() — si el provider
