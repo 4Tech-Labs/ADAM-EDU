@@ -276,15 +276,18 @@ def test_non_clasificacion_fallback_schema_has_no_classification_columns(family:
 def test_clustering_fallback_schema_is_segmentation_panel() -> None:
     """Issue #452 — ml_ds+clustering fallback is an entity-level SEGMENTATION schema (no
     classification target, no churn/retention/financial time-series panel)."""
-    from case_generator.graph import _build_fallback_schema  # noqa: PLC0415
+    from case_generator.graph import (  # noqa: PLC0415
+        _MLDS_CLUSTERING_MAX_ROWS,
+        _build_fallback_schema,
+    )
 
     result = _build_fallback_schema(  # type: ignore[arg-type]
-        state={}, max_rows=200, profile="ml_ds", primary_family="clustering"
+        state={}, max_rows=_MLDS_CLUSTERING_MAX_ROWS, profile="ml_ds", primary_family="clustering"
     )
     names = {c["name"] for c in result["columns"]}
     assert {"recency_days", "frequency_count", "monetary_value"}.issubset(names)
     assert names.isdisjoint({"categoria", "churn_rate", "nps", "retention_m1", "revenue", "costs"})
-    assert result["n_rows"] == 200
+    assert result["n_rows"] == _MLDS_CLUSTERING_MAX_ROWS  # Issue #468 — clustering row count bump
 
 
 def test_clustering_fallback_reverts_to_generic_when_disabled() -> None:

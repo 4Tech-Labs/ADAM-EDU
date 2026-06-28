@@ -3366,6 +3366,13 @@ _CLUSTERING_SEGMENTATION_COLUMNS: tuple[dict, ...] = (
     {"name": "support_intensity", "type": "float", "description": "Intensidad de uso de soporte (interacciones/mes)",     "range_min": 0.0,  "range_max": 10.0, "nullable": False, "trend": None, "dependency": None},
 )
 
+# Row count for the ml_ds + clustering dataset (Issue #468). 200 was too few for a 12-D K-Means
+# fit (~50 points/cluster → noisy silhouette, unstable re-seeding) and clashed with the "segment N
+# users" narrative. 1000 entity rows stabilises the clusters; the silhouette band is recalibrated
+# via `_CLUSTERING_BLOB_SPREAD_FRAC` (0.115). Single source shared by `schema_designer` and the
+# deterministic band-lock tests; gated by `MLDS_CLUSTERING_STRUCTURE` (OFF → 200 generic ml_ds).
+_MLDS_CLUSTERING_MAX_ROWS = 1000
+
 
 def _build_clustering_fallback_schema(max_rows: int) -> dict:
     """Entity-level segmentation fallback schema for ml_ds + clustering (Issue #452).
@@ -5008,11 +5015,20 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     _effective_family = (primary_family or "clasificacion") if profile == "ml_ds" else ""
 
     # ml_ds+clasificacion: 600 filas (Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV).
+    # ml_ds+clustering: 1000 filas (Issue #468 — entity-level segmentation needs more points than
+    #   the 12-D K-Means fit had at 200; recalibrated band). Gated por el switch → OFF = 200 genérico.
     # ml_ds+otras familias: 200 filas — el GridSearchCV size cascade es exclusivo del
-    # notebook de clasificacion; regresion/clustering no necesitan 600 filas.
+    # notebook de clasificacion; regresion no necesita 600 filas.
     # business: 100 (midpoint de 80-120; el LLM elige n_rows estrictamente entre 80-120).
     _is_clasificacion_ml = profile == "ml_ds" and _effective_family == "clasificacion"
-    max_rows = 600 if _is_clasificacion_ml else (200 if profile == "ml_ds" else 100)
+    if _is_clasificacion_ml:
+        max_rows = 600
+    elif _effective_family == "clustering" and settings.mlds_clustering_structure:
+        max_rows = _MLDS_CLUSTERING_MAX_ROWS
+    elif profile == "ml_ds":
+        max_rows = 200
+    else:
+        max_rows = 100
 
     _schema_prompt = SCHEMA_DESIGNER_PROMPT_BY_FAMILY.get(
         _effective_family, SCHEMA_DESIGNER_PROMPT
@@ -5696,7 +5712,11 @@ def _generate_dataset_from_schema(
 # silhouette in the healthy band ~[0.45, 0.70] (neither trivial nor degenerate) and the
 # adjusted Rand index vs. the latent blob label stays ≥ 0.6. Tuned against the deterministic
 # golden oracle (tests/test_issue452_clustering_structure.py); do NOT change without re-running it.
-_CLUSTERING_BLOB_SPREAD_FRAC = 0.135
+# Issue #468 — RE-CALIBRATED 0.135 → 0.115 for the 200 → 1000 row bump (`_MLDS_CLUSTERING_MAX_ROWS`):
+# more rows fill in the blob tails and lower the silhouette (k=4 was the worst case, dropping to
+# ~0.44 < 0.45 at 600 rows with 0.135). At n=1000 spread 0.115 the bare fallback lands k3≈0.553 /
+# k4≈0.584, and a 300-contract Monte Carlo over augmented schemas stays in [0.49, 0.67] (0 out of band).
+_CLUSTERING_BLOB_SPREAD_FRAC = 0.115
 # K (number of latent segments) is chosen deterministically per case from this set.
 _CLUSTERING_K_CHOICES: tuple[int, ...] = (3, 4)
 
@@ -5826,6 +5846,69 @@ def _enforce_mlds_clustering_structure(
     return new_rows
 
 
+def _apply_clustering_entity_index(
+    rows: list,
+    schema: dict,
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+) -> tuple[list, dict]:
+    """Renombra el índice temporal ``period`` → ``user_id`` (entity-level) para ml_ds + clustering (Issue #468).
+
+    El generador genérico rellena ``period`` con etiquetas mensuales (``2023-01``…) porque trata la
+    columna como índice temporal. Para clustering la unidad de análisis es la ENTIDAD (cliente/
+    usuario), no el mes — la narrativa segmenta usuarios. Este post-step (espeja
+    ``_enforce_mlds_clustering_structure``) reescribe la columna a un identificador de entidad
+    determinista ``user_00001``… y la renombra a ``user_id`` en las filas Y en una copia del schema,
+    de modo que el CSV que ve el estudiante es entity-level (no una serie temporal mensual).
+
+    PURO copy-on-write (no muta las entradas → determinismo + thread-safety). ``user_id`` (str, token
+    ``id``) queda excluido del fit K-Means y de los charts (``_select_clustering_feature_columns`` lo
+    descarta por no-numérico y por el token ``id``) y el notebook #454 lo dropea por no-numérico.
+
+    ROBUSTO a un re-feed del schema renombrado (value-idempotente, no solo no-op): la columna índice
+    es ``period`` en la 1ª pasada (el generador genérico la rellena con etiquetas mensuales) o
+    ``user_id`` si se re-genera contra el schema YA renombrado que ``data_generator`` re-emite (un
+    retry de ``data_validator`` o un futuro checkpoint-skip de ``schema_designer`` haría que el
+    generador genérico rellene ``user_id`` con ``cat_N``). En AMBOS casos se (re)deriva
+    ``user_id = user_NNNNN`` de forma determinista, sobrescribiendo cualquier relleno categórico
+    obsoleto → el índice de entidad nunca se corrompe.
+
+    Gate (fuera de él → MISMOS objetos, byte-idéntico): ``enabled`` (kill-switch
+    ``MLDS_CLUSTERING_STRUCTURE``) AND ``profile == "ml_ds"`` AND ``primary_family == "clustering"``
+    (ESTRICTO, espeja ``_enforce_mlds_clustering_structure``).
+    """
+    if not enabled or profile != "ml_ds" or primary_family != "clustering":
+        return rows, schema
+    if not isinstance(rows, list) or not rows:
+        return rows, schema
+    # Normaliza la columna índice (``period`` 1ª pasada / ``user_id`` re-feed) al id de entidad.
+    if "period" in rows[0]:
+        index_key = "period"
+    elif "user_id" in rows[0]:
+        index_key = "user_id"
+    else:
+        return rows, schema
+
+    new_rows: list = []
+    for i, r in enumerate(rows):
+        rest = {k: v for k, v in r.items() if k != index_key}
+        new_rows.append({"user_id": f"user_{i + 1:05d}", **rest})
+
+    new_schema = dict(schema)
+    new_columns: list = []
+    for col in schema.get("columns", []):
+        c = dict(col)
+        if c.get("name") == "period":
+            c["name"] = "user_id"
+            c["type"] = "str"
+            c["description"] = "Identificador único de entidad/usuario"
+        new_columns.append(c)
+    new_schema["columns"] = new_columns
+    return new_rows, new_schema
+
+
 # ─────────────────────────────────────────────────────────
 # NODO 2 — DATA GENERATOR (Python puro, 0 tokens LLM)
 # ─────────────────────────────────────────────────────────
@@ -5887,15 +5970,39 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             enabled=settings.mlds_clustering_structure,
             target_k=_target_k,
         )
+        # Issue #468 — entity-level index: rename the monthly `period` to a `user_id` (user_00001…)
+        # so the clustering CSV the student reads is per-entity, not a monthly time series. No-op
+        # byte-idéntico fuera de ml_ds+clustering / con el switch off. Copy-on-write, resume-safe.
+        rows, schema = _apply_clustering_entity_index(
+            rows,
+            schema,
+            profile=profile,
+            primary_family=_clustering_family,
+            enabled=settings.mlds_clustering_structure,
+        )
         constraints = schema.get("constraints", {})
         constraints_with_count = {**constraints, "n_rows_expected": schema.get("n_rows", 100)}
 
         print(f"[data_generator] {len(rows)} filas generadas — Python puro, 0 tokens LLM")
-        return {
+        node_out: dict[str, Any] = {
             "doc7_dataset": rows,
             "dataset_constraints": constraints_with_count,
             "current_agent": "data_generator",
         }
+        # Re-emit the entity-indexed schema so `dataset_metadata`/`protected_columns` (and the M2
+        # EDA prompt context) reference `user_id`, not the removed `period`. Gated to ml_ds+clustering
+        # → every other family's return is byte-identical. Re-feed-safe: if this `user_id` schema is
+        # later re-read by `data_generator` (a data_validator retry, or a future schema_designer
+        # checkpoint-skip), the generic generator would fill `user_id` with `cat_N`, but
+        # `_apply_clustering_entity_index` re-derives `user_id = user_NNNNN` from the row index in that
+        # pass too (value-idempotent), so the entity index is never corrupted.
+        if (
+            settings.mlds_clustering_structure
+            and profile == "ml_ds"
+            and _clustering_family == "clustering"
+        ):
+            node_out["dataset_schema"] = schema
+        return node_out
 
     except Exception as e:
         logger.error("[data_generator] ERROR: %s", e, exc_info=True)

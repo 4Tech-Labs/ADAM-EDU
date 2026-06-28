@@ -17,6 +17,7 @@ from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 from case_generator.graph import (
+    _MLDS_CLUSTERING_MAX_ROWS,
     _build_clustering_fallback_schema,
     _build_fallback_schema,
     _enforce_mlds_clustering_structure,
@@ -28,7 +29,7 @@ _STATE = {"doc1_anexo_financiero": "Ingresos anuales: $10M"}
 
 
 def _clustering_rows(enabled: bool):
-    schema = _build_clustering_fallback_schema(max_rows=200)
+    schema = _build_clustering_fallback_schema(max_rows=_MLDS_CLUSTERING_MAX_ROWS)
     rows = _generate_dataset_from_schema(schema, profile="ml_ds")
     rows, labels = _enforce_mlds_clustering_structure(
         rows,
@@ -81,7 +82,7 @@ def test_structure_off_is_unimodal_red_control() -> None:
 
 
 def test_helper_is_copy_on_write() -> None:
-    schema = _build_clustering_fallback_schema(max_rows=200)
+    schema = _build_clustering_fallback_schema(max_rows=_MLDS_CLUSTERING_MAX_ROWS)
     rows = _generate_dataset_from_schema(schema, profile="ml_ds")
     snapshot = [dict(r) for r in rows]
     out = _enforce_mlds_clustering_structure(
@@ -92,7 +93,7 @@ def test_helper_is_copy_on_write() -> None:
 
 
 def test_helper_is_deterministic() -> None:
-    schema = _build_clustering_fallback_schema(max_rows=200)
+    schema = _build_clustering_fallback_schema(max_rows=_MLDS_CLUSTERING_MAX_ROWS)
     a = _enforce_mlds_clustering_structure(
         _generate_dataset_from_schema(schema, profile="ml_ds"),
         schema, profile="ml_ds", primary_family="clustering", enabled=True,

@@ -198,6 +198,12 @@ class NodeEvalInputs:
     # ``check_clustering_eda_no_target_charts``; gate-protects against a chart regression that reopens
     # the LLM-JSON supervised path. RED control: an LLM-JSON chart with "vs objetivo"/regression fails.
     clustering_eda_no_target_charts_ok: bool = True
+    # ml_ds + clustering dataset is ENTITY-level, not a monthly time series (Issue #468): the unit of
+    # analysis is the entity (user/customer), so the index column must be a `user_id` (`user_00001`…),
+    # NOT a sequential monthly `period` (`2023-01`…). True (n/a) for non-clustering jobs / empty rows.
+    # Computed via ``check_clustering_entity_index``; gate-protects against a data-layer regression that
+    # reverts to the monthly period index. RED control: rows with a monthly `period` column fail.
+    clustering_entity_index_ok: bool = True
 
 
 @dataclass
@@ -293,6 +299,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "clustering M2 chart failure: a supervised 'feature vs target' / model-output chart "
             "leaked into the data-only pre-model EDA panel"
+        )
+    if not r.clustering_entity_index_ok:
+        reasons.append(
+            "clustering data failure: dataset is time-indexed (monthly `period`) instead of "
+            "entity-level (`user_id`) — analysis unit contradicts the segmentation narrative"
         )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
@@ -624,6 +635,35 @@ def check_clustering_structure(
         if float(adjusted_rand_score(latent_labels, labels)) < ari_floor:
             return False
     return True
+
+
+def _is_monthly_period(value: object) -> bool:
+    """True for a sequential monthly index label shaped ``YYYY-MM`` (e.g. ``2023-01``)."""
+    return (
+        isinstance(value, str)
+        and len(value) == 7
+        and value[:4].isdigit()
+        and value[4] == "-"
+        and value[5:].isdigit()
+    )
+
+
+def check_clustering_entity_index(rows: list) -> bool:
+    """Pure oracle (Issue #468): is the ml_ds+clustering dataset ENTITY-level, not time-indexed?
+
+    The unit of analysis for a segmentation case is the entity (user/customer), so the index column
+    must be a ``user_id`` (``user_00001``…), NOT a sequential monthly ``period`` (``2023-01``…).
+    Returns False when a row still carries a monthly ``period``-shaped index (the RED control / a
+    data-layer regression that reverts to the time series). True (n/a) when rows are empty. No LLM /
+    network / API key.
+    """
+    if not rows:
+        return True
+    first = rows[0]
+    if _is_monthly_period(first.get("period")):
+        return False
+    uid = first.get("user_id")
+    return isinstance(uid, str) and uid.startswith("user_")
 
 
 # ── Issue #467 — deterministic clustering data↔narrative k coherence oracle ───

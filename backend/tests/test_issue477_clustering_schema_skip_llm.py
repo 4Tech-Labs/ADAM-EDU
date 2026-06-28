@@ -74,7 +74,10 @@ def test_clustering_enabled_skips_llm(monkeypatch) -> None:  # type: ignore[no-u
     col_names = {c["name"] for c in schema["columns"]}
     assert col_names == _EXPECTED_CLUSTERING_COLUMNS
     assert "categoria" not in col_names  # clustering is unsupervised — no target column
-    assert schema["n_rows"] == 200
+    # Issue #468 — the clustering row count is bumped to `_MLDS_CLUSTERING_MAX_ROWS` (1000). The
+    # schema_designer output keeps `period`; the entity-index rename to `user_id` happens downstream
+    # in `data_generator`, so `_EXPECTED_CLUSTERING_COLUMNS` (period) is unchanged here.
+    assert schema["n_rows"] == graph_module._MLDS_CLUSTERING_MAX_ROWS
 
 
 def test_clustering_disabled_runs_llm(monkeypatch) -> None:  # type: ignore[no-untyped-def]
