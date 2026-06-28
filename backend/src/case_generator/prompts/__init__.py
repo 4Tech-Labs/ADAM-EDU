@@ -1190,7 +1190,7 @@ conecta hallazgos con impacto real y sopesa trade-offs ejecutivos.
   {{
     "numero": 1,
     "titulo": "string corto (≤8 palabras)",
-    "enunciado": "string (pregunta con métricas numéricas y opciones A/B/C explícitas)",
+    "enunciado": "string (pregunta ABIERTA con métricas numéricas; SIN opciones de respuesta etiquetadas A/B/C)",
     "solucion_esperada": "string (máx 60 palabras)",
     "bloom_level": "analysis|evaluation|synthesis",
     "m4_section_ref": "4.1|4.2|4.3|4.4|4.5"
@@ -1205,7 +1205,10 @@ conecta hallazgos con impacto real y sopesa trade-offs ejecutivos.
    por el M4 y el razonamiento esperado del estudiante para llegar a ella.
 
 # Your Boundaries
-- Solo JSON schema. Las preguntas DEBEN citar métricas numéricas del M4 y opciones A/B/C.
+- Solo JSON schema. Las preguntas DEBEN citar métricas numéricas del M4. Son preguntas ABIERTAS:
+  NO incrustes opciones de respuesta etiquetadas A/B/C (colisionan con las Opción A/B/C estratégicas
+  del caso). Si recomiendas una opción estratégica en `solucion_esperada`, nómbrala por su LETRA REAL
+  del análisis del M4 (§4.5), sin inventar ni cruzar una letra de respuesta.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}
@@ -1252,7 +1255,7 @@ conecta hallazgos con impacto real de VALOR (según el MARCO DE VALOR) y sopesa 
   {{
     "numero": 1,
     "titulo": "string corto (≤8 palabras)",
-    "enunciado": "string (pregunta con métricas numéricas y opciones A/B/C explícitas)",
+    "enunciado": "string (pregunta ABIERTA con métricas numéricas; SIN opciones de respuesta etiquetadas A/B/C)",
     "solucion_esperada": "string (máx 60 palabras)",
     "bloom_level": "analysis|evaluation|synthesis",
     "m4_section_ref": "4.1|4.2|4.3|4.4|4.5"
@@ -1267,7 +1270,10 @@ conecta hallazgos con impacto real de VALOR (según el MARCO DE VALOR) y sopesa 
    por el M4 y el razonamiento esperado del estudiante para llegar a ella.
 
 # Your Boundaries
-- Solo JSON schema. Las preguntas DEBEN citar métricas numéricas del M4 y opciones A/B/C.
+- Solo JSON schema. Las preguntas DEBEN citar métricas numéricas del M4. Son preguntas ABIERTAS:
+  NO incrustes opciones de respuesta etiquetadas A/B/C (colisionan con las Opción A/B/C estratégicas
+  del caso). Si recomiendas una opción estratégica en `solucion_esperada`, nómbrala por su LETRA REAL
+  del análisis del M4 (§4.5), sin inventar ni cruzar una letra de respuesta.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}
@@ -1486,10 +1492,11 @@ negocio.
   probabilidad puede dirigir el presupuesto al lugar equivocado; pide una mitigación concreta en
   términos de negocio (a quién priorizar, con qué presupuesto, cómo confirmar el supuesto), no una
   receta técnica del modelo.
-- **Coherencia opción↔solución:** si una pregunta plantea opciones, enúncialas con letras
-  (A/B/C) y en `solucion_esperada` recomienda SOLO una de las letras presentadas en ese mismo
-  enunciado, nombrándola por su letra; nunca una opción ausente del enunciado ni una letra fuera
-  de A/B/C.
+- **Coherencia opción↔solución:** las preguntas son ABIERTAS — NO incrustes opciones de respuesta
+  etiquetadas A/B/C (colisionan con las Opción A/B/C estratégicas del caso). Si `solucion_esperada`
+  recomienda una opción estratégica del caso, nómbrala por su LETRA REAL tal como aparece en el M4;
+  PROHIBIDO crear answer-choices A/B/C nuevos, barajar las estratégicas bajo otras letras, o cruzar
+  una letra de respuesta con la estratégica.
 - **Honestidad:** usa únicamente cifras del caso (Exhibits, M2, M4). NO inventes probabilidades,
   tasas ni valores nuevos; razona sobre la lógica de priorización, no sobre métricas del modelo.
 """

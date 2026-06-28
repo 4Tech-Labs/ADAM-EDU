@@ -1,8 +1,9 @@
 """M4 (Impacto) question option coherence — deterministic internal coherence guard.
 
 Covers the reported defect for Module 4: an ``solucion_esperada`` recommending an option that
-does not exist in the case, or one its own ``enunciado`` never presented. Scope is the
-classification family for BOTH profiles (business + ml_ds).
+does not exist in the case, or one its own ``enunciado`` never presented. Since #481 the wrapper is
+GENERAL (all families, both profiles) — the embedded-MCQ defect is not classification-specific; the
+#481 detector layer + its drift-locks live in ``test_issue481_m4_open_questions.py``.
 
 Three layers under test:
   1. The REUSED pure validator ``m1_grounding.validate_question_option_coherence(preguntas, "")``
@@ -12,8 +13,8 @@ Three layers under test:
   2. The prompt layer (defense-in-depth, #M4-coherence): both classification question prompts carry
      an option↔solution coherence boundary; the generic prompt does not (non-clf unaffected).
   3. The graph wrapper ``graph._apply_m4_questions_option_coherence`` — reprompt-once-then-DEGRADE,
-     gated to the classification family + kill-switch, identity-guarded on ``numero`` (the
-     ``M4-Q{numero}`` grading key), best-effort.
+     general (all families) behind the ``m4_question_coherence`` kill-switch, identity-guarded on
+     ``numero`` (the ``M4-Q{numero}`` grading key), best-effort.
 
 Pure-Python: no DB, no real LLM, no network.
 """
@@ -26,6 +27,7 @@ import string
 import pytest
 
 from case_generator.m1_grounding import validate_question_option_coherence
+from case_generator.m4_grounding import detect_embedded_mcq_options
 from case_generator.prompts import (
     M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
     M4_QUESTIONS_GENERATOR_PROMPT,
@@ -319,17 +321,32 @@ class TestWrapper:
         out = _invoke(fake, _state(profile="ml_ds", algoritmos=[]), _BAD)
         assert fake.calls == 1
 
-    def test_gate_noop_for_non_classification_family(self) -> None:
-        fake = _FakeStructuredLLM()  # would raise if invoked
+    def test_gate_fires_for_non_classification_family(self) -> None:
+        # #481: the guard is now GENERAL (not classification-only) — the defect is general (M4 of
+        # every family). A non-clf family with a violating pass-1 now reprompts.
+        fake = _FakeStructuredLLM([_CLEAN_RESULT])
         out = _invoke(fake, _state(algoritmos=["Linear Regression"]), _BAD)
-        assert fake.calls == 0
-        assert out == _BAD
+        assert fake.calls == 1
+        assert validate_question_option_coherence(out, "") == []
 
-    def test_gate_noop_for_business_without_algorithms(self) -> None:
-        fake = _FakeStructuredLLM()
+    def test_gate_fires_for_business_without_algorithms(self) -> None:
+        # #481: general gate — business without algorithms also gets the coherence guard now.
+        fake = _FakeStructuredLLM([_CLEAN_RESULT])
         out = _invoke(fake, _state(profile="business", algoritmos=[]), _BAD)
-        assert fake.calls == 0
-        assert out == _BAD
+        assert fake.calls == 1
+
+    def test_embedded_mcq_triggers_reprompt(self) -> None:
+        # #481: an enunciado embedding answer-choices "A)/B)/C)" must trigger the guard even though
+        # the shared validator (word-form "Opción X") cannot see the answer-letter form.
+        bad_mcq = _questions(
+            "Interpreta el AUC: A) modelo perfecto, B) overfitting, C) sin señal.",
+            "La opción A es correcta.",
+        )
+        fake = _FakeStructuredLLM([_CLEAN_RESULT])
+        out = _invoke(fake, _state(), bad_mcq)
+        assert fake.calls == 1
+        assert out != bad_mcq  # corrected, not degraded to the MCQ-bad pass-1
+        assert all(not detect_embedded_mcq_options(q["enunciado"]) for q in out)
 
     def test_kill_switch_off_is_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(graph_module.settings, "m4_question_coherence", False)

@@ -70,6 +70,13 @@ class NodeEvalInputs:
     # enunciado). True (n/a) for non-classification jobs. Computed via
     # ``check_m4_question_option_coherence`` (reuses the production validator).
     m4_questions_coherence_ok: bool = True
+    # M4 questions are OPEN (#481): no question ``enunciado`` may embed its own answer-choices A/B/C
+    # (which collide / cross-map with the strategic Opción A/B/C). True (n/a) when a job carries no M4
+    # questions. Computed via ``check_m4_questions_no_embedded_mcq`` (reuses the production
+    # ``m4_grounding.detect_embedded_mcq_options``), so a future M4-questions prompt or tier regression
+    # that re-embeds MCQ answer-choices fails the golden gate. Applies to ALL families (the defect is
+    # general, not classification-only).
+    m4_questions_no_embedded_mcq_ok: bool = True
     # M5 memorándum coherence: every classification golden job's M5 memo must be coherent (does not
     # name the unselected model; cites no model metric absent from the executed M3 metrics; does not
     # recommend a strategic option that does not exist in the case). True (n/a) for non-classification
@@ -212,6 +219,15 @@ class NodeEvalInputs:
     # that ships LaTeX math fails the gate. The DETERMINISTIC cure is the strip in ``sanitize_markdown``;
     # this gate-protects it on the frozen golden set.
     narrative_no_latex_math_ok: bool = True
+    # ml_ds + clustering data_gap_warnings NAME no supervised target (Issue #482): #466 strips the
+    # leaked target COLUMN from the CSV, but the architect coherence check and the schema validator
+    # still emit a warning naming the orphan target, which leaks into M2 EDA / M3-content (the student
+    # reads a column absent from the CSV). ``_filter_clustering_target_warnings`` drops both at the
+    # schema_designer choke point. True (n/a) for non-clustering jobs / empty warnings. Computed via
+    # ``check_clustering_no_target_warnings``; gate-protects against a regression that re-introduces a
+    # target-naming warning. RED control: a warnings list with a ``target '…'`` or
+    # ``target_semantic_mismatch`` entry fails.
+    clustering_no_target_warning_ok: bool = True
 
 
 @dataclass
@@ -244,6 +260,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M3 question coherence failure: section_ref or unselected-model leak")
     if not r.m4_questions_coherence_ok:
         reasons.append("M4 question option coherence failure: nonexistent or unpresented option")
+    if not r.m4_questions_no_embedded_mcq_ok:
+        reasons.append("M4 question coherence failure: enunciado embeds MCQ answer-choices A/B/C")
     if not r.m5_questions_coherence_ok:
         reasons.append(
             "M5 memorándum coherence failure: unselected-model leak, unanchored metric, or "
@@ -317,6 +335,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "narrative coherence failure: literal LaTeX math delimiter ($k$ / $5000 - 50$) "
             "leaked into prose (the case-viewer has no math renderer)"
+        )
+    if not r.clustering_no_target_warning_ok:
+        reasons.append(
+            "clustering narrative failure: a data_gap_warning names a stripped supervised target, "
+            "leaking a column absent from the CSV into M2 EDA / M3-content"
         )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
@@ -436,6 +459,22 @@ def check_m4_question_option_coherence(preguntas: list[dict]) -> bool:
     from case_generator.m1_grounding import validate_question_option_coherence
 
     return not validate_question_option_coherence(preguntas, "")
+
+
+def check_m4_questions_no_embedded_mcq(preguntas: list[dict]) -> bool:
+    """Pure oracle: do the M4 questions avoid embedding MCQ answer-choices A/B/C (#481)?
+
+    Reuses the production detector ``m4_grounding.detect_embedded_mcq_options`` (single source of
+    truth), so a future M4-questions prompt or tier regression that re-embeds answer-choices A/B/C in an
+    ``enunciado`` (colliding / cross-mapping with the strategic Opción A/B/C) fails the golden gate.
+    Applies to ALL families. Function-level import keeps this support module lightweight.
+    """
+    from case_generator.m4_grounding import detect_embedded_mcq_options
+
+    for pregunta in preguntas:
+        if isinstance(pregunta, dict) and detect_embedded_mcq_options(pregunta.get("enunciado")):
+            return False
+    return True
 
 
 def check_m4_deployment_section_unique(m4_content: str) -> bool:
@@ -814,6 +853,28 @@ def check_clustering_no_target(rows: list | None) -> bool:
         if non_null and non_null <= {0, 1}:
             return False
     return True
+
+
+def check_clustering_no_target_warnings(data_gap_warnings: list | None) -> bool:
+    """Pure oracle (Issue #482): do the ml_ds+clustering data_gap_warnings NAME no supervised target?
+
+    #466 strips the leaked target COLUMN from the CSV, but two upstream emitters still produce a
+    warning that names the orphan ``contract.target_column.name`` — the architect coherence check
+    (``target_semantic_mismatch: … target_column.name='…'``) and the schema validator
+    (``target '<name>' … no fue producido…``). Both reach M2 EDA and, via ``contexto_m2``, M3-content,
+    so the student reads a column absent from the downloaded CSV. ``_filter_clustering_target_warnings``
+    drops both at the schema_designer choke point. True iff NO warning starts with ``target '``
+    (validator) nor ``target_semantic_mismatch`` (architect). Feature-missing / leakage warnings
+    (``feature '…'``) are NOT target warnings → never flagged. Pure, deterministic, no LLM/network/API
+    key. Empty/absent → True (n/a). RED control: a list with either target-warning shape fails.
+    """
+    if not data_gap_warnings:
+        return True
+    return not any(
+        isinstance(w, str)
+        and (w.lstrip().startswith("target '") or w.lstrip().startswith("target_semantic_mismatch"))
+        for w in data_gap_warnings
+    )
 
 
 def check_clustering_eda_no_target_charts(charts: list | None) -> bool:

@@ -233,6 +233,7 @@ from case_generator.m5_grounding import validate_m5_questions_coherence
 from case_generator.m6_grounding import log_out_of_roster_mentions
 from case_generator.m4_grounding import (
     build_m4_chart_grounding_reprompt,
+    detect_embedded_mcq_options,
     drop_sensitivity_charts,
     log_chart_benchmark_fabrication,
     log_duplicate_deployment_sections,
@@ -1562,14 +1563,13 @@ _M1_QUESTIONS_OPTION_REPROMPT_HEADER = (
 )
 _M4_QUESTIONS_OPTION_REPROMPT_HEADER = (
     "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE OPCIONES (Módulo 4)\n"
-    "Algunas preguntas recomiendan en `solucion_esperada` una opción estratégica que NO "
-    "existe en el caso, o que el propio enunciado de esa pregunta no presenta al estudiante. "
-    "El caso define un conjunto cerrado de opciones (A, B, C). Regenera EXACTAMENTE 3 "
-    "preguntas con el MISMO schema y los MISMOS `numero` (1, 2, 3): el enunciado de cada "
-    "pregunta de decisión DEBE presentar las opciones (A/B/C) entre las que el estudiante "
-    "elige, y `solucion_esperada` SOLO puede recomendar una de las opciones presentadas en "
-    "su enunciado, nombrándola por su letra. NUNCA recomiendes una opción inexistente ni "
-    "ausente del enunciado. Incoherencias detectadas:\n"
+    "Las preguntas del Módulo 4 son ABIERTAS: el enunciado NO debe incrustar opciones de "
+    "respuesta etiquetadas A/B/C (colisionan con las opciones estratégicas A/B/C del caso). "
+    "Regenera EXACTAMENTE 3 preguntas con el MISMO schema y los MISMOS `numero` (1, 2, 3): "
+    "reescribe cada enunciado como pregunta abierta SIN answer-choices A/B/C. Si "
+    "`solucion_esperada` recomienda una opción estratégica del caso, nómbrala por su LETRA "
+    "REAL tal como aparece en el análisis del Módulo 4 (§4.5), sin inventar ni cruzar una "
+    "letra de respuesta. NUNCA recomiendes una opción inexistente. Incoherencias detectadas:\n"
 )
 
 
@@ -1774,6 +1774,7 @@ def _apply_m1_questions_option_coherence(
 _M4_VIOLATION_CODES = (
     ("OPTION_NONEXISTENT", "option_nonexistent"),
     ("OPTION_NOT_PRESENTED", "option_not_presented"),
+    ("MCQ_OPCIONES_EMBEBIDAS", "mcq_opciones_embebidas"),
 )
 
 
@@ -1787,33 +1788,50 @@ def _m4_violation_types(violations: list[str]) -> list[str]:
     return codes
 
 
+def _m4_question_violations(preguntas_dict: list[dict]) -> list[str]:
+    """All M4 question option-coherence violations (#481).
+
+    Two pure rules over the same set, so the pass-1 check and the post-reprompt re-validation apply the
+    SAME contract: (1) the shared #416 validator with the FLOOR universe (``dilema_brief=""``) — a
+    ``solucion_esperada`` that recommends a nonexistent / unpresented A/B/C option; (2) the embedded-MCQ
+    detector — an ``enunciado`` that incrusta its OWN answer-choices ("A) … B) … C) …"), which collide
+    and historically cross-map with the strategic Opción A/B/C. The validator is letter-agnostic on the
+    WORD "Opción X"; the detector covers the answer-letter "X)" form it cannot see.
+    """
+    violations = list(validate_question_option_coherence(preguntas_dict, ""))
+    for pregunta in preguntas_dict:
+        if isinstance(pregunta, dict):
+            violations.extend(detect_embedded_mcq_options(pregunta.get("enunciado")))
+    return violations
+
+
 def _apply_m4_questions_option_coherence(
     *, llm: Any, prompt: str, state: ADAMState, preguntas_dict: list[dict]
 ) -> list[dict]:
     """Validate + reprompt-once-then-DEGRADE the M4 (Impacto) question option coherence.
 
-    Reuses the M1 option validator with the FLOOR universe (M4 has no ``dilema_brief``): a
-    ``solucion_esperada`` may only recommend an option the case defines (A/B/C) and that its
-    own ``enunciado`` presents. Gated to the classification family for BOTH profiles
-    (business + ml_ds) behind the ``m4_question_coherence`` kill-switch; a byte-identical
-    no-op otherwise. On a violation it reprompts ONCE (one Flash call); the corrected set is
-    accepted ONLY if it preserves the question count AND the ``numero`` sequence (the grading
-    key ``M4-Q{numero}`` in shared.student_reads/teacher_reads) AND is now coherent —
-    otherwise it degrades to the pass-1 questions. ``GeneradorPreguntasOutput`` (unlike M1's
-    schema) does NOT enforce count/numbering, so the identity guard is load-bearing.
-    Best-effort: ANY throw (including a reprompt ``RuntimeError``) degrades to pass-1. Never
-    raises, so the job always completes.
+    The M4 questions are OPEN (#481): the only A/B/C in a case are the M1 *strategic* options, named by
+    their REAL letter in ``solucion_esperada``. ``_m4_question_violations`` flags both a recommended
+    option that is nonexistent/unpresented (the shared #416 validator) AND an ``enunciado`` that
+    embeds its own answer-choices A/B/C (the #481 detector). Runs for ALL families (the defect is
+    general, not classification-only) behind the ``m4_question_coherence`` kill-switch; a no-op when the
+    switch is off. On a violation it reprompts ONCE (one Flash call); the corrected set is accepted ONLY
+    if it preserves the question count AND the ``numero`` sequence (the grading key ``M4-Q{numero}`` in
+    shared.student_reads/teacher_reads) AND is now coherent — otherwise it degrades to the pass-1
+    questions. ``GeneradorPreguntasOutput`` (unlike M1's schema) does NOT enforce count/numbering, so
+    the identity guard is load-bearing. Best-effort: ANY throw (including a reprompt ``RuntimeError``)
+    degrades to pass-1. Never raises, so the job always completes.
 
-    Known coverage limit (same trade-off as M1, zero false positives): only A/B/C LETTER
-    options are checked. Options named as models/prose ("desplegar Random Forest") or an
-    enunciado that names a single option are not flagged; the M4 questions prompt boundary
-    nudges the LLM to the letter form so the validator covers the reported defect.
+    Known coverage limit (zero false negatives are not promised): only UPPERCASE A/B/C letter forms are
+    checked. A lowercase MCQ, or a pure-``solucion_esperada`` cross-map with no enunciado markers, is
+    not flagged; the prompt fix (open questions, name the real letter) is the primary defense and a
+    detector false positive only degrades to the already-good pass-1 question (never fails a job).
     """
     log_extra = {"node": "m4_questions_generator", "case_id": state.get("case_id")}
     try:
-        if not settings.m4_question_coherence or not _is_classification_family(state):
+        if not settings.m4_question_coherence:
             return preguntas_dict
-        violations = validate_question_option_coherence(preguntas_dict, "")
+        violations = _m4_question_violations(preguntas_dict)
         if not violations:
             return preguntas_dict
         logger.info(
@@ -1846,7 +1864,7 @@ def _apply_m4_questions_option_coherence(
                 extra=log_extra,
             )
             return preguntas_dict
-        residual = validate_question_option_coherence(corrected, "")
+        residual = _m4_question_violations(corrected)
         if not residual:
             logger.info(
                 "[m4_questions] coherencia de opciones M4 corregida por reprompt",
@@ -4981,6 +4999,49 @@ def _enforce_mlds_clustering_no_target(
     return new_schema
 
 
+def _filter_clustering_target_warnings(
+    warnings: list[str],
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+) -> list[str]:
+    """Issue #482 — drop data_gap_warnings que NOMBRAN un target supervisado en ml_ds+clustering.
+
+    Clustering es no supervisado: ``_enforce_mlds_clustering_no_target`` (#466) stripea la COLUMNA
+    target del CSV, pero DOS emisores upstream aún producen un warning que nombra ese target huérfano
+    (``contract.target_column.name``, p. ej. ``dummy_target_ignored_for_clustering``):
+      (1) el architect ``_validate_target_semantic_coherence`` (sembrado en ``data_gap_warnings`` en
+          ``case_architect``; ungated por familia — dispara cuando el TÍTULO trae un keyword de
+          ``_TITLE_TO_TARGET_TOKENS``), y
+      (2) el validador ``_validate_schema_against_contract`` (``"target '<name>' … no fue
+          producido…"``; determinista en todo caso stripeado).
+    Ambos terminan en el ``warnings_payload`` de ``schema_designer`` y de ahí a M2 EDA
+    (``{data_gap_warnings_block}``) y, vía ``contexto_m2``, a M3-content → el estudiante lee una
+    columna ausente del CSV (#482). Este filtro corre en el ÚNICO choke point de ``schema_designer``,
+    DESPUÉS de fusionar todos los warnings, así que cubre ambos emisores (y cualquier futuro).
+
+    Prefix-based sobre las DOS únicas formas que nombran el target en todo el código: ``"target '"``
+    (validador) y ``_TARGET_SEMANTIC_MISMATCH_TOKEN`` (architect). Los warnings de feature-missing
+    (``"feature '…'"``) y de leakage se PRESERVAN → cero falsos positivos (clustering nunca tiene un
+    target legítimo, así que cualquier warning de target es espurio). Fuera de ml_ds+clustering /
+    kill-switch off → devuelve el MISMO objeto (byte-idéntico). Reusa el switch ``MLDS_CLUSTERING_NO_TARGET``.
+    """
+    if not enabled or profile != "ml_ds" or primary_family != "clustering":
+        return warnings
+    return [
+        w
+        for w in warnings
+        if not (
+            isinstance(w, str)
+            and (
+                w.lstrip().startswith("target '")
+                or w.lstrip().startswith(_TARGET_SEMANTIC_MISMATCH_TOKEN)
+            )
+        )
+    ]
+
+
 def _contract_with_enforced_target(contract: dict | None, target_name: str | None) -> dict | None:
     """Reescribe ``target_column`` del contrato al target binario que el spine garantizó.
 
@@ -5219,6 +5280,13 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 warnings_payload.extend(leakage)
             if biz_notes:
                 warnings_payload.extend(biz_notes)
+            # Issue #482 — quita los warnings que nombran el target stripeado de clustering (architect
+            # coherence + validador) antes de persistir; M2 EDA y M3-content dejan de citar una columna
+            # ausente del CSV. No-op byte-idéntico fuera de ml_ds+clustering / switch off.
+            warnings_payload = _filter_clustering_target_warnings(
+                warnings_payload, profile=profile, primary_family=primary_family,
+                enabled=settings.mlds_clustering_no_target,
+            )
             node_out: dict[str, Any] = {
                 "dataset_schema": schema_result,
                 "data_gap_warnings": warnings_payload,
@@ -5274,6 +5342,12 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         warnings_payload.extend(leakage)
     if biz_notes:
         warnings_payload.extend(biz_notes)
+    # Issue #482 — mismo filtro de warnings de target stripeado en el fallback. Clustering corre ESTE
+    # path (determinista por #477), así que este es el filtro que actúa en producción.
+    warnings_payload = _filter_clustering_target_warnings(
+        warnings_payload, profile=profile, primary_family=primary_family,
+        enabled=settings.mlds_clustering_no_target,
+    )
     node_out = {
         "dataset_schema": fallback_schema,
         "data_gap_warnings": warnings_payload,
