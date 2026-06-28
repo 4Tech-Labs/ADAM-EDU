@@ -740,7 +740,8 @@ def test_get_m4_llm_uses_pro_medium_with_pro_low_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Fase 1 cost cut: M4 primary thinking "high"→"medium" (stays on Pro);
-    # the Pro fallback drops to "low". Model tier and fallback count unchanged.
+    # the Pro fallback drops to "low". M4 is a critical node: the WHOLE net is Pro
+    # (direct Pro + GA-stable gemini-2.5-pro), never Flash. Fallback count unchanged.
     constructed: list[dict] = []
 
     class _FakeGemini:
@@ -763,9 +764,12 @@ def test_get_m4_llm_uses_pro_medium_with_pro_low_fallback(
     assert constructed[1]["thinking_level"] == "low"
     assert constructed[1]["max_output_tokens"] == 24576
     assert constructed[2]["model"] == "writer-override"
+    assert constructed[2]["thinking_level"] == "medium"
     assert constructed[2]["max_output_tokens"] == 24576
-    assert constructed[3]["model"] == "gemini-2.5-flash"
+    # Critical-node net stays Pro: the GA-stable tier is gemini-2.5-pro, not Flash.
+    assert constructed[3]["model"] == "gemini-2.5-pro"
     assert constructed[3]["max_output_tokens"] == 24576
+    assert not any("flash" in c["model"].lower() for c in constructed)
 
 
 def test_get_m5_llm_uses_pro_medium_with_pro_low_fallback(
@@ -823,10 +827,12 @@ def test_m4_content_uses_configurable_pro_llm(
     update = graph_module.m4_content_generator(_base_state(), config={})
 
     assert update["m4_content"] == "El AUC fue 72% y se mantiene dentro del bloque computado."
+    # m4 is a critical node: the call site passes architect_model (Pro) as the fallback,
+    # NOT writer_model (Flash), so the whole net stays Pro.
     assert factory_kwargs == [
         {
             "model": "pro-override",
-            "fallback_model": "writer-override",
+            "fallback_model": "pro-override",
             "temperature": 0.5,
         }
     ]
