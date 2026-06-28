@@ -223,6 +223,7 @@ from case_generator.m1_grounding import (
     validate_question_option_coherence,
     validate_questions_exhibit_coherence,
 )
+from case_generator.m1_grounding import strip_latex_math as _strip_latex_math
 from case_generator.m2_grounding import validate_eda_questions_coherence
 from case_generator.m3_grounding import (
     allowed_sections_for,
@@ -756,7 +757,7 @@ def _compute_dataset_summary(dataset: list) -> tuple:
     return json.dumps(summary, ensure_ascii=False), len(dataset)
 
 
-def sanitize_markdown(text: str) -> str:
+def sanitize_markdown(text: str, *, strip_latex_math: bool = True) -> str:
     """Escudo de formato: limpia markdown code blocks y normaliza tablas."""
     if not text:
         return ""
@@ -767,7 +768,14 @@ def sanitize_markdown(text: str) -> str:
     # 3. Normalizar separadores de tablas (prevenir más de 3 guiones que rompen el parser)
     text = re.sub(r'-{4,}', '---', text)
     text = text.strip()
-    # 4. Backstop USD-only (#377): reetiqueta cualquier moneda no-USD pegada a una cifra
+    # 4. Strip de LaTeX matemático (#480): el case-viewer no tiene KaTeX/MathJax, así que un
+    #    `$k$` / `$5000.0 - 50.0$` llega literal al estudiante. Determinista + currency-safe
+    #    (disjunto de `enforce_usd_currency`, que nunca lee un `$` pelado → el orden no importa).
+    #    Kill-switch CASE_STRIP_LATEX_MATH. El M3 NOTEBOOK se EXCLUYE (`strip_latex_math=False`):
+    #    se consume en Colab/Jupyter, que SÍ renderiza math, y su código puede llevar `$` (shell).
+    if strip_latex_math and settings.case_strip_latex_math:
+        text = _strip_latex_math(text)
+    # 5. Backstop USD-only (#377): reetiqueta cualquier moneda no-USD pegada a una cifra
     #    (€/£/EUR/COP/MXN/R$/…) a USD. Punto DRY que cubre TODA la prosa downstream que pasa por
     #    aquí (narrativa M1 del writer, EDA M2, narrativa M4/M5). Byte-idéntico para texto ya en
     #    USD/$. Kill-switch CASE_USD_CURRENCY_ENFORCE. La FUENTE (campos del architect, structured
@@ -1470,12 +1478,22 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             # fields bypass sanitize_markdown). Best-effort, magnitude-preserving, kill-switch
             # gated; byte-identical when the field is already USD-only. anexo_operativo uses the
             # POST-#372 value (anexo_operativo_final) so the F1 rate row is already settled.
-            "company_profile": _enforce_usd_currency_field(result.company_profile),
-            "dilema_brief": _enforce_usd_currency_field(result.dilema_brief),
-            "pregunta_eje": (
-                _enforce_usd_currency_field(pregunta_eje) if pregunta_eje else pregunta_eje
+            # #480 — los 4 campos de PROSA también pasan por el strip de LaTeX (composición con
+            # el relabel USD; disjuntos → el orden no importa). Las 3 tablas Exhibit (abajo) NO.
+            "company_profile": _strip_latex_math_field(
+                _enforce_usd_currency_field(result.company_profile)
             ),
-            "doc1_instrucciones": _enforce_usd_currency_field(result.instrucciones_estudiante),
+            "dilema_brief": _strip_latex_math_field(
+                _enforce_usd_currency_field(result.dilema_brief)
+            ),
+            "pregunta_eje": (
+                _strip_latex_math_field(_enforce_usd_currency_field(pregunta_eje))
+                if pregunta_eje
+                else pregunta_eje
+            ),
+            "doc1_instrucciones": _strip_latex_math_field(
+                _enforce_usd_currency_field(result.instrucciones_estudiante)
+            ),
             # #356 — normalize <br> row separators → real newlines BEFORE the USD relabel,
             # so both the frontend GFM parser and the backend .splitlines() anchor parser see
             # a real multi-line table (the architect structured output bypasses sanitize_markdown).
@@ -1995,6 +2013,19 @@ def _enforce_usd_currency_field(text: str) -> str:
     if not settings.case_usd_currency_enforce:
         return text
     return enforce_usd_currency(text)
+
+
+def _strip_latex_math_field(text: str) -> str:
+    """Strip LaTeX math `$…$` in one architect PROSE field (#480, kill-switch gated).
+
+    Mirror of `_enforce_usd_currency_field`: the architect's structured output bypasses
+    `sanitize_markdown`, so a `$k$` framing in `dilema_brief`/`pregunta_eje` would reach the
+    student/questions untouched. Applied ONLY to the 4 prose fields — NOT the 3 Exhibit tables
+    (currency-dense, zero math) to keep the currency-FP surface minimal. Currency-safe + best-effort.
+    """
+    if not settings.case_strip_latex_math:
+        return text
+    return _strip_latex_math(text)
 
 
 def _normalize_exhibit_field(text: str) -> str:
@@ -8975,7 +9006,9 @@ def _invoke_m3_notebook_algo_section(
         active_llm = llm if attempt == 1 else retry_llm
         tier = "flash" if active_llm is llm else "escalated"
         response = active_llm.invoke(current_prompt)
-        algo_section = sanitize_markdown(_extract_text(response))
+        # #480 — el notebook se EXCLUYE del strip de LaTeX: se consume en Colab/Jupyter (que SÍ
+        # renderiza `$k$`) y su código puede contener `$` legítimo (shell `$HOME`, regex `$`).
+        algo_section = sanitize_markdown(_extract_text(response), strip_latex_math=False)
         # Deterministic repair of the sanctioned existence-guard idiom (clasificacion
         # only) — kills the most common INSEGURO cause without burning a reprompt.
         if family == "clasificacion":
