@@ -468,3 +468,46 @@ def build_m4_chart_grounding_reprompt(
         "\nMétricas verificadas del modelo (única fuente válida para métricas del modelo):\n"
         f"{metrics_block}\n"
     )
+
+
+# ── Issue #481 — embedded-MCQ answer-choice backstop (M4 questions, ALL families) ──────────────────
+# The PROMPT fix (the 5 M4-question prompt surfaces) is the CURE — it stops mandating embedded
+# "opciones A/B/C" answer-choices in the question ``enunciado``. This is the deterministic BACKSTOP:
+# M4 questions are meant to be OPEN, and the only A/B/C in a case are the M1 *strategic* options (cited
+# by their REAL letter in ``solucion_esperada``). A question whose ``enunciado`` still embeds its OWN
+# answer-choice markers ("A) … B) … C) …") collides — and historically CROSS-MAPS — with the strategic
+# Opción A/B/C (the #481 LIVE defect). The #416 validator cannot see it (it captures the word
+# "Opción X", not the answer-letter "X)" form). Wired into the existing reprompt-once-then-DEGRADE M4
+# guard (``graph._apply_m4_questions_option_coherence``); a residual violation only degrades to the
+# pass-1 question, so a FALSE POSITIVE costs one wasted reprompt and NEVER degrades quality or fails a
+# job.
+#
+# Marker shape: an UPPERCASE letter A-D immediately followed by ")" at the start of a line or after
+# whitespace (so a parenthetical cross-reference "(A)" — preceded by "(" — and an inline "wordA)" are
+# NOT markers). The defect needs an enumerated answer set, so the rule fires only on >=2 DISTINCT such
+# letters. Scans the ``enunciado`` ONLY (the solucion's "Opción C" word-form is the legit strategic
+# reference, covered by ``validate_question_option_coherence``). Bounded quantifiers → no ReDoS.
+_MCQ_OPTION_MARKER_RE = re.compile(r"(?:^|(?<=\s))([A-D])\)", re.MULTILINE)
+
+
+def detect_embedded_mcq_options(enunciado: str | None) -> list[str]:
+    """Return ``["MCQ_OPCIONES_EMBEBIDAS: …"]`` when *enunciado* embeds an A/B/C answer-choice set.
+
+    Pure and total: any non-str / None / internal error degrades to ``[]`` (never raises). Fires only
+    when >=2 DISTINCT uppercase ``A)``/``B)``/``C)``/``D)`` markers appear, so a single parenthetical
+    reference never trips it. Near-zero false positives; a false positive is degrade-safe at the call
+    site (reprompt-once-then-keep-pass-1).
+    """
+    if not isinstance(enunciado, str) or not enunciado:
+        return []
+    try:
+        letters = {m.group(1) for m in _MCQ_OPTION_MARKER_RE.finditer(enunciado)}
+        if len(letters) >= 2:
+            joined = ", ".join(f"{letter})" for letter in sorted(letters))
+            return [
+                "MCQ_OPCIONES_EMBEBIDAS: el enunciado incrusta opciones de respuesta "
+                f"etiquetadas ({joined}) que colisionan con las opciones estratégicas A/B/C del caso"
+            ]
+        return []
+    except Exception:  # pragma: no cover - defensive; never fail a job
+        return []

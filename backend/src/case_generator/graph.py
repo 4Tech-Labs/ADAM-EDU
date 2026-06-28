@@ -232,6 +232,7 @@ from case_generator.m5_grounding import validate_m5_questions_coherence
 from case_generator.m6_grounding import log_out_of_roster_mentions
 from case_generator.m4_grounding import (
     build_m4_chart_grounding_reprompt,
+    detect_embedded_mcq_options,
     drop_sensitivity_charts,
     log_chart_benchmark_fabrication,
     log_duplicate_deployment_sections,
@@ -1544,14 +1545,13 @@ _M1_QUESTIONS_OPTION_REPROMPT_HEADER = (
 )
 _M4_QUESTIONS_OPTION_REPROMPT_HEADER = (
     "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE OPCIONES (Módulo 4)\n"
-    "Algunas preguntas recomiendan en `solucion_esperada` una opción estratégica que NO "
-    "existe en el caso, o que el propio enunciado de esa pregunta no presenta al estudiante. "
-    "El caso define un conjunto cerrado de opciones (A, B, C). Regenera EXACTAMENTE 3 "
-    "preguntas con el MISMO schema y los MISMOS `numero` (1, 2, 3): el enunciado de cada "
-    "pregunta de decisión DEBE presentar las opciones (A/B/C) entre las que el estudiante "
-    "elige, y `solucion_esperada` SOLO puede recomendar una de las opciones presentadas en "
-    "su enunciado, nombrándola por su letra. NUNCA recomiendes una opción inexistente ni "
-    "ausente del enunciado. Incoherencias detectadas:\n"
+    "Las preguntas del Módulo 4 son ABIERTAS: el enunciado NO debe incrustar opciones de "
+    "respuesta etiquetadas A/B/C (colisionan con las opciones estratégicas A/B/C del caso). "
+    "Regenera EXACTAMENTE 3 preguntas con el MISMO schema y los MISMOS `numero` (1, 2, 3): "
+    "reescribe cada enunciado como pregunta abierta SIN answer-choices A/B/C. Si "
+    "`solucion_esperada` recomienda una opción estratégica del caso, nómbrala por su LETRA "
+    "REAL tal como aparece en el análisis del Módulo 4 (§4.5), sin inventar ni cruzar una "
+    "letra de respuesta. NUNCA recomiendes una opción inexistente. Incoherencias detectadas:\n"
 )
 
 
@@ -1756,6 +1756,7 @@ def _apply_m1_questions_option_coherence(
 _M4_VIOLATION_CODES = (
     ("OPTION_NONEXISTENT", "option_nonexistent"),
     ("OPTION_NOT_PRESENTED", "option_not_presented"),
+    ("MCQ_OPCIONES_EMBEBIDAS", "mcq_opciones_embebidas"),
 )
 
 
@@ -1769,33 +1770,50 @@ def _m4_violation_types(violations: list[str]) -> list[str]:
     return codes
 
 
+def _m4_question_violations(preguntas_dict: list[dict]) -> list[str]:
+    """All M4 question option-coherence violations (#481).
+
+    Two pure rules over the same set, so the pass-1 check and the post-reprompt re-validation apply the
+    SAME contract: (1) the shared #416 validator with the FLOOR universe (``dilema_brief=""``) — a
+    ``solucion_esperada`` that recommends a nonexistent / unpresented A/B/C option; (2) the embedded-MCQ
+    detector — an ``enunciado`` that incrusta its OWN answer-choices ("A) … B) … C) …"), which collide
+    and historically cross-map with the strategic Opción A/B/C. The validator is letter-agnostic on the
+    WORD "Opción X"; the detector covers the answer-letter "X)" form it cannot see.
+    """
+    violations = list(validate_question_option_coherence(preguntas_dict, ""))
+    for pregunta in preguntas_dict:
+        if isinstance(pregunta, dict):
+            violations.extend(detect_embedded_mcq_options(pregunta.get("enunciado")))
+    return violations
+
+
 def _apply_m4_questions_option_coherence(
     *, llm: Any, prompt: str, state: ADAMState, preguntas_dict: list[dict]
 ) -> list[dict]:
     """Validate + reprompt-once-then-DEGRADE the M4 (Impacto) question option coherence.
 
-    Reuses the M1 option validator with the FLOOR universe (M4 has no ``dilema_brief``): a
-    ``solucion_esperada`` may only recommend an option the case defines (A/B/C) and that its
-    own ``enunciado`` presents. Gated to the classification family for BOTH profiles
-    (business + ml_ds) behind the ``m4_question_coherence`` kill-switch; a byte-identical
-    no-op otherwise. On a violation it reprompts ONCE (one Flash call); the corrected set is
-    accepted ONLY if it preserves the question count AND the ``numero`` sequence (the grading
-    key ``M4-Q{numero}`` in shared.student_reads/teacher_reads) AND is now coherent —
-    otherwise it degrades to the pass-1 questions. ``GeneradorPreguntasOutput`` (unlike M1's
-    schema) does NOT enforce count/numbering, so the identity guard is load-bearing.
-    Best-effort: ANY throw (including a reprompt ``RuntimeError``) degrades to pass-1. Never
-    raises, so the job always completes.
+    The M4 questions are OPEN (#481): the only A/B/C in a case are the M1 *strategic* options, named by
+    their REAL letter in ``solucion_esperada``. ``_m4_question_violations`` flags both a recommended
+    option that is nonexistent/unpresented (the shared #416 validator) AND an ``enunciado`` that
+    embeds its own answer-choices A/B/C (the #481 detector). Runs for ALL families (the defect is
+    general, not classification-only) behind the ``m4_question_coherence`` kill-switch; a no-op when the
+    switch is off. On a violation it reprompts ONCE (one Flash call); the corrected set is accepted ONLY
+    if it preserves the question count AND the ``numero`` sequence (the grading key ``M4-Q{numero}`` in
+    shared.student_reads/teacher_reads) AND is now coherent — otherwise it degrades to the pass-1
+    questions. ``GeneradorPreguntasOutput`` (unlike M1's schema) does NOT enforce count/numbering, so
+    the identity guard is load-bearing. Best-effort: ANY throw (including a reprompt ``RuntimeError``)
+    degrades to pass-1. Never raises, so the job always completes.
 
-    Known coverage limit (same trade-off as M1, zero false positives): only A/B/C LETTER
-    options are checked. Options named as models/prose ("desplegar Random Forest") or an
-    enunciado that names a single option are not flagged; the M4 questions prompt boundary
-    nudges the LLM to the letter form so the validator covers the reported defect.
+    Known coverage limit (zero false negatives are not promised): only UPPERCASE A/B/C letter forms are
+    checked. A lowercase MCQ, or a pure-``solucion_esperada`` cross-map with no enunciado markers, is
+    not flagged; the prompt fix (open questions, name the real letter) is the primary defense and a
+    detector false positive only degrades to the already-good pass-1 question (never fails a job).
     """
     log_extra = {"node": "m4_questions_generator", "case_id": state.get("case_id")}
     try:
-        if not settings.m4_question_coherence or not _is_classification_family(state):
+        if not settings.m4_question_coherence:
             return preguntas_dict
-        violations = validate_question_option_coherence(preguntas_dict, "")
+        violations = _m4_question_violations(preguntas_dict)
         if not violations:
             return preguntas_dict
         logger.info(
@@ -1828,7 +1846,7 @@ def _apply_m4_questions_option_coherence(
                 extra=log_extra,
             )
             return preguntas_dict
-        residual = validate_question_option_coherence(corrected, "")
+        residual = _m4_question_violations(corrected)
         if not residual:
             logger.info(
                 "[m4_questions] coherencia de opciones M4 corregida por reprompt",
