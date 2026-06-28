@@ -684,12 +684,24 @@ def _get_m4_llm(
     deployment language. Prefer Gemini Pro, but keep Configuration-driven
     fallback escape hatches for preview-model outages and rollouts. Do not reuse
     the architect helper because M4 should not receive Code Execution tools.
+
+    Provider-aware (mirror of ``_get_m5_llm``/``_get_m3_content_llm``): the two
+    tiers carrying the resolved ``model`` pass through ``_build_llm`` — a model id
+    with ``"/"`` (e.g. ``"google/gemini-3.1-pro-preview"`` via ``NODE_MODEL_OVERRIDES``)
+    runs on OpenRouter, anything else on Gemini. An OpenRouter build failure
+    degrades to ``fallback_model`` (Gemini) DENTRO de ``_build_llm`` → the factory
+    never raises for the alternate provider. The two final tiers are ALWAYS Gemini
+    (the cross-provider net). **Byte-identical** for Gemini ids (sin ``"/"``):
+    ``test_m4_factory_thinking_cut_to_medium`` queda verde.
     """
     # Fase 1 cost cut: primary thinking "high"→"medium". M4 prose stays on Pro
     # (HIGH-risk terminal narrative), but the extra "high" reasoning tokens were
     # billed at Pro output rates for marginal quality; "medium" keeps the model.
-    primary = _build_gemini(model, temperature=temperature, thinking_level="medium", max_output_tokens=24576)
-    pro_fallback_low = _build_gemini(model, temperature=temperature, thinking_level="low", max_output_tokens=24576)
+    # NOTE: ``_build_openrouter`` ignores per-tier ``thinking_level`` — on the
+    # OpenRouter path both routed tiers reason at the GLOBAL ``OPENROUTER_REASONING_EFFORT``
+    # (so this medium cut applies only on the direct-Gemini path).
+    primary = _build_llm(model, gemini_fallback_model=fallback_model, temperature=temperature, thinking_level="medium", max_output_tokens=24576)
+    pro_fallback_low = _build_llm(model, gemini_fallback_model=fallback_model, temperature=temperature, thinking_level="low", max_output_tokens=24576)
     writer_fallback = _build_gemini(fallback_model, temperature=temperature, max_output_tokens=24576)
     stable_fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=24576)
     return primary.with_fallbacks([pro_fallback_low, writer_fallback, stable_fallback])
