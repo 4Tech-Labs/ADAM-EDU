@@ -615,12 +615,14 @@ def detect_unanchored_n_clusters(prose: str | None, valid_counts: set[int] | Non
 # Scoped to the value-by-segment chart ONLY (never chart 2, the A/B/C strategic comparison whose
 # normalized 0-100 bars over 2-4 metric categories must not be touched): a chart qualifies iff it has
 # NO "Opción A/B/C"-named trace, at most 2 traces (chart 2 has 3, one per option), and a category axis
-# with at least 3 entries (the discovered segments). ``n_clusters`` GATES the check (only a real
-# clustering result with >= 3 clusters is validated) — it is deliberately NOT used as an exact category
-# count, because the LLM can draw a fabricated distribution with a different bar count than the real
-# cluster count and an exact ``== n_clusters`` test would silently MISS it. Returns
-# ``[(chart_index, violations), ...]`` to match the reprompt-then-DROP survivor math in
-# ``_apply_clustering_m4_chart_grounding``. Pure, total — never raises.
+# with at least 3 entries (the discovered segments). When PRESENT, ``n_clusters`` gates the check to a
+# real clustering result with >= 3 clusters — it is deliberately NOT used as an exact category count,
+# because the LLM can draw a fabricated distribution with a different bar count than the real cluster
+# count and an exact ``== n_clusters`` test would silently MISS it. When ABSENT (``None`` — the executor
+# degraded, no metrics), the check still runs: the fabrication is INTRINSICALLY structural (the chart's
+# own >= 3-segment axis carries the gate), so a degraded case drops a fabricated ``[v, 0, 0, …]`` chart
+# instead of shipping it ungrounded. Returns ``[(chart_index, violations), ...]`` to match the
+# reprompt-then-DROP survivor math in ``_apply_clustering_m4_chart_grounding``. Pure, total — never raises.
 _OPTION_TRACE_RE = re.compile(r"\bopci[oó]n\s*[abc]\b|\boption\s*[abc]\b", re.IGNORECASE)
 _GENERIC_SEGMENT_NAME_RE = re.compile(
     r"\b(?:segmento|cluster|grupo|segment|group)\s*\d+\b", re.IGNORECASE
@@ -679,16 +681,18 @@ def _is_segment_value_chart(chart: object) -> bool:
 
     Identified STRUCTURALLY (not by an exact ``== n_clusters`` bar count, which silently MISSES a
     fabrication when the LLM draws a different bar count than the real cluster count): a clustering M4
-    emits exactly 2 charts, and the A/B/C comparison is excluded by its 3 ``Opción A/B/C`` traces, so the
-    remaining ``<= 2``-trace chart with a ``>= 3``-entry category axis is the value-by-segment chart.
+    emits exactly 2 charts, and the second chart (the per-segment PROFILE/fingerprint, one trace per
+    discovered segment → 3-4 traces; or a legacy A/B/C comparison on a replayed old job) is excluded by
+    its ``> 2`` traces, so the remaining ``<= 2``-trace chart with a ``>= 3``-entry category axis is the
+    value-by-segment chart.
     """
     traces = _iter_chart_traces(chart)
     if not traces or len(traces) > 2:
-        return False  # chart 2 has 3 traces (one per strategic option)
+        return False  # chart 2 (per-segment profile, 3-4 traces; or legacy A/B/C) → not chart 1
     for trace in traces:
         name = trace.get("name")
         if isinstance(name, str) and _OPTION_TRACE_RE.search(name):
-            return False  # an "Opción A/B/C" trace → the comparison chart
+            return False  # a legacy "Opción A/B/C" trace (pre-reframe replay) → not chart 1
     return any(length >= 3 for length in _chart_category_lengths(chart))
 
 
@@ -700,20 +704,25 @@ def detect_fabricated_segment_distribution(
 
     A value trace over >= 3 segments with <= 1 DISTINCT non-zero value is the fabrication signature
     (one-bar-rest-zero or same-everywhere). Source-agnostic (no anchoring to ``cluster_profiles`` — the
-    per-segment value is a derived case quantity). ``n_clusters`` GATES the check (a real clustering
-    result with >= 3 clusters) but does NOT have to equal the bar count — the chart is identified
-    structurally (see ``_is_segment_value_chart``) so a fabrication with a mismatched bar count is still
-    caught. ``[]`` when ``charts`` is empty, ``n_clusters`` is absent / non-integer / < 3, or no chart
-    qualifies (degrade-safe). Pure, total — never raises.
+    per-segment value is a derived case quantity). When PRESENT, ``n_clusters`` gates the check (a real
+    clustering result with >= 3 clusters) but does NOT have to equal the bar count — the chart is
+    identified structurally (see ``_is_segment_value_chart``) so a fabrication with a mismatched bar
+    count is still caught. When ABSENT (``None`` — executor degraded), the check STILL runs on the
+    chart's own >= 3-segment structure, so a fabricated distribution is dropped on a degraded case
+    instead of shipped ungrounded. ``[]`` when ``charts`` is empty, ``n_clusters`` is non-integer / < 3,
+    or no chart qualifies (degrade-safe). Pure, total — never raises.
     """
-    if not isinstance(charts, list) or not charts or n_clusters is None:
+    if not isinstance(charts, list) or not charts:
         return []
-    try:
-        k = int(n_clusters)
-    except (TypeError, ValueError, OverflowError):
-        return []
-    if k < 3:
-        return []
+    if n_clusters is not None:
+        try:
+            k = int(n_clusters)
+        except (TypeError, ValueError, OverflowError):
+            return []
+        if k < 3:
+            return []
+    # n_clusters absent (executor degraded) → no metric gate; rely on the chart's own >= 3-segment
+    # structure (``_is_segment_value_chart`` + the >= 3 numeric-y check below) to catch the fabrication.
     results: list[tuple[int, list[str]]] = []
     for index, chart in enumerate(charts):
         try:

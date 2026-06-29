@@ -9169,11 +9169,14 @@ def _render_cluster_profiles_table(cluster_profiles: dict) -> str:
 def _render_segment_data_table(cluster_sizes: Any, cluster_profiles: dict | None) -> str:
     """Render the REAL per-segment data table for the M4 value-by-segment chart (Issue #498).
 
-    Columns: ``segmento | tamaño | <feature…>`` — ``cluster_sizes`` (always present post-executor) plus
-    the per-cluster feature means from ``cluster_profiles`` (#494, when present). Passed as a ``.format``
-    VALUE (its ``|`` / braces are not re-interpreted by the template). Returns ``""`` when there is no
-    real per-segment data at all (the node then keeps the base prompt → byte-identical to #469). Pure,
-    total — never raises.
+    Columns: ``segmento | tamaño | <feature…>``. ``cluster_sizes`` (always present post-executor) is a
+    LIST ``[size0, size1, …]`` index-aligned to the sorted cluster ids ``0..k-1`` — the SHAPE the
+    executed ``metrics_summary_json`` cell emits and that #489's notebook-questions context already
+    reads; a dict is also accepted defensively. ``cluster_profiles`` (#494, when present) carries the
+    per-cluster feature means keyed by the SAME ``str(0..k-1)`` ids. Passed as a ``.format`` VALUE (its
+    ``|`` / braces are not re-interpreted by the template). Returns ``""`` when there is no real
+    per-segment data at all (the node then keeps the base prompt → byte-identical to #469). Pure, total
+    — never raises.
     """
     sizes: dict[str, float] = {}
     if isinstance(cluster_sizes, dict):
@@ -9181,6 +9184,16 @@ def _render_segment_data_table(cluster_sizes: Any, cluster_profiles: dict | None
             value = _finite_float(count)
             if value is not None:
                 sizes[str(cid)] = value
+    elif isinstance(cluster_sizes, list):
+        # The executor emits ``cluster_sizes`` as a LIST index-aligned to the sorted cluster ids 0..k-1
+        # (``_sizes = [int((labels == c).sum()) for c in sorted(set(labels) - {-1})]``), the SAME ids
+        # ``cluster_profiles`` is keyed by. Map index → ``str(index)`` so the size column aligns with the
+        # profile columns. The original #498 dict-only branch silently dropped EVERY real size (and, with
+        # profiles absent, collapsed the whole table to ``""`` → base prompt → Chart 1 ungrounded).
+        for index, count in enumerate(cluster_sizes):
+            value = _finite_float(count)
+            if value is not None:
+                sizes[str(index)] = value
     profiles = cluster_profiles if isinstance(cluster_profiles, dict) else {}
     features = [str(f) for f, pc in profiles.items() if isinstance(pc, dict) and pc]
     clusters: list[str] = []
@@ -11123,9 +11136,12 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
         # Issue #498 — ml_ds+clustering value-by-segment guard: DROP a fabricated per-segment
         # distribution (one bar with a value and the rest 0, or the same value on every segment).
-        # Source-agnostic structural check scoped to chart 1 only; reprompt-once-then-DROP. Mutually
-        # exclusive with the classification grounding above (clf vs clustering). No-op (byte-identical)
-        # for every other cohort and on the legacy 3-chart path. Best-effort; never fails the job.
+        # Source-agnostic structural check scoped to chart 1 only; reprompt-once-then-DROP. The guard
+        # runs even when the executor degraded and ``n_clusters`` is absent (the fabrication is
+        # structural — the chart's own >= 3-segment axis carries the gate), so a degraded case never
+        # ships an ungrounded fabricated chart. Mutually exclusive with the classification grounding
+        # above (clf vs clustering). No-op (byte-identical) for every other cohort and on the legacy
+        # 3-chart path. Best-effort; never fails the job.
         if (
             _lens_on
             and _is_ml_ds_clustering(state)
