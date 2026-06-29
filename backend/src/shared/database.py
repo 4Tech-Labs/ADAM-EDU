@@ -305,6 +305,17 @@ class Settings(BaseSettings):
     # financial base byte-identically (the #382-only behavior; instant env-only revert, no redeploy).
     # Gated INSIDE the #382 de-churn path: churn/retention, business, and other families are unaffected.
     mlds_detemplate_cross_section: bool = True
+    # De-template the SaaS/churn customer template for ml_ds + clasificación WORKFORCE/HR ATTRITION
+    # (employee attrition / staff turnover). `attrition` is a HARD retention token, so #382 skipped
+    # these cases and they kept the customer SaaS template (customer_ltv/plan_tier/payment_failures…),
+    # incoherent for an employee dataset (M2 mutual_info showed revenue/churn_rate as predictors of
+    # employee attrition). When true (default), the #382 retention RED LINE is narrowed to genuine SaaS
+    # CUSTOMER churn: a retention-by-name target that is ALSO workforce attrition (high-precision HR
+    # tokens in the target/feature names, `_is_workforce_attrition_case`) falls through to the de-churn
+    # path → domain (HR) driver + SaaS template stripped. Set MLDS_DETEMPLATE_WORKFORCE=false to keep
+    # every retention target on the template byte-identically (#382/#507 behavior; instant env-only
+    # revert, no redeploy). Genuine customer churn is NEVER affected (zero predicate FP on the red line).
+    mlds_detemplate_workforce: bool = True
     # Deterministic, data-only EDA chart builder for ml_ds + clustering (Issue #466, Frente 2). When
     # true (default), an ml_ds + clustering case routes M2 charts through `_eda_clustering_python_path`
     # (3 PRE-MODEL, target-free charts: feature distributions → motivates StandardScaler, correlation
@@ -534,6 +545,16 @@ class Settings(BaseSettings):
     # MLDS_CLUSTERING_M4_VALUE_FRAME). ml_ds-only — business+clf / clustering / other families and the
     # legacy 3-chart path are byte-identical regardless.
     m4_classification_decision_charts: bool = True
+    # M4 investment-chart dual y-axis (ml_ds + clasificación ONLY, decision-charts reframe path, NON-financial
+    # lens). On the reframe Gráfico 1, the deployment COST (always USD) and the projected VALUE in the lens
+    # unit (e.g. "240 estudiantes retenidos") used to share ONE y-axis, so — differing by orders of
+    # magnitude — the value bar rendered invisible. When true (default), `m4_chart_generator` appends a
+    # brace-free hint instructing the LLM to put the non-monetary value on a SECONDARY y-axis (Plotly `y2`).
+    # FINANCIAL lens is unaffected (both series in USD → the clean payback chart is byte-identical). Set
+    # M4_INVESTMENT_DUAL_AXIS=false to skip the hint → byte-identical to the prior (single-axis) behavior
+    # (instant env-only revert, no redeploy; mirrors M4_CLASSIFICATION_DECISION_CHARTS). No-op when the
+    # reframe is off, lens is financial, or profile/family is not ml_ds+clf.
+    m4_investment_dual_axis: bool = True
     # Impact Lens (Issue #437 / ADR 0003, Fase 1, ALL profiles/families). M4's value frame
     # (primary metric, §4.5 KPI rows, chart metrics, questions framing) is no longer hardcoded
     # to ROI/Payback/NPV; it is a lens resolved ONCE from the constrained intake industry and

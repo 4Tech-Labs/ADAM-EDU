@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sanitizeTraces } from "./plotlyChartUtils";
+import { buildLayout, sanitizeTraces } from "./plotlyChartUtils";
 
 function makeZ(rows: number, cols: number): number[][] {
     return Array.from({ length: rows }, (_, r) =>
@@ -115,6 +115,51 @@ describe("sanitizeTraces — pre-computed box traces (Issue #487)", () => {
         const [out] = sanitizeTraces([{ ...input }]);
         expect(out.x).toEqual(["engagement_score"]);
         expect(out).toEqual(input);
+    });
+});
+
+describe("buildLayout — secondary y-axis (M4 investment dual-axis fix)", () => {
+    // The M4 ml_ds+clf investment chart puts the USD cost on the primary axis and a non-monetary lens
+    // value (e.g. "estudiantes retenidos") on a SECONDARY axis so the small-magnitude value bar stays
+    // visible. A trace declaring `yaxis: "y2"` must yield an overlaying right-side yaxis2.
+    const dualTraces = [
+        { type: "bar", name: "Inversión (USD)", x: ["Despliegue"], y: [420000] },
+        { type: "bar", name: "Valor", x: ["Despliegue"], y: [240], yaxis: "y2" },
+    ];
+
+    it("injects an overlaying right-side yaxis2 when a trace uses yaxis y2", () => {
+        const layout = buildLayout({}, dualTraces) as Record<string, unknown>;
+        const y2 = layout.yaxis2 as Record<string, unknown>;
+        expect(y2).toBeDefined();
+        expect(y2.overlaying).toBe("y");
+        expect(y2.side).toBe("right");
+        expect(y2.automargin).toBe(true);
+    });
+
+    it("preserves a backend-provided yaxis2 title while FORCING the overlay invariants", () => {
+        // A partial yaxis2 (only a title) must still overlay correctly — the bug being fixed: previously
+        // a provided yaxis2 was left untouched, so without overlaying/side it rendered as a disjoint plot.
+        const layout = buildLayout(
+            { yaxis2: { title: "Estudiantes retenidos", side: "left" } },
+            dualTraces,
+        ) as Record<string, unknown>;
+        const y2 = layout.yaxis2 as Record<string, unknown>;
+        expect(y2.title).toBe("Estudiantes retenidos"); // kept
+        expect(y2.overlaying).toBe("y"); // forced
+        expect(y2.side).toBe("right"); // forced over the provided "left"
+    });
+
+    it("widens the right margin so the secondary axis labels are not clipped", () => {
+        const layout = buildLayout({}, dualTraces) as Record<string, unknown>;
+        expect((layout.margin as Record<string, unknown>).r).toBe(80);
+    });
+
+    it("does NOT add a yaxis2 for a single-axis chart (byte-identical for non-dual charts)", () => {
+        const layout = buildLayout({}, [
+            { type: "bar", x: ["a"], y: [1] },
+        ]) as Record<string, unknown>;
+        expect(layout.yaxis2).toBeUndefined();
+        expect((layout.margin as Record<string, unknown>).r).toBe(40);
     });
 });
 
