@@ -99,4 +99,41 @@ Industria: {industria}
 case_id: {case_id} | student_profile: {student_profile} | output_language: {output_language}
 """
 
-__all__ = ["M4_CHART_PROMPT_CLUSTERING"]
+# Issue #498 — value-by-segment chart fed with the REAL per-segment data. The generic
+# ``M4_CHART_PROMPT_CLUSTERING`` only receives ``{m4_content}`` (deliberately qualitative #469
+# narrative), so the LLM FABRICATES the per-segment distribution: it drops the case-level average onto
+# ONE segment and 0 on the rest ([135000, 0, 0, 0]) and names the unprofiled segments generically
+# ("Segmento 3/4"). This PROFILES variant appends one ``{segment_data_table}`` placeholder (the real
+# ``cluster_sizes`` + ``cluster_profiles`` table the executed notebook produced) plus hard rules so the
+# LLM plots a REAL, DISTINCT value per segment and names each segment by its profile. Selected by
+# ``m4_chart_generator`` ONLY on the ml_ds+clustering NEUTRAL path (``MLDS_CLUSTERING_M4_VALUE_FRAME``)
+# when real per-segment data exists; otherwise the base template above is kept (byte-identical revert).
+# Placeholder set = base ∪ ``{segment_data_table}``. The appended block is brace-free except that one
+# placeholder and the reused ``{m4_content}`` (both filled by the node's context).
+_M4_CHART_CLUSTERING_SEGMENT_DATA_BLOCK = """
+
+# DATOS REALES POR SEGMENTO (úsalos — NO inventes)
+La siguiente tabla son los valores REALES que el notebook ejecutado calculó para CADA segmento
+descubierto (columna `tamaño` = nº de entidades del segmento; las demás columnas = media REAL de cada
+variable por segmento):
+
+{segment_data_table}
+
+## Reglas OBLIGATORIAS para el Gráfico 1 (Valor por Segmento)
+- Cada segmento DEBE tener su PROPIO valor REAL y DISTINTO, tomado o derivado de la tabla de arriba
+  (o del {m4_content} / Exhibit 1). PROHIBIDO poner el valor en UN solo segmento y 0 (o vacío) en el
+  resto. PROHIBIDO repetir el MISMO número en todos los segmentos. El sentido de una segmentación es
+  que los segmentos se DIFERENCIAN: el gráfico DEBE mostrar valores distintos por segmento.
+- Nombra cada segmento por su PERFIL, en lenguaje de negocio claro y en {output_language} (p.ej.
+  "Clientes de alto valor", "Cuentas en riesgo"), derivado de las columnas de la tabla. NUNCA uses
+  nombres genéricos tipo "Segmento 3" / "Cluster 2" cuando la tabla aporta un perfil, y NUNCA uses el
+  identificador crudo de una columna (p.ej. "monetary_value", "num__x") como etiqueta visible.
+- Si una dimensión de valor no tiene un número real disponible, usa el `tamaño` real del segmento
+  (siempre es un valor real y distinto por segmento). NUNCA fabriques una distribución.
+"""
+
+M4_CHART_PROMPT_CLUSTERING_PROFILES = (
+    M4_CHART_PROMPT_CLUSTERING + _M4_CHART_CLUSTERING_SEGMENT_DATA_BLOCK
+)
+
+__all__ = ["M4_CHART_PROMPT_CLUSTERING", "M4_CHART_PROMPT_CLUSTERING_PROFILES"]
