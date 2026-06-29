@@ -6384,6 +6384,7 @@ def _generate_dataset_from_schema(
     *,
     target_event_rate: float | None = None,
     target_col_name: str | None = None,
+    outlier_respect_range: bool = True,
 ) -> list:
     """
     Genera filas de datos a partir del schema producido por schema_designer.
@@ -6694,11 +6695,24 @@ def _generate_dataset_from_schema(
                 original = float(rows[idx][target_col])
                 outlier_val = original * 3.5
                 if col_range_max is not None and float(col_range_max) > 0:
-                    # business: el atípico respeta el range_max declarado en vez de
-                    # 2× (evita p. ej. churn 0.30 cuando el schema declaró [0.02,0.15],
-                    # que además debilitaba la correlación nps↔churn que el panel
-                    # presenta como driver real). ml_ds conserva el cap ×2 histórico.
-                    cap_mult = 1.0 if profile == "business" else 2.0
+                    # El atípico respeta el range_max DECLARADO (cap ×1.0) en business —
+                    # evita p. ej. churn 0.30 cuando el schema declaró [0.02,0.15], que además
+                    # debilitaba la correlación nps↔churn que el panel presenta como driver real.
+                    # ml_ds hacía ×2 histórico, lo que producía valores SEMÁNTICAMENTE IMPOSIBLES
+                    # para una feature acotada (un credit_score declarado [300,850] llegaba a 1700,
+                    # un porcentaje pasaba de 100). El generador YA clipa todo a [low,high]; el
+                    # atípico era la única violación de los rangos declarados. Con
+                    # `outlier_respect_range` (kill-switch `MLDS_OUTLIER_RESPECT_RANGE`, default true)
+                    # ml_ds también capa en range_max → el punto sigue siendo un atípico ~5σ (el
+                    # grueso está concentrado en el centro) pero un valor VÁLIDO. Off → ×2 legacy
+                    # byte-idéntico. business cae siempre en la rama ×1.0 (intacto). Solo se capa el
+                    # range_max (la única violación observada): el range_min queda garantizado por el
+                    # clip de generación SOLO para features no-negativas (atípico = original×3.5 ≥
+                    # original ≥ range_min cuando range_min ≥ 0, el caso de toda feature ml_ds —
+                    # score/monto/conteo/ratio/edad). No se añade un floor explícito: lo mantendría
+                    # OFF byte-idéntico es la prioridad, y un range_min negativo no ocurre en este
+                    # dominio (su underflow sería el comportamiento legacy pre-existente, sin cambio).
+                    cap_mult = 1.0 if (profile == "business" or outlier_respect_range) else 2.0
                     outlier_val = min(outlier_val, float(col_range_max) * cap_mult)
                 rows[idx][target_col] = round(outlier_val, 2)
 
@@ -6988,6 +7002,10 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             profile=profile,
             target_event_rate=target_event_rate,
             target_col_name=target_col_name,
+            # Kill-switch MLDS_OUTLIER_RESPECT_RANGE (default true): keep the EDA outlier inside the
+            # feature's declared range_max for ml_ds too (no impossible 1700 credit_score). The
+            # generator stays pure (no settings import) — the flag is threaded in. Off → ×2 legacy.
+            outlier_respect_range=settings.mlds_outlier_respect_range,
         )
         # Issue #452 — inyecta estructura de clusters real para ml_ds + clustering (determinista,
         # gateado por kill-switch). No-op byte-idéntico para business/clasificación/regresión/

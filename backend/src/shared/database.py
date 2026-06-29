@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     # false to disable the sibling and ship the prior unsigned schema byte-identically (instant env-only
     # revert; no redeploy). No-op when no feature declares a direction, or outside ml_ds + clasificación.
     mlds_directional_priors: bool = True
+    # Keep the EDA-outlier injection (Fix B-05) inside each feature's DECLARED [range_min, range_max]
+    # for ml_ds datasets, so no generated value exceeds its own semantic bound (e.g. a credit_score
+    # declared [300, 850] never ships an impossible 1700, a percentage never exceeds 100). When true
+    # (default), the ml_ds outlier cap matches the already-correct business path (range_max, ×1.0)
+    # instead of the legacy ×2.0; the injected point stays a detectable ~5σ outlier (the bulk is
+    # center-concentrated) AND a semantically valid value. Kill-switch: set
+    # MLDS_OUTLIER_RESPECT_RANGE=false to restore the legacy ×2.0 ml_ds cap byte-identically (instant
+    # env-only revert; no redeploy). business is unaffected either way (it always capped at range_max).
+    mlds_outlier_respect_range: bool = True
     # Coerce the ml_ds + clasificación target to a binary int classification_target (Issue #350).
     # When true, the deterministic sibling `_normalize_mlds_classification_target` forces any
     # non-int / non-classification target the LLM emits to int binary {0,1} BEFORE the schema
