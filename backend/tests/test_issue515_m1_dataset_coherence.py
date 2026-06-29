@@ -418,8 +418,24 @@ def test_gate_off_for_other_cohorts(cohort: dict, _guard_on: None) -> None:
     assert graph._m1_dataset_coherence_active(cohort) is False
 
 
-def test_resolve_ceiling_reads_rfm_constant() -> None:
-    assert graph._resolve_m1_dataset_monetary_ceiling() == 5000.0
+def test_resolve_ceiling_no_contract_uses_rfm() -> None:
+    # No contract → the fixed RFM `monetary_value` ceiling (byte-identical to pre-#531).
+    assert graph._resolve_m1_dataset_monetary_ceiling({}) == 5000.0
+
+
+def test_resolve_ceiling_domain_contract_tracks_domain_feature() -> None:
+    # Issue #531 — with a domain contract the ceiling tracks the domain monetary feature (so the
+    # CURRENCY guard matches the dataset the student downloads), NOT the stale RFM 5000.
+    state = {
+        "dataset_schema_required": {
+            "feature_columns": [
+                {"name": "engagement_rate", "dtype": "float", "range_min": 0, "range_max": 1},
+                {"name": "visit_count", "dtype": "int", "range_min": 1, "range_max": 50},
+                {"name": "willingness_to_pay_usd", "dtype": "float", "range_min": 10, "range_max": 800},
+            ]
+        }
+    }
+    assert graph._resolve_m1_dataset_monetary_ceiling(state) == 800.0
 
 
 def test_writer_currency_reprompt_success(_guard_on: None) -> None:
