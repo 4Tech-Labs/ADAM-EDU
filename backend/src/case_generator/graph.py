@@ -152,6 +152,8 @@ from case_generator.prompts import (
     M4_CHART_PROMPT_CLUSTERING,
     M4_CHART_PROMPT_CLUSTERING_PROFILES,
     M4_CONTENT_PROMPT_CLUSTERING,
+    M4_QUESTIONS_PROMPT_CLUSTERING,
+    M5_QUESTIONS_PROMPT_CLUSTERING,
     M3_CLASSIFICATION_QUESTIONS_BY_VARIANT,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLASSIFICATION_BY_VARIANT,
     PROMPT_BY_FAMILY,
@@ -7780,6 +7782,11 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL
             if _lens_on else M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
         )
+        # EPIC #458 — for ml_ds+clustering, swap the generic (supervised/financial-framed) M4 questions
+        # prompt for the dedicated segmentation-native one (no model-ROI verdict, no projected uplift).
+        # Byte-identical no-op for every other cohort and when MLDS_CLUSTERING_M4_QUESTIONS is off; the
+        # lens hint (below) + the #467/#469 verdict hint still append to it.
+        prompt = _select_m4_questions_clustering_prompt(state, prompt)
         if _lens_on:
             prompt = prompt + build_impact_lens_hint(_resolve_impact_lens(state))
         # Issue #469 — for ml_ds+clustering, append the decision hint (recommended option + the REAL
@@ -8301,6 +8308,12 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         prompt_text = _maybe_business_classification_prompt(
             state, prompt_text, M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
         )
+        # EPIC #458 — for ml_ds+clustering, swap the generic (supervised-framed) M5 memo prompt for the
+        # dedicated segmentation-native one (decision = which segmentation strategy A/B/C, no model
+        # deployment verdict). Byte-identical no-op for every other cohort and when
+        # MLDS_CLUSTERING_M5_QUESTIONS is off; the #467 verdict hint (below) + the verdict guard still
+        # apply to it.
+        prompt_text = _select_m5_questions_clustering_prompt(state, prompt_text)
         # Issue #467 — for ml_ds+clustering, append the decision hint (recommended option + the REAL
         # executed silhouette) so the M5 memo recommends the shared option and anchors any silhouette
         # to reality. Brace-free → safe before .format. No-op (byte-identical) for every other cohort.
@@ -8820,6 +8833,42 @@ def _select_m3_ml_ds_nonclf_questions_prompt(family: str | None) -> tuple[str, s
     if family == "clustering" and settings.mlds_clustering_m3_questions:
         return M3_QUESTIONS_PROMPT_CLUSTERING, "m3_clustering_questions"
     return M3_EXPERIMENT_QUESTIONS_PROMPT, "m3_experiment_questions"
+
+
+def _select_m4_questions_clustering_prompt(state: ADAMState, base_prompt: str) -> str:
+    """Override the resolved M4 (Impacto) questions prompt with the dedicated segmentation-native
+    ``M4_QUESTIONS_PROMPT_CLUSTERING`` for an ml_ds + clustering case (EPIC #458).
+
+    The generic M4-questions prompt frames P2 as a SUPERVISED model-ROI verdict ("¿el valor proyectado
+    del modelo justifica la inversión dado el veredicto de M3?") and demands citing M4 metrics — incoherent
+    for a K-Means segmentation, which has no predictive model and no projected uplift. This returns the
+    dedicated prompt ONLY for ml_ds+clustering under the ``MLDS_CLUSTERING_M4_QUESTIONS`` kill-switch;
+    every other cohort (and clustering with the switch off) returns ``base_prompt`` UNCHANGED (byte-
+    identical revert). The node still appends the lens hint (#437) and the #467/#469 verdict hint AFTER
+    this — the dedicated prompt is value-frame-compatible. Pure (modulo the settings read) so the dispatch
+    is unit-testable; mirrors ``_select_m3_ml_ds_nonclf_questions_prompt`` / ``_effective_m4_clustering_prompts``.
+    """
+    if settings.mlds_clustering_m4_questions and _is_ml_ds_clustering(state):
+        return M4_QUESTIONS_PROMPT_CLUSTERING
+    return base_prompt
+
+
+def _select_m5_questions_clustering_prompt(state: ADAMState, base_prompt: str) -> str:
+    """Override the resolved M5 final-memorándum questions prompt with the dedicated segmentation-native
+    ``M5_QUESTIONS_PROMPT_CLUSTERING`` for an ml_ds + clustering case (EPIC #458).
+
+    The generic M5-questions prompt frames the memo around a SUPERVISED model decision ("límites del
+    modelo … rol del CTO") — incoherent for a segmentation, where the executive decision is which
+    segmentation strategy (Opción A/B/C) to adopt. Returns the dedicated prompt ONLY for ml_ds+clustering
+    under the ``MLDS_CLUSTERING_M5_QUESTIONS`` kill-switch; every other cohort (and clustering with the
+    switch off) returns ``base_prompt`` UNCHANGED (byte-identical revert). The node still appends the #467
+    verdict hint and still runs ``_apply_clustering_m5_verdict_coherence`` (the deterministic verdict-
+    option guarantee) AFTER this. Pure (modulo the settings read); mirrors
+    ``_select_m4_questions_clustering_prompt``.
+    """
+    if settings.mlds_clustering_m5_questions and _is_ml_ds_clustering(state):
+        return M5_QUESTIONS_PROMPT_CLUSTERING
+    return base_prompt
 
 
 def _is_classification_family(state: ADAMState) -> bool:
