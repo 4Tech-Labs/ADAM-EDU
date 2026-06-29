@@ -34,6 +34,7 @@ from case_generator.prompts._shared import (
 # Issue #437 (ADR 0003, Fase 1) — NEUTRAL clf twins imported directly from the leaf
 # modules (the financial twins still come through the clasificacion hub below).
 from case_generator.prompts.clasificacion.M4_clasificacion.charts import (
+    M4_CHART_PROMPT_CLASSIFICATION_INVESTMENT_NEUTRAL,
     M4_CHART_PROMPT_CLASSIFICATION_NEUTRAL,
 )
 from case_generator.prompts.clasificacion.M4_clasificacion.narrative import (
