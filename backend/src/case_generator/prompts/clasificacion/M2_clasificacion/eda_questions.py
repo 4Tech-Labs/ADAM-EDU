@@ -89,7 +89,9 @@ correlación/causalidad, sino los específicos de clasificación binaria:
 - Toda pregunta referencia métricas, variables o gráficas reales y exactas del M2.
 - Las referencias a gráficos: `chart_ref` contiene SOLO el `id` del chart (string exacto del
   manifest). Usa el `title` únicamente para identificar cuál chart seleccionar — nunca lo
-  incluyas en el valor de `chart_ref`.
+  incluyas en el valor de `chart_ref`. En la PROSA (`enunciado`/`solucion_esperada`/`titulo`)
+  refiérete al gráfico por su TÍTULO legible o por lo que muestra — NUNCA por el `id` crudo
+  snake_case.
 - COHERENCIA NUMÉRICA OBLIGATORIA: toda cifra de la tasa del evento en `solucion_esperada` DEBE ser
   EXACTAMENTE la misma que cita su propio `enunciado`, y ambas deben ser la tasa REAL de {eda_context}.
   Los símbolos Y, X y T de los ejemplos de abajo son placeholders — sustitúyelos por los valores reales

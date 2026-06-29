@@ -231,7 +231,11 @@ from case_generator.m1_grounding import (
     validate_questions_exhibit_coherence,
 )
 from case_generator.m1_grounding import strip_latex_math as _strip_latex_math
-from case_generator.m2_grounding import validate_eda_questions_coherence
+from case_generator.m2_grounding import (
+    detect_chart_id_leak,
+    relabel_chart_ids_in_prose,
+    validate_eda_questions_coherence,
+)
 from case_generator.m3_grounding import (
     allowed_sections_for,
     validate_m3_questions_coherence,
@@ -3185,6 +3189,86 @@ def _apply_eda_questions_coherence(
         return preguntas_dict
 
 
+def _apply_eda_chart_id_relabel(
+    *,
+    preguntas_dict: list[dict],
+    state: ADAMState,
+) -> list[dict]:
+    """Relabel raw chart ids leaked into the M2 EDA question prose with their readable titles.
+
+    Deterministic backstop (Issue #499): the LLM cites a chart's internal snake_case ``id``
+    (e.g. ``feature_distributions``) in the student-visible ``titulo``/``enunciado``/
+    ``solucion_esperada`` instead of the readable title. This maps each REAL chart id → its
+    manifest title and rewrites those three prose fields IN PLACE; the structured ``chart_ref``
+    field is NEVER touched (the coherence validator + future chart-linking consume it as the id).
+    Family-agnostic, gated by ``m2_chart_id_relabel``. Best-effort: ANY throw degrades to the input;
+    never raises (mirrors ``_apply_eda_questions_coherence``). Runs AFTER the coherence pass so a
+    coherence reprompt cannot re-leak an id.
+
+    Column-collision guard: on the LLM-JSON chart path the model can name a chart after a real
+    dataset column (``monetary_value``); relabeling that needle would rewrite every legitimate
+    column mention in prose. Any chart id that matches a ``doc7_dataset`` column name is dropped
+    from the relabel map.
+    """
+    log_extra = {"node": "eda_questions_generator", "case_id": state.get("case_id")}
+    try:
+        if not settings.m2_chart_id_relabel:
+            return preguntas_dict
+        # Real ids only (no ``chart_{i}`` synthetic fallback → no generic ``chart_0`` needle).
+        id_to_title: dict[str, str] = {}
+        for chart in state.get("doc2_eda_charts") or []:
+            if not isinstance(chart, dict):
+                continue
+            cid = chart.get("id")
+            title = chart.get("title")
+            if isinstance(cid, str) and cid and isinstance(title, str):
+                id_to_title[cid] = title
+        if not id_to_title:
+            return preguntas_dict
+        # Column-collision guard (best-effort): drop any chart id equal to a dataset column name.
+        # Union keys across ALL rows (not just row 0) — the LLM dataset path can emit ragged rows
+        # (a sparse column absent from row 0), and row 0 may be empty/non-dict.
+        dataset = state.get("doc7_dataset")
+        if isinstance(dataset, list):
+            columns = {str(k) for row in dataset if isinstance(row, dict) for k in row}
+            if columns:
+                id_to_title = {k: v for k, v in id_to_title.items() if k not in columns}
+        if not id_to_title:
+            return preguntas_dict
+        fields = ("titulo", "enunciado", "solucion_esperada")
+        for pregunta in preguntas_dict:
+            if not isinstance(pregunta, dict):
+                continue
+            for field in fields:
+                value = pregunta.get(field)
+                if isinstance(value, str) and value:
+                    pregunta[field] = relabel_chart_ids_in_prose(value, id_to_title)
+        # Observability only: a residual leak = an id whose title was unusable (blank/echoed), so it
+        # could not be relabeled. Never reprompts, mutates further, or fails the job.
+        residual: set[str] = set()
+        ids = set(id_to_title)
+        for pregunta in preguntas_dict:
+            if not isinstance(pregunta, dict):
+                continue
+            for field in fields:
+                value = pregunta.get(field)
+                if isinstance(value, str) and value:
+                    residual.update(detect_chart_id_leak(value, ids))
+        if residual:
+            logger.warning(
+                "[eda_questions] chart-id leak residual tras relabel",
+                extra={**log_extra, "violations": sorted(residual)},
+            )
+        return preguntas_dict
+    except Exception as exc:  # best-effort — relabel must never fail the job
+        logger.warning(
+            "[eda_questions] relabel de chart-id M2 falló (best-effort): %s",
+            exc,
+            extra=log_extra,
+        )
+        return preguntas_dict
+
+
 def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """Genera EXACTAMENTE 2 preguntas socráticas EDA (Sesgo + Correlación vs Causalidad).
 
@@ -3238,6 +3322,13 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             state=state,
             preguntas_dict=preguntas_eda_dict,
             chart_ids=chart_ids,
+        )
+
+        # Issue #499: relabel any raw chart id leaked into the student-visible prose with its
+        # readable title. AFTER the coherence pass (a reprompt must not re-leak), best-effort.
+        preguntas_eda_dict = _apply_eda_chart_id_relabel(
+            preguntas_dict=preguntas_eda_dict,
+            state=state,
         )
 
         return {
