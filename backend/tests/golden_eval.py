@@ -970,16 +970,22 @@ def check_clustering_m1_no_target_anchors(contract: dict | None) -> bool:
     """Pure oracle (Issue #455): an ml_ds + clustering M1 ``dataset_schema_required`` contract
     carries NO supervised anchor — clustering is unsupervised.
 
-    True iff the contract has NO supervised ``target_column``, NO ``business_cost_matrix``, and NO
+    True iff the contract has NO SUPERVISED ``target_column``, NO ``business_cost_matrix``, and NO
     ``target_event_rate`` (all three are contract-nested keys the classification architect anchor
-    emits). True (n/a) when the contract is None (architect emitted no contract). A clustering case
-    that populates any of them FAILS — the clustering M1 prompt forbids them and the clf-gated
-    validators no-op for clustering, so a populated anchor means the generic/classification framing
-    leaked in. RED control: a contract with any anchor returns False (non-tautological)."""
+    emits). Issue #531 — the clustering anchor now emits ``target_column`` as an UNSUPERVISED
+    ``role: "clustering_target"`` MARKER (to satisfy the required schema field; the data layer never
+    materializes it as a column), so that role is ALLOWED here; only a SUPERVISED target role (or a
+    malformed/non-dict target_column) is a leak. True (n/a) when the contract is None (architect
+    emitted no contract). RED control: a contract with a supervised target / cost matrix / event rate
+    returns False (non-tautological)."""
     if not isinstance(contract, dict):
         return True
+    tgt = contract.get("target_column")
+    target_ok = tgt is None or (
+        isinstance(tgt, dict) and (tgt.get("role") or "") == "clustering_target"
+    )
     return (
-        contract.get("target_column") is None
+        target_ok
         and contract.get("business_cost_matrix") is None
         and contract.get("target_event_rate") is None
     )

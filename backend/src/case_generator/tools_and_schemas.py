@@ -114,6 +114,27 @@ class DatasetFeatureSpec(BaseModel):
             "distancia al recurso ambiental = 'negative'; ingreso/calidad percibida = 'positive')."
         ),
     )
+    # Issue #531 — rango típico realista de la feature en SUS unidades naturales (ej: un
+    # `willingness_to_pay_usd` ∈ [10, 800], un `visit_recency_days` ∈ [1, 365]). OPCIONAL y
+    # ADITIVO: default None → cero impacto en clasificación/regresión/serie_temporal/business
+    # (sus builders no leen estos campos). Consumido SOLO por el builder de segmentación de
+    # ml_ds + clustering (`graph._resolve_clustering_segmentation_columns`), que genera columnas
+    # de dominio con valores plausibles en vez de los defaults genéricos [0,1]/[0,100] del
+    # augmenter. Si el architect no los declara, el builder cae a una heurística por nombre/tipo.
+    range_min: Optional[float] = Field(
+        default=None,
+        description=(
+            "Mínimo típico de la feature en sus unidades naturales (solo clustering). "
+            "Ej: willingness_to_pay_usd → 10. Déjalo null si no aplica."
+        ),
+    )
+    range_max: Optional[float] = Field(
+        default=None,
+        description=(
+            "Máximo típico de la feature en sus unidades naturales (solo clustering). "
+            "Ej: willingness_to_pay_usd → 800. Déjalo null si no aplica."
+        ),
+    )
 
     @field_validator("expected_direction", mode="before")
     @classmethod
@@ -126,6 +147,27 @@ class DatasetFeatureSpec(BaseModel):
             return None
         normalized = v.strip().lower()
         return normalized if normalized in {"positive", "negative"} else None
+
+    @model_validator(mode="after")
+    def _sanitize_range(self) -> "DatasetFeatureSpec":
+        # Coerce-never-reject (espejo de _coerce_expected_direction / EntityDescriptor): un par de
+        # rango inválido (no-finito, o min >= max) se NULIFICA a (None, None) en vez de levantar —
+        # un ValidationError abortaría el parse de TODO el CaseArchitectOutput y degradaría el caso
+        # a un placeholder de error. El builder de clustering cae entonces a su heurística por nombre.
+        lo, hi = self.range_min, self.range_max
+        valid = (
+            isinstance(lo, (int, float))
+            and isinstance(hi, (int, float))
+            and not isinstance(lo, bool)
+            and not isinstance(hi, bool)
+            and math.isfinite(lo)
+            and math.isfinite(hi)
+            and lo < hi
+        )
+        if not valid:
+            self.range_min = None
+            self.range_max = None
+        return self
 
 
 class DatasetSchemaRequired(BaseModel):

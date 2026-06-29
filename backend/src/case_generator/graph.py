@@ -1773,15 +1773,23 @@ def _m1_dataset_coherence_active(state: ADAMState) -> bool:
     )
 
 
-def _resolve_m1_dataset_monetary_ceiling() -> float | None:
-    """Per-entity monetary scale ceiling for the deterministic clustering RFM schema.
+def _resolve_m1_dataset_monetary_ceiling(state: ADAMState) -> float | None:
+    """Per-entity monetary scale ceiling for the ml_ds + clustering segmentation dataset.
 
-    Delegates to the shared ``monetary_ceiling_from_columns`` over ``_CLUSTERING_SEGMENTATION_
-    COLUMNS`` (the SAME deterministic source ``_build_clustering_fallback_schema`` consumes) — so
-    the runtime guard and the golden oracle compute the ceiling identically; no fixed feature list
-    (I3). Returns ``None`` when no monetary column is found → CURRENCY no-ops honestly.
+    Delegates to the shared ``monetary_ceiling_from_columns`` over the SAME columns the data layer
+    will generate — ``_resolve_clustering_segmentation_columns`` (Issue #531: the architect's DOMAIN
+    features when present, else the fixed RFM). So the #515 CURRENCY guard's ceiling EXACTLY matches
+    the monetary feature of the dataset the student downloads (a domain ``willingness_to_pay_usd ∈
+    [10, 800]`` ceiling, not a stale RFM ``monetary_value`` 5000), avoiding both false-positive
+    reprompts and missed incoherence; no fixed feature list (I3). Returns ``None`` when no monetary
+    column is found → CURRENCY no-ops honestly. Domain-off / no contract → the fixed RFM ceiling
+    (byte-identical to pre-#531).
     """
-    return monetary_ceiling_from_columns(_CLUSTERING_SEGMENTATION_COLUMNS)
+    columns = _resolve_clustering_segmentation_columns(
+        state.get("dataset_schema_required"),
+        domain_enabled=settings.mlds_clustering_domain_columns,
+    )
+    return monetary_ceiling_from_columns(columns)
 
 
 def _apply_m1_dataset_coherence_writer(
@@ -1799,7 +1807,7 @@ def _apply_m1_dataset_coherence_writer(
     try:
         entity = state.get("entity_descriptor")
         entity = entity if isinstance(entity, dict) else None
-        ceiling = _resolve_m1_dataset_monetary_ceiling()
+        ceiling = _resolve_m1_dataset_monetary_ceiling(state)
         violations = validate_m1_dataset_coherence(
             narrativa_raw,
             entity_descriptor=entity,
@@ -1880,7 +1888,7 @@ def _log_m1_dataset_coherence_architect(
             f"{company_profile or ''}\n{dilema_brief or ''}",
             entity_descriptor=entity_descriptor if isinstance(entity_descriptor, dict) else None,
             expected_population=_MLDS_CLUSTERING_MAX_ROWS,
-            monetary_ceiling=_resolve_m1_dataset_monetary_ceiling(),
+            monetary_ceiling=_resolve_m1_dataset_monetary_ceiling(state),
         )
         if violations:
             logger.warning(
@@ -3818,6 +3826,15 @@ _CLUSTERING_SEGMENTATION_COLUMNS: tuple[dict, ...] = (
     {"name": "support_intensity", "type": "float", "description": "Intensidad de uso de soporte (interacciones/mes)",     "range_min": 0.0,  "range_max": 10.0, "nullable": False, "trend": None, "dependency": None},
 )
 
+# Issue #531 — domain-adaptive segmentation columns. When the architect contract declares enough
+# usable numeric `feature_columns`, those (renamed/ranged for the case domain) REPLACE the generic
+# RFM above, so the CSV the student downloads is coherent with ANY case domain (educación, salud,
+# ambiental, manufactura…), not always generic e-commerce RFM. `_CLUSTERING_MIN_DOMAIN_FEATURES`
+# is the floor below which we fall back to the fixed RFM (≥2 needed for separable blobs; 3 gives a
+# buffer); `_CLUSTERING_MAX_DOMAIN_FEATURES` caps the fit dimensionality.
+_CLUSTERING_MIN_DOMAIN_FEATURES = 3
+_CLUSTERING_MAX_DOMAIN_FEATURES = 8
+
 # Row count for the ml_ds + clustering dataset (Issue #468). 200 was too few for a 12-D K-Means
 # fit (~50 points/cluster → noisy silhouette, unstable re-seeding) and clashed with the "segment N
 # users" narrative. 1000 entity rows stabilises the clusters; the silhouette band is recalibrated
@@ -3832,25 +3849,144 @@ _MLDS_CLUSTERING_MAX_ROWS = 1000
 _MLDS_CLASSIFICATION_MAX_ROWS = 1000
 
 
-def _build_clustering_fallback_schema(max_rows: int) -> dict:
-    """Entity-level segmentation fallback schema for ml_ds + clustering (Issue #452).
+def _clustering_feature_range_heuristic(name: str, dtype: str) -> tuple[float, float]:
+    """Sensible ``(low, high)`` for a domain clustering feature lacking an architect range (#531).
 
-    ``period`` is kept as a row id (str → excluded from the numeric K-Means fit); the rest are
-    interpretable segmentation features that `_enforce_mlds_clustering_structure` blobs. No
-    revenue/costs/margin/ebitda → the financial scaling + ebitda/margin recompute + outlier
-    target selection in `_generate_dataset_from_schema`/`data_validator` all no-op cleanly.
+    The range affects ONLY display realism: ``StandardScaler`` makes the K-Means silhouette
+    invariant to each feature's linear scale, so a rough bucket by name token is enough to avoid
+    the original ``_default_column`` defect (a ``willingness_to_pay_usd`` shown as ``0.65``). The
+    buckets mirror the fixed RFM ranges. First match wins; falls back to a generic ``[0, 100]``.
+    Pure, deterministic. Architect-declared ranges take precedence over this (see the resolver).
+    """
+    n = (name or "").lower()
+
+    def has(*toks: str) -> bool:
+        return any(t in n for t in toks)
+
+    # Strong money signals first (unambiguous units) → mirror `monetary_value` [50, 5000].
+    if has("usd", "dollar", "revenue", "income", "price", "spend", "ltv", "arpu", "monetar",
+           "budget", "payment", "willingness_to_pay", "_pay", "pay_", "donation", "sales"):
+        return (50.0, 5000.0)
+    if has("recency", "days", "_day", "day_", "dias"):
+        return (1.0, 365.0)
+    if has("tenure", "month", "_mes", "meses", "antiguedad", "antigüedad"):
+        return (1.0, 72.0)
+    if has("year", "anios", "años", "anos"):
+        return (1.0, 10.0)
+    # Intensity, then normalized score/rate — BEFORE the count bucket so a rate whose name happens
+    # to contain the "count" substring (e.g. "dis-count_rate") is not mis-bucketed as a count.
+    if has("intensity", "intensidad"):
+        return (0.0, 10.0)
+    if has("score", "index", "indice", "rate", "ratio", "pct", "percent", "proportion",
+           "share", "probability", "prob", "engagement", "satisfaction", "likelihood", "propensity"):
+        return (0.0, 1.0)
+    if has("count", "freq", "visit", "order", "session", "interaction", "transaction",
+           "purchase", "login", "click", "trip", "num_", "_num", "qty", "quantity"):
+        return (1.0, 60.0)
+    # Weak money signals (could be non-money) checked late.
+    if has("value", "valor", "amount", "monto", "cost"):
+        return (50.0, 5000.0)
+    return (0.0, 100.0)
+
+
+def _resolve_clustering_segmentation_columns(
+    contract: dict | None, *, domain_enabled: bool = True
+) -> list[dict]:
+    """SINGLE SOURCE of the ml_ds + clustering segmentation feature columns (Issue #531).
+
+    Domain-adaptive: when ``domain_enabled`` AND the architect contract declares at least
+    ``_CLUSTERING_MIN_DOMAIN_FEATURES`` USABLE numeric ``feature_columns``, those features (with the
+    architect's ``range_min``/``range_max`` or a name/dtype heuristic) ARE the segmentation set — so
+    the CSV is coherent with the case domain (a wetland case gets ``willingness_to_pay_usd`` /
+    ``visit_recency_days`` instead of generic e-commerce RFM), with NO duplicate generic RFM and NO
+    broken ``_default_column`` ranges. Otherwise (kill-switch off, no/insufficient contract) it falls
+    back to the fixed RFM ``_CLUSTERING_SEGMENTATION_COLUMNS``.
+
+    Pure, deterministic, no LLM. Used by BOTH the schema builder (``_build_clustering_fallback_schema``)
+    AND the #515 monetary-ceiling resolver, so the runtime guard and the generated dataset agree by
+    construction. Skips non-numeric (str/date) features, the entity index (``period``/``*_id``),
+    cluster-label artifacts (``cluster*``/``kmeans*``), and de-dups by name; caps at
+    ``_CLUSTERING_MAX_DOMAIN_FEATURES``.
+    """
+    if domain_enabled and isinstance(contract, dict):
+        cols: list[dict] = []
+        seen: set[str] = set()
+        for feat in contract.get("feature_columns") or []:
+            if not isinstance(feat, dict):
+                continue
+            # Defensive: in production `feat` is a Pydantic `DatasetFeatureSpec` dump (name is str),
+            # but schema_designer's clustering path has no try/except, so a malformed feature must be
+            # SKIPPED, never crash a job (e.g. a non-str name would break `.strip()`). If too few
+            # usable features survive, the function falls back to the fixed RFM.
+            raw_name = feat.get("name")
+            if not isinstance(raw_name, str) or not raw_name.strip():
+                continue
+            name = raw_name.strip()
+            lname = name.lower()
+            if lname == "period" or lname.endswith("_id") or lname in seen:
+                continue
+            if any(tok in lname for tok in _CLUSTERING_LABEL_NAME_TOKENS):
+                continue
+            ctype = _CONTRACT_TYPE_TO_SCHEMA_TYPE.get(feat.get("dtype", "float"), "float")
+            if ctype not in ("int", "float"):
+                continue  # str/date cannot be a numeric K-Means feature
+            lo, hi = feat.get("range_min"), feat.get("range_max")
+            if not (
+                isinstance(lo, (int, float)) and isinstance(hi, (int, float))
+                and not isinstance(lo, bool) and not isinstance(hi, bool) and lo < hi
+            ):
+                lo, hi = _clustering_feature_range_heuristic(name, ctype)
+            if ctype == "int":
+                lo, hi = float(int(round(lo))), float(int(round(hi)))
+                if lo >= hi:
+                    hi = lo + 1.0
+            raw_desc = feat.get("description")
+            desc = raw_desc.strip() if isinstance(raw_desc, str) and raw_desc.strip() else (
+                f"Eje de segmentación ({name})"
+            )
+            cols.append({
+                "name": name,
+                "type": ctype,
+                "description": desc,
+                "range_min": lo,
+                "range_max": hi,
+                "nullable": False,
+                "trend": None,
+                "dependency": None,
+            })
+            seen.add(lname)
+            if len(cols) >= _CLUSTERING_MAX_DOMAIN_FEATURES:
+                break
+        if len(cols) >= _CLUSTERING_MIN_DOMAIN_FEATURES:
+            return cols
+    return [dict(c) for c in _CLUSTERING_SEGMENTATION_COLUMNS]
+
+
+def _build_clustering_fallback_schema(
+    max_rows: int, contract: dict | None = None, *, domain_enabled: bool = True
+) -> dict:
+    """Entity-level segmentation schema for ml_ds + clustering (Issue #452, domain-adaptive #531).
+
+    ``period`` is kept as a row id (str → excluded from the numeric K-Means fit); the segmentation
+    features come from ``_resolve_clustering_segmentation_columns`` — the architect's DOMAIN features
+    when present (``domain_enabled`` + a contract with ≥ min usable numeric features), else the fixed
+    RFM. `_enforce_mlds_clustering_structure` blobs whichever features result. No revenue/costs/
+    margin/ebitda → the financial scaling + ebitda/margin recompute + outlier target selection in
+    `_generate_dataset_from_schema`/`data_validator` all no-op cleanly.
     """
     columns: list[dict] = [
         {"name": "period", "type": "str", "description": "Identificador de entidad/registro",
          "range_min": None, "range_max": None, "nullable": False, "trend": None, "dependency": None},
     ]
-    columns.extend(dict(c) for c in _CLUSTERING_SEGMENTATION_COLUMNS)
+    columns.extend(
+        _resolve_clustering_segmentation_columns(contract, domain_enabled=domain_enabled)
+    )
     return {
         "columns": columns,
         "n_rows": max_rows,
         "time_granularity": "monthly",
         "constraints": {"tolerance_pct": 0.05},
-        "reasoning_summary": "Fallback schema clustering — features de segmentación (Issue #452)",
+        "reasoning_summary": "Fallback schema clustering — features de segmentación (Issue #452/#531)",
     }
 
 
@@ -3865,6 +4001,7 @@ def _build_fallback_schema(
     primary_family: str = "clasificacion",
     *,
     clustering_structure_enabled: bool = True,
+    clustering_domain_columns_enabled: bool = True,
 ) -> dict:
     """Schema mínimo si schema_designer falla. Extrae revenue con regex del Exhibit 1.
 
@@ -3883,7 +4020,13 @@ def _build_fallback_schema(
         and profile == "ml_ds"
         and primary_family == "clustering"
     ):
-        return _build_clustering_fallback_schema(max_rows)
+        # Issue #531 — domain-adaptive segmentation columns from the architect contract (when present
+        # + the kill-switch is on); else the fixed RFM. The data adapts to the case domain.
+        return _build_clustering_fallback_schema(
+            max_rows,
+            state.get("dataset_schema_required"),
+            domain_enabled=clustering_domain_columns_enabled,
+        )
 
     financial_text = state.get("doc1_anexo_financiero", "")
 
@@ -5542,6 +5685,14 @@ def _enforce_mlds_clustering_no_target(
         return schema
 
     stripped = [c.get("name") for c in columns if c.get("name") in strip_names]
+    # Issue #531 — a contract `target_column` (incl. the clustering_target PLACEHOLDER the architect
+    # now emits to satisfy the required field) lands in `strip_names` via Regla A, but with the
+    # domain-adaptive builder it is NEVER materialized as a column (the builder only emits
+    # feature_columns; the generic augmenter is skipped for clustering). So `stripped` is empty →
+    # nothing to remove, no dangling-dependency repair needed → return the SAME schema (byte-identical
+    # no-op, no spurious "removidas: []" log).
+    if not stripped:
+        return schema
     columns = [c for c in columns if c.get("name") not in strip_names]
 
     # Reparación de dependencias colgantes: una columna cuyo padre fue eliminado genera independiente
@@ -5929,6 +6080,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     fallback_schema = _build_fallback_schema(
         state, max_rows, profile, primary_family=_effective_family,
         clustering_structure_enabled=settings.mlds_clustering_structure,
+        clustering_domain_columns_enabled=settings.mlds_clustering_domain_columns,
     )
     # Issue #225 — incluso en fallback respetamos el contrato del architect.
     contract = state.get("dataset_schema_required")
@@ -5936,7 +6088,15 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     fallback_schema = _align_ml_ds_classification_target(
         fallback_schema, contract, profile=profile, primary_family=primary_family
     )
-    fallback_schema = _augment_schema_with_contract(fallback_schema, contract)
+    # Issue #531 — for the ml_ds + clustering DETERMINISTIC path the segmentation columns already
+    # come from the contract (domain-adaptive) inside `_build_clustering_fallback_schema`, so the
+    # generic feature/target augmenter MUST NOT run here: it would (a) re-append the contract's
+    # `feature_columns` as DUPLICATE generic-ranged columns (the original defect) and (b) inject the
+    # (placeholder) `clustering_target`. Clustering has no target, so skipping it is correct. This is
+    # the UNCONDITIONAL bug fix (independent of MLDS_CLUSTERING_DOMAIN_COLUMNS) — restoring the
+    # duplicate-column path on an off-switch would re-expose the bug (anti-pattern; cf. #470).
+    if not _use_deterministic_clustering_schema:
+        fallback_schema = _augment_schema_with_contract(fallback_schema, contract)
     # Issue #301 — el spine determinista también aplica en fallback (red de seguridad).
     fallback_schema, biz_notes, biz_target = _enforce_business_classification_schema(
         fallback_schema, contract, profile=profile, primary_family=primary_family
