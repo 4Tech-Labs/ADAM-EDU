@@ -97,6 +97,35 @@ class DatasetFeatureSpec(BaseModel):
             "de que se conoce el target en producción."
         ),
     )
+    # Issue #506 — prior de dirección económica OPCIONAL. Cuando la teoría del dominio fija el
+    # SIGNO causal de la feature sobre el evento objetivo (ej: valoración contingente — a mayor
+    # tarifa propuesta MENOR aceptación → "negative", ley de demanda), el generador determinista
+    # del dataset acopla el target a la feature con ese signo, de modo que el coeficiente del
+    # modelo NO quede económicamente invertido. Consumido SOLO en ml_ds + clasificación por
+    # `_enforce_mlds_directional_target` (graph.py); inerte en otros perfiles/familias. `None` =
+    # dirección desconocida/ambigua → comportamiento previo (signo no controlado).
+    expected_direction: Optional[str] = Field(
+        default=None,
+        description=(
+            "Dirección causal esperada de la feature sobre el evento objetivo binario: "
+            "'positive' (a mayor valor, mayor probabilidad del evento), 'negative' (a mayor "
+            "valor, menor probabilidad), o null si es ambigua/desconocida. Declárala SOLO cuando "
+            "la teoría del dominio fije el signo (ej: ley de demanda → precio/tarifa = 'negative'; "
+            "distancia al recurso ambiental = 'negative'; ingreso/calidad percibida = 'positive')."
+        ),
+    )
+
+    @field_validator("expected_direction", mode="before")
+    @classmethod
+    def _coerce_expected_direction(cls, v: object) -> Optional[str]:
+        # Coerce-never-reject (espejo de _normalize_currency / _coerce_lens): cualquier valor que
+        # no sea exactamente 'positive'/'negative' (incl. no-str, vacío, typo, mayúsculas) → None.
+        # NUNCA levanta: un Literal estricto abortaría TODO el parse de CaseArchitectOutput por una
+        # etiqueta suelta del LLM, degradando el caso a un placeholder de error.
+        if not isinstance(v, str):
+            return None
+        normalized = v.strip().lower()
+        return normalized if normalized in {"positive", "negative"} else None
 
 
 class DatasetSchemaRequired(BaseModel):
