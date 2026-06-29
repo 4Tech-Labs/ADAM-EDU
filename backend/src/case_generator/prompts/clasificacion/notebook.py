@@ -336,12 +336,24 @@ M. **PEDAGOGÍA HARVARD ml_ds — bloque comparativo OBLIGATORIO.**
 
 # %%
 try:
-    # Distribución del target detectado por alias (label_aliases / churn_aliases) o último categórico.
-    target_col = find_first_matching_column(df.columns, label_aliases) or \
-                 find_first_matching_column(df.columns, churn_aliases)
-    if target_col is None:
-        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
-        target_col = cat_cols[-1] if cat_cols else None
+    # Target CONTRACT-FIRST (igual que la celda de modelado 3.0.5.1): si el caso
+    # declara la columna objetivo, esa es la que se explora; si no la declara, se
+    # cae al heurístico por alias. Así el "Target candidato" que se muestra aquí
+    # coincide con la columna que entrenan los modelos, sin contradicciones (p. ej.
+    # mostrar un identificador como objetivo y luego modelar otra columna distinta).
+    _eda_contract_target = "{contract_target_name}".strip()
+    if _eda_contract_target and _eda_contract_target in df.columns:
+        target_col = _eda_contract_target
+    elif _eda_contract_target:
+        print(f"⚠️ REQUISITO FALTANTE: target '{{_eda_contract_target}}' del contrato "
+              "no está presente en el dataset.")
+        target_col = None
+    else:
+        target_col = find_first_matching_column(df.columns, label_aliases) or \
+                     find_first_matching_column(df.columns, churn_aliases)
+        if target_col is None:
+            cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+            target_col = cat_cols[-1] if cat_cols else None
     if target_col is not None:
         print("Target candidato:", target_col)
         print(df[target_col].value_counts(normalize=True).round(3))
@@ -542,6 +554,11 @@ try:
     _coef_lr = pipe_lr.named_steps["clf"].coef_.ravel()
     if len(_feat_names_lr) != len(_coef_lr):
         _feat_names_lr = [f"f{{i}}" for i in range(len(_coef_lr))]
+    # Nombres legibles para el estudiante: quita el prefijo interno que el
+    # ColumnTransformer antepone (num__/cat__) para que la tabla muestre el nombre
+    # real de la variable (ingreso, antigüedad…) y no jerga de la librería.
+    import re as _re_feat_lr
+    _feat_names_lr = [_re_feat_lr.sub(r"^(?:[a-z][a-z0-9]*__)+", "", str(_n)) for _n in _feat_names_lr]
     or_df = pd.DataFrame(
         {{"feature": _feat_names_lr, "odds_ratio": np.exp(_coef_lr)}}
     ).sort_values("odds_ratio", ascending=False)
@@ -606,6 +623,11 @@ try:
     _imp_rf = pipe_rf.named_steps["clf"].feature_importances_
     if len(_feat_names_rf) != len(_imp_rf):
         _feat_names_rf = [f"f{{i}}" for i in range(len(_imp_rf))]
+    # Nombres legibles para el estudiante: quita el prefijo interno que el
+    # ColumnTransformer antepone (num__/cat__) para que la tabla muestre el nombre
+    # real de la variable (ingreso, antigüedad…) y no jerga de la librería.
+    import re as _re_feat_rf
+    _feat_names_rf = [_re_feat_rf.sub(r"^(?:[a-z][a-z0-9]*__)+", "", str(_n)) for _n in _feat_names_rf]
     perm_df = pd.DataFrame(
         {{"feature": _feat_names_rf, "importance_mean": _imp_rf}}
     ).sort_values("importance_mean", ascending=False)
