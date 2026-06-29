@@ -63,7 +63,6 @@ import re
 import textwrap
 import threading
 import time
-import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -276,6 +275,7 @@ from case_generator.m3_notebook_execution import (
     scrub_notebook_for_safe_execution,
 )
 from case_generator.m3_notebook_repair import repair_locals_existence_guards
+from case_generator.text_normalize import fold_accents
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
     EDAAnnotateOnlyOutput,
@@ -8564,11 +8564,7 @@ def _is_markdown_separator_row(cells: list[str]) -> bool:
 
 def _normalize_m5_matrix_header_cell(cell: str) -> str:
     compact = " ".join(cell.lower().split())
-    without_accents = "".join(
-        char
-        for char in unicodedata.normalize("NFKD", compact)
-        if not unicodedata.combining(char)
-    )
+    without_accents = fold_accents(compact)
     return _M5_DECISION_MATRIX_HEADER_ALIASES.get(without_accents, without_accents)
 
 
