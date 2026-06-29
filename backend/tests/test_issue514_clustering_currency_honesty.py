@@ -112,6 +112,14 @@ def test_helper_no_append_when_switch_off(monkeypatch: pytest.MonkeyPatch) -> No
     assert _maybe_append_clustering_currency_hint("BASE", _ML_DS_CLUSTERING) == "BASE"
 
 
+def test_kill_switch_defaults_to_true() -> None:
+    """The P0 launch-blocker guard must be ON by default — a silently flipped default
+    would disable the prevention for the whole launch cohort. Pin the DECLARED default
+    (env-independent), not the env-overridable runtime value."""
+    field = type(graph.settings).model_fields["mlds_clustering_currency_honesty"]
+    assert field.default is True
+
+
 @pytest.mark.parametrize("state", _OTHER_COHORTS)
 def test_helper_no_append_other_cohorts(monkeypatch: pytest.MonkeyPatch, state: dict) -> None:
     monkeypatch.setattr(graph.settings, "mlds_clustering_currency_honesty", True)
@@ -135,7 +143,11 @@ def test_helper_best_effort_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_graph_wires_currency_hint_into_both_m1_nodes() -> None:
     src = Path(graph.__file__).read_text(encoding="utf-8")
     assert "build_clustering_currency_honesty_hint" in src, "hint must be imported into graph.py"
-    # 1 helper def + ≥2 call sites (case_architect + case_writer).
-    assert src.count("_maybe_append_clustering_currency_hint(") >= 3, (
-        "helper must be wired into BOTH the architect and writer M1 nodes"
+    # Exactly one helper definition...
+    assert src.count("def _maybe_append_clustering_currency_hint(") == 1, (
+        "helper must be defined exactly once"
     )
+    # ...invoked at BOTH M1 prose producers (case_architect + case_writer). Counting call
+    # sites separately from the def keeps the assertion honest under a future rename.
+    call_sites = src.count("_maybe_append_clustering_currency_hint(") - 1  # minus the def
+    assert call_sites >= 2, "helper must be wired into BOTH the architect and writer M1 nodes"
