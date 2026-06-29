@@ -64,9 +64,10 @@ import textwrap
 import threading
 import time
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 logger = logging.getLogger("adam.graph")
 from pydantic import ValidationError
@@ -151,6 +152,7 @@ from case_generator.prompts import (
     M4_CHART_PROMPT_CLUSTERING_PROFILES,
     M4_CONTENT_PROMPT_CLUSTERING,
     M3_CLASSIFICATION_QUESTIONS_BY_VARIANT,
+    M3_NOTEBOOK_QUESTIONS_PROMPT_CLASSIFICATION_BY_VARIANT,
     PROMPT_BY_FAMILY,
     M4_PROMPT_BY_FAMILY,
     M4_PROMPT_BY_FAMILY_NEUTRAL,
@@ -218,8 +220,10 @@ from case_generator.retention_tokens import (
 )
 from case_generator.narrative_grounding import (
     NARRATIVE_GROUNDING_WARNING,
+    _strip_transformer_prefix,
     build_computed_metrics_block,
     contextualize_grounding_violations,
+    detect_unanchored_adjacent_metrics,
     detect_unselected_model_mentions,
     has_metric_anchors,
     log_raw_identifier_leak,
@@ -8638,29 +8642,119 @@ def _render_segment_data_table(cluster_sizes: Any, cluster_profiles: dict | None
     return "\n".join(rows)
 
 
-def _apply_m3_notebook_questions_grounding(
+def _apply_notebook_questions_grounding(
+    preguntas: list[dict],
     *,
     llm: Any,
-    prompt: str,
-    preguntas: list[dict],
-    real_silhouette: float,
+    base_prompt: str,
+    violations_fn: Callable[[list[dict]], list[str]],
+    correction_text: str,
     case_id: Any,
-    cluster_profiles: dict | None = None,
-    valid_counts: set[int] | None = None,
 ) -> list[dict]:
-    """Reprompt-once-then-OMIT the grounding of the 2 notebook questions (Issue #489, extended #494).
+    """Generic reprompt-once-then-OMIT grounding skeleton for the 2 M3 notebook questions.
 
-    Always reuses #469 ``detect_unanchored_silhouette`` over each question's ``solucion_esperada`` +
-    ``enunciado``: a cited silhouette diverging from the REAL executed value is a fabrication. When
-    ``cluster_profiles`` is provided (B4-a, Issue #494) it ALSO runs
-    ``detect_unanchored_cluster_profiles`` (per-feature means) and ``detect_unanchored_n_clusters``
-    (segment count vs ``valid_counts``). On a violation it reprompts ONCE (concatenated correction,
-    never re-``.format``); if the corrected set still fabricates (or is not exactly 2) the 2 questions
-    are OMITTED (``[]``) — the case ships the 3 conceptual questions, never a fabricated value, never a
-    job failure. With ``cluster_profiles=None`` the behavior is BYTE-IDENTICAL to #489 (B4-b).
-    Best-effort: ANY throw degrades to ``[]``. ``prompt`` is the ALREADY-formatted string.
+    Shared by the clustering (Issue #489/#494) and classification (Issue #493) families: each builds
+    a family-specific ``violations_fn`` (the deterministic detectors) and ``correction_text`` (the
+    reprompt addendum), and this skeleton owns the policy. ``violations_fn`` runs over the 2 questions;
+    on any violation it reprompts ONCE by CONCATENATING ``correction_text`` to ``base_prompt`` (never
+    re-``.format`` — the prompt/correction may carry JSON braces), re-coerces to ``numero`` 4/5, and
+    OMITS (``[]``) when the corrected set still violates or is not exactly 2. Best-effort: ANY throw
+    degrades to ``[]`` — the case ships the 3 conceptual questions, never a fabricated value, never a
+    job failure. ``base_prompt`` is the ALREADY-formatted string.
     """
     log_extra = {"node": "m3_notebook_questions_generator", "case_id": case_id}
+    try:
+        if not violations_fn(preguntas):
+            return preguntas
+        logger.info("[m3_notebook_questions] reprompt grounding disparado", extra=log_extra)
+        try:
+            resultado: GeneradorPreguntasOutput = llm.with_structured_output(
+                GeneradorPreguntasOutput
+            ).invoke(base_prompt + correction_text)
+            corrected = _coerce_notebook_questions([p.model_dump() for p in resultado.preguntas])
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[m3_notebook_questions] reprompt inválido — omite las 2: %s", exc, extra=log_extra
+            )
+            return []
+        if len(corrected) != 2 or violations_fn(corrected):
+            logger.warning(
+                "[m3_notebook_questions] grounding no resuelto tras reprompt — omite las 2",
+                extra={**log_extra, "degraded": True},
+            )
+            return []
+        logger.info(
+            "[m3_notebook_questions] grounding corregido por reprompt",
+            extra={**log_extra, "degraded": False},
+        )
+        return corrected
+    except Exception as exc:  # best-effort — el guard NUNCA falla el job
+        logger.warning(
+            "[m3_notebook_questions] guard de grounding falló (best-effort) — omite: %s",
+            exc,
+            extra=log_extra,
+        )
+        return []
+
+
+class _NotebookQuestionsPlan(NamedTuple):
+    """A family-resolved plan for the 2 M3 notebook questions (Issue #489 clustering / #493 clf).
+
+    ``formatted_prompt`` is the ready-to-invoke prompt; ``violations_fn`` is the deterministic
+    grounding detector closure (silhouette/profiles for clustering, AUC/F1 + model-leak for
+    classification); ``correction_text`` is the reprompt addendum. The node owns the shared LLM
+    scaffolding + the generic ``_apply_notebook_questions_grounding`` skeleton; the per-family logic
+    lives entirely in the plan builders.
+    """
+
+    formatted_prompt: str
+    violations_fn: Callable[[list[dict]], list[str]]
+    correction_text: str
+
+
+def _plan_clustering_notebook_questions(
+    state: ADAMState, metrics: dict
+) -> _NotebookQuestionsPlan | None:
+    """Build the clustering (Issue #489/#494) notebook-questions plan, or ``None`` to omit.
+
+    ``None`` when there is no finite silhouette (skipped/degenerate run). Otherwise selects the B4-a
+    (profiles, #494) or B4-b (#489) prompt, formats it, and returns the silhouette/profile/n_clusters
+    grounding closure + correction. The branch is BYTE-IDENTICAL to the pre-#493 inline clustering
+    path (guarded by the #489/#494 tests).
+    """
+    real_silhouette = _finite_metric(metrics, "silhouette")
+    if real_silhouette is None:
+        return None
+    context = _build_m3_notebook_questions_context(
+        state, real_silhouette=real_silhouette, metrics=metrics
+    )
+    # Issue #494 — B4-a (Q5 anclada a perfiles REALES) SOLO si el kill-switch está ON y la celda
+    # exportó perfiles bien formados; si no, B4-b (#489) byte-idéntico.
+    cluster_profiles = (
+        _extract_valid_cluster_profiles(metrics)
+        if settings.mlds_clustering_notebook_profiles
+        else None
+    )
+    valid_counts: set[int] | None = None
+    if cluster_profiles is not None:
+        decision = state.get("clustering_decision") or {}
+        target_k = decision.get("target_k") if isinstance(decision, dict) else None
+        n_clusters_real = _finite_metric(metrics, "n_clusters")
+        valid_counts = set()
+        if n_clusters_real is not None:
+            valid_counts.add(int(n_clusters_real))
+        if isinstance(target_k, int):
+            valid_counts.add(target_k)
+        feature_names = ", ".join(str(f) for f in cluster_profiles) or context["feature_names"]
+        context = {
+            **context,
+            "feature_names": feature_names,
+            "cluster_profiles_table": _render_cluster_profiles_table(cluster_profiles),
+        }
+        prompt_template = M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES
+    else:
+        prompt_template = M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING
+    formatted = prompt_template.format(**context)
 
     def _violations(qs: list[dict]) -> list[str]:
         out: list[str] = []
@@ -8677,67 +8771,163 @@ def _apply_m3_notebook_questions_grounding(
                 out.extend(detect_unanchored_n_clusters(enu, valid_counts))
         return out
 
-    try:
-        if not _violations(preguntas):
-            return preguntas
-        logger.info(
-            "[m3_notebook_questions] reprompt grounding silhouette disparado", extra=log_extra
+    correction_text = (
+        "\n\n# CORRECCIÓN OBLIGATORIA — SILHOUETTE\n"
+        f"El ÚNICO valor de silhouette permitido es {real_silhouette:.3f} (el real de la corrida). "
+        "Regenera EXACTAMENTE 2 preguntas (numero 4 y 5) con el MISMO schema; en `enunciado` y "
+        f"`solucion_esperada` cita SOLO {real_silhouette:.3f} o ningún número de silhouette. NUNCA "
+        "inventes otro valor ni fijes un umbral arbitrario."
+    )
+    if cluster_profiles is not None:
+        correction_text += (
+            "\n\n# CORRECCIÓN OBLIGATORIA — PERFILES POR SEGMENTO\n"
+            "En la P5, cita las medias por feature EXACTAMENTE como aparecen en la tabla real de "
+            "perfiles (formato `feature_name = NN.NN`); NUNCA inventes una media ausente de la "
+            "tabla, y cita SOLO el número de segmentos REAL."
         )
-        reprompt = prompt + (
-            "\n\n# CORRECCIÓN OBLIGATORIA — SILHOUETTE\n"
-            f"El ÚNICO valor de silhouette permitido es {real_silhouette:.3f} (el real de la corrida). "
-            "Regenera EXACTAMENTE 2 preguntas (numero 4 y 5) con el MISMO schema; en `enunciado` y "
-            f"`solucion_esperada` cita SOLO {real_silhouette:.3f} o ningún número de silhouette. NUNCA "
-            "inventes otro valor ni fijes un umbral arbitrario."
-        )
-        if cluster_profiles is not None:
-            reprompt += (
-                "\n\n# CORRECCIÓN OBLIGATORIA — PERFILES POR SEGMENTO\n"
-                "En la P5, cita las medias por feature EXACTAMENTE como aparecen en la tabla real de "
-                "perfiles (formato `feature_name = NN.NN`); NUNCA inventes una media ausente de la "
-                "tabla, y cita SOLO el número de segmentos REAL."
-            )
-        try:
-            resultado: GeneradorPreguntasOutput = llm.with_structured_output(
-                GeneradorPreguntasOutput
-            ).invoke(reprompt)
-            corrected = _coerce_notebook_questions([p.model_dump() for p in resultado.preguntas])
-        except (ValidationError, OutputParserException, ValueError) as exc:
-            logger.warning(
-                "[m3_notebook_questions] reprompt inválido — omite las 2: %s", exc, extra=log_extra
-            )
-            return []
-        if len(corrected) != 2 or _violations(corrected):
-            logger.warning(
-                "[m3_notebook_questions] grounding no resuelto tras reprompt — omite las 2",
-                extra={**log_extra, "degraded": True},
-            )
-            return []
-        logger.info(
-            "[m3_notebook_questions] grounding silhouette corregido por reprompt",
-            extra={**log_extra, "degraded": False},
-        )
-        return corrected
-    except Exception as exc:  # best-effort — el guard NUNCA falla el job
-        logger.warning(
-            "[m3_notebook_questions] guard de grounding falló (best-effort) — omite: %s",
-            exc,
-            extra=log_extra,
-        )
-        return []
+    return _NotebookQuestionsPlan(formatted, _violations, correction_text)
+
+
+# The DummyClassifier baseline AUC-ROC is DEFINITIONALLY 0.5 — a no-skill constant predictor has no
+# discriminative power (its ROC curve is the diagonal), and the executed notebook's comparison table
+# hardcodes exactly 0.5 for the Dummy row. The LIVE single-model metrics cell
+# (``METRICS_SECTIONS[lr_only|rf_only]`` in ``notebooks/_shared.py``) does NOT export an ``auc_dummy``
+# key, so the node injects this definitional baseline for Q4's "supera al baseline" comparison — both
+# in the prompt display AND as a grounding anchor (so a cited "0.50" near "baseline" is not flagged as
+# unanchored). This is a mathematical fact, not a fabricated metric.
+_DUMMY_CLASSIFIER_BASELINE_AUC = 0.5
+
+
+def _build_m3_notebook_classification_questions_context(
+    state: ADAMState, *, metrics: dict, variant: str
+) -> dict[str, Any]:
+    """KeyError-safe context for the classification notebook-questions prompt (Issue #493).
+
+    Resolves the selected-model name + AUC key, the readable real values (auc/f1/prevalence + top
+    features), and the cost-matrix block (#361) for Q5. The DummyClassifier baseline AUC is the
+    definitional 0.5 (the single-model executor cell does not export ``auc_dummy``; 0.5 is the
+    Dummy row's hardcoded value). Feature names are transformer-prefix STRIPPED — sklearn
+    ``ColumnTransformer`` names (``num__col``/``cat__col``) must NEVER leak to the student, so we reuse
+    ``_strip_transformer_prefix`` (the same cure ``build_computed_metrics_block`` applies). Pure read of
+    state with fallbacks — never raises.
+    """
+    base = _build_base_context(state)
+    is_lr = variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY
+    modelo = "Regresión Logística" if is_lr else "Random Forest"
+    auc_key = "auc_lr" if is_lr else "auc_rf"
+    real_auc = _finite_metric(metrics, auc_key)
+    auc_dummy = _finite_metric(metrics, "auc_dummy")
+    if auc_dummy is None:
+        auc_dummy = _DUMMY_CLASSIFIER_BASELINE_AUC  # definitional no-skill baseline
+    f1 = _finite_metric(metrics, "f1_macro")
+    prevalence = _finite_metric(metrics, "prevalence")
+    names: list[str] = []
+    top_features = metrics.get("top_features")
+    if isinstance(top_features, list):
+        for item in top_features[:5]:
+            if isinstance(item, dict):
+                raw = item.get("name") or item.get("feature")
+                if isinstance(raw, str) and raw.strip():
+                    names.append(_strip_transformer_prefix(raw.strip()))
+    return {
+        "output_language": base.get("output_language", "es"),
+        "nombre_empresa": base.get("nombre_empresa", "la empresa del caso"),
+        "dilema": base.get("dilema_hypotheses", ""),
+        "pregunta_eje": base.get("pregunta_eje", ""),
+        "modelo": modelo,
+        "auc": f"{real_auc:.3f}" if real_auc is not None else "—",
+        "auc_dummy": f"{auc_dummy:.3f}",
+        "f1": f"{f1:.3f}" if f1 is not None else "—",
+        "prevalence": f"{prevalence:.3f}" if prevalence is not None else "—",
+        "top_features_display": ", ".join(names)
+        if names
+        else "las features más influyentes de tu modelo",
+        "cost_matrix_block": build_cost_matrix_block(_extract_business_cost_matrix(state)),
+        "case_id": base.get("case_id", state.get("case_id", "no-id")),
+    }
+
+
+def _plan_classification_notebook_questions(
+    state: ADAMState, metrics: dict
+) -> _NotebookQuestionsPlan | None:
+    """Build the classification (Issue #493) notebook-questions plan, or ``None`` to omit.
+
+    Gates to the LIVE single-model variants (``lr_only`` / ``rf_only``) with a finite selected-model
+    AUC; ``lr_rf_contrast`` / unresolved or a skipped model (no AUC emitted) → ``None`` → the node
+    omits the 2 questions (the 3 conceptual ship, job never fails). Grounding reuses
+    ``build_computed_metrics_block`` + ``detect_unanchored_adjacent_metrics`` (the AUC/F1 numeric
+    guarantee, gated on ``has_metric_anchors``) + ``detect_unselected_model_mentions`` (#337, the
+    single-model leak guard). A low-but-finite AUC still produces the questions anchored to the real
+    value (a weak/leaky model is a teaching moment) — mirrors clustering's non-blocking low-silhouette.
+    """
+    variant, _ = _resolve_classification_notebook_variant(
+        algorithm_mode=_extract_state_algorithm_mode(state),
+        algoritmos=_extract_state_algoritmos(state),
+    )
+    if variant not in (
+        CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
+        CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
+    ):
+        return None
+    auc_key = "auc_lr" if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY else "auc_rf"
+    if _finite_metric(metrics, auc_key) is None:
+        return None
+    context = _build_m3_notebook_classification_questions_context(
+        state, metrics=metrics, variant=variant
+    )
+    formatted = M3_NOTEBOOK_QUESTIONS_PROMPT_CLASSIFICATION_BY_VARIANT[variant].format(**context)
+    # The single-model executor cell does not export `auc_dummy`; inject the definitional 0.5 baseline
+    # so the grounding block anchors a cited "baseline 0.50" (otherwise the `baseline|dummy` keyword
+    # would flag it as unanchored). Mirrors the prompt display default — same constant, same value.
+    metrics_for_block = (
+        metrics
+        if _finite_metric(metrics, "auc_dummy") is not None
+        else {**metrics, "auc_dummy": _DUMMY_CLASSIFIER_BASELINE_AUC}
+    )
+    metrics_block = build_computed_metrics_block(metrics_for_block)
+    anchors_present = has_metric_anchors(metrics_block)
+
+    def _violations(qs: list[dict]) -> list[str]:
+        out: list[str] = []
+        for q in qs:
+            sol = q.get("solucion_esperada", "")
+            enu = q.get("enunciado", "")
+            if anchors_present:
+                out.extend(detect_unanchored_adjacent_metrics(sol, metrics_block))
+                out.extend(detect_unanchored_adjacent_metrics(enu, metrics_block))
+            out.extend(detect_unselected_model_mentions(sol, variant))
+            out.extend(detect_unselected_model_mentions(enu, variant))
+        return out
+
+    correction_text = (
+        "\n\n# CORRECCIÓN OBLIGATORIA — MÉTRICAS REALES\n"
+        "Regenera EXACTAMENTE 2 preguntas (numero 4 y 5) con el MISMO schema. En `enunciado` y "
+        "`solucion_esperada` cita SOLO los valores de métrica REALES del modelo (AUC, F1, prevalencia, "
+        "baseline) mostrados; NUNCA inventes un número de métrica, y NO cites el valor numérico de "
+        f"coeficientes/importancias. Habla SOLO del modelo seleccionado ({context['modelo']}); NUNCA "
+        "menciones ningún otro modelo de clasificación."
+    )
+    return _NotebookQuestionsPlan(formatted, _violations, correction_text)
 
 
 def m3_notebook_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
-    """Genera 2 preguntas M3 ADICIONALES "output-grounded" (Issue #489), POST-executor.
+    """Genera 2 preguntas M3 ADICIONALES "output-grounded" POST-executor (Issue #489 + #493).
 
-    Gate (todo AND; fuera = noop limpio ``{}`` → 0 preguntas extra, el job NUNCA falla):
-    kill-switch ``m3_notebook_questions`` + ``_is_ml_ds_clustering`` + depth
-    ``visual_plus_notebook`` + notebook no degradado + silhouette finito en ``m3_metrics_summary``.
-    El estudiante interpreta SU resultado real (silhouette + perfiles del notebook DETERMINISTA).
-    Corre sobre GLM (``z-ai/glm-5.2`` por DEFAULT; Gemini como fallback de resiliencia en
-    ``_get_writer_llm``). Escribe la clave SEPARADA ``m3_notebook_questions`` (1 escritor → sin
-    fan-in hazard con las 3 de ``m3_questions_generator``); se mergean en ``m3Questions`` solo en
-    el adapter canónico. Cualquier fallo de generación → omite (``[]``), nunca falla el job.
+    El estudiante interpreta SU resultado real del notebook DETERMINISTA. Dos familias comparten este
+    nodo (gate común + dispatch por familia → plan → andamiaje compartido):
+
+    - **clustering** (#489/#494): silhouette + perfiles por segmento.
+    - **clasificación** single-model lr_only/rf_only (#493): AUC vs baseline + matriz de confusión
+      (Q4) y top features → matriz de costos → dilema M1 (Q5); gateada por su propio kill-switch
+      ``m3_notebook_questions_classification``.
+
+    Gate común (todo AND; fuera = noop ``{}`` → 0 preguntas extra): kill-switch maestro
+    ``m3_notebook_questions`` + depth ``visual_plus_notebook`` + notebook no degradado +
+    ``m3_metrics_summary`` dict. La familia decide la métrica (silhouette / auc finito) en su plan;
+    ``None`` → omite. Corre sobre GLM (``z-ai/glm-5.2`` por DEFAULT; Gemini fallback en
+    ``_get_writer_llm``). Escribe la clave SEPARADA ``m3_notebook_questions`` (1 escritor → sin fan-in
+    hazard con ``m3_questions``); se mergean en ``m3Questions`` solo en el adapter canónico. Cualquier
+    fallo de generación → omite (``[]``), nunca falla el job.
     """
     if not settings.m3_notebook_questions:
         return {}
@@ -8745,55 +8935,34 @@ def m3_notebook_questions_generator(state: ADAMState, config: RunnableConfig) ->
         return {}
     if state.get("m3_notebook_degraded"):
         return {}
-    if not _is_ml_ds_clustering(state):
-        return {}
     metrics = state.get("m3_metrics_summary")
     if not isinstance(metrics, dict):
         return {}
-    real_silhouette = _finite_metric(metrics, "silhouette")
-    if real_silhouette is None:
+
+    # Family selection is cheap + pure; a non-matching family is a clean noop ({}). The PLAN BUILD
+    # (context + cost/metrics blocks + .format) runs INSIDE the try so any builder error degrades to
+    # [] — never crashes the job (mirrors #489, which built its context inside the try).
+    plan_builder: Callable[[ADAMState, dict], _NotebookQuestionsPlan | None]
+    if _is_ml_ds_clustering(state):
+        plan_builder = _plan_clustering_notebook_questions
+    elif settings.m3_notebook_questions_classification and _is_ml_ds_classification(state):
+        plan_builder = _plan_classification_notebook_questions
+    else:
         return {}
 
     try:
+        plan = plan_builder(state, metrics)
+        if plan is None:
+            return {}
         cfg = Configuration.from_runnable_config(config)
         # DEFAULTEA a GLM (a diferencia de los otros nodos GLM de #486, que defaultean Gemini +
         # override): corre en GLM out-of-the-box. _get_writer_llm enruta el id con "/" a OpenRouter
         # y conserva Gemini como fallback de resiliencia dentro de _build_llm.
         model = resolve_node_model(cfg, NODE_M3_NOTEBOOK_QUESTIONS, "z-ai/glm-5.2")
         llm = _get_writer_llm(model, temperature=0.5, thinking_level="low")
-        context = _build_m3_notebook_questions_context(
-            state, real_silhouette=real_silhouette, metrics=metrics
-        )
-        # Issue #494 — B4-a (Q5 anclada a perfiles REALES) SOLO si el kill-switch está ON y la celda
-        # exportó perfiles bien formados; si no, B4-b (#489) byte-idéntico.
-        cluster_profiles = (
-            _extract_valid_cluster_profiles(metrics)
-            if settings.mlds_clustering_notebook_profiles
-            else None
-        )
-        valid_counts: set[int] | None = None
-        if cluster_profiles is not None:
-            decision = state.get("clustering_decision") or {}
-            target_k = decision.get("target_k") if isinstance(decision, dict) else None
-            n_clusters_real = _finite_metric(metrics, "n_clusters")
-            valid_counts = set()
-            if n_clusters_real is not None:
-                valid_counts.add(int(n_clusters_real))
-            if isinstance(target_k, int):
-                valid_counts.add(target_k)
-            feature_names = ", ".join(str(f) for f in cluster_profiles) or context["feature_names"]
-            context = {
-                **context,
-                "feature_names": feature_names,
-                "cluster_profiles_table": _render_cluster_profiles_table(cluster_profiles),
-            }
-            prompt_template = M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES
-        else:
-            prompt_template = M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING
-        formatted = prompt_template.format(**context)
         resultado: GeneradorPreguntasOutput = llm.with_structured_output(
             GeneradorPreguntasOutput
-        ).invoke(formatted)
+        ).invoke(plan.formatted_prompt)
         preguntas = _coerce_notebook_questions([p.model_dump() for p in resultado.preguntas])
         if len(preguntas) != 2:
             logger.warning(
@@ -8802,15 +8971,25 @@ def m3_notebook_questions_generator(state: ADAMState, config: RunnableConfig) ->
                 extra={"case_id": state.get("case_id")},
             )
             return {"m3_notebook_questions": [], "current_agent": "m3_notebook_questions_generator"}
-        preguntas = _apply_m3_notebook_questions_grounding(
+        preguntas = _apply_notebook_questions_grounding(
+            preguntas,
             llm=llm,
-            prompt=formatted,
-            preguntas=preguntas,
-            real_silhouette=real_silhouette,
+            base_prompt=plan.formatted_prompt,
+            violations_fn=plan.violations_fn,
+            correction_text=plan.correction_text,
             case_id=state.get("case_id"),
-            cluster_profiles=cluster_profiles,
-            valid_counts=valid_counts,
         )
+        # Observability backstop (mirrors m4/m5_content_generator): the deterministic
+        # `_strip_transformer_prefix` at the prompt input is the CURE for sklearn machine identifiers;
+        # this logs (never reprompts/mutates) if any `word__x` token still survived in the 2 questions.
+        if settings.case_identifier_leak_guard:
+            log_raw_identifier_leak(
+                " ".join(
+                    f"{q.get('enunciado', '')} {q.get('solucion_esperada', '')}" for q in preguntas
+                ),
+                node="m3_notebook_questions_generator",
+                case_id=state.get("case_id"),
+            )
         print(f"[m3_notebook_questions_generator] {len(preguntas)} preguntas output-grounded")
         return {"m3_notebook_questions": preguntas, "current_agent": "m3_notebook_questions_generator"}
     except RuntimeError:

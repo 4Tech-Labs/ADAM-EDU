@@ -219,6 +219,14 @@ class NodeEvalInputs:
     # `cluster_profiles` is absent / no extra questions. Computed via ``check_m3_notebook_profiles_grounded``.
     # RED control: a question whose solucion cites a divergent per-feature mean fails.
     m3_notebook_profiles_grounded_ok: bool = True
+    # ml_ds + clasificación M3 output-grounded questions cite ONLY real executed model metrics (Issue
+    # #493): the 2 extra notebook questions (numero 4/5) make the student interpret THEIR run, so an
+    # AUC/F1 (or other model-metric number) diverging from the verified `build_computed_metrics_block`
+    # of `m3_metrics_summary` is a fabrication. True (n/a) when the metrics block is absent / anchorless
+    # / no extra questions. Computed via ``check_m3_notebook_questions_classification_grounded``. RED
+    # control: a question citing a divergent AUC fails. Gate-protects a future
+    # m3_notebook_questions_generator (classification branch) model downgrade that starts fabricating.
+    m3_notebook_questions_classification_grounded_ok: bool = True
     # ml_ds + clustering dataset carries NO supervised target column (Issue #466, Frente 1): clustering
     # is unsupervised, so a leaked `dummy_target` (LLM-hallucinated or contract-injected) must be
     # stripped before data generation. True (n/a) for non-clustering jobs / empty rows. Computed via
@@ -360,6 +368,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "M3 notebook-question profile coherence failure: an output-grounded question cites a "
             "per-cluster feature mean that diverges from the real cluster_profiles (fabricated)"
+        )
+    if not r.m3_notebook_questions_classification_grounded_ok:
+        reasons.append(
+            "M3 notebook-question classification coherence failure: an output-grounded question cites "
+            "a model metric (AUC/F1) that diverges from the real executed metrics (fabricated)"
         )
     if not r.clustering_no_target_ok:
         reasons.append(
@@ -647,6 +660,34 @@ def check_m3_notebook_profiles_grounded(
         if detect_unanchored_cluster_profiles(q.get("solucion_esperada", ""), cluster_profiles):
             return False
         if detect_unanchored_cluster_profiles(q.get("enunciado", ""), cluster_profiles):
+            return False
+    return True
+
+
+def check_m3_notebook_questions_classification_grounded(
+    notebook_questions: list[dict] | None, metrics_block: str | None
+) -> bool:
+    """Pure oracle (Issue #493): do the M3 output-grounded clf questions cite ONLY real model metrics?
+
+    Reuses the production detector ``narrative_grounding.detect_unanchored_adjacent_metrics`` (single
+    source of truth) over each extra question's ``solucion_esperada`` + ``enunciado``: an AUC/F1 (or
+    other model-metric number) diverging from the verified ``build_computed_metrics_block`` of the
+    executed ``m3_metrics_summary`` is a fabrication. True (n/a) when ``metrics_block`` is absent or
+    carries no numeric anchors (``has_metric_anchors`` gate, mirroring the production guard), or there
+    are no extra questions. Gate-protects a future ``m3_notebook_questions_generator`` classification
+    branch model downgrade that starts fabricating.
+    """
+    from case_generator.narrative_grounding import (
+        detect_unanchored_adjacent_metrics,
+        has_metric_anchors,
+    )
+
+    if not metrics_block or not has_metric_anchors(metrics_block):
+        return True
+    for q in notebook_questions or []:
+        if detect_unanchored_adjacent_metrics(q.get("solucion_esperada", ""), metrics_block):
+            return False
+        if detect_unanchored_adjacent_metrics(q.get("enunciado", ""), metrics_block):
             return False
     return True
 

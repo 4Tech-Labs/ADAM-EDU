@@ -104,9 +104,10 @@ def adapter_legacy_to_canonical_output(state: dict) -> dict:
         content["m3Content"] = state["m3_content"]
     if state.get("m3_charts"):
         content["m3Charts"] = state["m3_charts"]
-    # Issue #489 — the 3 conceptual M3 questions (m3_questions) PLUS the 2 output-grounded
-    # notebook questions (m3_notebook_questions, ml_ds+clustering only, written by the dedicated
-    # POST-executor node) are MERGED here, the SINGLE canonical assembly point. Separate state keys
+    # Issue #489/#493 — the 3 conceptual M3 questions (m3_questions) PLUS the 2 output-grounded
+    # notebook questions (m3_notebook_questions, ml_ds+clustering #489/#494 OR ml_ds+clasificación
+    # single-model #493, written by the dedicated POST-executor node) are MERGED here, the SINGLE
+    # canonical assembly point. Separate state keys
     # (1 writer each) avoid the LangGraph fan-in race; the merge yields one variable-length
     # m3Questions array (numero 1..5) the frontend already renders. m3_notebook_questions is never
     # allowlisted on its own → it cannot leak; only the merged m3Questions reaches any payload.
