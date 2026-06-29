@@ -281,6 +281,19 @@ class Settings(BaseSettings):
     # job). Set MLDS_CLUSTERING_M1_COHERENCE_GUARD=false to skip the guard → byte-identical
     # (instant env-only revert, no redeploy). Every other cohort is byte-identical either way.
     mlds_clustering_m1_coherence_guard: bool = True
+    # Domain-adaptive segmentation columns for ml_ds + clustering (Issue #531). When true (default),
+    # the architect's DOMAIN `feature_columns` (with the architect's range_min/range_max or a
+    # name/dtype heuristic) ARE the dataset's segmentation features, so the CSV the student downloads
+    # is coherent with ANY case domain (educacion/salud/ambiental/manufactura -> e.g.
+    # `willingness_to_pay_usd` / `visit_recency_days`), instead of always the generic e-commerce RFM.
+    # Falls back to the fixed RFM when there is no/insufficient contract. NOTE: the duplicate-column /
+    # broken-`_default_column`-range defect (the generic augmenter appending the contract features on
+    # top of the RFM) is fixed UNCONDITIONALLY by skipping the augmenter on the clustering
+    # deterministic path -- restoring it on an off-switch would re-expose the bug (anti-pattern; cf.
+    # #470). So MLDS_CLUSTERING_DOMAIN_COLUMNS=false reverts to the CLEAN fixed-6-RFM behavior (the
+    # intended #452 baseline, what g07 shows), NOT the buggy duplicate path (instant env-only revert,
+    # no redeploy). Gate: profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected.
+    mlds_clustering_domain_columns: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign

@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import math
 import re
-import unicodedata
 from collections.abc import Mapping, Sequence
 from numbers import Real
 from typing import Any
@@ -20,6 +19,7 @@ from case_generator.prompts import (
     CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY,
     CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY,
 )
+from case_generator.text_normalize import fold_accents
 
 logger = logging.getLogger(__name__)
 
@@ -693,11 +693,7 @@ def _is_markdown_separator_row(cells: list[str]) -> bool:
 
 def _normalize_table_cell(cell: str) -> str:
     compact = " ".join(cell.lower().split())
-    return "".join(
-        char
-        for char in unicodedata.normalize("NFKD", compact)
-        if not unicodedata.combining(char)
-    )
+    return fold_accents(compact)
 
 
 def _normalize_m5_decision_matrix_header_cell(cell: str) -> str:

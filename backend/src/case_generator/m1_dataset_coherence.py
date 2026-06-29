@@ -48,13 +48,13 @@ Design invariants (acceptance):
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Iterable, Mapping
 
 # Reuse the M1-grounding number primitives (single source of truth for the Spanish
 # thousands-vs-decimal grammar + magnitude scale). m1_grounding is pure and never
 # imports the graph, so this stays import-light and graph-free too.
 from case_generator.m1_grounding import _mag_scale, _normalize_core
+from case_generator.text_normalize import fold_accents
 
 # ── Violation prefixes ─────────────────────────────────────────────────────────
 ENTITY_MISMATCH = "ENTITY_MISMATCH:"
@@ -94,10 +94,15 @@ _HEDGE_TERMS: tuple[str, ...] = (
 )
 
 # Substrings (lowercase) in a column's name/description that mark it as MONETARY. Shared by
-# the runtime ceiling resolver (over the deterministic RFM constant) and the golden oracle
-# (over the real post-job schema) so both compute the SAME ceiling — no fixed feature list (I3).
+# the runtime ceiling resolver and the golden oracle so both compute the SAME ceiling — no fixed
+# feature list (I3). Issue #531 — broadened beyond usd/value to the unambiguous money tokens the
+# clustering range heuristic (`graph._clustering_feature_range_heuristic`) scales as money, so the
+# #515 ceiling tracks a DOMAIN money column (e.g. `annual_revenue`, `customer_ltv`,
+# `program_donations`) and not only ones literally containing `usd`/`value`. Conservative set
+# (avoids substring-ambiguous tokens like a bare "pay"); RFM `monetary_value` already matched.
 _MONETARY_COLUMN_SIGNALS: tuple[str, ...] = (
     "usd", "monetar", "value", "valor", "precio", "costo", "ingreso", "$",
+    "revenue", "income", "dollar", "price", "spend", "ltv", "arpu", "donation", "budget", "payment",
 )
 
 
@@ -158,14 +163,6 @@ _DISTRIB_NOUN_RE = re.compile(
 )
 
 
-def _fold_accents(text: str) -> str:
-    """Strip combining accents (NFD), preserving case. ``región`` → ``region``."""
-    return "".join(
-        ch for ch in unicodedata.normalize("NFD", text)
-        if unicodedata.category(ch) != "Mn"
-    )
-
-
 def _entity_roots(entity_descriptor: Mapping[str, object] | None) -> list[str]:
     """Accent-folded, lowercased, non-empty {snake_prefix, singular, plural} roots."""
     if not isinstance(entity_descriptor, Mapping):
@@ -176,7 +173,7 @@ def _entity_roots(entity_descriptor: Mapping[str, object] | None) -> list[str]:
         if isinstance(value, str) and value.strip():
             # Use the first token (the head noun) so a multi-word entity
             # ("centro de distribución") still matches the captured single noun.
-            head = _fold_accents(value.strip().lower()).split()[0]
+            head = fold_accents(value.strip().lower()).split()[0]
             if len(head) >= 3 and head not in roots:
                 roots.append(head)
     return roots
@@ -318,7 +315,7 @@ def validate_m1_dataset_coherence(
     if not prose or not isinstance(prose, str):
         return []
     try:
-        folded = _fold_accents(prose)
+        folded = fold_accents(prose)
         violations: list[str] = []
         roots = _entity_roots(entity_descriptor)
         if roots:

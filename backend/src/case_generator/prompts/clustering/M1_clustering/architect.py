@@ -5,12 +5,18 @@
 ``_M1_CLUSTERING_ANCHOR_ARCHITECT``. No verbatim copy of the base is kept in sync —
 editing the base in ``_architect_base.py`` propagates here automatically.
 
-Clustering is UNSUPERVISED: the architect must NOT emit a ``target_column``,
+Clustering is UNSUPERVISED: the architect must NOT emit a SUPERVISED ``target_column``,
 ``business_cost_matrix`` or ``target_event_rate`` (those belong to the binary
 classification anchor in ``M1_clasificacion/architect.py``). It frames the M1
-dilemma as a SEGMENTATION decision and the A/B/C options as segmentation strategies,
-coherent with the RFM/behavioural dataset produced for ml_ds + clustering (Issue #452,
-``_build_clustering_fallback_schema`` / ``SCHEMA_DESIGNER_PROMPT_CLUSTERING``).
+dilemma as a SEGMENTATION decision and the A/B/C options as segmentation strategies.
+
+Issue #531 — the anchor now instructs the architect to emit ``dataset_schema_required``
+with DOMAIN ``feature_columns`` (4-8, with ``range_min``/``range_max``), so the dataset
+the student downloads is coherent with ANY case domain instead of always the generic RFM.
+``target_column`` is emitted as an unsupervised ``clustering_target`` MARKER only to satisfy
+the required schema field; ``graph._resolve_clustering_segmentation_columns`` consumes the
+domain features (the marker is never materialized as a dataset column). Without enough usable
+features the data layer falls back to the fixed RFM (``_build_clustering_fallback_schema``).
 
 The anchor is BRACE-FREE and PLACEHOLDER-FREE → safe to concatenate before the single
 ``str.format`` in ``_assemble_architect_prompt``. It is a SIBLING constant: it never
@@ -36,21 +42,29 @@ _M1_CLUSTERING_ANCHOR_ARCHITECT = """
 
 ## Contrato obligatorio para casos de clustering (segmentación)
 
-1. **SIN target supervisado (ANULA la sección `dataset_schema_required` de arriba).**
-   En `dataset_schema_required`:
-   - NUNCA emitas `target_column` (déjala ausente / `null`): en clustering no hay
-     variable objetivo. NO uses `role: classification_target` ni ningún target.
-   - NUNCA emitas `business_cost_matrix` ni `target_event_rate`: ambas pertenecen
-     solo a clasificación binaria supervisada y son incoherentes aquí.
-   - SÍ declara `feature_columns`: entre 4 y 8 ejes de comportamiento de la entidad,
-     interpretables y coherentes con la industria, en espíritu RFM + comportamiento:
-     recencia (días desde la última actividad), frecuencia (número de
-     interacciones/compras), valor monetario acumulado, antigüedad de la relación,
-     intensidad de uso/engagement e intensidad de soporte. Usa nombres snake_case en
-     inglés y `role: "feature"` en todas (todas son features de segmentación; no hay
-     leakage porque no hay target). NO declares un panel financiero de serie temporal.
-   La estructura latente de los segmentos la inyecta el pipeline determinista
-   downstream; tú SOLO declaras los ejes de comportamiento y el caso de negocio.
+1. **Contrato de dataset OBLIGATORIO — SIN target supervisado (ANULA la sección
+   `dataset_schema_required` de arriba).** SIEMPRE emite `dataset_schema_required` con esta forma:
+   - `target_column`: clustering es NO supervisado (no hay variable objetivo), pero el esquema
+     exige el campo. Emítelo como un MARCADOR no supervisado: name `segment`, role
+     `clustering_target`, dtype `int`, y una descripción que diga que es la etiqueta de segmento
+     que K-Means DESCUBRIRÁ (no supervisada, NO existe como columna en el dataset). NUNCA uses
+     `role: classification_target` ni ningún rol supervisado.
+   - NUNCA emitas `business_cost_matrix` ni `target_event_rate`: ambas pertenecen solo a
+     clasificación binaria supervisada y son incoherentes aquí.
+   - `feature_columns`: declara entre 4 y 8 ejes de comportamiento de la entidad, interpretables y
+     coherentes con la INDUSTRIA del caso, en espíritu RFM + comportamiento (recencia, frecuencia,
+     valor monetario acumulado, antigüedad de la relación, intensidad de uso/engagement, intensidad
+     de soporte). **Estos nombres SON las columnas del dataset que el estudiante verá**, así que
+     deben ser del DOMINIO del caso, no genéricos. Usa nombres snake_case en inglés del dominio
+     (p.ej. para un caso ambiental: visit_recency_days, annual_visit_count, willingness_to_pay_usd,
+     membership_tenure_months, conservation_engagement; para un caso educativo: attendance_rate,
+     assignments_submitted, hours_on_platform, semesters_enrolled, forum_engagement). Cada feature
+     lleva `role: "feature"`, `dtype` int o float, y OBLIGATORIAMENTE `range_min`/`range_max` = su
+     rango típico realista en SUS unidades naturales (p.ej. willingness_to_pay_usd entre 10 y 800;
+     visit_recency_days entre 1 y 365; un score 0-1 entre 0 y 1). NO declares un panel financiero de
+     serie temporal. No hay leakage porque no hay target.
+   La estructura latente de los segmentos (los grupos en sí) la inyecta el pipeline determinista
+   downstream; tú SOLO declaras los ejes de comportamiento (con su rango) y el caso de negocio.
 
 2. **`pregunta_eje` OBLIGATORIA para clustering (ANULA la regla base que la
    restringe a clasificación).** Para esta familia y el perfil ml_ds, emite

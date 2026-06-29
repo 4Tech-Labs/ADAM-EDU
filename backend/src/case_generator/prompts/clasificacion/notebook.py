@@ -217,9 +217,11 @@ K-bis. **Higiene de feature_cols OBLIGATORIA antes de construir X (anti-features
         `num_cols = df.select_dtypes(include=np.number).columns.tolist()`
         `cat_cols = [c for c in df.select_dtypes(include=["object", "category"]).columns if df[c].nunique(dropna=True) <= 20]`
         `candidates = [c for c in (num_cols + cat_cols) if c != target_col]`
-     2) Drop ID-like (cardinalidad == n_filas o token `"id"` en el nombre normalizado).
-        `n = len(df)`
-        `candidates = [c for c in candidates if df[c].nunique(dropna=True) < n and "id" not in normalize_colname(c).split("_")]`
+     2) Drop ID-like (token `"id"` en el nombre normalizado, o cardinalidad == n_filas
+        SOLO en columnas categóricas — una columna numérica con valores únicos es una
+        medición continua legítima, NO un ID, y se conserva).
+        `n = len(df); num_set = set(num_cols)`
+        `candidates = [c for c in candidates if (c in num_set or df[c].nunique(dropna=True) < n) and "id" not in normalize_colname(c).split("_")]`
      3) Drop near-constants (`nunique <= 1`) y high-null (`>50%` NaN).
         `candidates = [c for c in candidates if df[c].nunique(dropna=True) > 1 and df[c].isna().mean() <= 0.5]`
      4) Drop features de leakage por contrato + patrones temporal-posteriores
@@ -426,9 +428,14 @@ try:
                       if df[c].nunique(dropna=True) <= 20]
     _candidates_boot = [c for c in (_num_cols_boot + _cat_cols_boot) if c != target_col]
     _n_boot = len(df)
+    _num_set_boot = set(_num_cols_boot)
     feature_cols = [
         c for c in _candidates_boot
-        if df[c].nunique(dropna=True) < _n_boot
+        # Tener TODOS los valores distintos delata un identificador SOLO en columnas de
+        # texto; una columna NUMÉRICA con valores únicos es una medición continua legítima
+        # (p. ej. un monto o un ingreso) y la conservamos — descartarla borraba la única
+        # pista con señal del objetivo.
+        if (c in _num_set_boot or df[c].nunique(dropna=True) < _n_boot)
         and "id" not in normalize_colname(c).split("_")
         and df[c].nunique(dropna=True) > 1
         and df[c].isna().mean() <= 0.5
