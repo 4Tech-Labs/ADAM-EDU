@@ -6,12 +6,12 @@ that feed the teacher preview and downstream synthesis steps.
 
 import math
 import re
-import unicodedata
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from case_generator.impact_lens import DEFAULT_IMPACT_LENS, normalize_impact_lens
+from case_generator.text_normalize import fold_accents
 
 
 # USD-only product (Issue #370): el producto opera exclusivamente en dólares. Este sigue siendo
@@ -365,9 +365,9 @@ def _sanitize_entity_prefix(raw: object) -> str | None:
     """
     if not isinstance(raw, str):
         return None
-    # NFKD → drop combining marks → ASCII (accent-fold), lowercase.
+    # fold_accents (NFKD) → drop remaining non-ASCII → lowercase (accent-fold to a safe stem).
     ascii_only = (
-        unicodedata.normalize("NFKD", raw)
+        fold_accents(raw)
         .encode("ascii", "ignore")
         .decode("ascii")
         .lower()

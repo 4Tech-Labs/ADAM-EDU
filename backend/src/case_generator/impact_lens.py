@@ -28,8 +28,9 @@ test ``test_impact_lens`` asserts every value AND label maps.
 
 from __future__ import annotations
 
-import unicodedata
 from typing import Literal, cast
+
+from case_generator.text_normalize import fold_accents
 
 # ── Lens keys (the canonical catalog of 5, Issue #437 decision D-B + Issue #505) ─
 IMPACT_LENS_FINANCIAL_ROI = "financial_roi"
@@ -139,9 +140,7 @@ _INDUSTRY_LENS_BY_KEY: dict[str, str] = {
 
 def _normalize_industry(raw: str) -> str:
     """Casefold + strip diacritics so 'Salud & Medicina' / 'salud' / 'SALUD' match."""
-    decomposed = unicodedata.normalize("NFKD", raw)
-    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
-    return stripped.strip().casefold()
+    return fold_accents(raw).strip().casefold()
 
 
 def resolve_impact_lens_from_industry(raw: str | None) -> str:
