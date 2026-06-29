@@ -1231,7 +1231,65 @@ def check_clustering_decision_coherence(
         return True
     if len(set(latent_labels)) != int(target_k):
         return False
+    # k-coherence (the defect check_clustering_structure was blind to): the student RUNS the
+    # notebook, whose data-driven k-selection is argmax_k silhouette over k=2..10. For the case to
+    # be coherent that k must equal target_k — NOT merely "silhouette AT target_k is in band" (a
+    # different k can score higher, which the legacy placement shipped: target_k=4 → notebook 2).
+    if not check_clustering_kselection_matches_target(rows, target_k):
+        return False
     return check_clustering_structure(rows, latent_labels)
+
+
+def check_clustering_kselection_matches_target(
+    rows: list, target_k: int | None
+) -> bool:
+    """Pure oracle (k-coherence fix): does the notebook's data-driven k-selection land on target_k?
+
+    The student runs the K-Means notebook, whose ``kmeans_fit`` cell picks ``k = argmax`` over
+    ``k=2..10`` of the FULL silhouette (``KMeans(n_init=10, random_state=42)`` + ``silhouette_score``).
+    For the case to be COHERENT that ``k`` must equal the ``target_k`` the M1/M4/M5 narrative frames
+    (Issue #467). ``check_clustering_structure`` only verifies the silhouette AT ``target_k`` is in
+    band — it is BLIND to a DIFFERENT ``k`` scoring higher, which is exactly the defect the legacy
+    per-feature-permutation placement shipped (``target_k=4`` with few features → notebook picked 2).
+
+    This oracle mirrors the notebook's selection EXACTLY (same KMeans params, full silhouette,
+    ``range(2, min(11, n))`` search) so it predicts what the student observes. Returns True (n/a)
+    when ``target_k`` is None or the data is too small / has < 2 numeric segmentation features.
+    RED control: the legacy placement (``MLDS_CLUSTERING_SIMPLEX_CENTERS=false``) for ``target_k=4``
+    with 3-4 features. No LLM / network / API key; never raises on well-formed input.
+    """
+    if target_k is None or not rows:
+        return True
+    import numpy as np
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score
+    from sklearn.preprocessing import StandardScaler
+
+    feat_names = [
+        name
+        for name in rows[0].keys()
+        if name != "period"
+        and not str(name).startswith("period")
+        and all(
+            isinstance(r.get(name), (int, float)) and not isinstance(r.get(name), bool)
+            for r in rows
+        )
+    ]
+    if len(feat_names) < 2:
+        return True
+    X = np.array([[float(r[name]) for name in feat_names] for r in rows], dtype=float)
+    if X.shape[0] < 6:
+        return True
+    x_scaled = StandardScaler().fit_transform(X)
+    best_k, best_sil = None, float("-inf")
+    for k in range(2, min(11, X.shape[0])):
+        labels = KMeans(n_clusters=k, n_init=10, random_state=42).fit_predict(x_scaled)
+        if len(set(labels.tolist())) < 2:
+            continue
+        sil = float(silhouette_score(x_scaled, labels))
+        if sil > best_sil:
+            best_sil, best_k = sil, k
+    return best_k == int(target_k)
 
 
 # ── Issue #454 — deterministic K-Means notebook shape oracle ───
