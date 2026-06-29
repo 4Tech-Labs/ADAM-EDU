@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     # prior behavior byte-identically (instant env-only revert; no redeploy). churn / already-binary
     # cases are unaffected either way (the sibling passes them through unchanged).
     mlds_binary_target_coerce: bool = True
+    # Calibrate the business + clasificación dataset prevalence to the architect's declared
+    # target_event_rate (Issue #518). When true (default), (a) `_validate_target_event_rate`
+    # PRESERVES a plausible rate for business+clf instead of nullifying it, (b) the architect
+    # business block asks for the rate, and (c) the deterministic top-k calibration fires for
+    # business too, so the synthetic binary target's prevalence EQUALS the Exhibit-2 rate
+    # (preserving the driver->target order, AUC intact). Set BUSINESS_EVENT_RATE_CALIBRATION=false
+    # to revert byte-identically: business rates are nullified again and the target lands at ~0.50
+    # (instant env-only revert; no redeploy). ml_ds + clasificación is unaffected either way.
+    business_event_rate_calibration: bool = True
     # Inject real cluster structure into the ml_ds + clustering synthetic dataset (Issue #452).
     # When true (default), an ml_ds + clustering case (a) gets a dedicated entity-level SEGMENTATION
     # schema (period + interpretable segmentation features, instead of the generic churn/SaaS time-

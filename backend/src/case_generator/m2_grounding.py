@@ -154,8 +154,9 @@ def validate_eda_questions_coherence(
       the one in its own ``enunciado`` by > ±0.5pp. Both profiles; skipped when either
       side states no rate.
     * ``EVENT_RATE_VS_CONTRACT`` — an event rate (enunciado or solución) diverges from
-      ``target_event_rate * 100`` by > ±0.5pp. ml_ds only; ``None`` / bool / out-of-range
-      ``target_event_rate`` → skipped entirely (covers business and the no-contract path).
+      ``target_event_rate * 100`` by > ±0.5pp. Profile-agnostic (fires whenever a rate is
+      present): ml_ds always, and business+clf once Issue #518 calibrates a rate for it;
+      ``None`` / bool / out-of-range ``target_event_rate`` → skipped (covers the no-rate path).
 
     Zero false positives by construction: rate extraction is keyword-anchored and a
     sentinel/empty ``chart_ref`` is a non-reference. ``chart_ids`` membership is exact

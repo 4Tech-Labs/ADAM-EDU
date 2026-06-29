@@ -143,6 +143,13 @@ class NodeEvalInputs:
     # that reintroduces the leak fails the gate. The DETERMINISTIC cure is the strip in
     # ``build_computed_metrics_block``; this gate-protects it on the frozen golden set.
     narrative_no_raw_identifier_ok: bool = True
+    # business/ml_ds + clasificación synthetic dataset prevalence EQUALS the architect's declared
+    # target_event_rate (Issue #518). True (n/a) when no rate is declared, the target column is not
+    # resolvable, or it is not a binary {0,1} column (covers every non-classification family and the
+    # no-rate path). Computed via ``check_dataset_prevalence_matches_contract``. The RED control
+    # (kill-switch off → business target ~0.50 vs a contract rate of 0.083) proves non-tautology;
+    # gate-protects against a future regression that ships an uncalibrated prevalence.
+    dataset_prevalence_matches_contract_ok: bool = True
     # ml_ds + clustering synthetic dataset carries REAL latent structure (Issue #452): K-Means over
     # the StandardScaler-ed segmentation features must land the silhouette in ~[0.45, 0.70] AND
     # recover the injected blobs (adjusted Rand index ≥ 0.6). True (n/a) for non-clustering jobs.
@@ -318,6 +325,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M4 lens coherence failure: non-financial lens emitted forced ROI/NPV KPI rows")
     if not r.narrative_no_raw_identifier_ok:
         reasons.append("narrative coherence failure: raw machine identifier (word__x) leaked into M4/M5 prose")
+    if not r.dataset_prevalence_matches_contract_ok:
+        reasons.append("dataset prevalence mismatch: target prevalence != declared target_event_rate (Issue #518)")
     if not r.architect_value_model_lens_valid_ok:
         reasons.append("architect value_model failure: emitted an unknown/missing Impact Lens key")
     if not r.clustering_structure_ok:
@@ -748,6 +757,37 @@ def check_no_raw_identifier_leak(narrative: str | None) -> bool:
     from case_generator.narrative_grounding import detect_raw_identifier_leak
 
     return not detect_raw_identifier_leak(narrative or "")
+
+
+def check_dataset_prevalence_matches_contract(
+    rows: list | None, contract: dict | None, *, tol_rows: int = 1
+) -> bool:
+    """Pure oracle (Issue #518): the binary target's prevalence == the declared target_event_rate.
+
+    Profile-agnostic. True (n/a) when there is no rate, no resolvable target column name, or the
+    column is not binary {0,1} (covers ml_ds/business without a rate AND every non-classification
+    family). When a rate IS declared, ``count(target == 1)`` must equal ``round(rate * n)`` within
+    ``tol_rows`` — the deterministic top-k calibration is exact, and the slack absorbs the
+    ``k = max(1, min(n - 1, ...))`` both-classes flooring at extreme rates / tiny n. Reuses the SAME
+    contract target resolution as production (``graph._safe_contract_target_name``).
+    """
+    from case_generator.graph import _safe_contract_target_name
+
+    if not rows or not isinstance(contract, dict):
+        return True
+    rate = contract.get("target_event_rate")
+    if not isinstance(rate, (int, float)) or isinstance(rate, bool):
+        return True
+    name = _safe_contract_target_name(contract)
+    if not name:
+        return True
+    vals = [r.get(name) for r in rows if isinstance(r, dict)]
+    vals = [v for v in vals if v is not None]
+    if not vals or any(v not in (0, 1) for v in vals):
+        return True
+    n = len(vals)
+    expected_k = max(1, min(n - 1, round(float(rate) * n)))
+    return abs(sum(vals) - expected_k) <= tol_rows
 
 
 def check_m4_lens_kpi_coherence(narrative: str | None, *, lens: str | None) -> bool:
