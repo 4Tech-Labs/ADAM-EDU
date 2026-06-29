@@ -160,6 +160,37 @@ def build_clustering_architect_hint(decision: dict | None) -> str:
     )
 
 
+def build_clustering_entity_hint(expected_count: int) -> str:
+    """Brace-free hint appended in ``case_architect`` (after ``_assemble_architect_prompt``) for
+    ml_ds + clustering (Issue #513).
+
+    Directs the architect to (a) narrate ONE consistent unit-of-analysis entity drawn from THIS
+    case's domain (centros, pacientes, zonas, estudiantes… NOT necessarily "clientes" — the #455
+    anchor's examples lean that way, so this hint goes LAST to override them), (b) emit it as the
+    structured ``entity_descriptor`` (singular, plural, ``snake_prefix`` in ASCII snake_case), and
+    (c) declare that the dataset contains EXACTLY ``expected_count`` of those entities. The
+    deterministic data layer then renames the dataset index to ``{prefix}_00001`` / column
+    ``{prefix}_id`` so the CSV the student downloads matches the M1 story (Opción A). The count is
+    injected from ``_MLDS_CLUSTERING_MAX_ROWS`` (caller-side; never a literal here → I2). Brace-free
+    → safe after the already-formatted architect prompt (no second ``.format``; SHA snapshots
+    untouched, like ``build_clustering_architect_hint``).
+    """
+    n = str(int(expected_count))
+    return (
+        "\n# COHERENCIA DE ENTIDAD Y POBLACIÓN (clustering, Issue #513)\n"
+        "El dataset de este caso es de NIVEL ENTIDAD: cada fila representa una entidad que se "
+        "segmenta. Elige UNA entidad unidad-de-análisis coherente con el DOMINIO de ESTE caso (por "
+        "ejemplo centros, pacientes, zonas, estudiantes, sucursales, vehículos… NO necesariamente "
+        "'clientes') y úsala de forma CONSISTENTE en todo M1 (perfil, dilema, opciones, exhibits). "
+        "Declara explícitamente que el dataset contiene EXACTAMENTE " + n + " de esas entidades; no "
+        "menciones otra población ni un conteo distinto de " + n + ". Además, emite el campo "
+        "`entity_descriptor` con `singular` y `plural` de la entidad en español y `snake_prefix` = "
+        "la raíz en minúsculas ASCII, sin acentos ni espacios (p.ej. 'centro', 'paciente', 'zona'); "
+        "el dataset usará un identificador con ese prefijo (si el prefijo es 'centro', la columna "
+        "será 'centro_id' con valores 'centro_00001').\n"
+    )
+
+
 def build_clustering_m1_questions_hint(decision: dict | None) -> str:
     """Brace-free hint appended to the M1 ``case_questions`` prompt for ml_ds+clustering.
 

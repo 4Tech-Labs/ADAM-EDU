@@ -203,6 +203,7 @@ from case_generator.impact_lens import (
 from case_generator.clustering_decision import (
     build_clustering_architect_hint,
     build_clustering_currency_honesty_hint,
+    build_clustering_entity_hint,
     build_clustering_m1_questions_hint,
     build_clustering_m3_questions_hint,
     build_clustering_verdict_hint,
@@ -280,6 +281,7 @@ from case_generator.tools_and_schemas import (
     EDAQuestionsOutput,
     DatasetSchema,
     TeachingNoteIntroOutput,
+    _sanitize_entity_prefix,
 )
 from case_generator.datagen.eda_charts_business import (
     generate_business_eda_charts,
@@ -1437,6 +1439,19 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
     ):
         prompt = prompt + build_clustering_architect_hint(_clustering_decision)
 
+    # Issue #513 — append the entity+population coherence hint (brace-free) so M1 narrates ONE domain
+    # entity and EXACTLY N entities, and emits `entity_descriptor` → the data layer renames the index
+    # to `{prefix}_id` (Opción A). Gated by BOTH the structure premise (the N = _MLDS_CLUSTERING_MAX_ROWS
+    # rows only exist on that lane) AND the entity-coherence kill-switch AND ml_ds+clustering. Appended
+    # LAST so it overrides the #455 anchor's "clientes" examples; post-format (no second .format) →
+    # SHA untouched. N is injected from the constant (I2 — never a literal).
+    if (
+        settings.mlds_clustering_structure
+        and settings.mlds_clustering_entity_coherence
+        and _is_ml_ds_clustering(state)
+    ):
+        prompt = prompt + build_clustering_entity_hint(_MLDS_CLUSTERING_MAX_ROWS)
+
     # Issue #514 — prohibit absolute per-entity $ in the M1 prose (ml_ds+clustering). Best-effort,
     # brace-free, node-level append → architect SHA untouched; no-op (byte-identical) elsewhere.
     prompt = _maybe_append_clustering_currency_hint(prompt, state)
@@ -1560,9 +1575,26 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             else None
         )
 
+        # Issue #513 — persist the entity descriptor under the SAME dual gate as the entity hint
+        # (structure premise + entity coherence + ml_ds clustering), so the data layer's prefix and
+        # the M1 narrative agree (Opción A). None outside the gate → the data layer falls back to
+        # `user_` (#468, byte-identical). Like value_model: NOT in state_input → survives resume via
+        # the durable checkpoint; single writer (only the architect) → no clobber / fan-out hazard.
+        entity_descriptor_dict = (
+            result.entity_descriptor.model_dump()
+            if (
+                result.entity_descriptor is not None
+                and settings.mlds_clustering_structure
+                and settings.mlds_clustering_entity_coherence
+                and _is_ml_ds_clustering(state)
+            )
+            else None
+        )
+
         return {
             "current_agent": "case_architect",
             "value_model": value_model_dict,
+            "entity_descriptor": entity_descriptor_dict,
             "titulo": result.titulo,
             "industria": result.industria,
             # Issue #377 — relabel any non-USD currency to USD at the source (structured-output
@@ -6426,34 +6458,63 @@ def _enforce_mlds_clustering_structure(
     return new_rows
 
 
+def _resolve_entity_prefix(entity_descriptor: dict | None) -> tuple[str, str]:
+    """Resolve ``(snake_prefix, singular)`` for the clustering entity index (Issue #513).
+
+    Defense-in-depth: re-sanitizes ``snake_prefix`` via ``_sanitize_entity_prefix`` (the SAME helper
+    the ``EntityDescriptor`` schema validator uses) in case a raw/legacy dict reaches the data layer.
+    Falls back to the #468 ``("user", "usuario")`` when the descriptor is absent / malformed /
+    unsanitizable → ``user_id`` / ``user_00001`` (byte-identical to #468; required by its assertions,
+    which call ``_apply_clustering_entity_index`` with no descriptor). NOTE: this data-layer fallback
+    is deliberately ``"user"`` (no descriptor at all → #468 byte-compat), DISTINCT from the
+    schema-level ``EntityDescriptor`` default ``"cliente"`` (which applies when the architect DOES emit
+    a dict but with a missing/garbage ``snake_prefix``).
+    """
+    if isinstance(entity_descriptor, dict):
+        prefix = _sanitize_entity_prefix(entity_descriptor.get("snake_prefix"))
+        if prefix:
+            raw_singular = entity_descriptor.get("singular")
+            singular = (
+                raw_singular.strip()
+                if isinstance(raw_singular, str) and raw_singular.strip()
+                else prefix
+            )
+            return prefix, singular
+    return "user", "usuario"
+
+
 def _apply_clustering_entity_index(
     rows: list,
     schema: dict,
     *,
+    entity_descriptor: dict | None = None,
     profile: str,
     primary_family: str | None,
     enabled: bool = True,
 ) -> tuple[list, dict]:
-    """Renombra el índice temporal ``period`` → ``user_id`` (entity-level) para ml_ds + clustering (Issue #468).
+    """Renombra el índice temporal ``period`` → ``{prefix}_id`` (entity-level) para ml_ds + clustering.
 
-    El generador genérico rellena ``period`` con etiquetas mensuales (``2023-01``…) porque trata la
-    columna como índice temporal. Para clustering la unidad de análisis es la ENTIDAD (cliente/
-    usuario), no el mes — la narrativa segmenta usuarios. Este post-step (espeja
-    ``_enforce_mlds_clustering_structure``) reescribe la columna a un identificador de entidad
-    determinista ``user_00001``… y la renombra a ``user_id`` en las filas Y en una copia del schema,
-    de modo que el CSV que ve el estudiante es entity-level (no una serie temporal mensual).
+    Issue #468 introdujo el rename a ``user_id``; Issue #513 lo PARAMETRIZA por la entidad que narra
+    el architect (``entity_descriptor`` → ``snake_prefix``), de modo que el CSV que ve el estudiante
+    use la MISMA entidad de la historia M1 (Opción A — el dato se adapta a la narrativa). Sin
+    descriptor (entity_coherence off / no emitido) cae a ``user_`` → BYTE-IDÉNTICO a #468.
 
-    PURO copy-on-write (no muta las entradas → determinismo + thread-safety). ``user_id`` (str, token
-    ``id``) queda excluido del fit K-Means y de los charts (``_select_clustering_feature_columns`` lo
-    descarta por no-numérico y por el token ``id``) y el notebook #454 lo dropea por no-numérico.
+    El generador genérico rellena ``period`` con etiquetas mensuales (``2023-01``…). Para clustering
+    la unidad de análisis es la ENTIDAD, no el mes. Este post-step (espeja
+    ``_enforce_mlds_clustering_structure``) reescribe la columna a ``{prefix}_00001``… y la renombra a
+    ``{prefix}_id`` en las filas Y en una copia del schema.
 
-    ROBUSTO a un re-feed del schema renombrado (value-idempotente, no solo no-op): la columna índice
-    es ``period`` en la 1ª pasada (el generador genérico la rellena con etiquetas mensuales) o
-    ``user_id`` si se re-genera contra el schema YA renombrado que ``data_generator`` re-emite (un
-    retry de ``data_validator`` o un futuro checkpoint-skip de ``schema_designer`` haría que el
-    generador genérico rellene ``user_id`` con ``cat_N``). En AMBOS casos se (re)deriva
-    ``user_id = user_NNNNN`` de forma determinista, sobrescribiendo cualquier relleno categórico
-    obsoleto → el índice de entidad nunca se corrompe.
+    PURO copy-on-write (no muta las entradas → determinismo + thread-safety bajo jobs concurrentes),
+    preserva el conteo y el ORDEN de filas (1:1). ``{prefix}_id`` (str, token ``id``) queda excluido
+    del fit K-Means y de los charts (``_select_clustering_feature_columns`` lo descarta por
+    no-numérico y por el token ``id`` — robusto a cualquier prefijo) y el notebook #454 lo dropea por
+    no-numérico.
+
+    ROBUSTO a un re-feed del schema renombrado (value-idempotente): la columna índice es ``period``
+    en la 1ª pasada, el ``{prefix}_id`` actual (re-feed mismo prefijo, el caso durable normal) o el
+    legacy ``user_id``; en todos se (re)deriva ``{prefix}_NNNNN`` de forma determinista. NO se infiere
+    de un ``*_id`` arbitrario → una feature ``*_id`` que el architect declare nunca se confunde con el
+    índice.
 
     Gate (fuera de él → MISMOS objetos, byte-idéntico): ``enabled`` (kill-switch
     ``MLDS_CLUSTERING_STRUCTURE``) AND ``profile == "ml_ds"`` AND ``primary_family == "clustering"``
@@ -6463,27 +6524,40 @@ def _apply_clustering_entity_index(
         return rows, schema
     if not isinstance(rows, list) or not rows:
         return rows, schema
-    # Normaliza la columna índice (``period`` 1ª pasada / ``user_id`` re-feed) al id de entidad.
+
+    prefix, singular = _resolve_entity_prefix(entity_descriptor)
+    id_col = f"{prefix}_id"
+
     if "period" in rows[0]:
         index_key = "period"
+    elif id_col in rows[0]:
+        index_key = id_col
     elif "user_id" in rows[0]:
         index_key = "user_id"
     else:
         return rows, schema
 
+    # Guard de colisión (defensivo; las features de segmentación son RFM/comportamiento, ninguna
+    # termina en ``_id``): si ``{prefix}_id`` ya existe como columna NO-índice, cae al neutral
+    # ``user_id`` para no sobrescribir esa feature; si hasta el neutral colisiona, no toca nada.
+    if id_col != index_key and id_col in rows[0]:
+        prefix, singular, id_col = "user", "usuario", "user_id"
+        if id_col != index_key and id_col in rows[0]:
+            return rows, schema
+
     new_rows: list = []
     for i, r in enumerate(rows):
         rest = {k: v for k, v in r.items() if k != index_key}
-        new_rows.append({"user_id": f"user_{i + 1:05d}", **rest})
+        new_rows.append({id_col: f"{prefix}_{i + 1:05d}", **rest})
 
     new_schema = dict(schema)
     new_columns: list = []
     for col in schema.get("columns", []):
         c = dict(col)
-        if c.get("name") == "period":
-            c["name"] = "user_id"
+        if c.get("name") == index_key:
+            c["name"] = id_col
             c["type"] = "str"
-            c["description"] = "Identificador único de entidad/usuario"
+            c["description"] = f"Identificador único de {singular}"
         new_columns.append(c)
     new_schema["columns"] = new_columns
     return new_rows, new_schema
@@ -6550,12 +6624,22 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             enabled=settings.mlds_clustering_structure,
             target_k=_target_k,
         )
-        # Issue #468 — entity-level index: rename the monthly `period` to a `user_id` (user_00001…)
-        # so the clustering CSV the student reads is per-entity, not a monthly time series. No-op
-        # byte-idéntico fuera de ml_ds+clustering / con el switch off. Copy-on-write, resume-safe.
+        # Issue #468 + #513 — entity-level index: rename the monthly `period` to `{prefix}_id`
+        # (`{prefix}_00001`…) so the clustering CSV the student reads is per-entity AND uses the SAME
+        # entity the architect narrated (entity_descriptor, #513). The descriptor is injected ONLY
+        # under BOTH switches (the N-rows premise lives in `mlds_clustering_structure`; the entity
+        # rename is gated by `mlds_clustering_entity_coherence`) AND it is only persisted by the
+        # architect under that same dual gate → off / absent ⇒ None ⇒ `user_` (byte-identical to
+        # #468). No-op outside ml_ds+clustering. Copy-on-write, resume-safe.
+        _entity_descriptor = (
+            state.get("entity_descriptor")
+            if (settings.mlds_clustering_structure and settings.mlds_clustering_entity_coherence)
+            else None
+        )
         rows, schema = _apply_clustering_entity_index(
             rows,
             schema,
+            entity_descriptor=_entity_descriptor,
             profile=profile,
             primary_family=_clustering_family,
             enabled=settings.mlds_clustering_structure,

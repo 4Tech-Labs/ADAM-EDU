@@ -154,6 +154,18 @@ class Settings(BaseSettings):
     # hash, no prompt hints, no verdict guard; instant env-only revert, no redeploy). The gate is
     # profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
     mlds_clustering_decision_coherence: bool = True
+    # Entity + population coherence for ml_ds + clustering (Issue #513, EPIC #511). When true
+    # (default), an ml_ds + clustering case has the architect emit an `entity_descriptor`
+    # {singular, plural, snake_prefix} (via a brace-free M1 prompt hint that also declares EXACTLY
+    # `_MLDS_CLUSTERING_MAX_ROWS` entities), and the deterministic data layer renames the dataset
+    # index to `{snake_prefix}_id` / `{snake_prefix}_00001` so the CSV matches the M1 narrative
+    # (Opción A — the data adapts to the story). Gated TOGETHER with MLDS_CLUSTERING_STRUCTURE (the
+    # N-rows premise) so the hint never narrates N over a structure-off (200-row) dataset. Set
+    # MLDS_CLUSTERING_ENTITY_COHERENCE=false to revert byte-identically (no hint, descriptor not
+    # persisted → the data layer falls back to the #468 `user_id`; instant env-only revert, no
+    # redeploy). The gate is profile=="ml_ds" AND family=="clustering"; every other cohort is
+    # unaffected either way.
+    mlds_clustering_entity_coherence: bool = True
     # M4 value-frame for ml_ds + clustering (Issue #469). When true (default), an ml_ds + clustering
     # case on the NEUTRAL Impact-Lens path selects a dedicated M4 content + chart prompt where the
     # first chart is value-BY-SEGMENT (not a fabricated payback / break-even "Mes N"), §4.1/§4.2 are
