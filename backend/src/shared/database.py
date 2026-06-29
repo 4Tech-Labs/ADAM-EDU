@@ -270,6 +270,17 @@ class Settings(BaseSettings):
     # no redeploy). Every other cohort is byte-identical either way; the append is best-effort (a hint
     # error degrades to the un-hinted prompt, never fails a job).
     mlds_clustering_currency_honesty: bool = True
+    # ml_ds + clustering M1↔dataset coherence validator (Issue #515, EPIC #511) — the
+    # deterministic GUARANTEE sibling of the #513/#514 PREVENTION hints. When true (default), a
+    # pure validator (`m1_dataset_coherence`) checks the M1 narrative against the deterministic
+    # dataset: a per-entity/per-segment USD figure that exceeds the dataset's monetary scale
+    # ceiling (×3) triggers reprompt-once-then-DEGRADE in case_writer; entity/population
+    # contradictions are logger-only (the #513 hint prevents them by construction). Gate:
+    # profile=="ml_ds" AND family=="clustering" AND `mlds_clustering_structure` ON (the
+    # deterministic scale only holds then). Best-effort (violations degrade/log, never fail a
+    # job). Set MLDS_CLUSTERING_M1_COHERENCE_GUARD=false to skip the guard → byte-identical
+    # (instant env-only revert, no redeploy). Every other cohort is byte-identical either way.
+    mlds_clustering_m1_coherence_guard: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign
