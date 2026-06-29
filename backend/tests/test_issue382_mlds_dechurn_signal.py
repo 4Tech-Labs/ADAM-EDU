@@ -17,6 +17,7 @@ import pandas as pd
 
 from case_generator.graph import (
     _CHURN_TEMPLATE_COLUMNS,
+    _FINANCIAL_PANEL_TEMPLATE_COLUMNS,
     _MLDS_SAAS_TEMPLATE_COLUMNS,
     _align_ml_ds_classification_target,
     _augment_schema_with_contract,
@@ -92,7 +93,24 @@ def test_dechurn_strips_template_and_repoints_driver() -> None:
     assert tgt["dependency"]["depends_on"] != "churn_rate"
     assert tgt["is_domain_target"] is True
     assert {"transaction_amount", "account_age_days"} <= names  # features del contrato
-    assert {"period", "revenue", "costs", "margin_pct"} <= names  # base financiera
+    # Issue #507 — la base de panel financiero de empresa también se elimina ahora (detemplate default on).
+    assert not (names & _FINANCIAL_PANEL_TEMPLATE_COLUMNS), (
+        f"base financiera no eliminada: {sorted(names & _FINANCIAL_PANEL_TEMPLATE_COLUMNS)}"
+    )
+
+
+def test_detemplate_off_preserves_financial_base() -> None:
+    """Issue #507 — con ``detemplate_cross_section=False`` el de-churn churn/SaaS SÍ ocurre, pero la
+    base financiera (period/revenue/costs/margin_pct) se CONSERVA (comportamiento #382 byte-idéntico)."""
+    out = _enforce_mlds_classification_schema(
+        _post_augment(_FRAUD_CONTRACT), _FRAUD_CONTRACT,
+        profile="ml_ds", primary_family="clasificacion", detemplate_cross_section=False,
+    )
+    names = _names(out)
+    assert not (names & (_CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS)), "churn/SaaS deben irse"
+    assert _FINANCIAL_PANEL_TEMPLATE_COLUMNS <= names, (
+        "la base financiera debe conservarse con detemplate off"
+    )
 
 
 def test_dechurn_is_pure_copy_on_write() -> None:

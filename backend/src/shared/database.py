@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     # byte-identically (instant env-only revert; no redeploy). churn/retention is unaffected
     # either way (the sibling no-ops on retention targets).
     mlds_dechurn_signal: bool = True
+    # Economic-direction priors for the ml_ds + clasificación dataset SIGNAL (Issue #506). When true,
+    # the deterministic sibling `_enforce_mlds_directional_target` rewrites the de-churned binary target
+    # into a multi-driver SIGNED coupling (Σ sign·zscore) from the contract's `expected_direction`
+    # hints, so the executed model's coefficients are not economically inverted (e.g. law of demand: a
+    # higher proposed fee LOWERS acceptance, not raises it). Kill-switch: set MLDS_DIRECTIONAL_PRIORS=
+    # false to disable the sibling and ship the prior unsigned schema byte-identically (instant env-only
+    # revert; no redeploy). No-op when no feature declares a direction, or outside ml_ds + clasificación.
+    mlds_directional_priors: bool = True
     # Coerce the ml_ds + clasificación target to a binary int classification_target (Issue #350).
     # When true, the deterministic sibling `_normalize_mlds_classification_target` forces any
     # non-int / non-classification target the LLM emits to int binary {0,1} BEFORE the schema
@@ -210,6 +218,14 @@ class Settings(BaseSettings):
     # keeps the leaked column + §2.1 stays supervised; instant env-only revert, no redeploy). The gate
     # is profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
     mlds_clustering_no_target: bool = True
+    # De-template the company financial panel (period/revenue/costs/margin_pct) for ml_ds +
+    # clasificación NON-retention CROSS-SECTION cases (Issue #507). #382 strips the churn/SaaS template
+    # but KEEPS the financial base; for an entity survey (household/individual: environmental valuation,
+    # scoring, approval) that base is template residue. When true (default), it is ALSO stripped EXCEPT
+    # columns the contract declares as real features. Set MLDS_DETEMPLATE_CROSS_SECTION=false to keep the
+    # financial base byte-identically (the #382-only behavior; instant env-only revert, no redeploy).
+    # Gated INSIDE the #382 de-churn path: churn/retention, business, and other families are unaffected.
+    mlds_detemplate_cross_section: bool = True
     # Deterministic, data-only EDA chart builder for ml_ds + clustering (Issue #466, Frente 2). When
     # true (default), an ml_ds + clustering case routes M2 charts through `_eda_clustering_python_path`
     # (3 PRE-MODEL, target-free charts: feature distributions → motivates StandardScaler, correlation

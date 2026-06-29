@@ -24,6 +24,7 @@ from golden_eval import (
     check_domain_coherence,
     check_m4_deployment_section_unique,
     check_m4_lens_kpi_coherence,
+    check_no_financial_panel_residue,
     evaluate_downgrade_gate,
 )
 from test_issue351_mlds_multidomain_evals import _build_schema
@@ -209,6 +210,59 @@ def test_domain_coherence_oracle_on_rebuilt_dechurned_schema() -> None:
     is also domain-coherent, so a real chain change is caught even if the on-disk fixture drifts."""
     rebuilt, _contract = _build_schema("default_60d", "debt_to_income_ratio", 0.12, dechurn=True)
     assert check_domain_coherence(rebuilt) is True
+
+
+# ── Issue #507 — financial-panel de-template gate + oracle (deterministic) ──────
+
+
+def test_g13_fixture_has_no_financial_panel() -> None:
+    """The materialized g13 fixture (real de-churned default_60d schema) carries NO company
+    financial-panel residue (period/revenue/costs/margin_pct) after #507."""
+    schema = json.loads((_FIXTURES / "g13_mlds_clf_single.json").read_text(encoding="utf-8"))
+    assert check_no_financial_panel_residue(schema) is True
+
+
+def test_financial_panel_oracle_discriminates_residue() -> None:
+    """Oracle non-tautology: a schema that still carries the financial panel (kill-switch OFF, or the
+    pre-#507 #382-only schema) is NOT clean — the oracle provably tells the two apart."""
+    churn_coupled, _contract = _build_schema(
+        "default_60d", "debt_to_income_ratio", 0.12, dechurn=False
+    )
+    assert check_no_financial_panel_residue(churn_coupled) is False
+
+
+def test_financial_panel_oracle_flags_dechurned_panel_kept() -> None:
+    """Precise #507 RED control: a schema that IS de-churned (no churn/SaaS, a domain target) but KEPT
+    the financial base — the exact #382-only → #507 regression the oracle exists to catch — is flagged
+    False. The two oracles are orthogonal: domain-coherent yet not panel-clean."""
+    dechurned_panel_kept = {
+        "columns": [
+            {"name": "revenue", "type": "float", "dependency": None},
+            {"name": "debt_to_income_ratio", "type": "float", "dependency": None},
+            {
+                "name": "default_60d", "type": "int", "is_domain_target": True,
+                "dependency": {
+                    "depends_on": "debt_to_income_ratio", "relationship": "linear",
+                    "noise_factor": 0.15,
+                },
+            },
+        ],
+    }
+    assert check_domain_coherence(dechurned_panel_kept) is True  # de-churned (no churn/SaaS)
+    assert check_no_financial_panel_residue(dechurned_panel_kept) is False  # but panel survived
+
+
+def test_gate_blocks_on_financial_panel_failure() -> None:
+    # An ml_ds cross-section job whose schema regressed to carrying the financial panel must block.
+    r = NodeEvalInputs(node="schema_designer", deterministic_pass=True, financial_panel_stripped_ok=False)
+    result = evaluate_downgrade_gate(r)
+    assert not result.passed
+    assert any("financial-panel residue" in reason for reason in result.reasons)
+
+
+def test_gate_financial_panel_defaults_true_backcompat() -> None:
+    # Existing callers (business / company-panel / non-clf) omit the field → must stay passing.
+    assert evaluate_downgrade_gate(NodeEvalInputs(node="schema_designer", deterministic_pass=True)).passed
 
 
 # ── Issue #437 Fase 3 — per-lens Impact Lens oracles + gate wiring ────────────
