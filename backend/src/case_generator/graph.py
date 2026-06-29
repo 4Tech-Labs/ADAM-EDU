@@ -148,6 +148,7 @@ from case_generator.prompts import (
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES,
     M4_CHART_PROMPT_CLUSTERING,
+    M4_CHART_PROMPT_CLUSTERING_PROFILES,
     M4_CONTENT_PROMPT_CLUSTERING,
     M3_CLASSIFICATION_QUESTIONS_BY_VARIANT,
     PROMPT_BY_FAMILY,
@@ -202,6 +203,8 @@ from case_generator.clustering_decision import (
     build_clustering_m1_questions_hint,
     build_clustering_m3_questions_hint,
     build_clustering_verdict_hint,
+    detect_fabricated_segment_distribution,
+    detect_segment_chart_warnings,
     detect_unanchored_cluster_profiles,
     detect_unanchored_n_clusters,
     detect_unanchored_silhouette,
@@ -8588,6 +8591,53 @@ def _render_cluster_profiles_table(cluster_profiles: dict) -> str:
     return "\n".join(rows)
 
 
+def _render_segment_data_table(cluster_sizes: Any, cluster_profiles: dict | None) -> str:
+    """Render the REAL per-segment data table for the M4 value-by-segment chart (Issue #498).
+
+    Columns: ``segmento | tamaño | <feature…>`` — ``cluster_sizes`` (always present post-executor) plus
+    the per-cluster feature means from ``cluster_profiles`` (#494, when present). Passed as a ``.format``
+    VALUE (its ``|`` / braces are not re-interpreted by the template). Returns ``""`` when there is no
+    real per-segment data at all (the node then keeps the base prompt → byte-identical to #469). Pure,
+    total — never raises.
+    """
+    sizes: dict[str, float] = {}
+    if isinstance(cluster_sizes, dict):
+        for cid, count in cluster_sizes.items():
+            value = _finite_float(count)
+            if value is not None:
+                sizes[str(cid)] = value
+    profiles = cluster_profiles if isinstance(cluster_profiles, dict) else {}
+    features = [str(f) for f, pc in profiles.items() if isinstance(pc, dict) and pc]
+    clusters: list[str] = []
+    for cid in sizes:
+        if cid not in clusters:
+            clusters.append(cid)
+    for feat in features:
+        for cid in profiles[feat]:
+            if str(cid) not in clusters:
+                clusters.append(str(cid))
+    if not clusters:
+        return ""
+    try:
+        clusters.sort(key=int)
+    except ValueError:
+        clusters.sort()
+    if features:
+        header = "| segmento | tamaño | " + " | ".join(features) + " |"
+        separator = "| --- | --- | " + " | ".join(["---"] * len(features)) + " |"
+    else:
+        header = "| segmento | tamaño |"
+        separator = "| --- | --- |"
+    rows = [header, separator]
+    for cid in clusters:
+        cells = [f"{sizes[cid]:.0f}" if cid in sizes else "—"]
+        for feat in features:
+            value = _finite_float(profiles[feat].get(cid))
+            cells.append(f"{value:.2f}" if value is not None else "—")
+        rows.append(f"| {cid} | " + " | ".join(cells) + " |")
+    return "\n".join(rows)
+
+
 def _apply_m3_notebook_questions_grounding(
     *,
     llm: Any,
@@ -10113,6 +10163,112 @@ def _apply_m4_chart_grounding(
         return charts
 
 
+def _build_clustering_segment_reprompt() -> str:
+    """Concatenation suffix for the clustering value-by-segment reprompt (Issue #498).
+
+    Never re-``.format`` (the prior chart JSON carries ``{}``); appended to the already-formatted prompt.
+    A fixed directive — the fabrication mode is always the same (no per-segment differentiation), so the
+    correction does not need the per-chart violation list.
+    """
+    return (
+        "\n\n# CORRECCIÓN OBLIGATORIA — VALOR REAL Y DISTINTO POR SEGMENTO\n"
+        "El gráfico de valor por segmento tenía una distribución FABRICADA (el valor en UN solo "
+        "segmento y 0 en el resto, o el MISMO número en todos). Reescribe la salida COMPLETA (todos los "
+        "gráficos): cada segmento DEBE mostrar su PROPIO valor REAL y DISTINTO, tomado de la tabla de "
+        "datos reales por segmento. NUNCA pongas el valor en un solo segmento y 0 en el resto, NUNCA "
+        "repitas el mismo número en todos. Si no hay una métrica de valor con número real, usa el "
+        "TAMAÑO real de cada segmento. NUNCA inventes una distribución."
+    )
+
+
+def _apply_clustering_m4_chart_grounding(
+    *,
+    llm: Any,
+    formatted_prompt: str,
+    state: ADAMState,
+    charts: list[dict],
+    n_clusters: float | None,
+) -> list[dict]:
+    """Validate + reprompt-once-then-DROP the ml_ds+clustering value-by-segment chart (Issue #498).
+
+    Source-agnostic STRUCTURAL guard (``detect_fabricated_segment_distribution``): the value-by-segment
+    chart must show DIFFERENTIATED real per-segment values, not the ``[135k, 0, 0, 0]`` / same-everywhere
+    fabrication. Scoped to chart 1 (never chart 2, the A/B/C comparison) → the set never empties. On a
+    violation it reprompts ONCE by CONCATENATION (never re-``.format``); a chart that STILL fabricates is
+    DROPPED (mirrors ``drop_sensitivity_charts`` / ``_apply_m4_chart_grounding``). A logger-only backstop
+    flags generic ``Segmento N`` names / raw column identifiers (never a DROP). Best-effort: ANY throw
+    degrades to the input ``charts``; never fails the job, never ships a fabricated distribution. The
+    caller gates this to ml_ds+clustering on the non-legacy value-frame path.
+    """
+    log_extra = {"node": "m4_chart_generator", "case_id": state.get("case_id")}
+    try:
+        try:
+            warnings = detect_segment_chart_warnings(
+                charts,
+                n_clusters=n_clusters,
+                cluster_profiles=_extract_valid_cluster_profiles(
+                    state.get("m3_metrics_summary") or {}
+                ),
+            )
+            if warnings:
+                logger.warning(
+                    "[m4_chart_generator] clustering segment-chart warnings (logger-only)",
+                    extra={**log_extra, "warning_types": warnings},
+                )
+        except Exception:  # pragma: no cover - logger backstop must never affect the job
+            pass
+        violations = detect_fabricated_segment_distribution(charts, n_clusters=n_clusters)
+        if not violations:
+            return charts
+        logger.info(
+            "[m4_chart_generator] reprompt de distribución por segmento disparado",
+            extra={**log_extra, "violation_count": sum(len(v) for _i, v in violations)},
+        )
+        reprompt = formatted_prompt + _build_clustering_segment_reprompt()
+        try:
+            result: EDAChartGeneratorOutput = llm.with_structured_output(
+                EDAChartGeneratorOutput
+            ).invoke(reprompt)
+            candidate = [c.model_dump() for c in result.charts]
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[m4_chart_generator] reprompt de segmento inválido — degrada a pass-1: %s",
+                exc,
+                extra=log_extra,
+            )
+            candidate = charts
+        candidate_bad = {
+            i for i, _v in detect_fabricated_segment_distribution(candidate, n_clusters=n_clusters)
+        }
+        survivors = [c for i, c in enumerate(candidate) if i not in candidate_bad]
+        if survivors:
+            base_len = len(candidate)
+        else:
+            pass1_bad = {i for i, _v in violations}
+            survivors = [c for i, c in enumerate(charts) if i not in pass1_bad]
+            base_len = len(charts)
+        dropped = base_len - len(survivors)
+        if dropped > 0:
+            logger.warning(
+                "[m4_chart_generator] distribución por segmento: %d gráfico(s) descartado(s) tras reprompt",
+                dropped,
+                extra={**log_extra, "dropped_count": dropped, "degraded": True},
+            )
+        else:
+            logger.info(
+                "[m4_chart_generator] distribución por segmento corregida por reprompt",
+                extra={**log_extra, "degraded": False},
+            )
+        return survivors
+    except Exception as exc:  # best-effort — a coherence pass must never fail the job
+        logger.warning(
+            "[m4_chart_generator] guard de distribución por segmento falló (best-effort): %s",
+            exc,
+            extra=log_extra,
+        )
+        return charts
+
+
 def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
     """Gráficos financieros para M4. Ambos perfiles."""
     try:
@@ -10154,12 +10310,32 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # → byte-identical for every other cohort (and for the legacy 3-chart revert, where _lens_on
         # is already False). Replaces the financial Gráfico 1 (payback/break-even) for clustering.
         _chart_profile, _chart_family = _resolve_generation_focus(state)
+        # Issue #498 — feed the REAL per-segment data (cluster_sizes ALWAYS + cluster_profiles when #494
+        # on) so the clustering chart plots differentiated real values instead of fabricating a single-bar
+        # distribution. Select the PROFILES template ONLY when real data exists; else keep the base #469
+        # template (byte-identical). The {segment_data_table} key is added ONLY on this branch (no
+        # .format KeyError on the base path). Gate = same value-frame triple as the grounding below.
+        _clustering_chart_prompt = M4_CHART_PROMPT_CLUSTERING
+        if (
+            _lens_on
+            and _is_ml_ds_clustering(state)
+            and settings.mlds_clustering_m4_value_frame
+        ):
+            _m3_metrics = state.get("m3_metrics_summary")
+            if isinstance(_m3_metrics, dict):
+                _segment_table = _render_segment_data_table(
+                    _m3_metrics.get("cluster_sizes"),
+                    _extract_valid_cluster_profiles(_m3_metrics),
+                )
+                if _segment_table:
+                    context["segment_data_table"] = _segment_table
+                    _clustering_chart_prompt = M4_CHART_PROMPT_CLUSTERING_PROFILES
         charts_by_family = _effective_m4_clustering_prompts(
             charts_by_family,
             _chart_profile,
             _chart_family,
             lens_on=_lens_on,
-            clustering_prompt=M4_CHART_PROMPT_CLUSTERING,
+            clustering_prompt=_clustering_chart_prompt,
         )
         prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
         # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
@@ -10194,6 +10370,24 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
             variant=_chart_variant,
             metrics_block=context["computed_metrics_block"],
         )
+
+        # Issue #498 — ml_ds+clustering value-by-segment guard: DROP a fabricated per-segment
+        # distribution (one bar with a value and the rest 0, or the same value on every segment).
+        # Source-agnostic structural check scoped to chart 1 only; reprompt-once-then-DROP. Mutually
+        # exclusive with the classification grounding above (clf vs clustering). No-op (byte-identical)
+        # for every other cohort and on the legacy 3-chart path. Best-effort; never fails the job.
+        if (
+            _lens_on
+            and _is_ml_ds_clustering(state)
+            and settings.mlds_clustering_m4_value_frame
+        ):
+            charts = _apply_clustering_m4_chart_grounding(
+                llm=llm,
+                formatted_prompt=formatted_prompt,
+                state=state,
+                charts=charts,
+                n_clusters=_finite_metric(state.get("m3_metrics_summary"), "n_clusters"),
+            )
 
         # Backstop determinista (solo en el camino vigente): elimina cualquier gráfico de
         # sensibilidad/tornado residual que el LLM emita pese al prompt de 2 gráficos. INNER try para

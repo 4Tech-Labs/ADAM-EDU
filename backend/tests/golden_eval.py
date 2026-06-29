@@ -199,6 +199,13 @@ class NodeEvalInputs:
     # ``check_m4_clustering_silhouette_grounded``. RED control: a narrative citing a divergent silhouette
     # fails. gate-protects a future m4_content_generator Pro->Flash downgrade that starts fabricating.
     m4_clustering_silhouette_ok: bool = True
+    # ml_ds + clustering M4 value-by-segment chart shows REAL DIFFERENTIATED per-segment values (Issue
+    # #498): a value trace over >= 3 segments with <= 1 distinct non-zero value is the fabrication
+    # signature (one-bar-rest-zero / same-everywhere). True (n/a) for non-clustering jobs, an absent
+    # n_clusters, or an empty chart set. Computed via ``check_m4_clustering_segment_differentiated``
+    # (reuses ``clustering_decision.detect_fabricated_segment_distribution``). Symbolic in the frozen set
+    # (no chart+n_clusters fixture), like #469/#494; the teeth are in test_issue498 unit RED/GREEN.
+    m4_clustering_segment_differentiated_ok: bool = True
     # ml_ds + clustering M3 output-grounded questions cite ONLY the real executed silhouette (Issue
     # #489): the 2 extra notebook questions (numero 4/5) make the student interpret THEIR run, so a
     # cited silhouette that diverges from the REAL `m3_metrics_summary["silhouette"]` is a fabrication.
@@ -337,6 +344,12 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "M4 clustering narrative coherence failure: cited silhouette diverges from the real "
             "executed value (fabricated threshold)"
+        )
+    if not r.m4_clustering_segment_differentiated_ok:
+        reasons.append(
+            "M4 clustering chart coherence failure: the value-by-segment chart shows a fabricated "
+            "distribution (one segment with a value and the rest at 0, or the same value on every "
+            "segment) instead of real differentiated per-segment values"
         )
     if not r.m3_notebook_questions_grounded_ok:
         reasons.append(
@@ -636,6 +649,23 @@ def check_m3_notebook_profiles_grounded(
         if detect_unanchored_cluster_profiles(q.get("enunciado", ""), cluster_profiles):
             return False
     return True
+
+
+def check_m4_clustering_segment_differentiated(
+    charts: list[dict] | None, n_clusters: int | float | None
+) -> bool:
+    """Pure oracle (Issue #498): does the ml_ds + clustering M4 value-by-segment chart show REAL
+    DIFFERENTIATED per-segment values (not a fabricated one-bar-rest-zero / same-everywhere distribution)?
+
+    Reuses the production detector ``clustering_decision.detect_fabricated_segment_distribution`` (single
+    source of truth): a value trace over >= 3 segments with <= 1 distinct non-zero value is a fabrication.
+    True (n/a) when ``n_clusters`` is absent / < 3 or there are no charts. RED control: a chart whose
+    segment trace is ``[135000, 0, 0, 0]`` fails. Symbolic in the frozen golden set (no chart + n_clusters
+    fixture), like #469/#494; the deterministic teeth live in ``test_issue498`` unit RED/GREEN.
+    """
+    from case_generator.clustering_decision import detect_fabricated_segment_distribution
+
+    return not detect_fabricated_segment_distribution(charts, n_clusters=n_clusters)
 
 
 def check_m4_charts_no_fabrication(charts: list[dict]) -> bool:

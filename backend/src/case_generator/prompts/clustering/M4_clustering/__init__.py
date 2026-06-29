@@ -10,6 +10,7 @@ the #457 pattern).
 
 from case_generator.prompts.clustering.M4_clustering.charts import (
     M4_CHART_PROMPT_CLUSTERING,
+    M4_CHART_PROMPT_CLUSTERING_PROFILES,
 )
 from case_generator.prompts.clustering.M4_clustering.content import (
     M4_CONTENT_PROMPT_CLUSTERING,
@@ -18,4 +19,5 @@ from case_generator.prompts.clustering.M4_clustering.content import (
 __all__ = [
     "M4_CONTENT_PROMPT_CLUSTERING",
     "M4_CHART_PROMPT_CLUSTERING",
+    "M4_CHART_PROMPT_CLUSTERING_PROFILES",
 ]
