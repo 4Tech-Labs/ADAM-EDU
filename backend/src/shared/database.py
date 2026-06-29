@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     # byte-identically (instant env-only revert; no redeploy). churn/retention is unaffected
     # either way (the sibling no-ops on retention targets).
     mlds_dechurn_signal: bool = True
+    # Economic-direction priors for the ml_ds + clasificación dataset SIGNAL (Issue #506). When true,
+    # the deterministic sibling `_enforce_mlds_directional_target` rewrites the de-churned binary target
+    # into a multi-driver SIGNED coupling (Σ sign·zscore) from the contract's `expected_direction`
+    # hints, so the executed model's coefficients are not economically inverted (e.g. law of demand: a
+    # higher proposed fee LOWERS acceptance, not raises it). Kill-switch: set MLDS_DIRECTIONAL_PRIORS=
+    # false to disable the sibling and ship the prior unsigned schema byte-identically (instant env-only
+    # revert; no redeploy). No-op when no feature declares a direction, or outside ml_ds + clasificación.
+    mlds_directional_priors: bool = True
     # Coerce the ml_ds + clasificación target to a binary int classification_target (Issue #350).
     # When true, the deterministic sibling `_normalize_mlds_classification_target` forces any
     # non-int / non-classification target the LLM emits to int binary {0,1} BEFORE the schema

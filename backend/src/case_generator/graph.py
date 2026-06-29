@@ -5078,6 +5078,131 @@ def _enforce_mlds_classification_schema(
     return new_schema
 
 
+def _resolve_signed_directions(
+    columns: list, contract: dict | None, *, target_name: str | None
+) -> list[dict]:
+    """Issue #506 — resuelve los drivers con SIGNO económico declarado para el target binario.
+
+    Fuente ÚNICA de la regla de elegibilidad, compartida por el enforcer
+    ``_enforce_mlds_directional_target`` y el golden oracle ``check_directional_coherence`` (DRY: la
+    verificación no debe re-derivar la regla de la generación). Una feature del contrato entra como
+    driver con signo si declara ``expected_direction`` ∈ {positive, negative} Y es numérica (dtype
+    int/float), no-leakage, distinta del target, presente en el schema y una columna INDEPENDIENTE
+    (sin dependency propia → el generador la produce ANTES del target dependiente).
+
+    Devuelve la lista ORDENADA por aparición en el contrato (determinismo del seed) de
+    ``{"name": str, "sign": +1|-1}``; ``sign`` es int de Python (JSON-serializable → seed estable).
+    """
+    schema_by_name = {c.get("name"): c for c in columns}
+    signed: list[dict] = []
+    seen: set[str] = set()
+    for f in (contract or {}).get("feature_columns") or []:
+        raw = f.get("expected_direction")
+        if not isinstance(raw, str):
+            continue
+        direction = raw.strip().lower()
+        if direction == "positive":
+            sign = 1
+        elif direction == "negative":
+            sign = -1
+        else:
+            continue
+        fname = (f.get("name") or "").strip()
+        if not fname or fname == target_name or fname in seen:
+            continue
+        if f.get("is_leakage_risk") or f.get("dtype") not in ("int", "float"):
+            continue
+        scol = schema_by_name.get(fname)
+        if scol is None or scol.get("type") not in ("int", "float") or scol.get("dependency"):
+            continue
+        signed.append({"name": fname, "sign": sign})
+        seen.add(fname)
+    return signed
+
+
+def _enforce_mlds_directional_target(
+    schema: dict,
+    contract: dict | None,
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+) -> dict:
+    """Issue #506 — acopla el target binario ml_ds+clasificación a VARIOS drivers con SIGNO económico.
+
+    Sibling determinista de ``_enforce_mlds_classification_schema`` (NO generalizar). Corre DESPUÉS del
+    de-churn (#382): toma el ``is_domain_target`` ya re-apuntado y, cuando el contrato declara
+    ``expected_direction`` ('positive'/'negative') en ≥1 feature, reescribe la dependencia del target a
+    una forma multi-driver con signo::
+
+        dependency = {
+            "depends_on": signed_drivers[0]["name"],   # compat: golden oracle #382 + reparación colgantes
+            "relationship": "linear",                  # la rama signed del generador lo ignora
+            "signed_drivers": [{"name", "sign": +1|-1}, ...],
+            "noise_factor": <misma fórmula que #301/#382>,
+        }
+
+    El generador (``_signed_driver_values``) construye el target desde ``Σ sign·zscore(feature)`` → el
+    coeficiente del modelo respeta el signo del dominio (ej: ley de demanda → tarifa = negativa, en vez
+    de un coeficiente económicamente invertido). PURO copy-on-write (determinismo del seed +
+    thread-safety). LOG-ONLY (precedente #336).
+
+    Gate (fuera de él → MISMO objeto, byte-idéntico):
+      ``enabled`` (kill-switch ``MLDS_DIRECTIONAL_PRIORS``) AND ``profile=="ml_ds"`` AND
+      ``(primary_family or "clasificacion")=="clasificacion"`` AND existe una columna ``is_domain_target``
+      AND el contrato declara ≥1 ``expected_direction`` UTILIZABLE (numérica, no-leakage, presente en el
+      schema e INDEPENDIENTE — sin dependency propia, para que el generador la produzca ANTES del target).
+    """
+    if not enabled or profile != "ml_ds":
+        return schema
+    if (primary_family or "clasificacion") != "clasificacion":
+        return schema
+
+    columns = schema.get("columns", [])
+    target_col = next((c for c in columns if c.get("is_domain_target") is True), None)
+    if target_col is None:
+        return schema
+    keep_name = target_col.get("name")
+
+    # Drivers con SIGNO declarado — regla de elegibilidad COMPARTIDA con el golden oracle
+    # check_directional_coherence (fuente única `_resolve_signed_directions`, sin drift test↔prod).
+    signed_drivers = _resolve_signed_directions(columns, contract, target_name=keep_name)
+    if not signed_drivers:
+        return schema
+
+    # Copy-on-write: nuevo schema + columnas copiadas; reescribe SOLO la dependencia del target.
+    new_columns = [dict(c) for c in columns]
+    min_signal = float((contract or {}).get("min_signal_strength") or 0.15)
+    noise_factor = round(max(0.08, min(0.30, 0.30 - min_signal)), 3)
+    for c in new_columns:
+        if c.get("name") == keep_name:
+            c["dependency"] = {
+                # `depends_on` conservado (no inerte): mantiene verde el golden oracle
+                # check_domain_coherence (#382) y sobrevive la reparación de dependencias colgantes.
+                "depends_on": signed_drivers[0]["name"],
+                "relationship": "linear",
+                "signed_drivers": signed_drivers,
+                "noise_factor": noise_factor,
+            }
+            c["is_domain_target"] = True
+
+    logger.warning(
+        "[_enforce_mlds_directional_target] Issue #506: target '%s' ← drivers con signo %s",
+        keep_name,
+        [(d["name"], d["sign"]) for d in signed_drivers],
+        extra={
+            "node": "schema_designer",
+            "family": "clasificacion",
+            "target_name": keep_name,
+            "signed_drivers": [(d["name"], d["sign"]) for d in signed_drivers],
+        },
+    )
+
+    new_schema = dict(schema)
+    new_schema["columns"] = new_columns
+    return new_schema
+
+
 # Issue #466 — leaked-target detection for the ml_ds + clustering strip. Clustering is unsupervised →
 # NO target column of ANY kind may exist. Three vectors: (A) an explicit contract `target_column` (any
 # role/shape — clustering has no target); (B) a target-named binary column (a hallucinated
@@ -5497,6 +5622,14 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 enabled=settings.mlds_dechurn_signal,
                 detemplate_cross_section=settings.mlds_detemplate_cross_section,
             )
+            # Issue #506 — prior de dirección económica: reescribe el target ml_ds+clf de-churnado a un
+            # acoplamiento multi-driver con SIGNO (expected_direction del contrato) para que el
+            # coeficiente del modelo no quede económicamente invertido. Tras el de-churn; no-op
+            # byte-idéntico sin direcciones declaradas, fuera de ml_ds+clf, o con el kill-switch off.
+            schema_result = _enforce_mlds_directional_target(
+                schema_result, contract, profile=profile, primary_family=primary_family,
+                enabled=settings.mlds_directional_priors,
+            )
             # Issue #466 — clustering es no supervisado: elimina cualquier target supervisado filtrado
             # (dummy_target alucinado o target del contrato inyectado por el augmenter gateless) ANTES
             # de generar datos, para que el CSV no tenga target. No-op fuera de ml_ds+clustering.
@@ -5570,6 +5703,11 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         fallback_schema, contract, profile=profile, primary_family=primary_family,
         enabled=settings.mlds_dechurn_signal,
         detemplate_cross_section=settings.mlds_detemplate_cross_section,
+    )
+    # Issue #506 — mismo prior de dirección económica en el fallback (red de seguridad).
+    fallback_schema = _enforce_mlds_directional_target(
+        fallback_schema, contract, profile=profile, primary_family=primary_family,
+        enabled=settings.mlds_directional_priors,
     )
     # Issue #466 — mismo strip de target supervisado en el fallback (red de seguridad).
     fallback_schema = _enforce_mlds_clustering_no_target(
@@ -5744,6 +5882,76 @@ def _is_mlds_event_target(col: dict, target_col_name: str | None) -> bool:
     return name == "categoria"
 
 
+def _signed_driver_values(
+    signed_drivers: list,
+    df_data: dict,
+    columns: list,
+    low: float,
+    high: float,
+    n_rows: int,
+    *,
+    noise_factor: float,
+    rng: "np.random.Generator",
+) -> "np.ndarray | None":
+    """Issue #506 — valores de un target binario acoplado a VARIOS drivers con signo económico.
+
+    ``signed_drivers`` = ``[{"name": str, "sign": +1|-1}, ...]`` (lo emite
+    ``_enforce_mlds_directional_target``). Construye::
+
+        score = Σ_i  sign_i · zscore(feature_i)
+
+    sobre los drivers PRESENTES en ``df_data`` y numéricos con varianza > 0; normaliza el score a
+    [0,1] (min-max, el MISMO ``+1e-9`` que la rama de 1 padre) y lo escala a ``[low, high]`` con UNA
+    sola extracción ``rng.normal`` de ruido — idéntico al contrato de draws de la rama de 1 padre,
+    así el caso de 1 solo driver es FORMULA-equivalente a ``relationship=="linear"`` (sign +1) /
+    ``"inverse"`` (sign -1), porque ``minmax(zscore(x)) == minmax(x)`` para varianza finita.
+
+    Devuelve ``None`` SIN tocar el rng cuando NINGÚN driver es utilizable, para que el llamador caiga
+    al fallback independiente con el ``col`` real (espejo de la rama huérfana). Defensivo: nunca
+    crashea por driver ausente, no numérico, constante o todo-nulo.
+    """
+    import numpy as np
+
+    score = np.zeros(n_rows, dtype=float)
+    used = 0
+    for d in signed_drivers:
+        if not isinstance(d, dict):
+            continue
+        fname = (d.get("name") or "").strip()
+        try:
+            sign = float(d.get("sign", 0) or 0)
+        except (TypeError, ValueError):
+            sign = 0.0
+        if not fname or sign == 0.0 or fname not in df_data:
+            continue
+        col_def = next((c for c in columns if c.get("name") == fname), None)
+        if col_def is not None and col_def.get("type") not in ("int", "float"):
+            continue
+        raw = df_data[fname]
+        if len(raw) != n_rows:
+            continue
+        arr = np.array([float(v) if v is not None else np.nan for v in raw], dtype=float)
+        if np.all(np.isnan(arr)):
+            continue
+        mean = float(np.nanmean(arr))
+        arr = np.where(np.isnan(arr), mean, arr)
+        std = float(arr.std())
+        if std == 0.0:
+            continue
+        score += sign * ((arr - mean) / std)
+        used += 1
+
+    if used == 0:
+        return None
+
+    s_min, s_max = float(score.min()), float(score.max())
+    score_norm = (score - s_min) / (s_max - s_min + 1e-9)
+    target_range = high - low
+    base = low + score_norm * target_range
+    noise = rng.normal(0, target_range * noise_factor, n_rows)
+    return np.clip(base + noise, low, high)
+
+
 def _generate_dataset_from_schema(
     schema: dict,
     profile: str = "business",
@@ -5852,7 +6060,23 @@ def _generate_dataset_from_schema(
         if low >= high:
             high = low + 1.0
 
-        if parent_name in df_data:
+        # Issue #506 — target multi-driver con signos económicos declarados (expected_direction).
+        # Intercepta ANTES de la rama de 1 padre: como `_enforce_mlds_directional_target` conserva
+        # `depends_on` (compat con el golden oracle / la reparación de colgantes #382), esa rama
+        # dispararía y usaría UN solo padre; el signed branch usa TODOS los drivers con su signo.
+        signed_drivers = dep.get("signed_drivers")
+        if isinstance(signed_drivers, list) and signed_drivers:
+            signed_values = _signed_driver_values(
+                signed_drivers, df_data, columns, low, high, n_rows,
+                noise_factor=float(dep.get("noise_factor", 0.1)), rng=rng,
+            )
+            if signed_values is None:
+                # Ningún driver utilizable → espejo de la rama huérfana con el `col` REAL
+                # (conserva el sesgo semántico por nombre del target).
+                values = _generate_independent_values(col, low, high, n_rows, rng)
+            else:
+                values = signed_values
+        elif parent_name in df_data:
             # Guard: el padre debe ser numérico para aplicar la correlación matemática
             parent_col_def = next((c for c in columns if c["name"] == parent_name), None)
             if parent_col_def and parent_col_def.get("type") not in ("int", "float"):
