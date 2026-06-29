@@ -210,6 +210,14 @@ class Settings(BaseSettings):
     # keeps the leaked column + §2.1 stays supervised; instant env-only revert, no redeploy). The gate
     # is profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
     mlds_clustering_no_target: bool = True
+    # De-template the company financial panel (period/revenue/costs/margin_pct) for ml_ds +
+    # clasificación NON-retention CROSS-SECTION cases (Issue #507). #382 strips the churn/SaaS template
+    # but KEEPS the financial base; for an entity survey (household/individual: environmental valuation,
+    # scoring, approval) that base is template residue. When true (default), it is ALSO stripped EXCEPT
+    # columns the contract declares as real features. Set MLDS_DETEMPLATE_CROSS_SECTION=false to keep the
+    # financial base byte-identically (the #382-only behavior; instant env-only revert, no redeploy).
+    # Gated INSIDE the #382 de-churn path: churn/retention, business, and other families are unaffected.
+    mlds_detemplate_cross_section: bool = True
     # Deterministic, data-only EDA chart builder for ml_ds + clustering (Issue #466, Frente 2). When
     # true (default), an ml_ds + clustering case routes M2 charts through `_eda_clustering_python_path`
     # (3 PRE-MODEL, target-free charts: feature distributions → motivates StandardScaler, correlation
