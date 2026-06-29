@@ -23,6 +23,14 @@ never presents) takes two concrete, deterministic shapes:
   prevalence (``target_event_rate``, the SAME anchor Issue #372 uses for Exhibit 2).
   Profile-agnostic: fires whenever a rate is present — ml_ds always, and business+clf
   once Issue #518 calibrates a rate for it. ``None`` rate → skipped (the no-rate path).
+* **MODELO_NO_SELECCIONADO** — (ml_ds single-model ``lr_only`` / ``rf_only``) an M2 EDA
+  question/solution names the UNSELECTED classification model. The classification model is
+  chosen at intake, so for an ``lr_only`` case the M2 questions must reason about Logistic
+  Regression and never Random Forest (and vice versa) — the M2 sibling of the M3/M4/M5
+  single-model leak guards (#337). Reuses the SAME asymmetric prose guard
+  ``narrative_grounding.detect_unselected_model_mentions``; no-op for ``lr_rf_contrast`` /
+  business (``variant`` is ``None``), so it never fires for the cohorts that legitimately
+  name both models or none.
 
 Detection precision (zero-FP doctrine, mirrors #360/#372/#377):
 
@@ -52,6 +60,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
+
+from case_generator.narrative_grounding import detect_unselected_model_mentions
 
 # ── Tolerance ──────────────────────────────────────────────────────────────────
 # Percentage-points tolerance for "same event rate". Identical rationale and value
@@ -143,11 +153,13 @@ def validate_eda_questions_coherence(
     preguntas: list[dict],
     chart_ids: set[str],
     target_event_rate: float | None = None,
+    *,
+    variant: str | None = None,
 ) -> list[str]:
     """Return coherence violations for the M2 EDA Socratic questions.
 
     Pure, deterministic, total on well-typed input (never raises; the caller still
-    wraps it best-effort). ``[]`` means coherent. Three independent checks per question:
+    wraps it best-effort). ``[]`` means coherent. Four independent checks per question:
 
     * ``CHART_REF_NONEXISTENT`` — a non-sentinel ``chart_ref`` not present in
       ``chart_ids`` (the M2 chart manifest ids). Both profiles.
@@ -158,9 +170,15 @@ def validate_eda_questions_coherence(
       ``target_event_rate * 100`` by > ±0.5pp. Profile-agnostic (fires whenever a rate is
       present): ml_ds always, and business+clf once Issue #518 calibrates a rate for it;
       ``None`` / bool / out-of-range ``target_event_rate`` → skipped (covers the no-rate path).
+    * ``MODELO_NO_SELECCIONADO`` — (``variant`` ``lr_only`` / ``rf_only``) the question prose
+      (``titulo`` + ``enunciado`` + ``solucion_esperada``) names the unselected classification
+      model. Reuses ``detect_unselected_model_mentions`` (#337). ``variant`` is the resolved
+      classification notebook variant (or ``None``) — passed in by the caller, never re-derived
+      here; ``None`` / ``lr_rf_contrast`` → no-op (business and ml_ds contrast).
 
-    Zero false positives by construction: rate extraction is keyword-anchored and a
-    sentinel/empty ``chart_ref`` is a non-reference. ``chart_ids`` membership is exact
+    Zero false positives by construction: rate extraction is keyword-anchored, a
+    sentinel/empty ``chart_ref`` is a non-reference, and the model guard matches only the full
+    model names (never the bare ``RF`` / ``LR`` acronyms). ``chart_ids`` membership is exact
     and case-sensitive (the ids are machine-generated ``chart_NN``).
     """
     if not isinstance(preguntas, list):
@@ -205,6 +223,21 @@ def validate_eda_questions_coherence(
                         f"real del dataset ({_fmt(rate_pct)}%)"
                     )
                     break  # one contract-mismatch message per question is enough
+
+        # ── Check D — single-model question must not name the unselected model ──
+        # No-op for variant None / lr_rf_contrast (the detector short-circuits), so this
+        # never fires for business or the ml_ds contrast cohort. Mirrors m3_grounding's
+        # MODELO_NO_SELECCIONADO check; each leak is question-numbered.
+        if variant:
+            prose = "\n".join(
+                str(pregunta.get(key, "")) for key in ("titulo", "enunciado", "solucion_esperada")
+            )
+            for leak in detect_unselected_model_mentions(prose, variant):
+                model = leak.split(": ", 1)[-1]
+                violations.append(
+                    f"MODELO_NO_SELECCIONADO: la pregunta {num} nombra el modelo no "
+                    f"seleccionado ({model})"
+                )
     return violations
 
 

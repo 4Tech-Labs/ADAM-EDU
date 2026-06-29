@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     # false to disable the sibling and ship the prior unsigned schema byte-identically (instant env-only
     # revert; no redeploy). No-op when no feature declares a direction, or outside ml_ds + clasificación.
     mlds_directional_priors: bool = True
+    # Keep the EDA-outlier injection (Fix B-05) inside each feature's DECLARED [range_min, range_max]
+    # for ml_ds datasets, so no generated value exceeds its own semantic bound (e.g. a credit_score
+    # declared [300, 850] never ships an impossible 1700, a percentage never exceeds 100). When true
+    # (default), the ml_ds outlier cap matches the already-correct business path (range_max, ×1.0)
+    # instead of the legacy ×2.0; the injected point stays a detectable ~5σ outlier (the bulk is
+    # center-concentrated) AND a semantically valid value. Kill-switch: set
+    # MLDS_OUTLIER_RESPECT_RANGE=false to restore the legacy ×2.0 ml_ds cap byte-identically (instant
+    # env-only revert; no redeploy). business is unaffected either way (it always capped at range_max).
+    mlds_outlier_respect_range: bool = True
     # Coerce the ml_ds + clasificación target to a binary int classification_target (Issue #350).
     # When true, the deterministic sibling `_normalize_mlds_classification_target` forces any
     # non-int / non-classification target the LLM emits to int binary {0,1} BEFORE the schema
@@ -100,6 +109,18 @@ class Settings(BaseSettings):
     # redeploy). clasificación / regresión / serie_temporal / business are unaffected either way
     # (the gate is profile=="ml_ds" AND family=="clustering").
     mlds_clustering_structure: bool = True
+    # Centroid geometry for the injected ml_ds + clustering blobs (k-coherence fix). When true
+    # (default), `_enforce_mlds_clustering_structure` places the K∈{3,4} blob centers as a regular
+    # SIMPLEX (mutually-equidistant centroids, randomly rotated into the feature space) so the
+    # notebook's data-driven k-selection (`argmax_k silhouette`, the cell the student runs) lands on
+    # the coordinated `target_k` (Issue #467) — the legacy per-feature permutation could leave the
+    # silhouette peaking at k=2/3 while the M1/M4/M5 narrative framed `target_k=4` segments, so the
+    # student read "4 segmentos" but their own notebook reported 2. Set
+    # MLDS_CLUSTERING_SIMPLEX_CENTERS=false to revert to the legacy permutation placement +
+    # `_CLUSTERING_BLOB_SPREAD_FRAC` (byte-identical to pre-fix; the RED control for the new oracle).
+    # Only affects the geometry when MLDS_CLUSTERING_STRUCTURE is also on; non-clustering / business
+    # are unaffected. Instant env-only revert, no redeploy.
+    mlds_clustering_simplex_centers: bool = True
     # Execute + quality-gate the ml_ds + clustering M3 notebook (Issue #453, extends #239). When
     # true (default), the K-Means notebook is run in the executor subprocess (same nbclient/AST-
     # scrub/timeout path as classification), its real silhouette/n_clusters metrics are parsed into
