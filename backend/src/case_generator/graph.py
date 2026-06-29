@@ -4718,6 +4718,17 @@ _MLDS_SAAS_TEMPLATE_COLUMNS: frozenset[str] = frozenset({
     "plan_tier", "payment_failures", "monthly_usage_pct",
 })
 
+# Base de panel financiero MENSUAL de empresa (P&L) que `_build_fallback_schema` y el prompt
+# `M2_clasificacion/dataset.py` inyectan SIEMPRE para ml_ds+clf. Para un caso NO-retención de
+# ENTIDADES cross-section (encuesta de hogares/individuos: valoración ambiental, scoring, aprobación)
+# es RESIDUO de plantilla — una entidad no tiene revenue/costs/margin mensual. El de-churn (#382)
+# la CONSERVABA; el de-template (#507) la elimina EXCEPTO las columnas que el contrato declara como
+# feature real (un panel de empresa legítimo las lista → protegidas por el allowlist existente).
+# `period` es un índice temporal sin sentido en cross-section (str → ruido one-hot en el notebook).
+_FINANCIAL_PANEL_TEMPLATE_COLUMNS: frozenset[str] = frozenset({
+    "period", "revenue", "costs", "margin_pct",
+})
+
 
 def _is_retention_target_name(name: str, role: str = "") -> bool:
     """True si el target pertenece a la familia retención/churn (por nombre o rol).
@@ -4901,6 +4912,7 @@ def _enforce_mlds_classification_schema(
     profile: str,
     primary_family: str | None,
     enabled: bool = True,
+    detemplate_cross_section: bool = True,
 ) -> dict:
     """De-churna la SEÑAL del target para ml_ds + clasificación NO-retención (Issue #382).
 
@@ -4923,6 +4935,14 @@ def _enforce_mlds_classification_schema(
       ``(primary_family or "clasificacion")=="clasificacion"`` AND el target del contrato es
       binario (``role==classification_target`` y ``dtype=="int"``) AND
       ``NOT _is_retention_target_name(target_name)``.
+
+    De-template cross-section (Issue #507, ``detemplate_cross_section``, kill-switch
+    ``MLDS_DETEMPLATE_CROSS_SECTION``): cuando está activo (default) el strip AÑADE la base de panel
+    financiero de empresa (``_FINANCIAL_PANEL_TEMPLATE_COLUMNS`` = period/revenue/costs/margin_pct) al
+    conjunto a eliminar. Para una encuesta de ENTIDADES cross-section (hogares/individuos: valoración
+    ambiental, scoring, aprobación) esas columnas son residuo de plantilla, no datos. Tienen la MISMA
+    protección que el resto: una columna declarada feature del contrato (panel de empresa legítimo)
+    NUNCA se elimina. Off → comportamiento #382 byte-idéntico (base financiera conservada).
     """
     if not enabled or profile != "ml_ds":
         return schema
@@ -4986,7 +5006,13 @@ def _enforce_mlds_classification_schema(
         for f in (contract or {}).get("feature_columns") or []
     }
     protected = contract_features | {keep_name, driver_name}
-    strip_set = (_CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS) - protected
+    # Issue #507 — para una encuesta de entidades cross-section (no-retención) la base de panel
+    # financiero de empresa es residuo de plantilla; se añade al strip cuando `detemplate_cross_section`
+    # está activo. Las columnas declaradas por el contrato siguen protegidas (allowlist existente).
+    template_columns = _CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS
+    if detemplate_cross_section:
+        template_columns = template_columns | _FINANCIAL_PANEL_TEMPLATE_COLUMNS
+    strip_set = template_columns - protected
     stripped = [c.get("name") for c in columns if c.get("name") in strip_set]
     columns = [c for c in columns if c.get("name") not in strip_set]
 
@@ -5594,6 +5620,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
             schema_result = _enforce_mlds_classification_schema(
                 schema_result, contract, profile=profile, primary_family=primary_family,
                 enabled=settings.mlds_dechurn_signal,
+                detemplate_cross_section=settings.mlds_detemplate_cross_section,
             )
             # Issue #506 — prior de dirección económica: reescribe el target ml_ds+clf de-churnado a un
             # acoplamiento multi-driver con SIGNO (expected_direction del contrato) para que el
@@ -5675,6 +5702,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     fallback_schema = _enforce_mlds_classification_schema(
         fallback_schema, contract, profile=profile, primary_family=primary_family,
         enabled=settings.mlds_dechurn_signal,
+        detemplate_cross_section=settings.mlds_detemplate_cross_section,
     )
     # Issue #506 — mismo prior de dirección económica en el fallback (red de seguridad).
     fallback_schema = _enforce_mlds_directional_target(

@@ -60,6 +60,10 @@ class NodeEvalInputs:
     # ``eda_questions_no_chart_id_leak_ok``); the deterministic teeth live in the unit RED/GREEN tests.
     # Computed via ``check_directional_coherence``.
     directional_coherence_ok: bool = True
+    # Issue #507 — ml_ds + clasificación cross-section de-template: a NON-retention entity-survey golden
+    # job must carry NO company financial-panel residue (period/revenue/costs/margin_pct). True (n/a) for
+    # business / non-classification / company-panel jobs. Computed via ``check_no_financial_panel_residue``.
+    financial_panel_stripped_ok: bool = True
     # M2 (EDA) question coherence: every classification golden job's EDA questions must be coherent
     # (chart_ref exists; the event rate in each solución matches its enunciado and the dataset
     # prevalence). True (n/a) for non-classification jobs. Computed via
@@ -301,6 +305,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             "directional coherence failure: a declared expected_direction is not honored by the "
             "target's signed_drivers (economically inverted coefficient)"
         )
+    if not r.financial_panel_stripped_ok:
+        reasons.append("financial-panel residue: company P&L columns survived on an ml_ds cross-section job")
     if not r.eda_questions_coherence_ok:
         reasons.append("M2 EDA question coherence failure: chart_ref or event-rate mismatch")
     if not r.eda_questions_no_chart_id_leak_ok:
@@ -511,6 +517,28 @@ def check_directional_coherence(schema: dict, contract: dict | None) -> bool:
         (d.get("name") or "").strip(): d.get("sign") for d in signed if isinstance(d, dict)
     }
     return all(actual.get(name) == sign for name, sign in expected.items())
+
+
+def check_no_financial_panel_residue(schema: dict) -> bool:
+    """Pure oracle (Issue #507): does a de-churned ml_ds + clasificación schema carry NO company
+    financial-panel residue (period/revenue/costs/margin_pct)?
+
+    True iff none of ``_FINANCIAL_PANEL_TEMPLATE_COLUMNS`` survive. For a NON-retention cross-section
+    ENTITY case (household/individual survey: environmental valuation, scoring, approval) those columns
+    are template residue, stripped by ``_enforce_mlds_classification_schema`` when
+    ``detemplate_cross_section`` is on. The single source of truth for the column names is
+    ``case_generator.graph`` (function-level import keeps this module lightweight).
+
+    Same limitation as ``check_domain_coherence``: a contract feature legitimately NAMED like a panel
+    column (a real company-default case that lists ``revenue`` as a predictor) would be protected (kept)
+    by the strip yet trip this set-membership check → a False negative on a correct schema. No golden job
+    collides today; if a future fixture reuses a panel name as a real feature, pass the contract here and
+    exclude its declared features before this check.
+    """
+    from case_generator.graph import _FINANCIAL_PANEL_TEMPLATE_COLUMNS
+
+    names = {c.get("name") for c in (schema.get("columns") or [])}
+    return not (names & _FINANCIAL_PANEL_TEMPLATE_COLUMNS)
 
 
 def check_eda_questions_coherence(
