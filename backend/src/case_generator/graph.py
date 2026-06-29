@@ -202,6 +202,7 @@ from case_generator.impact_lens import (
 )
 from case_generator.clustering_decision import (
     build_clustering_architect_hint,
+    build_clustering_currency_honesty_hint,
     build_clustering_m1_questions_hint,
     build_clustering_m3_questions_hint,
     build_clustering_verdict_hint,
@@ -1436,6 +1437,10 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
     ):
         prompt = prompt + build_clustering_architect_hint(_clustering_decision)
 
+    # Issue #514 — prohibit absolute per-entity $ in the M1 prose (ml_ds+clustering). Best-effort,
+    # brace-free, node-level append → architect SHA untouched; no-op (byte-identical) elsewhere.
+    prompt = _maybe_append_clustering_currency_hint(prompt, state)
+
     try:
         result, profile_resolved, family_resolved, pregunta_eje = (
             _invoke_case_architect_with_contract(
@@ -2171,6 +2176,9 @@ def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
     prompt = CASE_WRITER_PROMPT_BY_FAMILY.get(
         _resolve_m1_prompt_family(context), CASE_WRITER_PROMPT
     ).format(**context)
+    # Issue #514 — same currency-honesty hint on the STUDENT-FACING narrative (ml_ds+clustering).
+    # Brace-free, appended after .format; best-effort; no-op (byte-identical) for every other cohort.
+    prompt = _maybe_append_clustering_currency_hint(prompt, state)
 
     try:
         # Invocación directa de texto crudo (sin JSON schema)
@@ -7653,6 +7661,23 @@ def _is_ml_ds_clustering(state: ADAMState) -> bool:
     """
     profile, family = _resolve_generation_focus(state)
     return profile == "ml_ds" and family == "clustering"
+
+
+def _maybe_append_clustering_currency_hint(prompt: str, state: ADAMState) -> str:
+    """Append the #514 currency-honesty hint for ml_ds+clustering when the kill-switch is on.
+
+    Shared by ``case_architect`` and ``case_writer`` (the two M1 prose producers). Best-effort: any
+    internal error returns the prompt UNCHANGED + logs (mirrors the repo's never-fail-a-job
+    augmentation doctrine), so a hint bug can never break M1 generation. Gate is independent of
+    ``mlds_clustering_m1_anchor`` / ``mlds_clustering_structure`` (granular-switch convention); the
+    hint is self-contained and coherent on either the clustering or the generic base prompt.
+    """
+    try:
+        if settings.mlds_clustering_currency_honesty and _is_ml_ds_clustering(state):
+            return prompt + build_clustering_currency_honesty_hint()
+    except Exception as e:  # pragma: no cover - defensive; never fail a job
+        logger.warning("[case] clustering currency hint skipped: %s", e)
+    return prompt
 
 
 def _select_eda_prompt(
