@@ -70,7 +70,8 @@ _FRAUD_CONTRACT = {
 
 _TARGET = "fraud_flag"
 _RATE = 0.08
-_N_ROWS = 600  # ml_ds + clasificación: cascada GridSearchCV #240 (no cambia).
+_N_ROWS = 600  # Fixture DESACOPLADO de la constante de producción `_MLDS_CLASSIFICATION_MAX_ROWS`
+# (=1000 desde #525). Los invariantes de de-churn/AUC de abajo son agnósticos al conteo de filas.
 _AUC_FLOOR = 0.55  # espeja el piso del gate del ejecutor (m3_notebook_execution.py:477).
 
 
@@ -139,8 +140,10 @@ def test_contract_target_is_binary_with_dependency() -> None:
     )
 
 
-def test_row_count_is_600_for_mlds_classification() -> None:
-    """Línea roja #347: el conteo de filas ml_ds+clf (cascada #240) no cambia."""
+def test_fallback_schema_honors_requested_row_count() -> None:
+    """Integridad del pipeline: `_build_fallback_schema` produce EXACTAMENTE las filas pedidas
+    (`_N_ROWS`). NO es un candado del conteo de PRODUCCIÓN — ese vive en
+    `_MLDS_CLASSIFICATION_MAX_ROWS` (=1000 desde #525), desacoplado de este fixture."""
     assert _build_mlds_nonchurn_schema()["n_rows"] == _N_ROWS
 
 

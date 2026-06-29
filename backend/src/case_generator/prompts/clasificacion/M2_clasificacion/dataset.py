@@ -12,7 +12,7 @@ Specialised for binary classification — dilemma-aware (Issue #382 de-churn):
   and which omits the churn/SaaS template columns.
 - The binary target is always ``int`` (0/1) with a ``dependency`` so LR/RF receive a
   signal-bearing target (AUC-ROC ≥ 0.70) instead of a random categorical string.
-- n_rows = {max_rows} (600 for ml_ds) → Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV.
+- n_rows = {max_rows} (1000 for ml_ds, Issue #525) → Issue #240 cascade: 1000 ≤ 2000 → full GridSearchCV.
 
 The deterministic post-LLM sibling ``_enforce_mlds_classification_schema`` (graph.py) is the
 GUARANTEE for the de-churned signal: for a non-retention ml_ds target it re-points the driver to
