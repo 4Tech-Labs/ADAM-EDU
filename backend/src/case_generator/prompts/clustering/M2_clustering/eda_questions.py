@@ -81,7 +81,11 @@ causalidad, sino los propios del clustering:
 - **DATA-ONLY / PRE-MODELO:** las preguntas razonan sobre PREPARACIÓN y VALIDEZ, no sobre un modelo
   ya ajustado; no asumas etiquetas de cluster ni centroides existentes.
 - Toda pregunta referencia métricas, variables o gráficas reales y exactas del M2.
-- Las referencias a gráficos usan el `id` del {chart_manifest} (o null si no hay uno relevante).
+- `chart_ref` (campo estructurado) = el `id` técnico del {chart_manifest} (o null si no hay uno
+  relevante). En la PROSA (`enunciado`/`solucion_esperada`/`titulo`) refiérete al gráfico por su
+  TÍTULO legible del manifest o por lo que muestra — NUNCA por el `id` crudo snake_case.
+- **M2 es PRE-MODELO:** NO cites un valor numérico de silhouette (aún no se ejecutó ningún modelo);
+  descríbelo siempre de forma CUALITATIVA (p.ej. un silhouette BAJO), nunca un número concreto.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}

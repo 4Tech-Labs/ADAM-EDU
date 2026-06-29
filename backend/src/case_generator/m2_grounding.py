@@ -206,6 +206,111 @@ def validate_eda_questions_coherence(
     return violations
 
 
+# ── Chart-id leak detection + relabel (Issue #499) ───────────────────────────────
+# The M2 EDA questions cite a chart's internal snake_case ``id`` (e.g. ``feature_distributions``)
+# in the student-visible prose (``enunciado``/``titulo``/``solucion_esperada``) instead of the
+# readable manifest ``title``. ``detect_chart_id_leak`` flags it (golden oracle + observability);
+# ``relabel_chart_ids_in_prose`` is the deterministic cure (maps id → title), mirroring the
+# ``m1_grounding.enforce_usd_currency`` / ``strip_latex_math`` doctrine: pure, total, best-effort,
+# bounded (linear, no ReDoS), byte-identical for clean prose. The structured ``chart_ref`` field is
+# NEVER touched (the coherence validator + future chart-linking consume it as the id).
+#
+# Only "id-shaped" tokens are eligible — lowercase snake_case with ≥1 underscore. This is the
+# critical false-positive guard: a single-word LLM-JSON chart id (e.g. ``ventas``) is too dangerous
+# to relabel (it could be an ordinary prose word), so it is left to the structured ``chart_ref``.
+# Real chart ids (``feature_distributions``, ``correlation_structure``, ``mutual_info_top8`` …) all
+# have underscores and pass.
+_ID_SHAPE_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$")
+
+
+def _eligible_chart_id_pattern(ids: Iterable[str]) -> re.Pattern[str] | None:
+    r"""Compile the shared detector/relabel pattern from id-shaped ids only, or ``None``.
+
+    One optional wrapper group ``w`` — 1-3 backticks (a markdown code-span fence, ``` `{1,3} ```)
+    OR a single ``'``/``"`` — closed by a CONDITIONAL BACKREFERENCE ``(?(w)(?P=w)|)`` so only a
+    genuinely MATCHED pair is consumed (a mismatched `` `id' `` leaves the stray glyphs untouched;
+    a `` ``id`` `` code span is fully consumed, leaving no residual backtick that would inject
+    markdown). The ``(?<!\w) … (?!\w)`` boundaries make the ``feature_distributions`` ⊏
+    ``feature_distributions_scaled`` prefix collision MOOT (the trailing ``_`` is ``\w``),
+    independent of alternation order (Python ``re`` is leftmost-first, not longest-match — the
+    lookahead, not the ordering, is what protects the prefix). ``re.escape`` per id is
+    defense-in-depth; longest-first ordering is belt-and-suspenders. Bounded quantifiers → LINEAR:
+    the backtick fence is capped at 3 (NOT a greedy ``` `+ ```), so a long ``` ` ``` run can never
+    drive quadratic backtracking — ReDoS-safe.
+    """
+    eligible = sorted(
+        {i for i in ids if isinstance(i, str) and _ID_SHAPE_RE.match(i)},
+        key=len,
+        reverse=True,
+    )
+    if not eligible:
+        return None
+    inner = "|".join(re.escape(i) for i in eligible)
+    return re.compile(r"(?<!\w)(?P<w>`{1,3}|['\"])?(?P<id>" + inner + r")(?(w)(?P=w)|)(?!\w)")
+
+
+def detect_chart_id_leak(text: str, chart_ids: Iterable[str]) -> list[str]:
+    """Return ``CHART_ID_LEAK: <id>`` for each id-shaped chart id leaked into prose, deduped.
+
+    Pure, total, best-effort (any internal error → ``[]``). Only manifest ids matching
+    ``_ID_SHAPE_RE`` are searched, so an ordinary prose word / single-token id is never flagged.
+    """
+    if not isinstance(text, str) or not text:
+        return []
+    try:
+        pattern = _eligible_chart_id_pattern(chart_ids)
+        if pattern is None:
+            return []
+        seen: set[str] = set()
+        violations: list[str] = []
+        for match in pattern.finditer(text):
+            idtok = match.group("id")
+            if idtok not in seen:
+                seen.add(idtok)
+                violations.append(f"CHART_ID_LEAK: {idtok}")
+        return violations
+    except Exception:  # best-effort — a detector bug must never fail a job
+        return []
+
+
+def relabel_chart_ids_in_prose(text: str, id_to_title: Mapping[str, str]) -> str:
+    """Replace each id-shaped chart id (bare or wrapped in quotes/backticks) with its title.
+
+    Pure, total, **best-effort** (any internal error returns the input unchanged), byte-identical
+    when no id-shaped id is present. SINGLE pass (``re.sub`` never rescans inserted titles → one
+    pass is idempotent; never loop, or an id-shaped column name embedded in an inserted title could
+    be re-relabeled). Titles are inserted VERBATIM — ``×`` / accents / parens / intra-word ``_`` are
+    markdown-safe in ``marked()`` and must NOT be escaped. An id is skipped (left as-is) when its
+    title is non-str / blank / equal to the id / itself id-shaped (an LLM echo of the id), so a
+    flagged id is always repairable — the detector and relabel share the same eligibility gate.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    try:
+        valid = {
+            k: v.strip()
+            for k, v in id_to_title.items()
+            if isinstance(k, str)
+            and _ID_SHAPE_RE.match(k)
+            and isinstance(v, str)
+            and v.strip()
+            and v.strip() != k
+            and not _ID_SHAPE_RE.match(v.strip())
+        }
+        # Drop any id whose TITLE itself contains an id-shaped needle from the map: inserting such a
+        # title would let the relabel cascade (a second pass — or a self-referential title — would
+        # re-expand the embedded id). Dropping it keeps the single pass fully idempotent and
+        # cascade-free; the raw id stays in prose (a logged residual) rather than risking corruption.
+        needles = set(valid)
+        valid = {k: v for k, v in valid.items() if not detect_chart_id_leak(v, needles)}
+        pattern = _eligible_chart_id_pattern(valid.keys())
+        if pattern is None:
+            return text
+        return pattern.sub(lambda m: valid[m.group("id")], text)
+    except Exception:  # best-effort — a relabel bug must never corrupt/fail a case
+        return text
+
+
 # ── Internals ───────────────────────────────────────────────────────────────────
 
 def _coerce_ids(chart_ids: object) -> set[str]:

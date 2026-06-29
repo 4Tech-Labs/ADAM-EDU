@@ -647,7 +647,7 @@ sesgo de confirmación y confusión entre correlación y causalidad.
 1. **Analiza:** Lee el reporte EDA y el manifest de gráficas `{chart_manifest}`.
 2. **Conecta:** Identifica el hallazgo más propenso a sesgo y la correlación más engañosa.
 3. **Diseña:** Preguntas que obliguen al estudiante a cuestionar lo que los datos PARECEN decir.
-   Usa los IDs y títulos del `{chart_manifest}` para que las referencias sean precisas.
+   Usa el `id` del `{chart_manifest}` para el campo `chart_ref` y el `title` legible en la prosa.
 4. **Redacta:** `solucion_esperada` como un párrafo fluido que integre el concepto, el ejemplo
    concreto del caso y la implicación ejecutiva.
    Máx 120 palabras. No uses sub-campos ni estructuras anidadas — solo texto plano.
@@ -656,7 +656,9 @@ sesgo de confirmación y confusión entre correlación y causalidad.
 # Your Boundaries
 - Solo JSON schema. PROHIBIDO Markdown libre.
 - Toda pregunta referencia métricas, variables o gráficas reales y exactas del M2.
-- Las referencias a gráficos deben usar el `id` y `title` del `{chart_manifest}`.
+- Las referencias a gráficos: `chart_ref` (campo estructurado) = el `id` del `{chart_manifest}`.
+  En la PROSA (`enunciado`/`solucion_esperada`/`titulo`) refiérete al gráfico por su `title`
+  legible o por lo que muestra — NUNCA por el `id` crudo snake_case.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}

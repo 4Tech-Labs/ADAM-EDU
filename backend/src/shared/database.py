@@ -246,6 +246,15 @@ class Settings(BaseSettings):
     # are unaffected. Kill-switch: set M2_QUESTION_COHERENCE=false to passthrough exactly
     # (instant env-only revert; no redeploy).
     m2_question_coherence: bool = True
+    # Deterministic relabel of raw chart ids leaked into the M2 (EDA) question prose (Issue #499).
+    # When true (default), `eda_questions_generator` rewrites any internal snake_case chart id
+    # (e.g. `feature_distributions`) cited in the student-visible `titulo`/`enunciado`/
+    # `solucion_esperada` to the chart's readable manifest title, via the pure
+    # `m2_grounding.relabel_chart_ids_in_prose`. Family-agnostic (the structured `chart_ref` field
+    # is never touched), best-effort, byte-identical for prose with no leaked id. Mirrors the
+    # one-way `enforce_usd_currency` / `strip_latex_math` backstop doctrine. Kill-switch: set
+    # M2_CHART_ID_RELABEL=false to passthrough exactly (instant env-only revert; no redeploy).
+    m2_chart_id_relabel: bool = True
     # Internal coherence of the M3 socratic questions (clasificación, both profiles).
     # When true, `validate_m3_questions_coherence` checks that each question's
     # `m3_section_ref` exists in the section taxonomy for its profile (business → 3.1–3.5;

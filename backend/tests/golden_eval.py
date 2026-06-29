@@ -58,6 +58,13 @@ class NodeEvalInputs:
     # prevalence). True (n/a) for non-classification jobs. Computed via
     # ``check_eda_questions_coherence`` (reuses the production validator).
     eda_questions_coherence_ok: bool = True
+    # M2 EDA question prose must not leak a raw chart id (Issue #499): no internal snake_case chart
+    # id (e.g. ``feature_distributions``) may appear in the student-visible ``titulo``/``enunciado``/
+    # ``solucion_esperada``. Family-agnostic. True (n/a) on the frozen golden set today (no fixture
+    # exercises it — like ``clustering_eda_no_target_ok``); the deterministic teeth live in the unit
+    # RED/GREEN tests. Computed via ``check_eda_questions_no_chart_id_leak`` (reuses the production
+    # detector ``m2_grounding.detect_chart_id_leak``).
+    eda_questions_no_chart_id_leak_ok: bool = True
     # M3 question coherence: every classification golden job's M3 questions must be coherent
     # (m3_section_ref exists in the profile's taxonomy; single-model questions do not name the
     # unselected model). True (n/a) for non-classification jobs. Computed via
@@ -276,6 +283,8 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("domain coherence failure: churn-coupled target on ml_ds non-churn job")
     if not r.eda_questions_coherence_ok:
         reasons.append("M2 EDA question coherence failure: chart_ref or event-rate mismatch")
+    if not r.eda_questions_no_chart_id_leak_ok:
+        reasons.append("M2 EDA chart-id leak failure: a raw snake_case chart id leaked into question prose")
     if not r.m3_questions_coherence_ok:
         reasons.append("M3 question coherence failure: section_ref or unselected-model leak")
     if not r.m4_questions_coherence_ok:
@@ -453,6 +462,29 @@ def check_eda_questions_coherence(
     from case_generator.m2_grounding import validate_eda_questions_coherence
 
     return not validate_eda_questions_coherence(preguntas, chart_ids, target_event_rate)
+
+
+def check_eda_questions_no_chart_id_leak(
+    preguntas: list[dict], chart_ids: set[str]
+) -> bool:
+    """Pure oracle (Issue #499): is every M2 EDA question's PROSE free of raw chart ids?
+
+    Scans ``titulo``/``enunciado``/``solucion_esperada`` (NOT the structured ``chart_ref`` field,
+    which is SUPPOSED to be the id) for any id-shaped chart id from the manifest, reusing the
+    production detector ``m2_grounding.detect_chart_id_leak`` (single source of truth), so a future
+    prompt regression that re-leaks an id into prose fails the golden gate. Family-agnostic; empty
+    questions → True (n/a). Function-level import keeps this support module lightweight.
+    """
+    from case_generator.m2_grounding import detect_chart_id_leak
+
+    for pregunta in preguntas or []:
+        if not isinstance(pregunta, dict):
+            continue
+        for field in ("titulo", "enunciado", "solucion_esperada"):
+            value = pregunta.get(field)
+            if isinstance(value, str) and value and detect_chart_id_leak(value, chart_ids):
+                return False
+    return True
 
 
 def check_m6_module_coherence(
