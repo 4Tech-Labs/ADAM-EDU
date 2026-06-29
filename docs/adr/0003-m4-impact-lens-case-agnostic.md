@@ -217,3 +217,15 @@ Medir la distribución de lentes resueltas por `industry`, la tasa de mismatch l
 filas KPI (señal de que el LLM ignora la lente) y la tasa de degradación cualitativa por falta
 de cifras. Si la lente se resuelve mal con frecuencia, endurecer el dict de intake o el
 contrato `value_model` del architect.
+
+## Extensiones posteriores (no alteran las decisiones de arriba)
+
+- **#505 — 5ª lente `environmental_outcomes` + industria "Medio ambiente / Sector público".**
+  Economía ambiental / valoración contingente: el VALOR se reencuadra a servicios ecosistémicos,
+  costo por hectárea conservada/restaurada y disposición a pagar (WTP) agregada (kpi_rows en
+  lenguaje natural; DD3 intacto: costos en USD). Extensión PURAMENTE ADITIVA del catálogo D-B
+  (4 → 5 lentes) y del dropdown de industria (7 → 8); reusa los kill-switches `IMPACT_LENS` /
+  `IMPACT_LENS_ARCHITECT` (sin switch nuevo). El bloque del architect enumera la 5ª lente
+  (regenera `_MLDS_ARCHITECT_LENS_PROMPT_SHA256`; el off-path queda intacto) para que el camino
+  industria-default sea coherente con el override docente. Sin nueva clave canónica/state/
+  `case_sanitization`/migración.

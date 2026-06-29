@@ -89,7 +89,8 @@ export type ImpactLens =
     | "financial_roi"
     | "operational_efficiency"
     | "clinical_outcomes"
-    | "learning_outcomes";
+    | "learning_outcomes"
+    | "environmental_outcomes";
 
 export interface CaseFormData {
     courseId: string;

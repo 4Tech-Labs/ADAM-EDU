@@ -31,11 +31,12 @@ from __future__ import annotations
 import unicodedata
 from typing import Literal, cast
 
-# ── Lens keys (the canonical catalog of 4, Issue #437 decision D-B) ────────────
+# ── Lens keys (the canonical catalog of 5, Issue #437 decision D-B + Issue #505) ─
 IMPACT_LENS_FINANCIAL_ROI = "financial_roi"
 IMPACT_LENS_OPERATIONAL_EFFICIENCY = "operational_efficiency"
 IMPACT_LENS_CLINICAL_OUTCOMES = "clinical_outcomes"
 IMPACT_LENS_LEARNING_OUTCOMES = "learning_outcomes"
+IMPACT_LENS_ENVIRONMENTAL_OUTCOMES = "environmental_outcomes"  # Issue #505 (environmental economics)
 
 DEFAULT_IMPACT_LENS = IMPACT_LENS_FINANCIAL_ROI
 
@@ -48,6 +49,7 @@ ImpactLensLiteral = Literal[
     "operational_efficiency",
     "clinical_outcomes",
     "learning_outcomes",
+    "environmental_outcomes",
 ]
 
 # Each lens declares only the VALUE-side framing: a primary metric name and the
@@ -91,11 +93,20 @@ IMPACT_LENS_CATALOG: dict[str, dict[str, object]] = {
             "Equidad del resultado",
         ],
     },
+    IMPACT_LENS_ENVIRONMENTAL_OUTCOMES: {
+        "label": "Resultados ambientales",
+        "primary_metric_name": "valor de servicios ecosistémicos (USD) y costo-efectividad ambiental",
+        "kpi_rows": [
+            "Valor de servicios ecosistémicos (USD)",
+            "Costo por hectárea conservada/restaurada (USD)",
+            "Disposición a pagar agregada de la comunidad (USD)",
+        ],
+    },
 }
 
 IMPACT_LENS_KEYS: frozenset[str] = frozenset(IMPACT_LENS_CATALOG)
 
-# Constrained intake industry (the 7 INDUSTRIAS_OPTIONS values AND their Spanish
+# Constrained intake industry (the 8 INDUSTRIAS_OPTIONS values AND their Spanish
 # display labels, accent/case-normalized) → lens. Unknown / "General" / empty →
 # DEFAULT_IMPACT_LENS. Values and labels both map so the resolver is robust to the
 # form persisting the label (F2) AND to a direct-API caller sending the value.
@@ -120,6 +131,9 @@ _INDUSTRY_LENS_BY_KEY: dict[str, str] = {
     "manufactura": IMPACT_LENS_OPERATIONAL_EFFICIENCY,
     # educacion
     "educacion": IMPACT_LENS_LEARNING_OUTCOMES,
+    # medio ambiente / sector publico (Issue #505 — economía ambiental / valoración contingente)
+    "medio_ambiente": IMPACT_LENS_ENVIRONMENTAL_OUTCOMES,
+    "medio ambiente / sector publico": IMPACT_LENS_ENVIRONMENTAL_OUTCOMES,
 }
 
 
@@ -224,6 +238,7 @@ __all__ = [
     "IMPACT_LENS_OPERATIONAL_EFFICIENCY",
     "IMPACT_LENS_CLINICAL_OUTCOMES",
     "IMPACT_LENS_LEARNING_OUTCOMES",
+    "IMPACT_LENS_ENVIRONMENTAL_OUTCOMES",
     "DEFAULT_IMPACT_LENS",
     "ImpactLensLiteral",
     "IMPACT_LENS_CATALOG",

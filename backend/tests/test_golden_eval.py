@@ -213,7 +213,12 @@ def test_domain_coherence_oracle_on_rebuilt_dechurned_schema() -> None:
 
 # ── Issue #437 Fase 3 — per-lens Impact Lens oracles + gate wiring ────────────
 
-_NON_FINANCIAL_LENSES = ("operational_efficiency", "clinical_outcomes", "learning_outcomes")
+_NON_FINANCIAL_LENSES = (
+    "operational_efficiency",
+    "clinical_outcomes",
+    "learning_outcomes",
+    "environmental_outcomes",
+)
 _FORCED_FINANCIAL_45 = "### 4.5 KPIs\n| KPI | Valor |\n| ROI proyectado (%) | 22 |\n| NPV estimado (USD) | 1000 |\n"
 
 
@@ -237,7 +242,14 @@ def test_lens_kpi_oracle_non_financial_passes_when_clean(lens: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "lens", ["financial_roi", "operational_efficiency", "clinical_outcomes", "learning_outcomes"]
+    "lens",
+    [
+        "financial_roi",
+        "operational_efficiency",
+        "clinical_outcomes",
+        "learning_outcomes",
+        "environmental_outcomes",
+    ],
 )
 def test_value_model_lens_oracle_accepts_every_canonical_key(lens: str) -> None:
     assert check_architect_value_model_lens_valid({"lens": lens}) is True

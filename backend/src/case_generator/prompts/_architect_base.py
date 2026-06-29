@@ -235,10 +235,11 @@ ARCHITECT_IMPACT_LENS_BLOCK = """
 # del caso y reencuádralo SIN tocar el lado del COSTO (que sigue SIEMPRE en USD).
 
 1. Emite el campo `value_model` con:
-   - `lens`: uno de financial_roi, operational_efficiency, clinical_outcomes, learning_outcomes —
-     elige el que mejor refleje el DOMINIO del caso (salud → clinical_outcomes; educación →
-     learning_outcomes; manufactura/logística → operational_efficiency; comercial/financiero/
-     fintech/retail/telecom → financial_roi).
+   - `lens`: uno de financial_roi, operational_efficiency, clinical_outcomes, learning_outcomes,
+     environmental_outcomes — elige el que mejor refleje el DOMINIO del caso (salud →
+     clinical_outcomes; educación → learning_outcomes; manufactura/logística → operational_efficiency;
+     medio ambiente / sostenibilidad / servicios ecosistémicos / valoración ambiental →
+     environmental_outcomes; comercial/financiero/fintech/retail/telecom → financial_roi).
    - `primary_metric_name`: la métrica de VALOR primaria del caso en lenguaje gerencial
      (p.ej. "ROI", "readmisiones evitadas", "retención de estudiantes", "tasa de defecto").
    - `kpi_rows`: 2-3 etiquetas de KPI de valor acordes a la lente.
@@ -247,7 +248,8 @@ ARCHITECT_IMPACT_LENS_BLOCK = """
    NO siempre "mayor ROI". Para `financial_roi` la dimensión de A sigue siendo el ROI; para una
    lente no financiera usa su métrica de valor (p.ej. clinical_outcomes → "mejor resultado clínico
    por costo"; learning_outcomes → "mayor retención de estudiantes"; operational_efficiency →
-   "mayor eficiencia/menor tasa de defecto"). B = menor riesgo y C = mayor velocidad se mantienen.
+   "mayor eficiencia/menor tasa de defecto"; environmental_outcomes → "mayor valor ambiental /
+   servicios ecosistémicos por costo"). B = menor riesgo y C = mayor velocidad se mantienen.
 3. COSTOS EN USD (no negociable, DD3): Exhibit 1 sigue siendo un P&L en USD (Ingresos, Costos,
    EBITDA, Margen, Caja, Inversión). La lente reencuadra solo la NARRATIVA de valor y las opciones,
    NUNCA convierte el P&L ni los Exhibits a unidades no monetarias.

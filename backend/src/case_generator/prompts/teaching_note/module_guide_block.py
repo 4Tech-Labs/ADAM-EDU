@@ -90,6 +90,7 @@ _M4_VALUE_FRAME_BY_LENS: dict[str, tuple[str, str]] = {
     "operational_efficiency": ("valor operativo", "eficiencia, reducción de defectos/downtime"),
     "clinical_outcomes": ("valor clínico", "outcomes evitados, factibilidad de despliegue"),
     "learning_outcomes": ("valor educativo", "retención y aprendizaje"),
+    "environmental_outcomes": ("valor ambiental", "servicios ecosistémicos, factibilidad de despliegue"),
 }
 _M4_VALUE_FRAME_DEFAULT = _M4_VALUE_FRAME_BY_LENS["financial_roi"]
 
