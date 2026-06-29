@@ -19,9 +19,10 @@ never presents) takes two concrete, deterministic shapes:
   contradicts the rate stated in its own ``enunciado``. The production prompt
   hardcodes example numbers ("tasa del evento del 8%", "92% de accuracy", …) that the
   model can copy verbatim instead of the real prevalence; this catches that leak.
-* **EVENT_RATE_VS_CONTRACT** — (ml_ds + clasificación only) the cited event rate
-  diverges from the dataset's real prevalence (``target_event_rate``, the SAME anchor
-  Issue #372 uses for Exhibit 2). ``None`` rate → skipped (business / no contract).
+* **EVENT_RATE_VS_CONTRACT** — the cited event rate diverges from the dataset's real
+  prevalence (``target_event_rate``, the SAME anchor Issue #372 uses for Exhibit 2).
+  Profile-agnostic: fires whenever a rate is present — ml_ds always, and business+clf
+  once Issue #518 calibrates a rate for it. ``None`` rate → skipped (the no-rate path).
 
 Detection precision (zero-FP doctrine, mirrors #360/#372/#377):
 
