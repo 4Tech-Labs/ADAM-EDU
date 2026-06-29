@@ -22,7 +22,7 @@ _MAX_BUSINESS_COST = 1_000_000_000.0
 _MAX_BUSINESS_COST_RATIO = 1_000.0
 
 # Issue F1 — prevalencia del evento objetivo anunciada en Exhibit 2. Un evento de
-# clasificación debe ser una minoría aprendible: piso 1% (≥1 positivo a n=600), techo 50%
+# clasificación debe ser una minoría aprendible: piso 1% (≥10 positivos a n=1000), techo 50%
 # (un evento "raro" no debería ser mayoría; > 0.5 sería el complemento).
 _MIN_TARGET_EVENT_RATE = 0.01
 _MAX_TARGET_EVENT_RATE = 0.50

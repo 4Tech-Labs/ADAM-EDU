@@ -3648,6 +3648,12 @@ _CLUSTERING_SEGMENTATION_COLUMNS: tuple[dict, ...] = (
 # deterministic band-lock tests; gated by `MLDS_CLUSTERING_STRUCTURE` (OFF → 200 generic ml_ds).
 _MLDS_CLUSTERING_MAX_ROWS = 1000
 
+# Row count for the ml_ds + clasificación dataset (Issue #525; 600 → 1000). More rows give LR/RF more
+# signal (AUC equal-or-better, bounded above by the target's noise_factor → no "too-perfect" degeneration).
+# 1000 ≤ 2000, so the notebook GridSearchCV cascade (#240) stays on the full-tuning branch — no behaviour
+# change. Sibling of `_MLDS_CLUSTERING_MAX_ROWS`; monotonic-safe constant, revert = git (no kill-switch).
+_MLDS_CLASSIFICATION_MAX_ROWS = 1000
+
 
 def _build_clustering_fallback_schema(max_rows: int) -> dict:
     """Entity-level segmentation fallback schema for ml_ds + clustering (Issue #452).
@@ -5492,15 +5498,15 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     # (the resolved family, not "") gates that spine.
     _effective_family = (primary_family or "clasificacion") if profile == "ml_ds" else ""
 
-    # ml_ds+clasificacion: 600 filas (Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV).
+    # ml_ds+clasificacion: 1000 filas (Issue #525, antes 600; cascada #240: 1000 ≤ 2000 → full GridSearchCV).
     # ml_ds+clustering: 1000 filas (Issue #468 — entity-level segmentation needs more points than
     #   the 12-D K-Means fit had at 200; recalibrated band). Gated por el switch → OFF = 200 genérico.
     # ml_ds+otras familias: 200 filas — el GridSearchCV size cascade es exclusivo del
-    # notebook de clasificacion; regresion no necesita 600 filas.
+    # notebook de clasificacion; regresion no necesita 1000 filas.
     # business: 100 (midpoint de 80-120; el LLM elige n_rows estrictamente entre 80-120).
     _is_clasificacion_ml = profile == "ml_ds" and _effective_family == "clasificacion"
     if _is_clasificacion_ml:
-        max_rows = 600
+        max_rows = _MLDS_CLASSIFICATION_MAX_ROWS
     elif _effective_family == "clustering" and settings.mlds_clustering_structure:
         max_rows = _MLDS_CLUSTERING_MAX_ROWS
     elif profile == "ml_ds":
