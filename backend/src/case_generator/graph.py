@@ -5258,6 +5258,68 @@ def _is_retention_target_name(name: str, role: str = "") -> bool:
     return (role or "").strip().lower() == "forecasting_target" and "retention" in n
 
 
+# Workforce/HR de-template carve-out (sibling de #382/#507). `_is_retention_target_name` marca
+# `attrition_flag`/`employee_attrition` como retención (token DURO `attrition`), así que el de-churn
+# #382 los saltaba y conservaban el template SaaS de CLIENTES (customer_ltv/plan_tier/payment_failures
+# …) — incoherente para un dataset de RRHH (M2 mutual_info mostraba revenue/churn_rate como predictores
+# de la atrición de EMPLEADOS). La atrición de empleados NO es churn de clientes SaaS. Dos niveles de
+# alta precisión, normalizados sin separadores → robustos a `job_level`/`JobLevel`/`joblevel`:
+#   • ENTIDAD (la entidad ES empleados): solo cuenta en el NOMBRE DEL TARGET. En una FEATURE es ambiguo
+#     — un churn de clientes B2B legítimamente lleva `num_employees` (tamaño de la empresa-cliente).
+#   • ATRIBUTO de un empleado individual: alta precisión en CUALQUIER sitio (target o feature); no
+#     describe a un cliente/empresa.
+# EXCLUYE a propósito tokens ambiguos cliente-también (`tenure`=antigüedad de suscripción,
+# `attrition`/`turnover`=atrición/rotación de CLIENTES, `department`/`salary`/`manager`) → NUNCA se
+# dispara sobre un churn de clientes genuino (cero FP sobre la LÍNEA ROJA churn). Un caso de RRHH sin
+# ninguno de estos tokens degrada de forma segura al comportamiento previo (conserva el template).
+_WORKFORCE_ENTITY_TOKENS: tuple[str, ...] = (
+    "employee", "empleado", "staff", "workforce", "headcount", "plantilla",
+    "personnel", "worker", "trabajador",
+)
+_WORKFORCE_ATTRIBUTE_TOKENS: tuple[str, ...] = (
+    "overtime", "seniority", "absentee", "worklife", "years_at_company", "years_in_role",
+    "job_level", "job_role", "job_title", "job_satisfaction", "job_involvement",
+)
+
+
+def _norm_identifier(text: str | None) -> str:
+    """Minúsculas + sin separadores (snake_case/camelCase/espacios → un token contiguo)."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+_WORKFORCE_ENTITY_TOKENS_NORM: tuple[str, ...] = tuple(
+    _norm_identifier(t) for t in _WORKFORCE_ENTITY_TOKENS
+)
+_WORKFORCE_ATTRIBUTE_TOKENS_NORM: tuple[str, ...] = tuple(
+    _norm_identifier(t) for t in _WORKFORCE_ATTRIBUTE_TOKENS
+)
+
+
+def _is_workforce_attrition_case(contract: dict | None) -> bool:
+    """True si el contrato describe ATRICIÓN DE EMPLEADOS (no churn de clientes SaaS).
+
+    Alta precisión, determinista, 0 LLM, no muta el contrato. Devuelve ``False`` si el contrato es
+    ``None``/vacío o no hay señal de empleados (degradación segura → conserva el template, byte-
+    idéntico al comportamiento previo). Usado SOLO para acotar la LÍNEA ROJA de retención del de-churn
+    (#382): un target retención-por-nombre que ADEMÁS es RRHH sale del early-return y sigue la ruta
+    de-template contract-first del dominio. Un token de ENTIDAD cuenta solo en el nombre del target;
+    un token de ATRIBUTO cuenta en el target o en cualquier feature (ver constantes arriba).
+    """
+    if not contract:
+        return False
+    tgt = contract.get("target_column") or {}
+    target_name = _norm_identifier(tgt.get("name") if isinstance(tgt, dict) else "")
+    if target_name and any(tok in target_name for tok in _WORKFORCE_ENTITY_TOKENS_NORM):
+        return True
+    haystacks = [target_name]
+    for feat in contract.get("feature_columns") or []:
+        if isinstance(feat, dict):
+            haystacks.append(_norm_identifier(feat.get("name")))
+    return any(
+        tok in hs for hs in haystacks if hs for tok in _WORKFORCE_ATTRIBUTE_TOKENS_NORM
+    )
+
+
 def _select_driver_feature(
     contract: dict | None, *, target_name: str | None = None
 ) -> tuple[str, dict | None]:
@@ -5428,6 +5490,7 @@ def _enforce_mlds_classification_schema(
     primary_family: str | None,
     enabled: bool = True,
     detemplate_cross_section: bool = True,
+    detemplate_workforce: bool = True,
 ) -> dict:
     """De-churna la SEÑAL del target para ml_ds + clasificación NO-retención (Issue #382).
 
@@ -5458,6 +5521,15 @@ def _enforce_mlds_classification_schema(
     ambiental, scoring, aprobación) esas columnas son residuo de plantilla, no datos. Tienen la MISMA
     protección que el resto: una columna declarada feature del contrato (panel de empresa legítimo)
     NUNCA se elimina. Off → comportamiento #382 byte-idéntico (base financiera conservada).
+
+    De-template workforce (``detemplate_workforce``, kill-switch ``MLDS_DETEMPLATE_WORKFORCE``): la
+    LÍNEA ROJA de retención (early-return byte-idéntico) se ACOTA a churn de CLIENTES SaaS. Un target
+    retención-por-nombre que ADEMÁS es atrición de EMPLEADOS (``_is_workforce_attrition_case``: tokens
+    RRHH de alta precisión en el nombre del target/features) SALE del early-return y sigue esta misma
+    ruta de-template: re-apunta el target a un driver de DOMINIO (RRHH) y elimina el template SaaS de
+    clientes, de modo que el dataset hable de RRHH (antigüedad/satisfacción/nivel del puesto) y no de
+    churn_rate/customer_ltv. Off → todo target retención conserva el template (#382/#507 byte-idéntico).
+    El churn de clientes genuino NUNCA se ve afectado (cero FP del predicado sobre la línea roja).
     """
     if not enabled or profile != "ml_ds":
         return schema
@@ -5472,8 +5544,12 @@ def _enforce_mlds_classification_schema(
     contract_target = _safe_contract_target_name(contract)
     if not contract_target:
         return schema
-    # LÍNEA ROJA: churn/retención conserva el template intacto (byte-idéntico).
-    if _is_retention_target_name(contract_target):
+    # LÍNEA ROJA: churn de CLIENTES SaaS conserva el template intacto (byte-idéntico). Carve-out
+    # workforce: la atrición de EMPLEADOS es retención-por-nombre pero NO churn de clientes → sale del
+    # early-return y sigue la ruta de-template del dominio (kill-switch MLDS_DETEMPLATE_WORKFORCE).
+    if _is_retention_target_name(contract_target) and not (
+        detemplate_workforce and _is_workforce_attrition_case(contract)
+    ):
         return schema
 
     columns = [dict(c) for c in schema.get("columns", [])]
@@ -6144,6 +6220,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 schema_result, contract, profile=profile, primary_family=primary_family,
                 enabled=settings.mlds_dechurn_signal,
                 detemplate_cross_section=settings.mlds_detemplate_cross_section,
+                detemplate_workforce=settings.mlds_detemplate_workforce,
             )
             # Issue #506 — prior de dirección económica: reescribe el target ml_ds+clf de-churnado a un
             # acoplamiento multi-driver con SIGNO (expected_direction del contrato) para que el
@@ -6235,6 +6312,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         fallback_schema, contract, profile=profile, primary_family=primary_family,
         enabled=settings.mlds_dechurn_signal,
         detemplate_cross_section=settings.mlds_detemplate_cross_section,
+        detemplate_workforce=settings.mlds_detemplate_workforce,
     )
     # Issue #506 — mismo prior de dirección económica en el fallback (red de seguridad).
     fallback_schema = _enforce_mlds_directional_target(
