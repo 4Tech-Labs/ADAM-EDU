@@ -182,6 +182,24 @@ class Settings(BaseSettings):
     # is unaffected. The profile emission itself is defensive (nested try, finite-filter) and never
     # breaks the metrics marker.
     mlds_clustering_notebook_profiles: bool = True
+    # Extend the 2 output-grounded M3 questions to ml_ds + clasificación single-model (Issue #493).
+    # When true (default), the SAME `m3_notebook_questions_generator` node ALSO serves an
+    # ml_ds + clasificación case whose notebook EXECUTED, for the LIVE single-model variants
+    # (lr_only / rf_only): Q4 reads the real AUC vs the DummyClassifier baseline + the confusion
+    # matrix (FP vs FN, qualitative — the counts are not in `m3_metrics_summary`); Q5 reads the top
+    # driver feature + direction (odds ratios for LR / permutation importances for RF) and ties it to
+    # the cost matrix + the M1 dilemma. `solucion_esperada` is anchored to the REAL executed metrics
+    # (`auc_lr`/`auc_rf`, `f1_macro`, `prevalence`, `top_features`; the DummyClassifier baseline is the
+    # node-injected definitional 0.5); a grounding guard
+    # (`detect_unanchored_adjacent_metrics` + `detect_unselected_model_mentions`) reprompts-once-then-
+    # omits a fabricated AUC/F1 or an unselected-model leak. `lr_rf_contrast` is OUT OF SCOPE (hidden
+    # in the form; the node omits the 2 there). The master switch `M3_NOTEBOOK_QUESTIONS` still gates
+    # the whole node; this is a GRANULAR revert of the classification branch only. Set
+    # M3_NOTEBOOK_QUESTIONS_CLASSIFICATION=false → the classification branch noops (byte-identical to
+    # the 3 questions), clustering (#489/#494) intact (instant env-only revert, no redeploy). Gate:
+    # profile=="ml_ds" AND family=="clasificacion" AND variant lr_only/rf_only AND a finite
+    # selected-model AUC; every other cohort / depth is unaffected (the node noops).
+    m3_notebook_questions_classification: bool = True
     # De-supervise the ml_ds + clustering DATA + notebook prose (Issue #466). When true (default),
     # (a) `_enforce_mlds_clustering_no_target` deterministically strips any leaked supervised target
     # column (e.g. an LLM-hallucinated `dummy_target`, or a contract `target_column` injected by the

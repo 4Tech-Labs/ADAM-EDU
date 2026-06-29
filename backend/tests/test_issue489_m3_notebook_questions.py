@@ -2,8 +2,9 @@
 
 Pure-Python unit tests (no DB, no network; the LLM is a fake queue). Cover:
   1. Gate: ON + executed clustering notebook → 2 questions (numero 4/5), Q4 cites the REAL silhouette.
-  2. Noop paths (byte-identical 3 questions): kill-switch off, non-clustering, degraded notebook,
-     missing/None metrics, no finite silhouette, wrong output_depth.
+  2. Noop paths (byte-identical 3 questions): kill-switch off, business profile, a classification
+     job WITHOUT executed classification metrics (the #493 branch returns None — no auc), degraded
+     notebook, missing/None metrics, no finite silhouette, wrong output_depth.
   3. Deterministic post-process: numero forced to 4/5 regardless of the LLM; <2 returned → omit.
   4. Grounding guard (reuses #469 detect_unanchored_silhouette): fabricated silhouette → reprompt;
      fixed → kept; still fabricated → omit (the 2 are dropped, the job never fails).
@@ -154,7 +155,14 @@ class TestGateNoop:
         monkeypatch.setattr(graph_module.settings, "m3_notebook_questions", False)
         self._assert_noop(monkeypatch, _clustering_state())
 
-    def test_non_clustering_classification(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_classification_without_executed_metrics_noops(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Post-#493 a classification job IS in scope for this node, but only with executed
+        # classification metrics. This fixture carries clustering-shaped metrics (silhouette, no
+        # `auc_lr`), so `_plan_classification_notebook_questions` returns None → the node noops and
+        # the 3 conceptual questions are untouched. The positive classification path is covered in
+        # test_issue493_clf_notebook_questions.py.
         self._assert_noop(monkeypatch, _clustering_state(algoritmos=["Logistic Regression"]))
 
     def test_business_profile(self, monkeypatch: pytest.MonkeyPatch) -> None:
