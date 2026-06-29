@@ -157,11 +157,46 @@ def test_currency_noop_when_ceiling_none() -> None:
     assert not _currency(v), v
 
 
-def test_currency_generic_segment_anchor_without_entity() -> None:
-    # The per-segment marker needs no entity word → works even without a descriptor.
+def test_currency_us_dollar_prefix_form() -> None:
+    v = validate_m1_dataset_coherence(
+        "Cada centro genera US$135.000.",
+        entity_descriptor=_CENTRO, expected_population=1000, monetary_ceiling=5000.0,
+    )
+    assert _currency(v), v
+
+
+def test_currency_no_anchor_without_entity_root() -> None:
+    # No entity descriptor → no per-entity anchor → CURRENCY no-ops (per-segment is not anchored).
     v = validate_m1_dataset_coherence(
         "Cada segmento factura $135.000.",
         entity_descriptor=None, expected_population=None, monetary_ceiling=5000.0,
+    )
+    assert not _currency(v), v
+
+
+def test_currency_generic_business_terms_not_anchored() -> None:
+    # Adversarial FP regression: generic segment/business words ("grupo"/"unidad"/"cluster"/
+    # "segmento") are NOT per-entity anchors when the case entity is something else ("centro").
+    # A legitimate company aggregate over them must NOT be flagged (it would degrade a good case).
+    for prose in (
+        "La empresa invierte $1.2M anuales y segmenta el gasto por grupo demografico.",
+        "El presupuesto total de $800.000 se asigna por unidad organizacional.",
+        "El mercado proyecta $10M para cada cluster competitivo.",
+        "Se factura $135.000 por segmento de mercado.",
+    ):
+        v = validate_m1_dataset_coherence(
+            prose, entity_descriptor=_CENTRO, expected_population=1000, monetary_ceiling=5000.0,
+        )
+        assert not _currency(v), prose
+
+
+def test_currency_anchors_on_actual_entity_when_it_is_grupo() -> None:
+    # When the case's ACTUAL entity IS "grupo", a per-grupo figure over the cap IS a per-entity
+    # claim → correctly flagged. The anchor keys on the real unit of analysis, not a fixed word.
+    v = validate_m1_dataset_coherence(
+        "Cada grupo encuestado genera $135.000.",
+        entity_descriptor={"singular": "grupo", "plural": "grupos", "snake_prefix": "grupo"},
+        expected_population=1000, monetary_ceiling=5000.0,
     )
     assert _currency(v), v
 
@@ -255,11 +290,12 @@ def test_all_inputs_none_is_clean() -> None:
 
 
 def test_malformed_descriptor_does_not_raise_h5() -> None:
+    # Empty/malformed roots → entity/pop checks skip AND CURRENCY has no anchor → clean [].
     for bad in ({}, {"singular": ""}, {"snake_prefix": 123}, {"plural": None}):
         assert validate_m1_dataset_coherence(
             "El estudio analiza 200 clientes.",
             entity_descriptor=bad, expected_population=1000, monetary_ceiling=5000.0,
-        ) == [] or True  # never raises; empty roots → entity/pop skip
+        ) == []
 
 
 def test_empty_or_non_string_prose_is_clean() -> None:
@@ -499,6 +535,38 @@ def test_architect_log_only_noop_when_off(monkeypatch: pytest.MonkeyPatch) -> No
         company_profile="El estudio analiza 200 clientes.", dilema_brief="",
     )
     assert not warnings
+
+
+def test_architect_log_only_no_warning_on_coherent_prose(
+    monkeypatch: pytest.MonkeyPatch, _guard_on: None
+) -> None:
+    # GREEN path: coherent architect prose → zero warnings (guards against spurious logging).
+    warnings: list = []
+    monkeypatch.setattr(graph.logger, "warning", lambda *a, **k: warnings.append((a, k)))
+    graph._log_m1_dataset_coherence_architect(
+        state=dict(_ML_DS_CLUSTERING), entity_descriptor=_CENTRO,
+        company_profile="Cada centro muestra un valor relativo alto en su cuartil superior.",
+        dilema_brief="El dataset reune 1.000 centros de distribucion.",
+    )
+    assert not warnings
+
+
+def test_architect_log_only_best_effort_on_validator_error(
+    monkeypatch: pytest.MonkeyPatch, _guard_on: None
+) -> None:
+    # Best-effort: a validator exception in the architect log path must be swallowed, never raised.
+    warnings: list = []
+    monkeypatch.setattr(graph.logger, "warning", lambda *a, **k: warnings.append(a))
+
+    def _boom(*a: object, **k: object) -> list[str]:
+        raise RuntimeError("synthetic validator failure")
+
+    monkeypatch.setattr(graph, "validate_m1_dataset_coherence", _boom)
+    graph._log_m1_dataset_coherence_architect(
+        state=dict(_ML_DS_CLUSTERING), entity_descriptor=_CENTRO,
+        company_profile="Cada centro genera $135.000 por centro.", dilema_brief="",
+    )  # must not raise
+    assert any("best-effort" in str(a) for a in warnings)
 
 
 def test_wiring_source_scan() -> None:

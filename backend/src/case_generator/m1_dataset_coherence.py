@@ -15,11 +15,14 @@ validators stay consistent on Spanish thousands/decimal parsing.
 Three checks (the CALLER decides what to do with each, by prefix):
 
 * ``CURRENCY_ON_FEATURE:`` — **reprompt-grade** (the guarantee). A USD magnitude
-  (``$``/``US$``/``USD``) sitting in a per-entity / per-segment distributive phrase
-  whose value exceeds the dataset's monetary scale ceiling by a wide factor (default
-  ×3). This is the documented LIVE defect (``"$135.000/mes por centro"`` vs a
-  ``monetary_value`` capped at 5000). Only currency-marked figures count, so a bare
-  per-entity count (``"135.000 unidades por centro"``) is never flagged.
+  (``$``/``US$``/``USD``) sitting in a per-ENTITY distributive phrase (anchored on the
+  case's actual entity root — "por centro", "cada cliente") whose value exceeds the
+  dataset's monetary scale ceiling by a wide factor (default ×3). This is the documented
+  LIVE defect (``"$135.000/mes por centro"`` vs a ``monetary_value`` capped at 5000). Only
+  currency-marked figures count, so a bare per-entity count (``"135.000 unidades por
+  centro"``) is never flagged. Per-SEGMENT figures are deliberately NOT anchored: a segment
+  is an aggregate of many entities whose total legitimately exceeds the per-entity cap, so it
+  cannot be deterministically bounded — that case is covered by the #514 prevention hint.
 * ``ENTITY_MISMATCH:`` / ``POPULATION_MISMATCH:`` — **logger-only** (observability).
   The #513 hint already commands the exact entity + count by construction, and a
   closed unit-noun lexicon / exact-count match would false-positive on legitimate
@@ -90,11 +93,6 @@ _HEDGE_TERMS: tuple[str, ...] = (
     "casi", "hasta", "al menos", "menos de", "mas o menos", "cercano a",
 )
 
-# Generic per-segment markers that do not need the entity word (clustering language).
-_GENERIC_SEGMENT_TERMS: tuple[str, ...] = (
-    "segmento", "segmentos", "cluster", "clusters", "grupo", "grupos", "unidad",
-)
-
 # Substrings (lowercase) in a column's name/description that mark it as MONETARY. Shared by
 # the runtime ceiling resolver (over the deterministic RFM constant) and the golden oracle
 # (over the real post-job schema) so both compute the SAME ceiling — no fixed feature list (I3).
@@ -127,7 +125,9 @@ def monetary_ceiling_from_columns(columns: Iterable[Mapping[str, object]]) -> fl
 
 # Bounded number grammar (no unbounded digit run → linear matching, ReDoS-safe).
 _NUM = r"\d{1,3}(?:[.,]\d{3}){0,4}(?:[.,]\d{1,2})?|\d{1,9}(?:[.,]\d{1,2})?"
-_MAG = r"MM|M|K|mil|millones|mill[oó]n|millon"
+# Magnitude suffix. The text is accent-folded before matching, so no accented form is needed
+# (``millón`` → ``millon``); ``_mag_scale`` maps every alternative to its scale.
+_MAG = r"MM|M|K|mil|millones|millon"
 
 # CURRENCY: USD-marked figure. Two surgical forms — ``$``/``US$``/``USD`` PREFIX, or a
 # ``USD`` SUFFIX (post-#377 the narrative may be relabeled to the suffix form). A bare
@@ -209,14 +209,22 @@ def _clause_window(folded: str, start: int, end: int, radius: int = _ANCHOR_WIND
     return back + " " + fwd
 
 
-def _build_anchor_re(entity_descriptor: Mapping[str, object] | None) -> re.Pattern[str]:
-    """Per-entity / per-segment distributive marker regex (folded terms)."""
-    terms = list(_GENERIC_SEGMENT_TERMS)
-    for r in _entity_roots(entity_descriptor):
-        # Match the root and its plural (root + 's'/'es') without a fixed list.
-        terms.append(r)
-    alt = "|".join(re.escape(t) for t in terms if t)
-    # ``por (cada )? X`` | ``cada X`` | ``/X`` | ``X`` directly after the figure span.
+def _build_anchor_re(roots: list[str]) -> re.Pattern[str] | None:
+    """Per-ENTITY distributive marker regex from the case's actual entity roots (folded).
+
+    Appends the bare root only; the alternation has NO trailing word-boundary, so the root
+    also prefix-matches its plural ("por centro" matches inside "por centros") without a fixed
+    list. Anchors CURRENCY ONLY on the real unit of analysis ("por centro", "cada cliente"),
+    NOT on generic segment words ("grupo"/"unidad"/"cluster") — those collide with common
+    business phrasings ("por grupo demográfico", "por unidad organizacional") AND a per-segment
+    figure is an AGGREGATE of many entities whose total legitimately exceeds the per-entity cap.
+    The per-segment case is left to the #514 prevention hint (not deterministically boundable).
+    Returns ``None`` when there are no roots → CURRENCY no-ops (no per-entity anchor possible).
+    """
+    alt = "|".join(re.escape(r) for r in roots if r)
+    if not alt:
+        return None
+    # ``por (cada )? X`` | ``cada X`` | ``/X`` near the figure span.
     return re.compile(
         r"(?:\bpor\s{1,3}(?:cada\s{1,3})?|\bcada\s{1,3}|/\s{0,2})(?:" + alt + r")",
         re.IGNORECASE,
@@ -225,11 +233,13 @@ def _build_anchor_re(entity_descriptor: Mapping[str, object] | None) -> re.Patte
 
 def _check_currency(
     folded: str,
-    entity_descriptor: Mapping[str, object] | None,
+    roots: list[str],
     monetary_ceiling: float,
     currency_factor: float,
 ) -> list[str]:
-    anchor_re = _build_anchor_re(entity_descriptor)
+    anchor_re = _build_anchor_re(roots)
+    if anchor_re is None:  # no entity root → no per-entity anchor → honest no-op
+        return []
     threshold = currency_factor * monetary_ceiling
     out: list[str] = []
     for regex in (_CURRENCY_PREFIX_RE, _CURRENCY_SUFFIX_RE):
@@ -241,11 +251,11 @@ def _check_currency(
             value = mantissa * (_mag_scale(mag) if mag else 1.0)
             if value <= threshold:
                 continue
-            # Require a per-entity / per-segment anchor in the SAME clause so a market-total
-            # ("$500M") or an aggregate in a neighboring sentence is never flagged.
+            # Require a per-entity anchor in the SAME clause so a market-total ("$500M") or an
+            # aggregate in a neighboring sentence is never flagged.
             if anchor_re.search(_clause_window(folded, m.start(), m.end())):
                 out.append(
-                    f"{CURRENCY_ON_FEATURE} '{m.group(0).strip()}' por-entidad/segmento "
+                    f"{CURRENCY_ON_FEATURE} '{m.group(0).strip()}' por-entidad "
                     f"excede la escala del dataset (techo {monetary_ceiling:g} USD, "
                     f"x{currency_factor:g})"
                 )
@@ -316,10 +326,10 @@ def validate_m1_dataset_coherence(
                 _check_entity_population(folded, roots, expected_population)
             )
         if isinstance(monetary_ceiling, (int, float)) and monetary_ceiling > 0:
+            # CURRENCY anchors on the entity root (per-individual-entity); ``roots`` empty →
+            # no anchor → no-op (per-segment aggregates are left to the #514 prompt hint).
             violations.extend(
-                _check_currency(
-                    folded, entity_descriptor, float(monetary_ceiling), currency_factor
-                )
+                _check_currency(folded, roots, float(monetary_ceiling), currency_factor)
             )
         # Order-preserving de-dup (a repeated phrase yields one violation).
         seen: set[str] = set()
