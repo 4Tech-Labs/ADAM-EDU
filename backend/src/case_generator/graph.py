@@ -240,6 +240,11 @@ from case_generator.m1_grounding import (
     validate_questions_exhibit_coherence,
 )
 from case_generator.m1_grounding import strip_latex_math as _strip_latex_math
+from case_generator.m1_dataset_coherence import (
+    CURRENCY_ON_FEATURE,
+    monetary_ceiling_from_columns,
+    validate_m1_dataset_coherence,
+)
 from case_generator.m2_grounding import (
     detect_chart_id_leak,
     relabel_chart_ids_in_prose,
@@ -1592,6 +1597,16 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             else None
         )
 
+        # Issue #515 — logger-only M1↔dataset coherence on the architect prose. Receives the
+        # just-computed entity_descriptor_dict EXPLICITLY (it is NOT yet in state — H3). No
+        # reprompt, no mutation (the writer is the guarantee); best-effort, never fails the job.
+        _log_m1_dataset_coherence_architect(
+            state=state,
+            entity_descriptor=entity_descriptor_dict,
+            company_profile=result.company_profile,
+            dilema_brief=result.dilema_brief,
+        )
+
         return {
             "current_agent": "case_architect",
             "value_model": value_model_dict,
@@ -1726,6 +1741,162 @@ def _extract_business_cost_matrix(state: ADAMState) -> dict | None:
         return None
     matrix = contract.get("business_cost_matrix")
     return matrix if isinstance(matrix, dict) else None
+
+
+# ── Issue #515 — M1↔dataset coherence (the deterministic GUARANTEE) ───────────
+# CURRENCY violations (per-entity $ the clustering dataset can't back) are reprompt-grade;
+# ENTITY/POPULATION are logger-only (the #513 hint prevents them by construction and a
+# closed-lexicon/exact-count reprompt would degrade correct narratives — E1). Concatenated,
+# never .format (the violation bullets carry figures/braces).
+_M1_DATASET_REPROMPT_HEADER = (
+    "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA CON EL DATASET\n"
+    "Tu salida anterior citó una cifra monetaria absoluta por-entidad o por-segmento que el "
+    "dataset de este caso NO respalda (cada entidad tiene un valor a escala individual, no de "
+    "empresa). Reescribe la narrativa COMPLETA expresando el valor por-entidad/segmento de forma "
+    "CUALITATIVA o RELATIVA (cuartiles, índices, alto/medio/bajo), o dentro de la escala del "
+    "dato; NUNCA inventes un monto absoluto por-entidad. El Exhibit 1 (P&L de la empresa, "
+    "agregado) se conserva intacto. Incoherencias detectadas:\n"
+)
+
+
+def _m1_dataset_coherence_active(state: ADAMState) -> bool:
+    """Gate for the #515 guard: kill-switch ON + STRUCTURE ON + ml_ds clustering (STRICT).
+
+    The STRUCTURE gate is load-bearing: with ``MLDS_CLUSTERING_STRUCTURE`` OFF the dataset is a
+    generic 200-row ml_ds schema (not the RFM fallback), so the deterministic ceiling/population
+    do not hold — the guard must no-op (the issue's dependency invariant).
+    """
+    return bool(
+        settings.mlds_clustering_m1_coherence_guard
+        and settings.mlds_clustering_structure
+        and _is_ml_ds_clustering(state)
+    )
+
+
+def _resolve_m1_dataset_monetary_ceiling() -> float | None:
+    """Per-entity monetary scale ceiling for the deterministic clustering RFM schema.
+
+    Delegates to the shared ``monetary_ceiling_from_columns`` over ``_CLUSTERING_SEGMENTATION_
+    COLUMNS`` (the SAME deterministic source ``_build_clustering_fallback_schema`` consumes) — so
+    the runtime guard and the golden oracle compute the ceiling identically; no fixed feature list
+    (I3). Returns ``None`` when no monetary column is found → CURRENCY no-ops honestly.
+    """
+    return monetary_ceiling_from_columns(_CLUSTERING_SEGMENTATION_COLUMNS)
+
+
+def _apply_m1_dataset_coherence_writer(
+    *, llm: Any, prompt: str, state: ADAMState, narrativa_raw: str
+) -> str:
+    """Validate + reprompt-once-then-DEGRADE the M1 narrative against the dataset (Issue #515).
+
+    Gated to ml_ds + clustering with STRUCTURE on (byte-identical no-op otherwise). Only the
+    CURRENCY_ON_FEATURE class reprompts (the documented $135k/center defect); ENTITY/POPULATION
+    are logged, never rewritten (E1). Best-effort: any error keeps the best narrative; never
+    raises, never fails the job.
+    """
+    if not _m1_dataset_coherence_active(state):
+        return narrativa_raw
+    try:
+        entity = state.get("entity_descriptor")
+        entity = entity if isinstance(entity, dict) else None
+        ceiling = _resolve_m1_dataset_monetary_ceiling()
+        violations = validate_m1_dataset_coherence(
+            narrativa_raw,
+            entity_descriptor=entity,
+            expected_population=_MLDS_CLUSTERING_MAX_ROWS,
+            monetary_ceiling=ceiling,
+        )
+        if not violations:
+            return narrativa_raw
+        currency = [v for v in violations if v.startswith(CURRENCY_ON_FEATURE)]
+        other = [v for v in violations if not v.startswith(CURRENCY_ON_FEATURE)]
+        if other:  # ENTITY/POPULATION — logger-only (E1), narrative untouched
+            logger.warning(
+                "[case_writer] coherencia M1↔dataset (entity/población) — solo log",
+                extra={
+                    "node": "case_writer",
+                    "violations": other,
+                    "case_id": state.get("case_id"),
+                },
+            )
+        if not currency:
+            return narrativa_raw
+        bullet_list = "\n".join(f"- {v}" for v in currency)
+        print(
+            f"[case_writer] Incoherencia moneda↔dataset M1 detectada: {currency}. "
+            "Reprompt explícito (1/1)."
+        )
+        reprompt = prompt + _M1_DATASET_REPROMPT_HEADER + bullet_list
+        corrected = sanitize_markdown(_extract_text(llm.invoke(reprompt)))
+        currency_2 = [
+            v
+            for v in validate_m1_dataset_coherence(
+                corrected,
+                entity_descriptor=entity,
+                expected_population=_MLDS_CLUSTERING_MAX_ROWS,
+                monetary_ceiling=ceiling,
+            )
+            if v.startswith(CURRENCY_ON_FEATURE)
+        ]
+        if not currency_2:
+            print("[case_writer] Reprompt moneda↔dataset M1 OK")
+            return corrected
+        logger.warning(
+            "[case_writer] coherencia moneda↔dataset M1 degradada tras reprompt",
+            extra={
+                "node": "case_writer",
+                "violations": currency_2,
+                "case_id": state.get("case_id"),
+            },
+        )
+        # DEGRADE: keep whichever pass has fewer CURRENCY violations.
+        return corrected if len(currency_2) < len(currency) else narrativa_raw
+    except Exception as exc:  # best-effort — a validator bug must never fail M1
+        logger.warning(
+            "[case_writer] validador coherencia M1↔dataset falló (best-effort): %s",
+            exc,
+            extra={"node": "case_writer", "case_id": state.get("case_id")},
+        )
+        return narrativa_raw
+
+
+def _log_m1_dataset_coherence_architect(
+    *,
+    state: ADAMState,
+    entity_descriptor: dict | None,
+    company_profile: str,
+    dilema_brief: str,
+) -> None:
+    """Logger-only M1↔dataset coherence on the architect prose (Issue #515, D1).
+
+    Observability of WHERE a contradiction originates; NO reprompt, NO mutation (the writer is
+    the guarantee). Receives ``entity_descriptor`` EXPLICITLY — at ``case_architect`` time it is
+    being returned, NOT yet in ``state`` (H3). Best-effort: never raises.
+    """
+    if not _m1_dataset_coherence_active(state):
+        return
+    try:
+        violations = validate_m1_dataset_coherence(
+            f"{company_profile or ''}\n{dilema_brief or ''}",
+            entity_descriptor=entity_descriptor if isinstance(entity_descriptor, dict) else None,
+            expected_population=_MLDS_CLUSTERING_MAX_ROWS,
+            monetary_ceiling=_resolve_m1_dataset_monetary_ceiling(),
+        )
+        if violations:
+            logger.warning(
+                "[case_architect] coherencia M1↔dataset en prosa del architect — solo log",
+                extra={
+                    "node": "case_architect",
+                    "violations": violations,
+                    "case_id": state.get("case_id"),
+                },
+            )
+    except Exception as exc:  # best-effort
+        logger.warning(
+            "[case_architect] validador coherencia M1↔dataset falló (best-effort): %s",
+            exc,
+            extra={"node": "case_architect", "case_id": state.get("case_id")},
+        )
 
 
 def _invoke_m1_writer_with_exhibit_coherence(
@@ -2230,6 +2401,12 @@ def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
         response = llm.invoke(prompt)
         narrativa_raw = sanitize_markdown(_extract_text(response))
         narrativa_raw = _invoke_m1_writer_with_exhibit_coherence(
+            llm=llm, prompt=prompt, state=state, narrativa_raw=narrativa_raw
+        )
+        # Issue #515 — M1↔dataset coherence GUARANTEE (ml_ds+clustering). Reprompts-once-then-
+        # DEGRADE on a per-entity currency fabrication the dataset can't back; ENTITY/POPULATION
+        # are logger-only. No-op (byte-identical) for #360's clf cohort and every other case.
+        narrativa_raw = _apply_m1_dataset_coherence_writer(
             llm=llm, prompt=prompt, state=state, narrativa_raw=narrativa_raw
         )
         print(f"[case_writer] narrativa={len(narrativa_raw)} chars")
@@ -3647,6 +3824,12 @@ _CLUSTERING_SEGMENTATION_COLUMNS: tuple[dict, ...] = (
 # via `_CLUSTERING_BLOB_SPREAD_FRAC` (0.115). Single source shared by `schema_designer` and the
 # deterministic band-lock tests; gated by `MLDS_CLUSTERING_STRUCTURE` (OFF → 200 generic ml_ds).
 _MLDS_CLUSTERING_MAX_ROWS = 1000
+
+# Row count for the ml_ds + clasificación dataset (Issue #525; 600 → 1000). More rows give LR/RF more
+# signal (AUC equal-or-better, bounded above by the target's noise_factor → no "too-perfect" degeneration).
+# 1000 ≤ 2000, so the notebook GridSearchCV cascade (#240) stays on the full-tuning branch — no behaviour
+# change. Sibling of `_MLDS_CLUSTERING_MAX_ROWS`; monotonic-safe constant, revert = git (no kill-switch).
+_MLDS_CLASSIFICATION_MAX_ROWS = 1000
 
 
 def _build_clustering_fallback_schema(max_rows: int) -> dict:
@@ -5492,15 +5675,15 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     # (the resolved family, not "") gates that spine.
     _effective_family = (primary_family or "clasificacion") if profile == "ml_ds" else ""
 
-    # ml_ds+clasificacion: 600 filas (Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV).
+    # ml_ds+clasificacion: 1000 filas (Issue #525, antes 600; cascada #240: 1000 ≤ 2000 → full GridSearchCV).
     # ml_ds+clustering: 1000 filas (Issue #468 — entity-level segmentation needs more points than
     #   the 12-D K-Means fit had at 200; recalibrated band). Gated por el switch → OFF = 200 genérico.
     # ml_ds+otras familias: 200 filas — el GridSearchCV size cascade es exclusivo del
-    # notebook de clasificacion; regresion no necesita 600 filas.
+    # notebook de clasificacion; regresion no necesita 1000 filas.
     # business: 100 (midpoint de 80-120; el LLM elige n_rows estrictamente entre 80-120).
     _is_clasificacion_ml = profile == "ml_ds" and _effective_family == "clasificacion"
     if _is_clasificacion_ml:
-        max_rows = 600
+        max_rows = _MLDS_CLASSIFICATION_MAX_ROWS
     elif _effective_family == "clustering" and settings.mlds_clustering_structure:
         max_rows = _MLDS_CLUSTERING_MAX_ROWS
     elif profile == "ml_ds":

@@ -288,6 +288,13 @@ class NodeEvalInputs:
     # target-naming warning. RED control: a warnings list with a ``target '…'`` or
     # ``target_semantic_mismatch`` entry fails.
     clustering_no_target_warning_ok: bool = True
+    # Issue #515: the M1 narrative does not contradict the deterministic clustering dataset — no
+    # per-entity/per-segment USD figure beyond the monetary scale ceiling, no wrong entity/count.
+    # True (n/a) for non-clustering jobs / absent inputs. Computed via
+    # ``check_m1_dataset_coherence``; gate-protects against a regression that ships a narrative
+    # citing money the CSV can't back. RED control: a narrative with a per-entity $ above the
+    # ceiling (or the kill-switch-off path that lets it through) fails.
+    m1_dataset_coherence_ok: bool = True
 
 
 @dataclass
@@ -439,6 +446,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             "clustering narrative failure: a data_gap_warning names a stripped supervised target, "
             "leaking a column absent from the CSV into M2 EDA / M3-content"
         )
+    if not r.m1_dataset_coherence_ok:
+        reasons.append(
+            "M1 dataset coherence failure: the narrative cites a per-entity/per-segment money "
+            "figure (or entity/population) the deterministic clustering dataset cannot back (Issue #515)"
+        )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -448,6 +460,44 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             f"pairwise Pro-win {r.pairwise_pro_win_rate:.2f} > {PAIRWISE_MAX_PRO_WIN:.2f}"
         )
     return GateResult(node=r.node, passed=not reasons, reasons=reasons)
+
+
+# ── Issue #515 — deterministic M1↔dataset coherence oracle ───
+
+
+def check_m1_dataset_coherence(
+    narrative: str | None,
+    *,
+    entity_descriptor: dict | None,
+    rows: list | None,
+    dataset_schema: dict | None,
+) -> bool:
+    """Pure oracle (Issue #515): does the M1 narrative honor the clustering dataset's reality?
+
+    Reuses the production validator (single source of truth): coherent iff
+    ``validate_m1_dataset_coherence`` finds no violation. Runs POST-job, so it feeds the validator
+    the REAL dataset — ``expected_population = len(rows)`` and the monetary ceiling computed by the
+    SAME shared ``monetary_ceiling_from_columns`` the runtime guard uses (over the real schema).
+    True (n/a) when narrative / rows / schema are absent (non-clustering job / no dataset). RED
+    control: a narrative citing a per-entity $ above the ceiling ("$135.000 por centro" vs a 5000
+    cap), or the kill-switch-off path that lets it through, yields a violation → False. No LLM /
+    network / API key. Function-level imports keep this support module light.
+    """
+    if not narrative or not rows or not isinstance(dataset_schema, dict):
+        return True
+    from case_generator.m1_dataset_coherence import (
+        monetary_ceiling_from_columns,
+        validate_m1_dataset_coherence,
+    )
+
+    columns = dataset_schema.get("columns") or []
+    violations = validate_m1_dataset_coherence(
+        narrative,
+        entity_descriptor=entity_descriptor if isinstance(entity_descriptor, dict) else None,
+        expected_population=len(rows),
+        monetary_ceiling=monetary_ceiling_from_columns(columns),
+    )
+    return not violations
 
 
 # ── Issue #480 — deterministic LaTeX-math-free narrative oracle ───
