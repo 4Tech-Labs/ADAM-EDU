@@ -130,6 +130,14 @@ class NodeEvalInputs:
     # re-invites benchmark estimates fails the golden gate. (The metric-anchoring + unselected-model
     # guarantees are unit-tested — they require per-job metrics/variant fixtures the golden set lacks.)
     m4_charts_no_fabrication_ok: bool = True
+    # ml_ds + clasificación M4 cost-of-errors chart (when present) plots ONLY the REAL contract costs.
+    # The decision-charts reframe builds Gráfico 2 DETERMINISTICALLY from business_cost_matrix (fp/fn),
+    # so a `python_builder` cost chart whose bar values diverge from the real fp_cost/fn_cost is a
+    # regression (e.g. a future change that lets the LLM author it). True (n/a) for non-ml_ds+clf jobs,
+    # an absent cost matrix, or no cost chart. Computed via ``check_m4_classification_cost_chart_grounded``.
+    # Trivially green by construction today; the teeth are in test_m4_classification_decision_charts
+    # unit RED/GREEN (the golden set lacks a per-job cost-matrix fixture).
+    m4_classification_cost_chart_grounded_ok: bool = True
     # M4 narrative avoids the benchmark-fabrication disclaimer ("estimaciones de benchmarks de
     # industria"), for both profiles / all families (Issue #436). True (n/a) when a job carries no M4
     # narrative. Computed via ``check_m4_narrative_no_fabrication`` (reuses the production
@@ -351,6 +359,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M4 chart coherence failure: retired sensitivity/tornado chart emitted")
     if not r.m4_charts_no_fabrication_ok:
         reasons.append("M4 chart coherence failure: invented benchmark figure in chart prose")
+    if not r.m4_classification_cost_chart_grounded_ok:
+        reasons.append(
+            "M4 chart coherence failure: the cost-of-errors chart plots a cost that diverges from the "
+            "real contract business_cost_matrix (fp_cost/fn_cost)"
+        )
     if not r.m4_narrative_no_fabrication_ok:
         reasons.append("M4 narrative coherence failure: invented benchmark figure in narrative prose")
     if not r.m4_lens_kpi_coherence_ok:
@@ -873,6 +886,47 @@ def check_m4_charts_no_fabrication(charts: list[dict]) -> bool:
     from case_generator.m4_grounding import _chart_prose_blob, detect_benchmark_fabrication
 
     return not any(detect_benchmark_fabrication(_chart_prose_blob(c)) for c in charts or [])
+
+
+def check_m4_classification_cost_chart_grounded(
+    charts: list[dict] | None, fp_cost: float | None, fn_cost: float | None
+) -> bool:
+    """Pure oracle: does the ml_ds+clf M4 cost-of-errors chart plot ONLY the REAL contract costs?
+
+    The decision-charts reframe builds Gráfico 2 (``id == "m4_cost_of_errors"``,
+    ``data_source == "python_builder"``) DETERMINISTICALLY from the contract ``business_cost_matrix``,
+    so its two bars MUST be the real ``fp_cost`` / ``fn_cost``. This oracle re-derives that: if such a
+    chart exists, both real costs (rounded to the builder's 2 decimals) must appear among its numeric
+    bar values; a divergent value is a regression (e.g. a future change that lets the LLM author it).
+    True (n/a) when there is no real cost matrix (``fp_cost``/``fn_cost`` absent) or no cost chart.
+    Trivially green by construction today; the teeth are in the unit RED/GREEN tests. Pure, total.
+    """
+    if not isinstance(fp_cost, (int, float)) or isinstance(fp_cost, bool):
+        return True
+    if not isinstance(fn_cost, (int, float)) or isinstance(fn_cost, bool):
+        return True
+    cost_chart = next(
+        (
+            c
+            for c in (charts or [])
+            if isinstance(c, dict) and c.get("id") == "m4_cost_of_errors"
+        ),
+        None,
+    )
+    if cost_chart is None:
+        return True
+    values: list[float] = []
+    for trace in cost_chart.get("traces") or []:
+        if not isinstance(trace, dict):
+            continue
+        for v in trace.get("y") or []:
+            if isinstance(v, bool):
+                continue
+            try:
+                values.append(round(float(v), 2))
+            except (TypeError, ValueError):
+                continue
+    return round(float(fp_cost), 2) in values and round(float(fn_cost), 2) in values
 
 
 def check_m4_narrative_no_fabrication(narrative: str | None) -> bool:
