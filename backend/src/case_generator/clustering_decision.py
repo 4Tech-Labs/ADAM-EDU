@@ -277,6 +277,35 @@ def build_clustering_verdict_hint(
     )
 
 
+def build_clustering_currency_honesty_hint() -> str:
+    """Brace-free hint appended in ``case_architect`` AND ``case_writer`` for ml_ds+clustering (#514).
+
+    Prohibits absolute money magnitudes on the per-entity / per-segment BEHAVIOR axes of the case
+    (e.g. "$135.000/mes", "$15M") — the per-row dataset (``monetary_value`` at an individual scale)
+    does not back them, so the student would read money the CSV never contains. Exhibit 1 (the COMPANY
+    P&L, an aggregate in USD) is preserved; per-segment value is expressed qualitatively / relatively
+    (quartiles, indices, "% concentrado en el cuartil superior", high/medium/low), coherent with the
+    Impact-Lens value reframe (#437/#469). Names NO concrete feature (feature-agnostic — invariant I3
+    of EPIC #511 — so it serves any domain's feature set). No-arg (carries no per-job data).
+    Brace-free → safe after an already-formatted prompt (no second ``.format``; architect SHA
+    snapshots untouched, like the #437/#467 hints). The deterministic guarantee is the sibling #515.
+    """
+    return (
+        "\n# HONESTIDAD DE MAGNITUDES POR ENTIDAD (clustering, Issue #514)\n"
+        "Este es un caso de SEGMENTACIÓN no supervisada: el dataset describe ENTIDADES individuales "
+        "(clientes, cuentas o usuarios) por ejes de COMPORTAMIENTO a escala individual. El Exhibit 1 "
+        "(P&L de la EMPRESA, agregado, en USD) se MANTIENE: ahí sí van cifras monetarias agregadas de "
+        "la compañía.\n"
+        "PROHIBIDO: atribuir cifras de dinero ABSOLUTO (por ejemplo \"$135.000/mes\" o \"$15M\") a los "
+        "ejes de comportamiento por-entidad o por-segmento de ESTE caso, sean cuales sean esos ejes. "
+        "El dataset por-entidad no respalda esas magnitudes y confunden al estudiante.\n"
+        "EN SU LUGAR: expresa el valor por-segmento de forma CUALITATIVA o RELATIVA — cuartiles, "
+        "índices, proporciones, \"% de ingresos concentrado en el cuartil superior\", o niveles "
+        "alto/medio/bajo. Describe los segmentos por su comportamiento relativo, nunca por un monto en "
+        "dólares inventado.\n"
+    )
+
+
 def _recommendation_section(text: str) -> str:
     """Return the deployment/executive recommendation region of an M4 narrative.
 

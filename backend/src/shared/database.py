@@ -249,6 +249,18 @@ class Settings(BaseSettings):
     # chart can never reappear. The gate is profile=="ml_ds" AND family=="clustering"; the builder is
     # profile-agnostic so business+clustering (#317) is a 1-line dispatch follow-up.
     mlds_clustering_charts: bool = True
+    # ml_ds + clustering M1 currency honesty (Issue #514, EPIC #511). When true (default), a brace-free
+    # node-level hint is appended to the case_architect AND case_writer prompts prohibiting absolute $
+    # magnitudes on the per-entity / per-segment behavior axes of the case (e.g. "$135.000/mes", "$15M")
+    # — the per-row dataset (monetary_value at an individual scale) does not back them. Exhibit 1 (the
+    # company P&L, aggregate USD) is preserved; per-segment value is expressed qualitatively/relatively.
+    # The hint names NO concrete feature (feature-agnostic — invariant I3). This is the PREVENTION layer;
+    # the deterministic guarantee is the sibling Issue #515. Gate: profile=="ml_ds" AND family==
+    # "clustering" (STRICT); independent of MLDS_CLUSTERING_STRUCTURE / MLDS_CLUSTERING_M1_ANCHOR. Set
+    # MLDS_CLUSTERING_CURRENCY_HONESTY=false to skip the append → byte-identical (instant env-only revert,
+    # no redeploy). Every other cohort is byte-identical either way; the append is best-effort (a hint
+    # error degrades to the un-hinted prompt, never fails a job).
+    mlds_clustering_currency_honesty: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign
