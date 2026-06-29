@@ -64,13 +64,25 @@ _MAX_DISTRIBUTION_FEATURES = 8
 # y trima la otra mitad del payload del scatter.
 _MAX_SCATTER_POINTS = 500
 
-# Supervised target-name tokens — a residual target-named column must NOT be charted (defence in
-# depth: #466 Frente 1 already strips it from the schema; this keeps the builder honest even if a
-# leaked column reaches it, e.g. on the business path where the strip is out of scope until #317).
+# Defence-in-depth target/cluster name detection — MUST mirror the schema-level strip
+# ``_enforce_mlds_clustering_no_target`` (graph.py, #466/#531) so the charts show EXACTLY the
+# columns K-Means fits. The strip already removes real targets / cluster-ids from the schema BEFORE
+# generation on the ml_ds path; this keeps the (profile-agnostic) builder honest for the future
+# business+clustering path (#317), where that strip does not run.
+#
+#   * Classification-target tokens → excluded ONLY when the column is ALSO binary-shaped (Regla B of
+#     the strip). A CONTINUOUS feature whose name merely contains such a substring
+#     (``target_segment_value``, ``label_rate``) is a legitimate segmentation axis and is KEPT — the
+#     strip keeps it too (its anti-FP test pins ``target_segment_value``). This closes the #531
+#     follow-on: such a domain feature used to be dropped from EVERY M2 chart while still driving the
+#     K-Means fit (panel incoherent with the dataset/notebook the student runs).
+#   * Cluster-label tokens (``cluster*``/``kmeans*``) → excluded by NAME regardless of shape (Regla C
+#     of the strip): a k-valued cluster id is the answer and must never appear in a PRE-model panel.
 _TARGET_NAME_TOKENS = (
     "dummy_target", "target", "objetivo", "label", "categoria", "clase", "clasificacion", "churn",
 )
 _TARGET_EXACT_NAMES = frozenset({"y", "y_true", "y_pred"})
+_CLUSTER_LABEL_NAME_TOKENS = ("cluster", "kmeans")
 
 
 def _normalize_colname(name: str) -> str:
@@ -79,18 +91,42 @@ def _normalize_colname(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(name).lower()).strip("_")
 
 
-def _is_target_named(name: str) -> bool:
+def _is_classification_target_named(name: str) -> bool:
+    """Nombre tipo-target de CLASIFICACIÓN (token o exacto). Mismos token-sets que el strip de schema
+    ``_enforce_mlds_clustering_no_target``."""
     lname = str(name).lower()
     return lname in _TARGET_EXACT_NAMES or any(tok in lname for tok in _TARGET_NAME_TOKENS)
+
+
+def _is_cluster_label_named(name: str) -> bool:
+    """Artefacto de etiqueta de cluster (``cluster*``/``kmeans*``) — answer leak del modelo, fuera del
+    panel PRE-modelo sin importar la forma."""
+    lname = str(name).lower()
+    return any(tok in lname for tok in _CLUSTER_LABEL_NAME_TOKENS)
+
+
+def _is_binary_series(s: pd.Series) -> bool:
+    """¿La serie es binaria (valores no-nulos ⊆ {0, 1})? Espejo data-inferido de la ``binary_shape``
+    (rango [0,1]) del strip de schema: cubre int 0/1 y float 0.0/1.0 (``0 == 0.0``). Total/defensiva
+    → vacío / no numérico = ``False`` (no se trata como target)."""
+    try:
+        uniq = set(pd.to_numeric(s, errors="coerce").dropna().unique().tolist())
+    except (TypeError, ValueError):
+        return False
+    return bool(uniq) and uniq <= {0, 1}
 
 
 def _select_clustering_feature_columns(df: pd.DataFrame) -> list[str]:
     """Columnas numéricas de segmentación elegibles para los charts data-only.
 
     Reglas por columna ``c`` (sobre ``sorted(df.columns)``): descarta el índice temporal
-    (``period``/dtype fecha), IDs (token ``id``), constantes (``nunique <= 1``), >50%% nulos,
-    no-numéricas, y cualquier nombre tipo-target residual (defensa en profundidad: clustering no
-    tiene target). Conserva las features numéricas continuas de segmentación.
+    (``period``/dtype fecha), IDs (token ``id``), artefactos de etiqueta de cluster
+    (``cluster*``/``kmeans*``, cualquier forma), no-numéricas, constantes (``nunique <= 1``),
+    >50%% nulos, y un target de CLASIFICACIÓN binario (nombre tipo-target Y valores ⊆ {0,1}).
+    Conserva toda feature numérica continua de segmentación —incluida una con substring tipo-target
+    en el nombre (``target_segment_value``)— de modo que el panel muestre las MISMAS features que el
+    K-Means ajusta, para CUALQUIER dominio. Espeja la precisión del strip de schema
+    ``_enforce_mlds_clustering_no_target`` (Reglas B/C, #466/#531).
     """
     n_rows = len(df)
     feature_cols: list[str] = []
@@ -100,7 +136,9 @@ def _select_clustering_feature_columns(df: pd.DataFrame) -> list[str]:
             continue
         if "id" in norm.split("_"):
             continue
-        if _is_target_named(c):
+        # Etiqueta de cluster: fuera por NOMBRE sin importar la forma (un id de cluster k-valuado no
+        # es binario). Defensa para el path business (#317), donde el strip de schema no corre.
+        if _is_cluster_label_named(c):
             continue
         s = df[c]
         if not (pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)):
@@ -111,6 +149,10 @@ def _select_clustering_feature_columns(df: pd.DataFrame) -> list[str]:
         except TypeError:
             continue
         if n_rows and float(s.isna().mean()) > 0.5:
+            continue
+        # Target de clasificación: fuera SOLO si es binario (espeja la Regla B del strip de schema);
+        # una feature continua con substring tipo-target es un eje legítimo y se conserva.
+        if _is_classification_target_named(c) and _is_binary_series(s):
             continue
         feature_cols.append(c)
     return feature_cols
@@ -166,7 +208,7 @@ def _build_feature_distributions(
         subtitle = "Escalas muy distintas → conviene estandarizar antes de agrupar"
         yaxis_title = "Valor (escala cruda)"
 
-    sel = features[:_MAX_DISTRIBUTION_FEATURES]
+    sel = features  # el cap (_MAX_DISTRIBUTION_FEATURES) ya se aplicó en generate_clustering_eda_charts
     traces: list[dict[str, Any]] = []
     for col in sel:
         s = pd.to_numeric(df[col], errors="coerce").dropna()
@@ -364,7 +406,11 @@ def generate_clustering_eda_charts(
         return []
 
     source = source_label(contract)
-    features = _select_clustering_feature_columns(df)
+    # Una sola fuente de verdad para el conjunto de features del panel: capar AQUÍ garantiza que las
+    # 3 familias de chart (box, heatmap, scatter) muestren las MISMAS variables (panel coherente).
+    # #531 ya capa las features de dominio a 8 aguas arriba → byte-idéntico para ml_ds hoy; esto
+    # blinda el builder profile-agnostic para business+clustering (#317), que no tiene ese cap.
+    features = _select_clustering_feature_columns(df)[:_MAX_DISTRIBUTION_FEATURES]
     charts: list[dict[str, Any]] = []
 
     builders: list[tuple[str, Any]] = [
