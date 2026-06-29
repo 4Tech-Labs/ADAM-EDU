@@ -70,3 +70,27 @@ def test_validate_output_adapter_hitl_and_final_states() -> None:
         }
     ]
     assert final_content["teachingNote"] == "La respuesta optima..."
+
+
+def test_adapter_surfaces_primary_family() -> None:
+    # The canonical root carries the algorithm family so the frontend can frame M4 by family (e.g. a
+    # clustering case shows a segmentation identity, not the financial NPV/ROI/Payback copy).
+    base = {"titulo": "Caso", "studentProfile": "ml_ds"}
+
+    clustering = adapter_legacy_to_canonical_output({**base, "algoritmos": ["K-Means"]})
+    assert clustering["canonical_output"]["primaryFamily"] == "clustering"
+
+    classification = adapter_legacy_to_canonical_output(
+        {**base, "algoritmos": ["Logistic Regression"]}
+    )
+    assert classification["canonical_output"]["primaryFamily"] == "clasificacion"
+
+    # No algorithm picks → None (the frontend then defaults to the financial framing).
+    none_case = adapter_legacy_to_canonical_output({**base, "algoritmos": []})
+    assert none_case["canonical_output"]["primaryFamily"] is None
+
+    # task_payload fallback (algoritmos absent at the top level, as on a resumed job).
+    fallback = adapter_legacy_to_canonical_output(
+        {**base, "task_payload": {"algoritmos": ["K-Means"]}}
+    )
+    assert fallback["canonical_output"]["primaryFamily"] == "clustering"
