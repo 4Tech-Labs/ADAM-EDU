@@ -53,6 +53,13 @@ class NodeEvalInputs:
     # produce a domain-coherent schema (no churn/SaaS template, domain-driven target). True (n/a) for
     # business / non-classification jobs. Computed deterministically via ``check_domain_coherence``.
     domain_coherence_ok: bool = True
+    # Issue #506 — ml_ds + clasificación economic-direction coherence: when a contract declares feature
+    # `expected_direction` hints, the generated schema's domain target must couple to those features with
+    # the matching SIGN (signed_drivers). True (n/a) when no direction is declared / business / non-clf,
+    # and on the frozen golden set today (no fixture declares directions — like
+    # ``eda_questions_no_chart_id_leak_ok``); the deterministic teeth live in the unit RED/GREEN tests.
+    # Computed via ``check_directional_coherence``.
+    directional_coherence_ok: bool = True
     # M2 (EDA) question coherence: every classification golden job's EDA questions must be coherent
     # (chart_ref exists; the event rate in each solución matches its enunciado and the dataset
     # prevalence). True (n/a) for non-classification jobs. Computed via
@@ -289,6 +296,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("AUC distribution degraded toward the 0.55 floor")
     if not r.domain_coherence_ok:
         reasons.append("domain coherence failure: churn-coupled target on ml_ds non-churn job")
+    if not r.directional_coherence_ok:
+        reasons.append(
+            "directional coherence failure: a declared expected_direction is not honored by the "
+            "target's signed_drivers (economically inverted coefficient)"
+        )
     if not r.eda_questions_coherence_ok:
         reasons.append("M2 EDA question coherence failure: chart_ref or event-rate mismatch")
     if not r.eda_questions_no_chart_id_leak_ok:
@@ -461,6 +473,44 @@ def check_domain_coherence(schema: dict) -> bool:
         (t.get("dependency") or {}).get("depends_on") not in (None, "churn_rate")
         for t in domain_targets
     )
+
+
+def check_directional_coherence(schema: dict, contract: dict | None) -> bool:
+    """Pure oracle (Issue #506): does ``schema``'s domain target honor the contract's declared
+    economic-direction priors?
+
+    Structural check (deterministic, no dataset generation): for every contract feature that declares
+    ``expected_direction`` ∈ {"positive","negative"} AND is eligible (numeric, non-leakage, not the
+    target, present in the schema as an INDEPENDENT column — via the SHARED
+    ``_resolve_signed_directions``, the same source the enforcer uses), the ``is_domain_target`` column's
+    ``dependency.signed_drivers`` must contain that feature with the matching sign (+1 for "positive",
+    -1 for "negative"). True (n/a) when the contract declares no usable direction or the schema has no
+    domain target — so business / non-classification / undirected jobs AND the kill-switch-off path
+    pass. A schema where a declared direction is missing from ``signed_drivers`` or carries the wrong
+    sign FAILS (the economically inverted coefficient the issue exists to prevent).
+    """
+    columns = schema.get("columns") or []
+    target = next((c for c in columns if c.get("is_domain_target") is True), None)
+    if target is None:
+        return True  # n/a (no domain target: business / non-clf / undirected)
+
+    # Reusa la fuente ÚNICA de elegibilidad del enforcer (lazy import, como check_domain_coherence)
+    # → la verificación NO re-deriva la regla de la generación (sin drift test↔prod).
+    from case_generator.graph import _resolve_signed_directions
+
+    target_name = target.get("name")
+    expected = {
+        d["name"]: d["sign"]
+        for d in _resolve_signed_directions(columns, contract, target_name=target_name)
+    }
+    if not expected:
+        return True  # n/a (no usable declared direction)
+
+    signed = ((target.get("dependency") or {}).get("signed_drivers")) or []
+    actual = {
+        (d.get("name") or "").strip(): d.get("sign") for d in signed if isinstance(d, dict)
+    }
+    return all(actual.get(name) == sign for name, sign in expected.items())
 
 
 def check_eda_questions_coherence(
