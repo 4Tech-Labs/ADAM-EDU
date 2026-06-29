@@ -145,13 +145,65 @@ def _select_mi_feature_columns(df: pd.DataFrame, target_col: str) -> list[str]:
 
 
 def _build_class_distribution(
-    df: pd.DataFrame, target_col: str, source: str
+    df: pd.DataFrame, target_col: str, source: str, *, honest_text: bool = True
 ) -> dict[str, Any]:
     counts = df[target_col].value_counts(dropna=False).sort_index()
     classes = [str(c) for c in counts.index.tolist()]
     values = [int(v) for v in counts.values.tolist()]
     total = sum(values) or 1
-    pct = [round(v * 100.0 / total, 6) for v in values]
+    # 1 decimal: la etiqueta de cada barra es de DISPLAY (no se consume aguas abajo),
+    # así un split no-redondo (p. ej. 137/834) muestra "16.4%" y no "16.428571%".
+    pct = [round(v * 100.0 / total, 1) for v in values]
+
+    # El builder conoce el balance EXACTO de clases → escribe una lectura honesta y
+    # data-grounded (en vez de dejar que el LLM anotador, que NO ve los datos, adivine si
+    # hay desbalance y arriesgue una descripción que contradiga el chart). El target
+    # ml_ds+clf es binario 0/1 (#350) con la clase 1 = evento a predecir (#372/#506);
+    # para esa forma se nombra el evento, y para cualquier otra (multiclase/strings o un
+    # target mal resuelto a una continua) se degrada a lenguaje neutro sin romper. Enseña
+    # la Paradoja de la Exactitud vía la línea base mayoritaria. `honest_text=False`
+    # (kill-switch `m2_classification_chart_honest_text`) restaura el texto vacío + LLM.
+    description = ""
+    notes = ""
+    if honest_text and values:
+        n_classes = len(values)
+        maj_i = max(range(n_classes), key=lambda i: values[i])
+        maj_lbl, maj_pct = classes[maj_i], pct[maj_i]
+        if n_classes == 1:
+            description = (
+                f"La variable objetivo «{target_col}» tiene una sola clase observada "
+                f"({classes[0]}, {total} registros): no hay variabilidad para clasificar."
+            )
+            notes = (
+                "Sin al menos dos clases no es posible entrenar un clasificador; "
+                "revisa la generación del dataset antes de modelar."
+            )
+        else:
+            parts = [
+                f"clase {classes[i]} = {pct[i]:.1f}% ({values[i]})"
+                for i in range(n_classes)
+            ]
+            # Cap defensivo de enumeración (un target mal resuelto a una continua daría
+            # muchas clases): lista hasta 6 y resume el resto.
+            if n_classes > 6:
+                enum = f"{', '.join(parts[:6])}, … (+{n_classes - 6} clases)"
+            else:
+                enum = ", ".join(parts)
+            event_clause = (
+                " La clase 1 es el evento a predecir."
+                if n_classes == 2 and set(classes) == {"0", "1"}
+                else ""
+            )
+            description = (
+                f"Distribución de la variable objetivo «{target_col}» sobre {total} "
+                f"registros: {enum}.{event_clause}"
+            )
+            notes = (
+                f"Un modelo que prediga siempre la clase mayoritaria ({maj_lbl}) acertaría "
+                f"~{maj_pct:.1f}% (línea base). Con clases desbalanceadas evalúa con F1, "
+                "recall y AUC, no solo accuracy (Paradoja de la Exactitud)."
+            )
+
     return {
         "id": "class_distribution",
         "title": f"Distribución de la variable objetivo: {target_col}",
@@ -175,8 +227,8 @@ def _build_class_distribution(
             "showlegend": False,
         },
         "source": source,
-        "description": "",
-        "notes": "",
+        "description": description,
+        "notes": notes,
         "data_source": "python_builder",
     }
 
@@ -326,7 +378,12 @@ def _build_missingness_heatmap(
 
 
 def _build_mutual_info_top8(
-    df: pd.DataFrame, target_col: str, source: str, *, exclude_index: bool = True
+    df: pd.DataFrame,
+    target_col: str,
+    source: str,
+    *,
+    exclude_index: bool = True,
+    honest_text: bool = True,
 ) -> dict[str, Any]:
     from sklearn.feature_selection import mutual_info_classif
     from sklearn.preprocessing import LabelEncoder
@@ -376,6 +433,40 @@ def _build_mutual_info_top8(
     ]
     feats = [p[0] for p in pairs]
     scores = [round(float(p[1]), 6) for p in pairs]
+
+    # El builder conoce el ranking REAL de MI → escribe una lectura honesta (nombra la
+    # feature más informativa y advierte que MI ≠ causalidad ≠ peso en el modelo, más el
+    # riesgo de leakage). El LLM anotador no ve los datos, así que ni siquiera podría
+    # nombrar la feature top: el texto determinista es estrictamente más coherente y
+    # enseña la literacia ML que un estudiante necesita. `honest_text=False` (kill-switch
+    # `m2_classification_chart_honest_text`) restaura el texto vacío + anotación LLM.
+    description = ""
+    notes = ""
+    if honest_text and feats:
+        top_feat, top_score = feats[0], scores[0]
+        if top_score <= 0.0:
+            description = (
+                f"Información mutua (MI) entre cada feature y «{target_col}». Ninguna "
+                "feature muestra dependencia apreciable (todas con MI ≈ 0): el objetivo "
+                "podría no tener señal aprovechable en estas variables."
+            )
+        else:
+            tail = (
+                " Las features con MI cercana a 0 aportan poca señal sobre el objetivo."
+                if len(feats) > 1
+                else ""
+            )
+            description = (
+                f"Información mutua (MI) entre cada feature y «{target_col}», ordenada de "
+                f"mayor a menor. La más informativa es «{top_feat}» (MI={top_score})."
+                f"{tail}"
+            )
+        notes = (
+            "La MI capta dependencia (incluida no lineal) en ESTOS datos: no implica "
+            "causalidad ni el peso final en el modelo. Una MI muy alta puede delatar fuga "
+            "de información (leakage); valida esa feature antes de usarla."
+        )
+
     return {
         "id": "mutual_info_top8",
         "title": f"Top {len(feats)} features por Mutual Information",
@@ -398,8 +489,8 @@ def _build_mutual_info_top8(
             "showlegend": False,
         },
         "source": source,
-        "description": "",
-        "notes": "",
+        "description": description,
+        "notes": notes,
         "data_source": "python_builder",
     }
 
@@ -416,18 +507,29 @@ def generate_classification_eda_charts(
     *,
     honest_text: bool = True,
     exclude_index: bool = True,
+    caption_text: bool = True,
 ) -> list[dict[str, Any]]:
     """Build the 3-chart EDA panel deterministically.
 
     Returns a list of dicts shaped like ``EDAChartSpec`` (with
-    ``data_source="python_builder"``). All charts emit empty ``description``/
-    ``notes`` (the LLM annotates them) EXCEPT ``missingness_heatmap``, whose text
-    is deterministic and honest about the real missingness when ``honest_text`` is
-    True (the builder knows the truth; the LLM annotator does not see the data and
-    would otherwise invent an MNAR pattern that the de-churned ml_ds+clf dataset,
-    Issue #382, never has). ``honest_text=False`` (kill-switch
-    ``m2_missingness_honest_text``) restores the previous byte-identical behaviour.
-    The caller validates with the Pydantic model and merges LLM annotations.
+    ``data_source="python_builder"``). The builder writes deterministic,
+    data-grounded ``description``/``notes`` for the charts whose truth it knows,
+    so the caller can exclude them from LLM annotation and the LLM can never
+    invent text that contradicts the chart:
+
+    * ``missingness_heatmap`` — gated by ``honest_text`` (kill-switch
+      ``m2_missingness_honest_text``). Describes the real missingness (and an
+      empty-state annotation when there are 0 nulls), so the LLM can no longer
+      invent an MNAR pattern the de-churned ml_ds+clf dataset (#382) never has.
+    * ``class_distribution`` and ``mutual_info_top8`` — gated by ``caption_text``
+      (kill-switch ``m2_classification_chart_honest_text``). Describe the exact
+      class balance (with the majority-baseline / Accuracy-Paradox reading) and
+      the real MI ranking (with the MI≠causation + leakage caveat) — facts the
+      LLM annotator cannot even see, let alone state correctly.
+
+    Each flag set to ``False`` restores the previous byte-identical behaviour for
+    its chart(s) (empty builder text → the LLM annotates them). The caller
+    validates with the Pydantic model and merges any LLM annotations.
 
     On hard failure (empty df, missing target) returns ``[]`` so the caller
     can fall back to the LLM-JSON path with a warning.
@@ -446,9 +548,9 @@ def generate_classification_eda_charts(
     charts: list[dict[str, Any]] = []
 
     builders: list[tuple[str, Any]] = [
-        ("class_distribution", lambda: _build_class_distribution(df, target_col, source)),
+        ("class_distribution", lambda: _build_class_distribution(df, target_col, source, honest_text=caption_text)),
         ("missingness_heatmap", lambda: _build_missingness_heatmap(df, target_col, source, honest_text=honest_text)),
-        ("mutual_info_top8", lambda: _build_mutual_info_top8(df, target_col, source, exclude_index=exclude_index)),
+        ("mutual_info_top8", lambda: _build_mutual_info_top8(df, target_col, source, exclude_index=exclude_index, honest_text=caption_text)),
     ]
     for cid, fn in builders:
         try:
