@@ -49,6 +49,7 @@ export const INDUSTRIAS_OPTIONS = [
     { value: "educacion", label: "Educación" },
     { value: "telecomunicaciones", label: "Telecomunicaciones" },
     { value: "manufactura", label: "Manufactura" },
+    { value: "medio_ambiente", label: "Medio ambiente / Sector público" },
 ];
 
 export const STUDENT_PROFILES = [
@@ -67,6 +68,7 @@ export const IMPACT_LENS_OPTIONS = [
     { value: "operational_efficiency", label: "Eficiencia operativa" },
     { value: "clinical_outcomes", label: "Resultados clínicos" },
     { value: "learning_outcomes", label: "Resultados de aprendizaje" },
+    { value: "environmental_outcomes", label: "Resultados ambientales" },
 ];
 
 // Bumped from v2 → v3 when the scenario-anchored authoring contract landed.
