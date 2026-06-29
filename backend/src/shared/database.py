@@ -109,6 +109,18 @@ class Settings(BaseSettings):
     # redeploy). clasificación / regresión / serie_temporal / business are unaffected either way
     # (the gate is profile=="ml_ds" AND family=="clustering").
     mlds_clustering_structure: bool = True
+    # Centroid geometry for the injected ml_ds + clustering blobs (k-coherence fix). When true
+    # (default), `_enforce_mlds_clustering_structure` places the K∈{3,4} blob centers as a regular
+    # SIMPLEX (mutually-equidistant centroids, randomly rotated into the feature space) so the
+    # notebook's data-driven k-selection (`argmax_k silhouette`, the cell the student runs) lands on
+    # the coordinated `target_k` (Issue #467) — the legacy per-feature permutation could leave the
+    # silhouette peaking at k=2/3 while the M1/M4/M5 narrative framed `target_k=4` segments, so the
+    # student read "4 segmentos" but their own notebook reported 2. Set
+    # MLDS_CLUSTERING_SIMPLEX_CENTERS=false to revert to the legacy permutation placement +
+    # `_CLUSTERING_BLOB_SPREAD_FRAC` (byte-identical to pre-fix; the RED control for the new oracle).
+    # Only affects the geometry when MLDS_CLUSTERING_STRUCTURE is also on; non-clustering / business
+    # are unaffected. Instant env-only revert, no redeploy.
+    mlds_clustering_simplex_centers: bool = True
     # Execute + quality-gate the ml_ds + clustering M3 notebook (Issue #453, extends #239). When
     # true (default), the K-Means notebook is run in the executor subprocess (same nbclient/AST-
     # scrub/timeout path as classification), its real silhouette/n_clusters metrics are parsed into
