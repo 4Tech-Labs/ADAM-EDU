@@ -172,6 +172,20 @@ class Settings(BaseSettings):
     # family=="clustering"; clasificación / regresión / serie_temporal / business (including
     # business+clustering, which uses the audit prompt) are unaffected either way.
     mlds_clustering_m3_content: bool = True
+    # M3 conceptual (methodological) questions for ml_ds + clustering (EPIC #458). When true
+    # (default), an ml_ds + clustering case selects the dedicated `M3_QUESTIONS_PROMPT_CLUSTERING`
+    # (segmentation-native 3-question arc: how k is chosen, segment validity, segments → the M1
+    # strategic decision) instead of the generic supervised-experiment `M3_EXPERIMENT_QUESTIONS_PROMPT`
+    # (fragile hypothesis / algorithmic bias / discard-before-deploy) that the #467 hint only reframed
+    # on top of contradictory examples. The brace-free #467 hint still appends (anchoring target_k), so
+    # the prompts compose; quality is judged qualitatively (the notebook executor runs AFTER this node,
+    # so no real silhouette exists — anti-fabrication is enforced at the prompt boundary, the #457
+    # pattern). The 3 conceptual questions stay non-redundant with the 2 output-grounded notebook
+    # questions (#489/#494). Set MLDS_CLUSTERING_M3_QUESTIONS=false to revert to the generic prompt +
+    # #467 hint byte-identically (instant env-only revert, no redeploy). The gate is profile=="ml_ds"
+    # AND family=="clustering"; clasificación / regresión / serie_temporal / business (including
+    # business+clustering, which uses the audit prompt) are unaffected either way.
+    mlds_clustering_m3_questions: bool = True
     # Cross-module clustering coherence source of truth (Issue #467). When true (default), an
     # ml_ds + clustering case resolves a deterministic `clustering_decision`
     # {target_k∈{3,4}, recommended_option∈{A,B,C}, silhouette_floor} ONCE at intake and propagates it:
