@@ -726,6 +726,13 @@ def _run_node_capture_coherence(state: dict) -> dict:
         patch("case_generator.graph._get_writer_llm", return_value=mock_llm),
         patch("case_generator.graph._build_base_context", return_value={}),
         patch("case_generator.graph._resolve_family_prompt", return_value="PROMPT"),
+        # EPIC #458 — the ml_ds+clustering override runs AFTER _resolve_family_prompt; stub it to
+        # identity so the placeholder-free "PROMPT" survives and .format cannot KeyError (this test
+        # exercises the metrics_block/variant gating, not the prompt selection).
+        patch(
+            "case_generator.graph._select_m4_questions_clustering_prompt",
+            side_effect=lambda _state, base: base,
+        ),
         patch("case_generator.graph._apply_m4_questions_coherence", side_effect=_capture),
     ):
         graph_module.m4_questions_generator(state, RunnableConfig())  # type: ignore[arg-type]

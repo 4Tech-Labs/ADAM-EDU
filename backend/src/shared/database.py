@@ -186,6 +186,29 @@ class Settings(BaseSettings):
     # AND family=="clustering"; clasificación / regresión / serie_temporal / business (including
     # business+clustering, which uses the audit prompt) are unaffected either way.
     mlds_clustering_m3_questions: bool = True
+    # Dedicated segmentation-native M4 (Impacto) QUESTIONS prompt for ml_ds + clustering (EPIC #458).
+    # When true (default), an ml_ds + clustering case generates its 3 M4 questions with
+    # `M4_QUESTIONS_PROMPT_CLUSTERING` instead of the generic prompt, whose P2 frames a SUPERVISED
+    # model-ROI verdict ("¿el valor proyectado del modelo justifica la inversión dado el veredicto de
+    # M3?") and demands citing M4 metrics — incoherent for a K-Means segmentation (no predictive model,
+    # no projected uplift). The dedicated prompt asks instead about segment value, prioritization vs.
+    # intervention cost (USD), and segmentation production risk. The lens hint (#437) and the #467/#469
+    # verdict hint still append to it; the option/MCQ coherence guard is unchanged. Set
+    # MLDS_CLUSTERING_M4_QUESTIONS=false to revert to the generic prompt byte-identically (instant
+    # env-only revert, no redeploy). The gate is profile=="ml_ds" AND family=="clustering"; every other
+    # cohort (incl. business+clustering) is unaffected either way.
+    mlds_clustering_m4_questions: bool = True
+    # Dedicated segmentation-native M5 final-memorándum QUESTIONS prompt for ml_ds + clustering
+    # (EPIC #458). When true (default), an ml_ds + clustering case generates its single M5 consigna with
+    # `M5_QUESTIONS_PROMPT_CLUSTERING` instead of the generic prompt, which frames the memo around a
+    # SUPERVISED model decision ("límites del modelo … rol del CTO") — incoherent for a segmentation,
+    # where the executive decision is which segmentation strategy (Opción A/B/C) to adopt. The memo keeps
+    # the SHARED M5 contract (1 consigna, 100-160 words, 5 single-sentence paragraphs) verbatim; only the
+    # subject is reframed. The #467 verdict hint + the `_apply_clustering_m5_verdict_coherence` guarantee
+    # still apply. Set MLDS_CLUSTERING_M5_QUESTIONS=false to revert byte-identically (instant env-only
+    # revert, no redeploy). The gate is profile=="ml_ds" AND family=="clustering"; every other cohort
+    # (incl. business+clustering) is unaffected either way.
+    mlds_clustering_m5_questions: bool = True
     # Cross-module clustering coherence source of truth (Issue #467). When true (default), an
     # ml_ds + clustering case resolves a deterministic `clustering_decision`
     # {target_k∈{3,4}, recommended_option∈{A,B,C}, silhouette_floor} ONCE at intake and propagates it:

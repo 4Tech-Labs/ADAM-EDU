@@ -15,9 +15,13 @@ from case_generator.prompts.clustering.M4_clustering.charts import (
 from case_generator.prompts.clustering.M4_clustering.content import (
     M4_CONTENT_PROMPT_CLUSTERING,
 )
+from case_generator.prompts.clustering.M4_clustering.questions import (
+    M4_QUESTIONS_PROMPT_CLUSTERING,
+)
 
 __all__ = [
     "M4_CONTENT_PROMPT_CLUSTERING",
     "M4_CHART_PROMPT_CLUSTERING",
     "M4_CHART_PROMPT_CLUSTERING_PROFILES",
+    "M4_QUESTIONS_PROMPT_CLUSTERING",
 ]
