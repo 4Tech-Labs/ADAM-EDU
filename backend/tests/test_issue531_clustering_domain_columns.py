@@ -93,6 +93,9 @@ _DOMAIN_NAMES = [f["name"] for f in _DOMAIN_CONTRACT["feature_columns"]]
         ("discount_rate", "float", (0.0, 1.0)),  # "dis-COUNT" must NOT be read as a count
         ("conversion_rate", "float", (0.0, 1.0)),
         ("session_count", "int", (1.0, 60.0)),
+        ("session_duration_minutes", "float", (1.0, 60.0)),  # "du-RATIO-n" must NOT be read as a rate
+        ("annual_revenue", "float", (50.0, 5000.0)),
+        ("customer_ltv", "float", (50.0, 5000.0)),
         ("opaque_metric", "float", (0.0, 100.0)),  # generic fallback
     ],
 )
@@ -314,6 +317,17 @@ def test_ceiling_no_contract_is_rfm() -> None:
     assert _resolve_m1_dataset_monetary_ceiling({}) == 5000.0
 
 
+def test_ceiling_detects_domain_money_without_usd_token() -> None:
+    # Issue #531 finding 2: the #515 ceiling must track a domain money column whose name has no
+    # usd/value token (e.g. `annual_revenue`) so the CURRENCY guard isn't silently disabled.
+    state = {"dataset_schema_required": {"feature_columns": [
+        {"name": "engagement_rate", "dtype": "float", "range_min": 0, "range_max": 1},
+        {"name": "visit_count", "dtype": "int", "range_min": 1, "range_max": 50},
+        {"name": "annual_revenue", "dtype": "float", "range_min": 100, "range_max": 9000},
+    ]}}
+    assert _resolve_m1_dataset_monetary_ceiling(state) == 9000.0
+
+
 def test_ceiling_matches_generated_dataset_monetary_column() -> None:
     # The ceiling resolver and the data layer share _resolve_clustering_segmentation_columns,
     # so the ceiling == the max of the dataset's monetary feature by construction.
@@ -353,6 +367,35 @@ def test_resolver_non_str_description_does_not_crash() -> None:
     ]}
     cols = {c["name"]: c for c in _resolve_clustering_segmentation_columns(contract, domain_enabled=True)}
     assert cols["spend_usd"]["description"] == "Eje de segmentación (spend_usd)"  # fell back, no crash
+
+
+def test_resolver_non_str_dtype_does_not_crash() -> None:
+    # An unhashable dtype would break `_CONTRACT_TYPE_TO_SCHEMA_TYPE.get(...)`; it must default to
+    # float, not raise (schema_designer's clustering path has no try/except).
+    contract = {"feature_columns": [
+        {"name": "weird_axis", "dtype": ["not", "a", "str"]},  # unhashable dtype
+        {"name": "spend_usd", "dtype": "float"},
+        {"name": "visit_count", "dtype": "int"},
+        {"name": "activity_score", "dtype": "float"},
+    ]}
+    cols = {c["name"]: c for c in _resolve_clustering_segmentation_columns(contract, domain_enabled=True)}
+    assert cols["weird_axis"]["type"] == "float"  # defaulted, no crash
+
+
+def test_resolver_non_finite_range_falls_to_heuristic_no_inf() -> None:
+    # A raw inf/NaN range must NOT pass `lo < hi` into the dataset (invalid JSON Infinity). It falls
+    # to the name heuristic. (Production: DatasetFeatureSpec._sanitize_range already nullifies these;
+    # this guards a non-Pydantic caller on the no-try/except clustering path.)
+    contract = {"feature_columns": [
+        {"name": "willingness_to_pay_usd", "dtype": "float", "range_min": 10, "range_max": float("inf")},
+        {"name": "visit_count", "dtype": "int", "range_min": float("nan"), "range_max": 50},
+        {"name": "activity_score", "dtype": "float"},
+    ]}
+    cols = {c["name"]: c for c in _resolve_clustering_segmentation_columns(contract, domain_enabled=True)}
+    wtp = cols["willingness_to_pay_usd"]
+    assert wtp["range_max"] == 5000.0 and wtp["range_min"] == 50.0  # heuristic, not inf
+    import math as _math
+    assert _math.isfinite(wtp["range_max"]) and _math.isfinite(cols["visit_count"]["range_max"])
 
 
 # ── 8. schema_designer node-level integration (the skip-augment guard) ────────────

@@ -57,6 +57,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -1778,12 +1779,13 @@ def _resolve_m1_dataset_monetary_ceiling(state: ADAMState) -> float | None:
 
     Delegates to the shared ``monetary_ceiling_from_columns`` over the SAME columns the data layer
     will generate — ``_resolve_clustering_segmentation_columns`` (Issue #531: the architect's DOMAIN
-    features when present, else the fixed RFM). So the #515 CURRENCY guard's ceiling EXACTLY matches
-    the monetary feature of the dataset the student downloads (a domain ``willingness_to_pay_usd ∈
-    [10, 800]`` ceiling, not a stale RFM ``monetary_value`` 5000), avoiding both false-positive
-    reprompts and missed incoherence; no fixed feature list (I3). Returns ``None`` when no monetary
-    column is found → CURRENCY no-ops honestly. Domain-off / no contract → the fixed RFM ceiling
-    (byte-identical to pre-#531).
+    features when present, else the fixed RFM). So the #515 CURRENCY guard's ceiling TRACKS the
+    monetary feature of the dataset the student downloads (a domain ``willingness_to_pay_usd ∈
+    [10, 800]`` ceiling, not a stale RFM ``monetary_value`` 5000). Detection is best-effort via the
+    shared ``_MONETARY_COLUMN_SIGNALS`` token set; a money column whose name carries no money token
+    is missed → the CURRENCY guard just no-ops for it (safe-failing — a silent guard, never a false
+    reprompt). No fixed feature list (I3). ``None`` when no monetary column is found. Domain-off / no
+    contract → the fixed RFM ceiling (byte-identical to pre-#531).
     """
     columns = _resolve_clustering_segmentation_columns(
         state.get("dataset_schema_required"),
@@ -3857,34 +3859,43 @@ def _clustering_feature_range_heuristic(name: str, dtype: str) -> tuple[float, f
     the original ``_default_column`` defect (a ``willingness_to_pay_usd`` shown as ``0.65``). The
     buckets mirror the fixed RFM ranges. First match wins; falls back to a generic ``[0, 100]``.
     Pure, deterministic. Architect-declared ranges take precedence over this (see the resolver).
+
+    Matching is WORD-boundary (split the snake_case name into tokens) rather than raw substring, so
+    an unrelated word is never mis-read by an embedded substring (e.g. ``du[ratio]n`` → NOT a rate,
+    ``dis[count]`` → NOT a count, ``dis[pay]`` → NOT money). Multi-concept names (``days_to_payment``)
+    stay a first-match judgment call — acceptable since this is display-only and a fallback (the
+    architect supplies real ranges on the happy path).
     """
-    n = (name or "").lower()
+    words = {w for w in re.split(r"[^a-z0-9]+", (name or "").lower()) if w}
 
     def has(*toks: str) -> bool:
-        return any(t in n for t in toks)
+        return any(t in words for t in toks)
 
     # Strong money signals first (unambiguous units) → mirror `monetary_value` [50, 5000].
-    if has("usd", "dollar", "revenue", "income", "price", "spend", "ltv", "arpu", "monetar",
-           "budget", "payment", "willingness_to_pay", "_pay", "pay_", "donation", "sales"):
+    if has("usd", "dollar", "dollars", "revenue", "income", "price", "spend", "spending", "ltv",
+           "arpu", "monetary", "monetar", "budget", "payment", "payments", "pay", "donation",
+           "donations", "sales", "valor", "precio", "costo", "ingreso", "ingresos"):
         return (50.0, 5000.0)
-    if has("recency", "days", "_day", "day_", "dias"):
+    if has("recency", "day", "days", "dias"):
         return (1.0, 365.0)
-    if has("tenure", "month", "_mes", "meses", "antiguedad", "antigüedad"):
+    if has("tenure", "month", "months", "mes", "meses", "antiguedad"):
         return (1.0, 72.0)
-    if has("year", "anios", "años", "anos"):
+    if has("year", "years", "anio", "anios", "ano", "anos"):
         return (1.0, 10.0)
-    # Intensity, then normalized score/rate — BEFORE the count bucket so a rate whose name happens
-    # to contain the "count" substring (e.g. "dis-count_rate") is not mis-bucketed as a count.
+    # Intensity, then normalized score/rate — BEFORE the count bucket.
     if has("intensity", "intensidad"):
         return (0.0, 10.0)
-    if has("score", "index", "indice", "rate", "ratio", "pct", "percent", "proportion",
-           "share", "probability", "prob", "engagement", "satisfaction", "likelihood", "propensity"):
+    if has("score", "index", "indice", "rate", "ratio", "pct", "percent", "percentage",
+           "proportion", "share", "probability", "prob", "engagement", "satisfaction",
+           "likelihood", "propensity"):
         return (0.0, 1.0)
-    if has("count", "freq", "visit", "order", "session", "interaction", "transaction",
-           "purchase", "login", "click", "trip", "num_", "_num", "qty", "quantity"):
+    if has("count", "freq", "frequency", "visit", "visits", "order", "orders", "session",
+           "sessions", "interaction", "interactions", "transaction", "transactions", "purchase",
+           "purchases", "login", "logins", "click", "clicks", "trip", "trips", "num", "number",
+           "qty", "quantity"):
         return (1.0, 60.0)
     # Weak money signals (could be non-money) checked late.
-    if has("value", "valor", "amount", "monto", "cost"):
+    if has("value", "valor", "amount", "monto", "cost", "costs"):
         return (50.0, 5000.0)
     return (0.0, 100.0)
 
@@ -3927,13 +3938,23 @@ def _resolve_clustering_segmentation_columns(
                 continue
             if any(tok in lname for tok in _CLUSTERING_LABEL_NAME_TOKENS):
                 continue
-            ctype = _CONTRACT_TYPE_TO_SCHEMA_TYPE.get(feat.get("dtype", "float"), "float")
+            raw_dtype = feat.get("dtype", "float")
+            # Defensive: a non-str dtype (e.g. a list) is unhashable and would raise in `.get`;
+            # default it to "float" (the resolver must be total — see name guard above).
+            ctype = (
+                _CONTRACT_TYPE_TO_SCHEMA_TYPE.get(raw_dtype, "float")
+                if isinstance(raw_dtype, str) else "float"
+            )
             if ctype not in ("int", "float"):
                 continue  # str/date cannot be a numeric K-Means feature
             lo, hi = feat.get("range_min"), feat.get("range_max")
+            # `math.isfinite` is load-bearing (mirrors DatasetFeatureSpec._sanitize_range): without
+            # it an inf range_max passes `lo < hi` and an `inf` value would reach the dataset as
+            # invalid JSON (`Infinity`). Any non-finite/inverted/non-numeric pair → name/dtype heuristic.
             if not (
                 isinstance(lo, (int, float)) and isinstance(hi, (int, float))
-                and not isinstance(lo, bool) and not isinstance(hi, bool) and lo < hi
+                and not isinstance(lo, bool) and not isinstance(hi, bool)
+                and math.isfinite(lo) and math.isfinite(hi) and lo < hi
             ):
                 lo, hi = _clustering_feature_range_heuristic(name, ctype)
             if ctype == "int":

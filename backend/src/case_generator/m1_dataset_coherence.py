@@ -94,10 +94,15 @@ _HEDGE_TERMS: tuple[str, ...] = (
 )
 
 # Substrings (lowercase) in a column's name/description that mark it as MONETARY. Shared by
-# the runtime ceiling resolver (over the deterministic RFM constant) and the golden oracle
-# (over the real post-job schema) so both compute the SAME ceiling — no fixed feature list (I3).
+# the runtime ceiling resolver and the golden oracle so both compute the SAME ceiling — no fixed
+# feature list (I3). Issue #531 — broadened beyond usd/value to the unambiguous money tokens the
+# clustering range heuristic (`graph._clustering_feature_range_heuristic`) scales as money, so the
+# #515 ceiling tracks a DOMAIN money column (e.g. `annual_revenue`, `customer_ltv`,
+# `program_donations`) and not only ones literally containing `usd`/`value`. Conservative set
+# (avoids substring-ambiguous tokens like a bare "pay"); RFM `monetary_value` already matched.
 _MONETARY_COLUMN_SIGNALS: tuple[str, ...] = (
     "usd", "monetar", "value", "valor", "precio", "costo", "ingreso", "$",
+    "revenue", "income", "dollar", "price", "spend", "ltv", "arpu", "donation", "budget", "payment",
 )
 
 
