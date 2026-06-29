@@ -148,6 +148,7 @@ from case_generator.prompts import (
     M3_CONTENT_PROMPT_CLUSTERING,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES,
+    M3_QUESTIONS_PROMPT_CLUSTERING,
     M4_CHART_PROMPT_CLUSTERING,
     M4_CHART_PROMPT_CLUSTERING_PROFILES,
     M4_CONTENT_PROMPT_CLUSTERING,
@@ -8661,6 +8662,22 @@ def _select_eda_prompt(
     return by_family.get(primary_family, generic)
 
 
+def _select_m3_ml_ds_nonclf_questions_prompt(family: str | None) -> tuple[str, str]:
+    """Pick the M3 conceptual-questions prompt + log tag for an ml_ds NON-classification cohort (EPIC #458).
+
+    ml_ds + clustering (gated by ``MLDS_CLUSTERING_M3_QUESTIONS``) gets the dedicated
+    segmentation-native ``M3_QUESTIONS_PROMPT_CLUSTERING`` (so the supervised-experiment framing of
+    ``M3_EXPERIMENT_QUESTIONS_PROMPT`` no longer fights the #467 reframing hint); every other ml_ds
+    non-clf cohort (regresión / serie_temporal, or clustering with the kill-switch off) keeps the
+    generic experiment prompt byte-identically. The #467 hint still appends downstream (it anchors
+    ``target_k`` and is brace-free). Pure (modulo the settings read) so the dispatch is unit-testable
+    without an LLM — mirrors ``_select_eda_prompt`` (#456).
+    """
+    if family == "clustering" and settings.mlds_clustering_m3_questions:
+        return M3_QUESTIONS_PROMPT_CLUSTERING, "m3_clustering_questions"
+    return M3_EXPERIMENT_QUESTIONS_PROMPT, "m3_experiment_questions"
+
+
 def _is_classification_family(state: ADAMState) -> bool:
     """True for ANY profile (business OR ml_ds) when the resolved family is clasificación.
 
@@ -9361,9 +9378,14 @@ def _apply_m3_questions_coherence(
 
 
 def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
-    """Genera preguntas de M3 bifurcadas por perfil:
-    - business: M3_AUDIT_QUESTIONS_PROMPT    (3 preguntas, refs 3.1–3.5, auditoría de evidencia)
-    - ml_ds:    M3_EXPERIMENT_QUESTIONS_PROMPT (3 preguntas, refs exp.*, diseño experimental)
+    """Genera las 3 preguntas CONCEPTUALES de M3 bifurcadas por perfil/familia:
+    - business:           M3_AUDIT_QUESTIONS_PROMPT      (refs 3.1–3.5, auditoría de evidencia)
+    - ml_ds clasificación: M3_CLASSIFICATION_QUESTIONS_BY_VARIANT (lr_only/rf_only/lr_rf_contrast, refs exp.*)
+    - ml_ds clustering:   M3_QUESTIONS_PROMPT_CLUSTERING (EPIC #458, segmentación, refs seg.*; kill-switch
+                          MLDS_CLUSTERING_M3_QUESTIONS — off revierte al genérico + hint #467)
+    - ml_ds otras:        M3_EXPERIMENT_QUESTIONS_PROMPT (refs exp.*, diseño experimental)
+    Las 2 preguntas output-grounded del notebook (numero 4/5) las genera el nodo POST-executor
+    `m3_notebook_questions_generator` (#489/#494) y se mergean en el adapter canónico.
     """
     try:
         cfg = Configuration.from_runnable_config(config)
@@ -9408,8 +9430,11 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 )
                 tag = f"m3_classification_questions_{_variant}"
             else:
-                prompt = M3_EXPERIMENT_QUESTIONS_PROMPT
-                tag = "m3_experiment_questions"
+                # EPIC #458 — ml_ds + clustering selects the dedicated segmentation-native conceptual
+                # questions prompt (kill-switch MLDS_CLUSTERING_M3_QUESTIONS); regresión / serie_temporal
+                # / clustering-with-switch-off keep the generic experiment prompt byte-identically. The
+                # #467 hint (below) still appends to anchor target_k.
+                prompt, tag = _select_m3_ml_ds_nonclf_questions_prompt(family)
         else:
             prompt = M3_AUDIT_QUESTIONS_PROMPT
             tag = "m3_audit_questions"
