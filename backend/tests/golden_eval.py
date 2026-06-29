@@ -25,7 +25,6 @@ executes only under RUN_LIVE_LLM_TESTS with a configured job runner.
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass, field
 
 # ── gate thresholds (5A) ─────────────────────────────────
@@ -1083,12 +1082,9 @@ _ENTITY_ID_VALUE_RE = re.compile(r"^[a-z][a-z0-9_]*_\d{4,}$")
 
 def _fold_accents(text: str) -> str:
     """Lowercase + strip accents (NFKD → ASCII) for accent-insensitive narrative matching (#513)."""
-    return (
-        unicodedata.normalize("NFKD", text)
-        .encode("ascii", "ignore")
-        .decode("ascii")
-        .lower()
-    )
+    from case_generator.text_normalize import fold_accents
+
+    return fold_accents(text).encode("ascii", "ignore").decode("ascii").lower()
 
 
 def check_clustering_entity_index(rows: list) -> bool:
