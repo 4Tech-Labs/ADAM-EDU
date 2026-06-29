@@ -87,6 +87,13 @@ class ADAMState(CanonicalInputState):
     # Issue #437 Fase 2 — the architect's value_model {lens, primary_metric_name, kpi_rows};
     # prompt-side only (NOT canonical / student-facing). None when the architect lens block is off.
     value_model: NotRequired[dict]
+    # Issue #513 — the ml_ds+clustering entity descriptor {singular, plural, snake_prefix} emitted by
+    # the architect. Like value_model: written ONLY by case_architect (single writer → no clobber /
+    # fan-out hazard), NOT in state_input → survives resume via the durable checkpoint. The data layer
+    # renames the dataset index to {snake_prefix}_id (Opción A). Absent / None outside the
+    # mlds_clustering_structure + mlds_clustering_entity_coherence + ml_ds-clustering gate → the data
+    # layer falls back to `user_` (#468, byte-identical).
+    entity_descriptor: NotRequired[dict]
     # Issue #467 — the ml_ds+clustering coherence source of truth {target_k, recommended_option,
     # silhouette_floor}. Resolved ONCE at intake (state_input) from a stable seed, re-injected every
     # attempt (resume-stable, the impact_lens lifecycle) and NEVER written by a node (no clobber, no

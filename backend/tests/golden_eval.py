@@ -24,6 +24,8 @@ executes only under RUN_LIVE_LLM_TESTS with a configured job runner.
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass, field
 
 # ── gate thresholds (5A) ─────────────────────────────────
@@ -246,6 +248,11 @@ class NodeEvalInputs:
     # Computed via ``check_clustering_entity_index``; gate-protects against a data-layer regression that
     # reverts to the monthly period index. RED control: rows with a monthly `period` column fail.
     clustering_entity_index_ok: bool = True
+    # The dataset's entity matches the architect's narrated entity (Issue #513): the entity-id column
+    # prefix == entity_descriptor.snake_prefix AND the M1 narrative names that entity. True (n/a) when
+    # the descriptor / narrative are absent (the frozen golden set). Computed via
+    # ``check_clustering_entity_coherence``; the deterministic teeth are the unit RED/GREEN tests.
+    clustering_entity_coherence_ok: bool = True
     # Narrative carries NO literal LaTeX math delimiter (Issue #480), for ALL profiles/families: the
     # case-viewer has no KaTeX/MathJax, so a ``$k$`` / ``$5000.0 - 50.0$`` would reach the student as a
     # literal delimiter. True (n/a) when the narrative is empty/absent. Computed via
@@ -388,6 +395,12 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "clustering data failure: dataset is time-indexed (monthly `period`) instead of "
             "entity-level (`user_id`) — analysis unit contradicts the segmentation narrative"
+        )
+    if not r.clustering_entity_coherence_ok:
+        reasons.append(
+            "clustering entity coherence failure: the dataset entity-id prefix differs from the "
+            "architect's narrated entity (entity_descriptor) — the CSV and the M1 story name "
+            "different entities (Issue #513)"
         )
     if not r.narrative_no_latex_math_ok:
         reasons.append(
@@ -889,22 +902,84 @@ def _is_monthly_period(value: object) -> bool:
     )
 
 
-def check_clustering_entity_index(rows: list) -> bool:
-    """Pure oracle (Issue #468): is the ml_ds+clustering dataset ENTITY-level, not time-indexed?
+_ENTITY_ID_VALUE_RE = re.compile(r"^[a-z][a-z0-9_]*_\d{4,}$")
 
-    The unit of analysis for a segmentation case is the entity (user/customer), so the index column
-    must be a ``user_id`` (``user_00001``…), NOT a sequential monthly ``period`` (``2023-01``…).
-    Returns False when a row still carries a monthly ``period``-shaped index (the RED control / a
-    data-layer regression that reverts to the time series). True (n/a) when rows are empty. No LLM /
-    network / API key.
+
+def _fold_accents(text: str) -> str:
+    """Lowercase + strip accents (NFKD → ASCII) for accent-insensitive narrative matching (#513)."""
+    return (
+        unicodedata.normalize("NFKD", text)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .lower()
+    )
+
+
+def check_clustering_entity_index(rows: list) -> bool:
+    """Pure oracle (Issue #468, prefix-generalized #513): is the ml_ds+clustering dataset ENTITY-level?
+
+    The unit of analysis for a segmentation case is the entity, so the index column must be an entity
+    id (``{prefix}_00001``… for ANY prefix — ``user_``/``centro_``/``paciente_``…; #513 made the prefix
+    architect-driven), NOT a sequential monthly ``period`` (``2023-01``…). Prefix-agnostic: scans for a
+    ``*_id`` string column whose value is ``{prefix}_NNNNN``-shaped. Returns False when a row still
+    carries a monthly ``period``-shaped index (the RED control / a data-layer regression to the time
+    series) OR when no entity id is present. True (n/a) when rows are empty. No LLM / network / API key.
     """
     if not rows:
         return True
     first = rows[0]
     if _is_monthly_period(first.get("period")):
         return False
-    uid = first.get("user_id")
-    return isinstance(uid, str) and uid.startswith("user_")
+    for k, v in first.items():
+        if (
+            isinstance(k, str)
+            and k.endswith("_id")
+            and isinstance(v, str)
+            and _ENTITY_ID_VALUE_RE.match(v)
+        ):
+            return True
+    return False
+
+
+def check_clustering_entity_coherence(
+    rows: list,
+    entity_descriptor: dict | None,
+    narrative: str | None,
+) -> bool:
+    """Pure oracle (Issue #513): does the dataset's entity match the architect's narrated entity?
+
+    Two-sided coherence: (a) the dataset's entity-id column prefix == ``entity_descriptor.snake_prefix``
+    (the CSV the student downloads uses the SAME entity handle the architect emitted), AND (b) the M1
+    narrative MENTIONS that entity (its snake_prefix / singular / plural, accent-folded) — so the story
+    the student reads names the entity the CSV is built from. RED when either side diverges. True (n/a)
+    when rows / descriptor / narrative are absent or the descriptor carries no snake_prefix → the frozen
+    golden set (no entity_descriptor) stays green; the deterministic teeth live in the unit RED/GREEN
+    tests (precedent #457/#469/#489/#494). No LLM / network / API key.
+    """
+    if not rows or not isinstance(entity_descriptor, dict) or not narrative:
+        return True
+    prefix = entity_descriptor.get("snake_prefix")
+    if not isinstance(prefix, str) or not prefix:
+        return True
+    # (a) data side: the entity id column's value prefix must equal snake_prefix.
+    first = rows[0]
+    id_vals = [
+        v
+        for k, v in first.items()
+        if isinstance(k, str) and k.endswith("_id") and isinstance(v, str)
+    ]
+    if not id_vals:
+        return False  # entity index missing entirely
+    if id_vals[0].rsplit("_", 1)[0] != prefix:
+        return False
+    # (b) narrative side: the story must name the entity (prefix / singular / plural), accent-folded.
+    folded_narrative = _fold_accents(narrative)
+    candidates = {
+        _fold_accents(prefix),
+        _fold_accents(str(entity_descriptor.get("singular", ""))),
+        _fold_accents(str(entity_descriptor.get("plural", ""))),
+    }
+    return any(c and c in folded_narrative for c in candidates)
 
 
 # ── Issue #467 — deterministic clustering data↔narrative k coherence oracle ───
