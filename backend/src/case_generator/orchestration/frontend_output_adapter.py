@@ -1,8 +1,49 @@
+import logging
 from typing import Any, Dict
 from datetime import datetime
 
+from case_generator.suggest_service import family_of, resolve_legacy_family
+
+logger = logging.getLogger(__name__)
+
 
 _QUESTION_METADATA_TO_DROP = frozenset({"rubric"})
+
+
+def _resolve_primary_family_for_output(state: dict) -> str | None:
+    """Resolve the canonical algorithm family for the teacher/student payload.
+
+    Mirrors ``graph._resolve_primary_family`` (canonical catalog first, then the legacy substring map)
+    over the algorithm picks in ``state`` — with the same ``task_payload`` fallback
+    ``graph._extract_state_algoritmos`` uses. Returns one of
+    ``{"clasificacion","regresion","clustering","serie_temporal"}`` or ``None`` when no pick resolves.
+    Surfaced at the canonical root so the frontend can frame the Módulo 4 identity by family (e.g. a
+    clustering case must NOT promise NPV/ROI/Payback). Lightweight — ``suggest_service`` is a catalog
+    module with no graph import, so this stays out of the heavy generation stack. GUARANTEED never to
+    raise: any internal error degrades to ``None`` (the frontend's default financial framing) so a
+    family-resolution bug can never break the canonical-output assembly that feeds the teacher preview.
+    """
+    try:
+        raw = state.get("algoritmos") or []
+        if not raw:
+            task_payload = state.get("task_payload") or {}
+            if isinstance(task_payload, dict):
+                raw = task_payload.get("algoritmos") or []
+        algoritmos = [str(a) for a in raw if str(a).strip()] if isinstance(raw, list) else []
+        for algo in algoritmos:
+            family = family_of(algo)
+            if family is not None:
+                return family
+        for algo in algoritmos:
+            legacy = resolve_legacy_family(algo)
+            if legacy is not None:
+                return legacy[0]
+        return None
+    except Exception:  # pragma: no cover - defensive: never break canonical-output assembly
+        logger.warning(
+            "[adapter] primaryFamily resolution failed; defaulting to None", exc_info=True
+        )
+        return None
 
 
 def _strip_question_metadata(questions: Any) -> Any:
@@ -139,6 +180,11 @@ def adapter_legacy_to_canonical_output(state: dict) -> dict:
         # Preview metadata derived from the normalized teacher intake.
         "edaDepth": state.get("edaDepth"),                           # None if harvard_only
         "studentProfile": state.get("studentProfile", "business"),   # default to "business"
+
+        # Algorithm family (clasificacion | regresion | clustering | serie_temporal | None) so the
+        # frontend can frame Módulo 4 by family — e.g. a clustering case shows a segmentation identity,
+        # not the financial "NPV/ROI/Payback" role copy that suits a financial/classification case.
+        "primaryFamily": _resolve_primary_family_for_output(state),
 
         # Additional preview metadata retained by the current UI contract.
         "outputDepth": state.get("output_depth"),  # None | "visual_plus_technical" | "visual_plus_notebook"

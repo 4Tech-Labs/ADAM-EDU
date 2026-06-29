@@ -1,33 +1,52 @@
 import type { CaseModuleProps } from "./types";
 import { PlotlyChartsRenderer } from "../PlotlyChartsRenderer";
 
-export function M4Finance({ content, md, renderPreguntas }: CaseModuleProps) {
+export function M4Finance({ result, content, md, renderPreguntas }: CaseModuleProps) {
+    // Frame the M4 identity by algorithm family: a clustering (segmentation) case has NO
+    // cash-flow / payback model, so it must not promise "NPV/ROI/Payback" the way a financial /
+    // classification case does — it measures differentiated value per discovered segment instead.
+    const isClustering = result?.primaryFamily === "clustering";
+
     return (
         <>
             <div className="mb-8">
-                <p className="running-header mb-2">Módulo 4 · Finance / Technical Intern</p>
+                <p className="running-header mb-2">Módulo 4 · {isClustering ? "Impact / Technical Intern" : "Finance / Technical Intern"}</p>
                 <h1 className="type-h1 text-slate-900 mb-2">
                     Impacto y Finanzas
                 </h1>
                 <hr style={{ border: "none", height: "1.5px", background: "linear-gradient(to right, #cbd5e1, transparent)", margin: "1.5rem 0" }} />
             </div>
 
-            {/* Sección 1 — Identidad del Arquitecto Financiero */}
+            {/* Sección 1 — Identidad del Arquitecto (de Impacto para segmentación, Financiero por defecto) */}
             <div className="overlay-docente mb-8">
                 <div className="flex items-center gap-2 mb-3">
                     <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                     </svg>
-                    <span className="text-xs font-bold text-amber-700 uppercase tracking-wider">Arquitecto Financiero · Mi Rol en el Equipo ADAM</span>
+                    <span className="text-xs font-bold text-amber-700 uppercase tracking-wider">
+                        {isClustering ? "Arquitecto de Impacto · Mi Rol en el Equipo ADAM" : "Arquitecto Financiero · Mi Rol en el Equipo ADAM"}
+                    </span>
                 </div>
-                <p className="text-sm text-amber-800 leading-relaxed">
-                    Soy el Arquitecto Financiero. Mi trabajo es construir el business case cuantitativo.{" "}
-                    <strong>Metáfora:</strong> Imagina que soy un agricultor evaluando si plantar un cultivo nuevo
-                    o comprar un sistema de riego automatizado costoso. El Ingeniero de Experimentos
-                    (mi agrónomo) ya demostró que funciona. Ahora necesito calcular si vale la pena la inversión
-                    para toda la finca: costos, ingresos proyectados y el retorno de la inversión.
-                    En términos financieros, mido el <strong>NPV, ROI y Payback</strong>.
-                </p>
+                {isClustering ? (
+                    <p className="text-sm text-amber-800 leading-relaxed">
+                        Soy el Arquitecto de Impacto. Mi trabajo es traducir los segmentos descubiertos en
+                        decisiones de negocio.{" "}
+                        <strong>Metáfora:</strong> Imagina que soy el gerente de una tienda que acaba de descubrir
+                        que sus clientes no son todos iguales, sino varios grupos con hábitos distintos. El
+                        Ingeniero de Experimentos (que corrió la segmentación) ya reveló esos grupos; ahora yo
+                        decido qué hacer con cada uno — a quién priorizar y qué intervención diferenciada aplicar.
+                        Mido el <strong>valor diferenciado por segmento</strong>, no un único retorno financiero.
+                    </p>
+                ) : (
+                    <p className="text-sm text-amber-800 leading-relaxed">
+                        Soy el Arquitecto Financiero. Mi trabajo es construir el business case cuantitativo.{" "}
+                        <strong>Metáfora:</strong> Imagina que soy un agricultor evaluando si plantar un cultivo nuevo
+                        o comprar un sistema de riego automatizado costoso. El Ingeniero de Experimentos
+                        (mi agrónomo) ya demostró que funciona. Ahora necesito calcular si vale la pena la inversión
+                        para toda la finca: costos, ingresos proyectados y el retorno de la inversión.
+                        En términos financieros, mido el <strong>NPV, ROI y Payback</strong>.
+                    </p>
+                )}
             </div>
 
             {content.m4Charts && content.m4Charts.length > 0 && (

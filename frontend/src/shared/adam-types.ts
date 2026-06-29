@@ -165,6 +165,10 @@ export interface CanonicalCaseOutput {
     // Optional so older jobs can still render with safe preview fallbacks.
     edaDepth?: EDADepth;
     studentProfile?: StudentProfile;
+    // Algorithm family (lets the UI frame a module by family, e.g. a clustering case shows a
+    // segmentation identity in M4 instead of the financial NPV/ROI/Payback copy). May be absent
+    // for older jobs generated before this field was surfaced.
+    primaryFamily?: AlgorithmFamily | null;
     generatedAt: string;
     content: CaseContent; // Optional properties inside allow for partial state during HITL
 

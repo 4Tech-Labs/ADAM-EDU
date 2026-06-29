@@ -15,6 +15,7 @@ _ALLOWED_ROOT_FIELDS = (
     "caseType",
     "edaDepth",
     "studentProfile",
+    "primaryFamily",
     "generatedAt",
     "outputDepth",
 )

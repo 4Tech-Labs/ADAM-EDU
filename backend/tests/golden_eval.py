@@ -849,9 +849,11 @@ def check_m4_clustering_segment_differentiated(
 
     Reuses the production detector ``clustering_decision.detect_fabricated_segment_distribution`` (single
     source of truth): a value trace over >= 3 segments with <= 1 distinct non-zero value is a fabrication.
-    True (n/a) when ``n_clusters`` is absent / < 3 or there are no charts. RED control: a chart whose
-    segment trace is ``[135000, 0, 0, 0]`` fails. Symbolic in the frozen golden set (no chart + n_clusters
-    fixture), like #469/#494; the deterministic teeth live in ``test_issue498`` unit RED/GREEN.
+    True (n/a) when ``n_clusters`` is < 3 or there are no charts. When ``n_clusters`` is ABSENT (executor
+    degraded) the structural fabrication is STILL caught (a ``[135000, 0, 0, 0]`` chart fails regardless),
+    so a degraded case cannot mask a fabricated distribution. RED control: a fabricated segment trace
+    fails. Symbolic in the frozen golden set (no chart + n_clusters fixture), like #469/#494; the
+    deterministic teeth live in ``test_issue498`` unit RED/GREEN.
     """
     from case_generator.clustering_decision import detect_fabricated_segment_distribution
 
