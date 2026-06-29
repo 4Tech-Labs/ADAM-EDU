@@ -169,6 +169,7 @@ from case_generator.prompts import (
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL,
+    M4_CHART_PROMPT_CLASSIFICATION_INVESTMENT_NEUTRAL,
     M4_CHARTS_PROMPT_BY_FAMILY,
     M4_CHARTS_PROMPT_BY_FAMILY_LEGACY,
     M4_CHARTS_PROMPT_BY_FAMILY_NEUTRAL,
@@ -297,6 +298,9 @@ from case_generator.datagen.eda_charts_classification import (
 )
 from case_generator.datagen.eda_charts_clustering import (
     generate_clustering_eda_charts,
+)
+from case_generator.datagen.m4_charts_classification import (
+    generate_m4_cost_chart,
 )
 from case_generator.orchestration.frontend_adapter import adapter_canonical_to_legacy
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
@@ -8393,6 +8397,33 @@ def _effective_m4_clustering_prompts(
     return by_family
 
 
+def _effective_m4_classification_prompts(
+    by_family: dict[str, str],
+    profile: str | None,
+    primary_family: str | None,
+    *,
+    lens_on: bool,
+) -> dict[str, str]:
+    """Override ``"clasificacion"`` with the G1-only investment prompt (decision-charts reframe).
+
+    Mirrors ``_effective_m4_clustering_prompts``: returns the SAME ``by_family`` object for every
+    cohort EXCEPT ml_ds+clasificación on the NEUTRAL path (``lens_on``) under the
+    ``M4_CLASSIFICATION_DECISION_CHARTS`` switch, where it returns a shallow copy with
+    ``"clasificacion"`` overridden to the LLM-authored Gráfico-1 (investment) prompt — the
+    DETERMINISTIC cost-of-errors Gráfico 2 is built in Python and appended by the node afterwards.
+    Off / non-clf / business (``profile != "ml_ds"``) / lens-off → identity object → byte-identical.
+    Pure (no LLM/state) so the gate is unit-testable. Used for the M4 CHARTS dict only.
+    """
+    if (
+        lens_on
+        and profile == "ml_ds"
+        and primary_family == "clasificacion"
+        and settings.m4_classification_decision_charts
+    ):
+        return {**by_family, "clasificacion": M4_CHART_PROMPT_CLASSIFICATION_INVESTMENT_NEUTRAL}
+    return by_family
+
+
 def _resolve_impact_lens(state: ADAMState) -> str:
     """Return the case's resolved Impact Lens (value frame for M4) — Issue #437.
 
@@ -11360,6 +11391,16 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
             lens_on=_lens_on,
             clustering_prompt=_clustering_chart_prompt,
         )
+        # Decision-charts reframe (ml_ds+clf): override "clasificacion" with the G1-only investment
+        # prompt; the deterministic cost-of-errors Gráfico 2 is built + appended after grounding (below).
+        # Same gate (_chart_profile/_chart_family) as that append → they fire together (never a stray
+        # 3rd chart). Identity object for every other cohort / lens-off / switch-off → byte-identical.
+        charts_by_family = _effective_m4_classification_prompts(
+            charts_by_family,
+            _chart_profile,
+            _chart_family,
+            lens_on=_lens_on,
+        )
         prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
         # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
         # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
@@ -11372,6 +11413,20 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
             EDAChartGeneratorOutput
         ).invoke(formatted_prompt)
         charts = [c.model_dump() for c in result.charts]
+
+        # Decision-charts reframe gate (ml_ds+clf, NEUTRAL/lens-on path, switch on). Computed ONCE and
+        # reused below for the deterministic Gráfico-2 append — SAME gate as the prompt override, so
+        # they fire together. On this path the LLM was asked for EXACTLY 1 chart (Gráfico 1); cap to the
+        # first defensively so a stray 2nd LLM chart can't combine with the appended deterministic
+        # Gráfico 2 into a 3-chart M4. No-op for every other cohort / lens-off / switch-off.
+        _clf_reframe = (
+            _lens_on
+            and _chart_profile == "ml_ds"
+            and _chart_family == "clasificacion"
+            and settings.m4_classification_decision_charts
+        )
+        if _clf_reframe and len(charts) > 1:
+            charts = charts[:1]
 
         # Grounding de coherencia de gráficos (ml_ds+clf y business+clf): reprompt-once-then-DROP de
         # cualquier gráfico que cite una métrica del modelo no verificada (anclada al M3 ejecutado),
@@ -11414,6 +11469,33 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 charts=charts,
                 n_clusters=_finite_metric(state.get("m3_metrics_summary"), "n_clusters"),
             )
+
+        # Decision-charts reframe (ml_ds+clf): the LLM authored ONLY Gráfico 1 (investment); build the
+        # cost-of-errors Gráfico 2 DETERMINISTICALLY from the contract cost matrix and APPEND it. Zero
+        # fabrication by construction (no LLM, no guard). Returns None → M4 ships only Gráfico 1 when
+        # the case has no real asymmetric cost matrix (honest; never a fabricated chart). SAME gate as
+        # the prompt override above (they fire together → never a stray 3rd chart). Mutually exclusive
+        # with the clustering branch. No-op (byte-identical) for every other cohort / lens-off / legacy.
+        # INNER try so a builder fault never empties the set nor hits the node's outer except.
+        if _clf_reframe:
+            try:
+                _cost_chart = generate_m4_cost_chart(
+                    _extract_business_cost_matrix(state),
+                    prevalence=_finite_metric(state.get("m3_metrics_summary"), "prevalence"),
+                    contract=state.get("dataset_schema_required"),
+                )
+                if _cost_chart is not None:
+                    # Schema-validate before emitting (mirrors _annotate_validate_emit); a malformed
+                    # builder dict is dropped, never crashes the node.
+                    _validated_cost = EDAChartGeneratorOutput.model_validate(
+                        {"charts": [_cost_chart]}
+                    )
+                    charts = charts + [_validated_cost.charts[0].model_dump()]
+            except Exception:  # pragma: no cover - defensive; never fail/empty a job
+                logger.exception(
+                    "[m4_chart_generator] deterministic cost chart failed — omitting",
+                    extra={"node": "m4_chart_generator", "case_id": state.get("case_id")},
+                )
 
         # Backstop determinista (solo en el camino vigente): elimina cualquier gráfico de
         # sensibilidad/tornado residual que el LLM emita pese al prompt de 2 gráficos. INNER try para
