@@ -302,6 +302,14 @@ class NodeEvalInputs:
     # citing money the CSV can't back. RED control: a narrative with a per-entity $ above the
     # ceiling (or the kill-switch-off path that lets it through) fails.
     m1_dataset_coherence_ok: bool = True
+    # Every generated value stays inside its column's DECLARED [range_min, range_max] (ml_ds outlier
+    # respects the bound): the EDA-outlier injection (Fix B-05) no longer ships a semantically
+    # impossible value (a credit_score declared [300,850] reaching 1700, a percentage exceeding 100)
+    # for ml_ds. True (n/a) when rows/schema are absent. Computed via
+    # ``check_outliers_within_declared_bounds``; gate-protects against a regression that reopens the
+    # legacy ×2 ml_ds cap. RED control: a dataset generated with the kill-switch off (ml_ds ×2) ships
+    # values above range_max and fails.
+    outliers_within_declared_bounds_ok: bool = True
 
 
 @dataclass
@@ -462,6 +470,12 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "M1 dataset coherence failure: the narrative cites a per-entity/per-segment money "
             "figure (or entity/population) the deterministic clustering dataset cannot back (Issue #515)"
+        )
+    if not r.outliers_within_declared_bounds_ok:
+        reasons.append(
+            "dataset bounds failure: a generated value exceeds its column's declared "
+            "[range_min, range_max] (the EDA outlier injection shipped a semantically impossible "
+            "value, e.g. a credit_score declared [300,850] reaching 1700)"
         )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
@@ -984,6 +998,53 @@ def check_dataset_prevalence_matches_contract(
     n = len(vals)
     expected_k = max(1, min(n - 1, round(float(rate) * n)))
     return abs(sum(vals) - expected_k) <= tol_rows
+
+
+# Columns whose values are legitimately transformed AFTER generation (revenue/cost scaling to the
+# annual total, ebitda/margin recompute, the m1>=m3>=m6>=m12 retention enforcement, the period index)
+# and may therefore drift outside their per-row declared [range_min, range_max]. The bounds oracle
+# skips them — it targets the FEATURE/TARGET columns the EDA-outlier injection can violate.
+_BOUNDS_SKIP_TOKENS: tuple[str, ...] = ("revenue", "cost", "ebitda", "margin", "retention_", "period")
+
+
+def check_outliers_within_declared_bounds(
+    rows: list | None, schema: dict | None, *, rel_tol: float = 1e-6, abs_tol: float = 0.02
+) -> bool:
+    """Pure oracle: every generated value stays inside its column's DECLARED [range_min, range_max].
+
+    The generator clips all generated values to ``[low, high]``; the EDA-outlier injection (Fix B-05)
+    was the ONLY violator — it pushed ``numeric_non_revenue[0]`` to ``range_max × 2`` for ml_ds,
+    shipping a semantically impossible value (a credit_score declared ``[300, 850]`` reaching 1700, a
+    percentage past 100). With ``MLDS_OUTLIER_RESPECT_RANGE`` (default on) the ml_ds cap matches the
+    already-correct business path (``range_max``), so every value is in-bounds.
+
+    Profile/family-agnostic, zero-FP: skips the columns that are legitimately rescaled / recomputed /
+    range-enforced after generation (``_BOUNDS_SKIP_TOKENS``); only flags a numeric value above
+    ``range_max`` (or below ``range_min``) beyond a small rounding tolerance. True (n/a) for empty
+    rows / absent schema. RED control: a dataset generated with the kill-switch OFF (ml_ds ×2) ships a
+    value above ``range_max`` → False.
+    """
+    if not rows or not isinstance(schema, dict):
+        return True
+    for col in schema.get("columns") or []:
+        if col.get("type") not in ("int", "float"):
+            continue
+        name = str(col.get("name") or "")
+        if any(tok in name.lower() for tok in _BOUNDS_SKIP_TOKENS):
+            continue
+        rmin, rmax = col.get("range_min"), col.get("range_max")
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            v = r.get(name)
+            if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
+                continue
+            fv = float(v)
+            if rmax is not None and fv > float(rmax) + abs_tol + rel_tol * abs(float(rmax)):
+                return False
+            if rmin is not None and fv < float(rmin) - abs_tol - rel_tol * abs(float(rmin)):
+                return False
+    return True
 
 
 def check_m4_lens_kpi_coherence(narrative: str | None, *, lens: str | None) -> bool:
