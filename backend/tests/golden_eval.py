@@ -96,6 +96,14 @@ class NodeEvalInputs:
     # that re-embeds MCQ answer-choices fails the golden gate. Applies to ALL families (the defect is
     # general, not classification-only).
     m4_questions_no_embedded_mcq_ok: bool = True
+    # M4 question model coherence (ml_ds + clasificación single-model): no question may name the
+    # unselected model (lr_only must not name Random Forest; rf_only must not name Logistic Regression)
+    # nor cite a model metric (AUC/F1/recall) absent from the executed M3 metrics. True (n/a) for
+    # contrast / business / non-clf jobs (variant None) and pre-execution (anchorless block). Computed
+    # via ``check_m4_questions_model_coherence`` (reuses the production validator). Wired into the gate
+    # so a future m4_questions_generator / m4_content downgrade that reintroduces the leak/fabrication is
+    # blocked (the M4 sibling of ``m5_questions_coherence_ok``).
+    m4_questions_model_coherence_ok: bool = True
     # M5 memorándum coherence: every classification golden job's M5 memo must be coherent (does not
     # name the unselected model; cites no model metric absent from the executed M3 metrics; does not
     # recommend a strategic option that does not exist in the case). True (n/a) for non-classification
@@ -362,6 +370,10 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M4 question option coherence failure: nonexistent or unpresented option")
     if not r.m4_questions_no_embedded_mcq_ok:
         reasons.append("M4 question coherence failure: enunciado embeds MCQ answer-choices A/B/C")
+    if not r.m4_questions_model_coherence_ok:
+        reasons.append(
+            "M4 question coherence failure: unselected-model leak or unanchored model metric"
+        )
     if not r.m5_questions_coherence_ok:
         reasons.append(
             "M5 memorándum coherence failure: unselected-model leak, unanchored metric, or "
@@ -754,6 +766,28 @@ def check_m4_questions_no_embedded_mcq(preguntas: list[dict]) -> bool:
         if isinstance(pregunta, dict) and detect_embedded_mcq_options(pregunta.get("enunciado")):
             return False
     return True
+
+
+def check_m4_questions_model_coherence(
+    preguntas: list[dict], *, variant: str | None, metrics_block: str
+) -> bool:
+    """Pure oracle: are the M4 questions free of an unselected-model leak / fabricated model metric?
+
+    Reuses the production validator ``m4_grounding.validate_m4_questions_coherence`` (single source of
+    truth), filtered to the ml_ds+clf model-coherence violations (the option/MCQ dimension has its own
+    oracles ``check_m4_question_option_coherence`` / ``check_m4_questions_no_embedded_mcq``), so a future
+    M4-questions prompt or m4_content tier downgrade that lets an ``lr_only`` question name Random Forest
+    or cite an AUC absent from the executed M3 metrics fails the golden gate. The M4 sibling of
+    ``check_m5_questions_coherence``. Function-level import keeps this support module lightweight.
+    """
+    from case_generator.m4_grounding import validate_m4_questions_coherence
+
+    violations = validate_m4_questions_coherence(
+        preguntas, variant=variant, metrics_block=metrics_block
+    )
+    return not any(
+        v.startswith(("MODELO_NO_SELECCIONADO", "METRICA_NO_ANCLADA")) for v in violations
+    )
 
 
 def check_m4_deployment_section_unique(m4_content: str) -> bool:

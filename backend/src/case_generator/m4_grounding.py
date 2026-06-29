@@ -24,12 +24,15 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 
+from case_generator.m1_grounding import validate_question_option_coherence
 from case_generator.narrative_grounding import (
     _FALLBACK_MARKER,
     _extract_anchor_numbers,
     _is_thousands_formatted,
     _within_tolerance,
+    detect_unanchored_adjacent_metrics,
     detect_unselected_model_mentions,
     has_metric_anchors,
 )
@@ -475,10 +478,10 @@ def build_m4_chart_grounding_reprompt(
 # by their REAL letter in ``solucion_esperada``). A question whose ``enunciado`` still embeds its OWN
 # answer-choice markers ("A) … B) … C) …") collides — and historically CROSS-MAPS — with the strategic
 # Opción A/B/C (the #481 LIVE defect). The #416 validator cannot see it (it captures the word
-# "Opción X", not the answer-letter "X)" form). Wired into the existing reprompt-once-then-DEGRADE M4
-# guard (``graph._apply_m4_questions_option_coherence``); a residual violation only degrades to the
-# pass-1 question, so a FALSE POSITIVE costs one wasted reprompt and NEVER degrades quality or fails a
-# job.
+# "Opción X", not the answer-letter "X)" form). Aggregated by ``validate_m4_questions_coherence`` and
+# wired into the reprompt-once-then-DEGRADE M4 guard (``graph._apply_m4_questions_coherence``); a
+# residual violation only degrades to the pass-1 question, so a FALSE POSITIVE costs one wasted reprompt
+# and NEVER degrades quality or fails a job.
 #
 # Marker shape: an UPPERCASE letter A-D immediately followed by ")" at the start of a line or after
 # whitespace (so a parenthetical cross-reference "(A)" — preceded by "(" — and an inline "wordA)" are
@@ -509,3 +512,97 @@ def detect_embedded_mcq_options(enunciado: str | None) -> list[str]:
         return []
     except Exception:  # pragma: no cover - defensive; never fail a job
         return []
+
+
+# ── M4 (Impacto) question coherence orchestrator ───────────────────────────────────────────────────
+# Sibling of ``m5_grounding.validate_m5_questions_coherence``. The M4 questions were the ONLY
+# classification question surface still missing the single-model leak guard and the model-metric
+# anchoring guard that M2 (``m2_grounding``), M3 (``m3_grounding``), M5 (``m5_grounding``), the M4
+# narrative (``graph._invoke_narrative_with_grounding``) and the M4 charts (``validate_m4_chart_grounding``)
+# already carry. For an ml_ds + Logistic-Regression deep dive (``lr_only``) an M4 question could name
+# Random Forest (a model the case never built) or fabricate an AUC, with NO deterministic guarantee.
+# This validator closes that asymmetry so the M4 questions obey the SAME coherence contract the rest of
+# the case already does. Same zero-false-positive doctrine and reuse-the-hardened-primitives discipline
+# as the siblings (NO new detection regex).
+def validate_m4_questions_coherence(
+    preguntas: list[dict],
+    *,
+    variant: str | None,
+    metrics_block: str,
+) -> list[str]:
+    """Return coherence violations for the M4 (Impacto) question set. ``[]`` == coherent.
+
+    Pure, deterministic, total on well-typed input (never raises; the caller still wraps it
+    best-effort). Four independent checks, each gated so a non-applicable cohort is a byte-identical
+    no-op:
+
+    * **MODELO_NO_SELECCIONADO** (ml_ds single-model ``lr_only`` / ``rf_only``) — a question names the
+      UNSELECTED model. Reuses ``narrative_grounding.detect_unselected_model_mentions`` (#337) over
+      ``titulo + enunciado + solucion_esperada`` (a leak in the student-facing ``enunciado`` is the
+      worst). No-op for ``lr_rf_contrast`` (both models legit) and for business (``variant`` is
+      ``None`` — the business arc is RF-free by design, #329).
+    * **METRICA_NO_ANCLADA** (ml_ds with an executed M3 notebook) — a model metric (AUC/F1/recall…)
+      cited in a question's ``enunciado`` or ``solucion_esperada`` is not anchored to the verified M3
+      metrics. Reuses ``detect_unanchored_adjacent_metrics`` (ADJACENCY-ONLY): the M4 questions cite
+      heavy business figures (ROI, revenue), so the generic clause-level pass would false-positive.
+      The M4 prompt REQUIRES citing model metrics in the ``enunciado`` (unlike the M5 memo, where only
+      the ``solucion`` carries them), so both fields are scanned. Gated on ``has_metric_anchors`` so an
+      absent/anchorless block (all of business; ml_ds pre-execution / visual-only) is a clean no-op.
+    * **OPTION_NONEXISTENT / OPTION_NOT_PRESENTED** (ALL families) — a ``solucion_esperada`` recommends
+      a strategic option (A/B/C) that does not exist in / was not presented by its own ``enunciado``.
+      Reuses ``m1_grounding.validate_question_option_coherence`` with the FLOOR universe (``""`` — M4
+      has no ``dilema_brief`` authority), keeping BOTH the #416 primary and secondary rules byte-for-
+      byte (the M4 question contract has always kept both, unlike the M5 memo).
+    * **MCQ_OPCIONES_EMBEBIDAS** (ALL families, #481) — an ``enunciado`` embeds its OWN answer-choices
+      ("A) … B) … C) …"), which collide / cross-map with the strategic Opción A/B/C. Reuses the local
+      ``detect_embedded_mcq_options``.
+
+    ``variant`` is the RESOLVED classification notebook variant (``lr_only`` / ``rf_only`` /
+    ``lr_rf_contrast`` / ``None``) — passed in by the caller, NEVER ``algorithm_mode`` (``"single"`` /
+    ``"contrast"``), which would silently disable the model-leak check. ``metrics_block`` is the
+    ``computed_metrics_block`` already built by the node from ``m3_metrics_summary``.
+    """
+    if not isinstance(preguntas, list):
+        return []
+    # Defensive: keep the validator genuinely total. Production always passes a str from
+    # ``build_computed_metrics_block``, but a None here (e.g. a test oracle) must no-op Check B,
+    # not raise inside ``has_metric_anchors``'s substring test.
+    metrics_block = metrics_block or ""
+    metrics_available = has_metric_anchors(metrics_block)
+    violations: list[str] = []
+    for index, pregunta in enumerate(preguntas):
+        if not isinstance(pregunta, Mapping):
+            continue
+        numero = pregunta.get("numero")
+        num = numero if isinstance(numero, int) else index + 1
+        titulo = str(pregunta.get("titulo", "") or "")
+        enunciado = str(pregunta.get("enunciado", "") or "")
+        solucion = str(pregunta.get("solucion_esperada", "") or "")
+
+        # ── Check A — a question must not name the unselected/unbuilt model ───────────
+        prose = "\n".join((titulo, enunciado, solucion))
+        for leak in detect_unselected_model_mentions(prose, variant):
+            model = leak.split(": ", 1)[-1]
+            violations.append(
+                f"MODELO_NO_SELECCIONADO: la pregunta {num} nombra el modelo no "
+                f"seleccionado ({model})"
+            )
+
+        # ── Check B — model metrics cited in the question must be anchored to executed M3 ─
+        if metrics_available:
+            for field in (enunciado, solucion):
+                for unanchored in detect_unanchored_adjacent_metrics(field, metrics_block):
+                    raw = unanchored.split(": ", 1)[-1]
+                    violations.append(
+                        f"METRICA_NO_ANCLADA: la pregunta {num} cita una métrica del modelo "
+                        f"({raw}) que no figura en las métricas verificadas del M3"
+                    )
+
+        # ── Check D — the enunciado must not embed its own A/B/C answer-choices (#481) ─
+        violations.extend(detect_embedded_mcq_options(enunciado))
+
+    # ── Check C — a solucion must not recommend a nonexistent / unpresented option (#416) ─
+    # Reuse the proven validator with the FLOOR universe (M4 has no dilema_brief). The returned
+    # messages already carry the question number.
+    violations.extend(validate_question_option_coherence(preguntas, ""))
+    return violations

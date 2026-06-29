@@ -199,6 +199,7 @@ from case_generator.impact_lens import (
     IMPACT_LENS_KEYS,
     build_impact_lens_architect_hint,
     build_impact_lens_hint,
+    build_impact_lens_m4_dual_axis_hint,
     build_impact_lens_m5_hint,
     normalize_impact_lens,
 )
@@ -260,12 +261,12 @@ from case_generator.m5_grounding import validate_m5_questions_coherence
 from case_generator.m6_grounding import log_out_of_roster_mentions
 from case_generator.m4_grounding import (
     build_m4_chart_grounding_reprompt,
-    detect_embedded_mcq_options,
     drop_sensitivity_charts,
     log_chart_benchmark_fabrication,
     log_duplicate_deployment_sections,
     log_narrative_benchmark_fabrication,
     validate_m4_chart_grounding,
+    validate_m4_questions_coherence,
 )
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
@@ -1706,16 +1707,6 @@ _M1_QUESTIONS_OPTION_REPROMPT_HEADER = (
     "NUNCA recomiendes una opción inexistente ni ausente del enunciado. Incoherencias "
     "detectadas:\n"
 )
-_M4_QUESTIONS_OPTION_REPROMPT_HEADER = (
-    "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE OPCIONES (Módulo 4)\n"
-    "Las preguntas del Módulo 4 son ABIERTAS: el enunciado NO debe incrustar opciones de "
-    "respuesta etiquetadas A/B/C (colisionan con las opciones estratégicas A/B/C del caso). "
-    "Regenera EXACTAMENTE 3 preguntas con el MISMO schema y los MISMOS `numero` (1, 2, 3): "
-    "reescribe cada enunciado como pregunta abierta SIN answer-choices A/B/C. Si "
-    "`solucion_esperada` recomienda una opción estratégica del caso, nómbrala por su LETRA "
-    "REAL tal como aparece en el análisis del Módulo 4 (§4.5), sin inventar ni cruzar una "
-    "letra de respuesta. NUNCA recomiendes una opción inexistente. Incoherencias detectadas:\n"
-)
 
 
 def _build_m1_exhibit_anexos(state: ADAMState) -> dict[str, str]:
@@ -2078,13 +2069,16 @@ def _apply_m1_questions_option_coherence(
 
 
 # ─────────────────────────────────────────────────────────
-# M4 (Impacto) question option coherence — reuses the M1 validator with the FLOOR
-# universe {A,B,C} (M4 has no dilema_brief). See m1_grounding.validate_question_option_coherence.
+# M4 (Impacto) question coherence — option/MCQ (all families) + single-model leak +
+# model-metric anchoring (ml_ds+clf). The pure validator lives in m4_grounding
+# (``validate_m4_questions_coherence``, the M4 sibling of ``validate_m5_questions_coherence``).
 # ─────────────────────────────────────────────────────────
 _M4_VIOLATION_CODES = (
     ("OPTION_NONEXISTENT", "option_nonexistent"),
     ("OPTION_NOT_PRESENTED", "option_not_presented"),
     ("MCQ_OPCIONES_EMBEBIDAS", "mcq_opciones_embebidas"),
+    ("MODELO_NO_SELECCIONADO", "unselected_model"),
+    ("METRICA_NO_ANCLADA", "unanchored_metric"),
 )
 
 
@@ -2098,62 +2092,98 @@ def _m4_violation_types(violations: list[str]) -> list[str]:
     return codes
 
 
-def _m4_question_violations(preguntas_dict: list[dict]) -> list[str]:
-    """All M4 question option-coherence violations (#481).
-
-    Two pure rules over the same set, so the pass-1 check and the post-reprompt re-validation apply the
-    SAME contract: (1) the shared #416 validator with the FLOOR universe (``dilema_brief=""``) — a
-    ``solucion_esperada`` that recommends a nonexistent / unpresented A/B/C option; (2) the embedded-MCQ
-    detector — an ``enunciado`` that incrusta its OWN answer-choices ("A) … B) … C) …"), which collide
-    and historically cross-map with the strategic Opción A/B/C. The validator is letter-agnostic on the
-    WORD "Opción X"; the detector covers the answer-letter "X)" form it cannot see.
+def _build_m4_coherence_reprompt(
+    violations: list[str],
+    *,
+    variant: str | None,
+    metrics_block: str,
+    numeros: list[Any],
+) -> str:
+    """Focused reprompt (CONCATENATED, never ``.format`` — the formatted prompt and any cited cifras
+    carry ``{}``). Carries the concrete fix: open questions with no embedded A/B/C answer-choices, the
+    real strategic letter, the forbidden model when single-model, the verified-metrics rule, and the
+    SAME 3 ``numero`` so the downstream ``M4-Q{numero}`` grading key holds. Mirrors
+    ``_build_m5_coherence_reprompt``.
     """
-    violations = list(validate_question_option_coherence(preguntas_dict, ""))
-    for pregunta in preguntas_dict:
-        if isinstance(pregunta, dict):
-            violations.extend(detect_embedded_mcq_options(pregunta.get("enunciado")))
-    return violations
+    bullet_list = "\n".join(f"- {violation}" for violation in violations)
+    forbidden_line = ""
+    if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY:
+        forbidden_line = "NO menciones Random Forest (el modelo seleccionado es Logistic Regression).\n"
+    elif variant == CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY:
+        forbidden_line = "NO menciones Logistic Regression (el modelo seleccionado es Random Forest).\n"
+    metrics_line = ""
+    if has_metric_anchors(metrics_block):
+        metrics_line = (
+            "Cita SOLO métricas del modelo (AUC/F1/precision/recall) que figuren en las métricas "
+            "verificadas del M3; no inventes valores.\n"
+        )
+    numeros_str = ", ".join(str(numero) for numero in numeros)
+    return (
+        "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA (Módulo 4)\n"
+        "Las preguntas del Módulo 4 son ABIERTAS: el enunciado NO debe incrustar opciones de "
+        "respuesta etiquetadas A/B/C (colisionan con las opciones estratégicas A/B/C del caso). "
+        f"Regenera EXACTAMENTE {len(numeros)} pregunta(s) con el MISMO schema y los MISMOS "
+        f"`numero` ({numeros_str}): reescribe cada enunciado como pregunta abierta SIN "
+        "answer-choices A/B/C. Si `solucion_esperada` recomienda una opción estratégica del caso, "
+        "nómbrala por su LETRA REAL tal como aparece en el análisis del Módulo 4 (§4.5), sin "
+        "inventar ni cruzar una letra de respuesta. NUNCA recomiendes una opción inexistente.\n"
+        f"{forbidden_line}"
+        f"{metrics_line}"
+        "Incoherencias detectadas:\n" + bullet_list
+    )
 
 
-def _apply_m4_questions_option_coherence(
-    *, llm: Any, prompt: str, state: ADAMState, preguntas_dict: list[dict]
+def _apply_m4_questions_coherence(
+    *,
+    llm: Any,
+    prompt: str,
+    state: ADAMState,
+    preguntas_dict: list[dict],
+    variant: str | None,
+    metrics_block: str,
 ) -> list[dict]:
-    """Validate + reprompt-once-then-DEGRADE the M4 (Impacto) question option coherence.
+    """Validate + reprompt-once-then-DEGRADE the M4 (Impacto) question coherence.
 
-    The M4 questions are OPEN (#481): the only A/B/C in a case are the M1 *strategic* options, named by
-    their REAL letter in ``solucion_esperada``. ``_m4_question_violations`` flags both a recommended
-    option that is nonexistent/unpresented (the shared #416 validator) AND an ``enunciado`` that
-    embeds its own answer-choices A/B/C (the #481 detector). Runs for ALL families (the defect is
-    general, not classification-only) behind the ``m4_question_coherence`` kill-switch; a no-op when the
-    switch is off. On a violation it reprompts ONCE (one Flash call); the corrected set is accepted ONLY
-    if it preserves the question count AND the ``numero`` sequence (the grading key ``M4-Q{numero}`` in
+    Runs the pure ``m4_grounding.validate_m4_questions_coherence`` (the M4 sibling of
+    ``validate_m5_questions_coherence``), which aggregates FOUR checks: (1) option nonexistent/
+    unpresented (#416, ALL families, floor universe) + (2) embedded A/B/C answer-choices (#481, ALL
+    families) — both PRESERVED byte-for-byte — PLUS (3) the single-model leak ``MODELO_NO_SELECCIONADO``
+    (ml_ds ``lr_only``/``rf_only``; a no-op for contrast / business / non-clf via ``variant``) and
+    (4) model-metric anchoring ``METRICA_NO_ANCLADA`` (ml_ds with an executed M3 notebook; a no-op when
+    ``metrics_block`` has no anchors). The new checks close the asymmetry with M2/M3/M5 questions and
+    M4 content/charts, which already guard the unselected-model leak.
+
+    Behind the ``m4_question_coherence`` kill-switch; a no-op when off. On a violation it reprompts ONCE
+    (one Flash call) with the concrete fix; the corrected set is accepted ONLY if it preserves the
+    question count AND the ``numero`` sequence (the grading key ``M4-Q{numero}`` in
     shared.student_reads/teacher_reads) AND is now coherent — otherwise it degrades to the pass-1
     questions. ``GeneradorPreguntasOutput`` (unlike M1's schema) does NOT enforce count/numbering, so
-    the identity guard is load-bearing. Best-effort: ANY throw (including a reprompt ``RuntimeError``)
-    degrades to pass-1. Never raises, so the job always completes.
-
-    Known coverage limit (zero false negatives are not promised): only UPPERCASE A/B/C letter forms are
-    checked. A lowercase MCQ, or a pure-``solucion_esperada`` cross-map with no enunciado markers, is
-    not flagged; the prompt fix (open questions, name the real letter) is the primary defense and a
-    detector false positive only degrades to the already-good pass-1 question (never fails a job).
+    the identity guard is load-bearing. ``variant`` is the RESOLVED notebook variant (NEVER
+    ``algorithm_mode``); ``metrics_block`` is the ``computed_metrics_block`` the node built. Best-effort:
+    ANY throw (including a reprompt ``RuntimeError``) degrades to pass-1. Never raises, so the job always
+    completes.
     """
     log_extra = {"node": "m4_questions_generator", "case_id": state.get("case_id")}
     try:
         if not settings.m4_question_coherence:
             return preguntas_dict
-        violations = _m4_question_violations(preguntas_dict)
+        violations = validate_m4_questions_coherence(
+            preguntas_dict, variant=variant, metrics_block=metrics_block
+        )
         if not violations:
             return preguntas_dict
+        numeros = [q.get("numero") for q in preguntas_dict]
         logger.info(
-            "[m4_questions] reprompt de coherencia de opciones M4 disparado",
+            "[m4_questions] reprompt de coherencia M4 disparado",
             extra={
                 **log_extra,
                 "violation_count": len(violations),
                 "violation_types": _m4_violation_types(violations),
             },
         )
-        bullet_list = "\n".join(f"- {violation}" for violation in violations)
-        reprompt = prompt + _M4_QUESTIONS_OPTION_REPROMPT_HEADER + bullet_list
+        reprompt = prompt + _build_m4_coherence_reprompt(
+            violations, variant=variant, metrics_block=metrics_block, numeros=numeros
+        )
         try:
             resultado: GeneradorPreguntasOutput = llm.with_structured_output(
                 GeneradorPreguntasOutput
@@ -2161,34 +2191,36 @@ def _apply_m4_questions_option_coherence(
             corrected = [p.model_dump() for p in resultado.preguntas]
         except (ValidationError, OutputParserException, ValueError) as exc:
             logger.warning(
-                "[m4_questions] reprompt coherencia de opciones M4 inválido — degrada a pass-1: %s",
+                "[m4_questions] reprompt coherencia M4 inválido — degrada a pass-1: %s",
                 exc,
                 extra=log_extra,
             )
             return preguntas_dict
         # Identity guard: a reprompt that drops/adds/renumbers a question would corrupt the
         # ``M4-Q{numero}`` grading key (shared.student_reads) — reject it, keep pass-1.
-        if [q.get("numero") for q in corrected] != [q.get("numero") for q in preguntas_dict]:
+        if [q.get("numero") for q in corrected] != numeros:
             logger.warning(
                 "[m4_questions] reprompt M4 alteró conteo/numero — degrada a pass-1",
                 extra=log_extra,
             )
             return preguntas_dict
-        residual = _m4_question_violations(corrected)
+        residual = validate_m4_questions_coherence(
+            corrected, variant=variant, metrics_block=metrics_block
+        )
         if not residual:
             logger.info(
-                "[m4_questions] coherencia de opciones M4 corregida por reprompt",
+                "[m4_questions] coherencia M4 corregida por reprompt",
                 extra={**log_extra, "degraded": False},
             )
             return corrected
         logger.warning(
-            "[m4_questions] coherencia de opciones M4 degradada tras reprompt",
+            "[m4_questions] coherencia M4 degradada tras reprompt",
             extra={**log_extra, "violation_types": _m4_violation_types(residual), "degraded": True},
         )
         return preguntas_dict
     except Exception as exc:  # best-effort — a coherence pass must never fail the job
         logger.warning(
-            "[m4_questions] validador coherencia de opciones M4 falló (best-effort): %s",
+            "[m4_questions] validador coherencia M4 falló (best-effort): %s",
             exc,
             extra=log_extra,
         )
@@ -7722,11 +7754,14 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         llm = _get_writer_llm(cfg.writer_model, temperature=0.5, thinking_level="low")
 
         context = _build_base_context(state)
+        # Built once: feeds the prompt AND the metric-anchoring coherence check below (so the
+        # questions cannot fabricate an AUC/F1 absent from the executed M3 metrics).
+        computed_metrics_block = build_computed_metrics_block(state.get("m3_metrics_summary"))
         context.update({
             "m4_content": state.get("m4_content", ""),
             "anexo_financiero": state.get("doc1_anexo_financiero", ""),
             "algorithm_mode": _extract_state_algorithm_mode(state) or "single",
-            "computed_metrics_block": build_computed_metrics_block(state.get("m3_metrics_summary")),
+            "computed_metrics_block": computed_metrics_block,
         })
 
         # Issue #437 (ADR 0003, Fase 1) — NEUTRAL questions set + «MARCO DE VALOR» hint when
@@ -7767,10 +7802,41 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
         print(f"[m4_questions_generator] {len(preguntas)} preguntas")
-        # Option coherence (clasificación, both profiles) — best-effort, reprompt-once-then-
-        # degrade. The wrapper concatenates onto the rendered prompt (never re-.format, cifras `{}`).
-        preguntas = _apply_m4_questions_option_coherence(
-            llm=llm, prompt=rendered_prompt, state=state, preguntas_dict=preguntas
+        # Resolve the notebook variant ONLY for ml_ds+clf (mirror m5_questions_generator); it stays
+        # None for every other cohort, so the unselected-model leak check inside the wrapper is a no-op
+        # there. This is the RESOLVED variant (lr_only/rf_only/lr_rf_contrast), NEVER algorithm_mode
+        # (passing the mode would silently disable the guard).
+        _profile, _family = _resolve_generation_focus(
+            state, default_unresolved_ml_ds_to_classification=True
+        )
+        resolved_variant: str | None = None
+        if _profile == "ml_ds" and _family == "clasificacion":
+            _variant, _q_variant_warning = _resolve_classification_notebook_variant(
+                algorithm_mode=_extract_state_algorithm_mode(state),
+                algoritmos=_extract_state_algoritmos(state),
+            )
+            if _q_variant_warning:
+                logger.warning(
+                    "[m4_questions_generator] question variant fallback: %s", _q_variant_warning
+                )
+            resolved_variant = _variant
+        # The metric-anchoring check is a CLASSIFICATION guard (keys on AUC/F1/recall keywords), so the
+        # coherence wrapper receives the metrics block ONLY for clasificacion — mirror
+        # m5_questions_generator. For ml_ds+clustering the prompt still gets the full block above, but an
+        # ungated block would carry silhouette anchors and the classification-keyword check could
+        # false-positive on a segment number (e.g. "importancia 0.83") → a spurious reprompt. Business+clf
+        # passes the fallback marker here (no executor → no anchors → already a no-op).
+        _coherence_metrics_block = computed_metrics_block if _family == "clasificacion" else ""
+        # Coherence — best-effort, reprompt-once-then-degrade. Option/MCQ for ALL families PLUS the
+        # single-model leak + model-metric anchoring for ml_ds+clf (the M4 sibling of the M5 memo guard).
+        # The wrapper concatenates onto the rendered prompt (never re-.format, cifras `{}`).
+        preguntas = _apply_m4_questions_coherence(
+            llm=llm,
+            prompt=rendered_prompt,
+            state=state,
+            preguntas_dict=preguntas,
+            variant=resolved_variant,
+            metrics_block=_coherence_metrics_block,
         )
         return {"m4_questions": preguntas, "current_agent": "m4_questions_generator"}
     except Exception as e:
@@ -11624,30 +11690,44 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
             _chart_family,
             lens_on=_lens_on,
         )
-        prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
-        # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
-        # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
-        prompt = _maybe_business_classification_prompt(state, prompt, business_chart_prompt)
-        # Issue #437 — append the «MARCO DE VALOR» hint (brace-free) on the 2-chart lens path.
-        if _lens_on:
-            prompt = prompt + build_impact_lens_hint(_resolve_impact_lens(state))
-        formatted_prompt = prompt.format(**context)
-        result: EDAChartGeneratorOutput = llm.with_structured_output(
-            EDAChartGeneratorOutput
-        ).invoke(formatted_prompt)
-        charts = [c.model_dump() for c in result.charts]
-
-        # Decision-charts reframe gate (ml_ds+clf, NEUTRAL/lens-on path, switch on). Computed ONCE and
-        # reused below for the deterministic Gráfico-2 append — SAME gate as the prompt override, so
-        # they fire together. On this path the LLM was asked for EXACTLY 1 chart (Gráfico 1); cap to the
-        # first defensively so a stray 2nd LLM chart can't combine with the appended deterministic
-        # Gráfico 2 into a 3-chart M4. No-op for every other cohort / lens-off / switch-off.
+        # Decision-charts reframe gate (ml_ds+clf, NEUTRAL/lens-on path, switch on). Computed ONCE here
+        # and reused below for: the dual-axis hint append, the stray-2nd-chart cap, and the deterministic
+        # Gráfico-2 append — SAME gate everywhere, so they fire together (never a stray 3rd chart).
         _clf_reframe = (
             _lens_on
             and _chart_profile == "ml_ds"
             and _chart_family == "clasificacion"
             and settings.m4_classification_decision_charts
         )
+        prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
+        # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
+        # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
+        prompt = _maybe_business_classification_prompt(state, prompt, business_chart_prompt)
+        # Issue #437 — append the «MARCO DE VALOR» hint (brace-free) on the 2-chart lens path.
+        if _lens_on:
+            _resolved_lens = _resolve_impact_lens(state)
+            prompt = prompt + build_impact_lens_hint(_resolved_lens)
+            # Dual-axis fix (decision-charts reframe, ml_ds+clf): the investment Gráfico 1 plots the USD
+            # cost next to a NON-monetary lens value (e.g. "240 estudiantes retenidos"); on a single
+            # y-axis the small-magnitude value bar is invisible. Append a brace-free hint telling the LLM
+            # to put the non-monetary value on a SECONDARY y-axis (y2). FINANCIAL lens → no hint (both
+            # series in USD = the clean payback chart) → byte-identical. Gated by M4_INVESTMENT_DUAL_AXIS.
+            if (
+                _clf_reframe
+                and settings.m4_investment_dual_axis
+                and _resolved_lens != DEFAULT_IMPACT_LENS
+            ):
+                prompt = prompt + build_impact_lens_m4_dual_axis_hint(_resolved_lens)
+        formatted_prompt = prompt.format(**context)
+        result: EDAChartGeneratorOutput = llm.with_structured_output(
+            EDAChartGeneratorOutput
+        ).invoke(formatted_prompt)
+        charts = [c.model_dump() for c in result.charts]
+
+        # On the reframe path the LLM was asked for EXACTLY 1 chart (Gráfico 1); cap to the first
+        # defensively so a stray 2nd LLM chart can't combine with the appended deterministic Gráfico 2
+        # into a 3-chart M4. _clf_reframe was computed ONCE above (same gate everywhere). No-op for every
+        # other cohort / lens-off / switch-off.
         if _clf_reframe and len(charts) > 1:
             charts = charts[:1]
 

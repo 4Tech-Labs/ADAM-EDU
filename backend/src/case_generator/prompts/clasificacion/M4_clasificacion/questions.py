@@ -69,6 +69,9 @@ riesgos de producción específicos de modelos de clasificación.
   otras letras, o cruzar una letra de respuesta con la estratégica.
 - Citar SOLO números que aparezcan en {m4_content} o en {computed_metrics_block}.
   No fabricar métricas que no figuren en esas fuentes.
+- MODELO ÚNICO (modo single): si {algorithm_mode} es "single", las preguntas (enunciado y
+  solucion_esperada) NO deben nombrar ningún modelo de clasificación distinto al seleccionado en
+  {algoritmos}; no introduzcas un modelo alternativo.
 - **Idioma de salida: {output_language}**
 
 # Modo de algoritmo: {algorithm_mode}
@@ -157,6 +160,9 @@ DE VALOR) y con los riesgos de producción específicos de modelos de clasificac
   otras letras, o cruzar una letra de respuesta con la estratégica.
 - Citar SOLO números que aparezcan en {m4_content} o en {computed_metrics_block}.
   No fabricar métricas que no figuren en esas fuentes.
+- MODELO ÚNICO (modo single): si {algorithm_mode} es "single", las preguntas (enunciado y
+  solucion_esperada) NO deben nombrar ningún modelo de clasificación distinto al seleccionado en
+  {algoritmos}; no introduzcas un modelo alternativo.
 - **Idioma de salida: {output_language}**
 
 # Modo de algoritmo: {algorithm_mode}

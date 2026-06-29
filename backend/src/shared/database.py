@@ -401,14 +401,16 @@ class Settings(BaseSettings):
     # business/other-family/non-clf cases are unaffected. Kill-switch: set
     # M3_QUESTION_COHERENCE=false to passthrough exactly (instant env-only revert; no redeploy).
     m3_question_coherence: bool = True
-    # Internal coherence of the M4 (Impacto) decision-question options (clasificación, both
-    # profiles). When true, `validate_question_option_coherence` (reused from m1_grounding with
-    # the floor universe A/B/C — M4 has no `dilema_brief`) checks that each `solucion_esperada`
-    # only recommends an option the case defines (A/B/C) and that its own `enunciado` presents;
-    # `m4_questions_generator` reprompts once then degrades to the pass-1 questions (identity-
-    # guarded on `numero`). Best-effort + gated to the classification family, so
-    # business/other-family/non-clf cases are unaffected. Kill-switch: set
-    # M4_QUESTION_COHERENCE=false to passthrough exactly (instant env-only revert; no redeploy).
+    # Internal coherence of the M4 (Impacto) decision questions. When true,
+    # `validate_m4_questions_coherence` runs FOUR checks: option nonexistent/unpresented (reused from
+    # m1_grounding with the floor universe A/B/C — M4 has no `dilema_brief`) + embedded-MCQ A/B/C
+    # (#481), BOTH for all families; PLUS the single-model leak (an ml_ds `lr_only` question must not
+    # name Random Forest, `rf_only` must not name Logistic Regression) and model-metric anchoring (no
+    # AUC/F1 absent from the executed M3 metrics), gated to ml_ds+clf via the resolved variant /
+    # anchored metrics block. `m4_questions_generator` reprompts once then degrades to the pass-1
+    # questions (identity-guarded on `numero`). Best-effort; business/other-family/non-clf cases are
+    # unaffected by the two ml_ds checks. Kill-switch: set M4_QUESTION_COHERENCE=false to passthrough
+    # exactly (instant env-only revert; no redeploy).
     m4_question_coherence: bool = True
     # Internal coherence of the M5 memorándum question (clasificación, both profiles).
     # When true, `validate_m5_questions_coherence` checks that the memorándum does not name the
@@ -520,6 +522,16 @@ class Settings(BaseSettings):
     # MLDS_CLUSTERING_M4_VALUE_FRAME). ml_ds-only — business+clf / clustering / other families and the
     # legacy 3-chart path are byte-identical regardless.
     m4_classification_decision_charts: bool = True
+    # M4 investment-chart dual y-axis (ml_ds + clasificación ONLY, decision-charts reframe path, NON-financial
+    # lens). On the reframe Gráfico 1, the deployment COST (always USD) and the projected VALUE in the lens
+    # unit (e.g. "240 estudiantes retenidos") used to share ONE y-axis, so — differing by orders of
+    # magnitude — the value bar rendered invisible. When true (default), `m4_chart_generator` appends a
+    # brace-free hint instructing the LLM to put the non-monetary value on a SECONDARY y-axis (Plotly `y2`).
+    # FINANCIAL lens is unaffected (both series in USD → the clean payback chart is byte-identical). Set
+    # M4_INVESTMENT_DUAL_AXIS=false to skip the hint → byte-identical to the prior (single-axis) behavior
+    # (instant env-only revert, no redeploy; mirrors M4_CLASSIFICATION_DECISION_CHARTS). No-op when the
+    # reframe is off, lens is financial, or profile/family is not ml_ds+clf.
+    m4_investment_dual_axis: bool = True
     # Impact Lens (Issue #437 / ADR 0003, Fase 1, ALL profiles/families). M4's value frame
     # (primary metric, §4.5 KPI rows, chart metrics, questions framing) is no longer hardcoded
     # to ROI/Payback/NPV; it is a lens resolved ONCE from the constrained intake industry and
