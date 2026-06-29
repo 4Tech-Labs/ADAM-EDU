@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import logging
 import re
-import unicodedata
 
 from case_generator.narrative_grounding import (
     _FALLBACK_MARKER,
@@ -34,6 +33,7 @@ from case_generator.narrative_grounding import (
     detect_unselected_model_mentions,
     has_metric_anchors,
 )
+from case_generator.text_normalize import fold_accents
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,7 @@ _LEADING_SECTION_NUM_RE = re.compile(r"^\d+(?:\.\d+)*[.)]?\s*")
 
 def _normalize_heading(title: str) -> str:
     """Lowercase, strip accents, drop closing-ATX hashes + a leading section number, collapse spaces."""
-    decomposed = unicodedata.normalize("NFKD", title)
-    no_accents = "".join(c for c in decomposed if not unicodedata.combining(c))
+    no_accents = fold_accents(title)
     # rstrip trailing closing-ATX hashes/spaces ("## Title ##" → "title"); harmless for our
     # Spanish deployment-heading substring match (no legitimate title ends in '#').
     cleaned = no_accents.lower().strip().rstrip("# \t").strip()
@@ -147,8 +146,7 @@ def _normalize_chart_text(value: object) -> str:
     """Lowercase + strip accents from a chart text field. Non-str / None → empty string."""
     if not isinstance(value, str):
         return ""
-    decomposed = unicodedata.normalize("NFKD", value)
-    return "".join(c for c in decomposed if not unicodedata.combining(c)).lower()
+    return fold_accents(value).lower()
 
 
 def is_sensitivity_chart(chart: object) -> bool:
