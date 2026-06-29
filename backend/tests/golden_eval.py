@@ -626,17 +626,25 @@ def check_no_financial_panel_residue(schema: dict) -> bool:
 
 
 def check_eda_questions_coherence(
-    preguntas: list[dict], chart_ids: set[str], target_event_rate: float | None
+    preguntas: list[dict],
+    chart_ids: set[str],
+    target_event_rate: float | None,
+    *,
+    variant: str | None = None,
 ) -> bool:
-    """Pure oracle: are the M2 EDA questions coherent (no chart_ref / event-rate mismatch)?
+    """Pure oracle: are the M2 EDA questions coherent (no chart_ref / event-rate / model-leak)?
 
     Reuses the production validator ``m2_grounding.validate_eda_questions_coherence`` (single
     source of truth), so a future M2-prompt regression that reintroduces the example-number leak
-    fails the golden gate. Function-level import keeps this support module lightweight.
+    OR names the unselected classification model fails the golden gate. ``variant`` drives the
+    MODELO_NO_SELECCIONADO check (no-op for ``None`` / ``lr_rf_contrast``). Function-level import
+    keeps this support module lightweight.
     """
     from case_generator.m2_grounding import validate_eda_questions_coherence
 
-    return not validate_eda_questions_coherence(preguntas, chart_ids, target_event_rate)
+    return not validate_eda_questions_coherence(
+        preguntas, chart_ids, target_event_rate, variant=variant
+    )
 
 
 def check_eda_questions_no_chart_id_leak(

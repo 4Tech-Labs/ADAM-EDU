@@ -74,8 +74,9 @@ correlación/causalidad, sino los específicos de clasificación binaria:
    solo para seleccionar el chart correcto; chart_ref = solo el id, sin incluir el title).
 4. **Diseña P2 — Precision/Recall Trade-off** anclada en el costo asimétrico del negocio:
    - Usa la tasa del evento objetivo de {eda_context} para cuantificar el trade-off.
-   - Pregunta al estudiante qué threshold debería usar LR/RF en {primary_family} para maximizar
-     recall (capturar los casos positivos) y cómo afecta esto la elección entre F-beta (beta>1) y AUC-ROC.
+   - Pregunta al estudiante qué threshold debería usar el modelo de clasificación de {primary_family}
+     para maximizar recall (capturar los casos positivos) y cómo afecta esto la elección entre
+     F-beta (beta>1) y AUC-ROC.
    - Exige que proponga un umbral concreto (ej: 0.3) con justificación cuantitativa.
 5. **Verifica** que cada pregunta obligue al estudiante a ir más allá de la métrica superficial
    (accuracy) hacia métricas de negocio (recall, F-beta, AUC-ROC, costo de la acción correctiva).
@@ -105,8 +106,9 @@ correlación/causalidad, sino los específicos de clasificación binaria:
 # Perfil del estudiante: {student_profile}
 - Si es "ml_ds":
   Profundizar en implicaciones metodológicas para {primary_family}: threshold tuning,
-  AUC-ROC ≥ 0.70 como umbral mínimo de discriminación, impacto de class_weight="balanced"
-  en LR y max_features en RF. El estudiante debe poder citar métricas técnicas precisas.
+  AUC-ROC ≥ 0.70 como umbral mínimo de discriminación, e impacto del balanceo de clases
+  (p.ej. class_weight="balanced") y la regularización sobre el modelo de clasificación
+  seleccionado del caso. El estudiante debe poder citar métricas técnicas precisas.
 - Si es "business":
   Mismas preguntas pero sin jerga técnica:
   P1 → "¿Por qué el modelo que parece acertar 9 de 10 veces falla en identificar
@@ -130,7 +132,7 @@ de estructura (sustituir X e Y con los valores reales del caso):
 solucion_esperada: (párrafo único; sustituye Y por la tasa REAL del evento de {eda_context}, NUNCA un número de ejemplo:)
   "Con una tasa del evento del Y%, un modelo que siempre predice 'sin evento' logra (100−Y)% de accuracy
   sin capturar ni un solo caso positivo real — eso es el accuracy paradox. Usar threshold=0.5 en
-  un dataset tan desbalanceado implica que LR o RF 'funcionan' en accuracy pero el equipo pierde
+  un dataset tan desbalanceado implica que el modelo 'funciona' en accuracy pero el equipo pierde
   una porción grande de los casos positivos reales y el presupuesto de la acción correctiva se dirige
   al segmento equivocado. La alternativa es evaluar con recall, F-beta (beta>1) o AUC-ROC."
 

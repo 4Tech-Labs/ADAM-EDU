@@ -3310,6 +3310,7 @@ _M2_VIOLATION_CODES = (
     ("CHART_REF_NONEXISTENT", "chart_ref"),
     ("EVENT_RATE_INCOHERENT", "rate_internal"),
     ("EVENT_RATE_VS_CONTRACT", "rate_contract"),
+    ("MODELO_NO_SELECCIONADO", "model_leak"),
 )
 
 
@@ -3324,13 +3325,18 @@ def _m2_violation_types(violations: list[str]) -> list[str]:
 
 
 def _build_m2_coherence_reprompt(
-    chart_ids: set[str], rate_pct: float | None, violations: list[str]
+    chart_ids: set[str],
+    rate_pct: float | None,
+    violations: list[str],
+    *,
+    variant: str | None = None,
 ) -> str:
     """Focused reprompt (CONCATENATED, never ``.format`` — prose may carry ``{}``).
 
-    Carries the CONCRETE fix (valid chart ids + the real event rate) so the model
-    corrects the specific figures, and demands the SAME 2 questions with the SAME
-    ``numero`` (1 and 2) so the downstream ``M2-Q{numero}`` answer/grading key is preserved.
+    Carries the CONCRETE fix (valid chart ids + the real event rate + the single selected
+    model when a model-leak is present) so the model corrects the specific issues, and demands
+    the SAME 2 questions with the SAME ``numero`` (1 and 2) so the downstream ``M2-Q{numero}``
+    answer/grading key is preserved.
     """
     bullet_list = "\n".join(f"- {violation}" for violation in violations)
     valid_charts = ", ".join(sorted(chart_ids)) if chart_ids else "ninguna"
@@ -3339,16 +3345,56 @@ def _build_m2_coherence_reprompt(
         if rate_pct is not None
         else ""
     )
+    model_line = ""
+    if any(v.startswith("MODELO_NO_SELECCIONADO") for v in violations):
+        if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY:
+            selected = "Regresión Logística"
+        elif variant == CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY:
+            selected = "Random Forest"
+        else:
+            selected = "el modelo seleccionado por el caso"
+        model_line = (
+            f"El caso construye un único modelo de clasificación: {selected}. Refiérete SOLO a "
+            "ese modelo y elimina toda mención de cualquier otro algoritmo de clasificación.\n"
+        )
     return (
         "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA (Módulo 2)\n"
-        "Algunas preguntas citan una gráfica inexistente o una tasa del evento en "
-        "`solucion_esperada` que NO coincide con su propio `enunciado` ni con el dataset. "
+        "Algunas preguntas citan una gráfica inexistente, una tasa del evento en "
+        "`solucion_esperada` que NO coincide con su propio `enunciado` ni con el dataset, o un "
+        "modelo de clasificación que el caso no seleccionó. "
         "Regenera EXACTAMENTE 2 preguntas con el MISMO schema y los MISMOS `numero` (1 y 2): "
         "cada `chart_ref` debe ser uno de los ids válidos del manifest (o null), y toda cifra "
         "de la tasa del evento en `solucion_esperada` debe ser EXACTAMENTE la de su enunciado.\n"
         f"Gráficas válidas (ids): {valid_charts}.\n"
         f"{rate_line}"
+        f"{model_line}"
         "Incoherencias detectadas:\n" + bullet_list
+    )
+
+
+def _build_eda_model_focus_hint(variant: str | None) -> str:
+    """Brace-free model-focus addendum for the M2 EDA questions prompt (ml_ds single-model).
+
+    The classification model is selected at intake, so for an ``lr_only`` / ``rf_only`` case the
+    M2 questions should name THAT model and never another — the M2 counterpart of the variant-aware
+    M3/M4/M5 surfaces. The M2 base prompt was de-specified to be model-neutral; this re-anchors it to
+    the actual model so M2 stays coherent with M3/M4/M5. ``lr_rf_contrast`` / ``None`` (business and
+    ml_ds contrast) → ``""`` (no-op): contrast legitimately reasons about both models and business is
+    already model-neutral. CONCATENATED onto the already-formatted prompt (never ``.format``), so it
+    carries no placeholder. A one-way prompt improvement (mirrors the de-specify; no kill-switch).
+    """
+    if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY:
+        modelo = "Regresión Logística"
+    elif variant == CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY:
+        modelo = "Random Forest"
+    else:
+        return ""
+    return (
+        "\n\n# Modelo del caso (coherencia M2 ↔ M3)\n"
+        f"El caso construirá un único modelo de clasificación: {modelo}. Cuando una pregunta razone "
+        f"sobre el clasificador (umbral de decisión, recall, precisión, regularización), refiérete a "
+        f"{modelo}. NUNCA nombres ningún otro algoritmo de clasificación que el caso no haya "
+        "seleccionado."
     )
 
 
@@ -3359,6 +3405,7 @@ def _apply_eda_questions_coherence(
     state: ADAMState,
     preguntas_dict: list[dict],
     chart_ids: set[str],
+    variant: str | None = None,
 ) -> list[dict]:
     """Validate + reprompt-once-then-DEGRADE the M2 EDA question coherence.
 
@@ -3369,6 +3416,10 @@ def _apply_eda_questions_coherence(
     key ``M2-Q{numero}``) AND is now coherent — otherwise it degrades to the pass-1 questions.
     Best-effort: ANY throw (including a reprompt ``RuntimeError``, which the node would
     otherwise re-raise and fail the job) degrades to pass-1. Never raises.
+
+    ``variant`` is the resolved classification notebook variant (or ``None``) — passed by the
+    caller; it drives the ``MODELO_NO_SELECCIONADO`` leak check (no-op for ``None`` /
+    ``lr_rf_contrast``, i.e. business and ml_ds contrast).
     """
     log_extra = {"node": "eda_questions_generator", "case_id": state.get("case_id")}
     try:
@@ -3381,7 +3432,9 @@ def _apply_eda_questions_coherence(
             if isinstance(raw_rate, (int, float)) and not isinstance(raw_rate, bool)
             else None
         )
-        violations = validate_eda_questions_coherence(preguntas_dict, chart_ids, rate)
+        violations = validate_eda_questions_coherence(
+            preguntas_dict, chart_ids, rate, variant=variant
+        )
         if not violations:
             return preguntas_dict
         logger.info(
@@ -3393,7 +3446,9 @@ def _apply_eda_questions_coherence(
             },
         )
         rate_pct = rate * 100.0 if rate is not None and 0.0 < rate <= 1.0 else None
-        reprompt = prompt + _build_m2_coherence_reprompt(chart_ids, rate_pct, violations)
+        reprompt = prompt + _build_m2_coherence_reprompt(
+            chart_ids, rate_pct, violations, variant=variant
+        )
         try:
             resultado: EDAQuestionsOutput = llm.with_structured_output(
                 EDAQuestionsOutput
@@ -3414,7 +3469,7 @@ def _apply_eda_questions_coherence(
                 extra=log_extra,
             )
             return preguntas_dict
-        residual = validate_eda_questions_coherence(corrected, chart_ids, rate)
+        residual = validate_eda_questions_coherence(corrected, chart_ids, rate, variant=variant)
         if not residual:
             logger.info(
                 "[eda_questions] coherencia M2 corregida por reprompt",
@@ -3545,6 +3600,17 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "chart_manifest": chart_manifest,
         })
 
+        # Resolve the classification variant ONLY for ml_ds+clf (mirror m3_questions_generator).
+        # The model is selected at intake, so M2 already knows it. business / other families →
+        # None → both the model-focus hint and the MODELO_NO_SELECCIONADO guard are no-ops.
+        _eda_profile, _eda_family = _resolve_generation_focus(state)
+        eda_variant: str | None = None
+        if _eda_profile == "ml_ds" and _eda_family == "clasificacion":
+            eda_variant, _ = _resolve_classification_notebook_variant(
+                algorithm_mode=_extract_state_algorithm_mode(state),
+                algoritmos=_extract_state_algoritmos(state),
+            )
+
         prompt = _select_eda_prompt(
             state,
             context.get("primary_family", ""),
@@ -3552,6 +3618,9 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             generic=EDA_QUESTIONS_GENERATOR_PROMPT,
             clustering_override=EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING,
         ).format(**context)
+        # ml_ds single-model → re-anchor the (de-specified, model-neutral) prompt to the selected
+        # model so M2 stays coherent with M3/M4/M5. Brace-free concat; no-op ("") elsewhere.
+        prompt = prompt + _build_eda_model_focus_hint(eda_variant)
 
         # v9 M2-Redesign: EDAQuestionsOutput con EDASocraticQuestion (solucion_esperada = objeto)
         resultado: EDAQuestionsOutput = llm.with_structured_output(
@@ -3572,6 +3641,7 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             state=state,
             preguntas_dict=preguntas_eda_dict,
             chart_ids=chart_ids,
+            variant=eda_variant,
         )
 
         # Issue #499: relabel any raw chart id leaked into the student-visible prose with its
