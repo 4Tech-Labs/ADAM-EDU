@@ -282,6 +282,17 @@ class Settings(BaseSettings):
     # financial base byte-identically (the #382-only behavior; instant env-only revert, no redeploy).
     # Gated INSIDE the #382 de-churn path: churn/retention, business, and other families are unaffected.
     mlds_detemplate_cross_section: bool = True
+    # De-template the SaaS/churn customer template for ml_ds + clasificación WORKFORCE/HR ATTRITION
+    # (employee attrition / staff turnover). `attrition` is a HARD retention token, so #382 skipped
+    # these cases and they kept the customer SaaS template (customer_ltv/plan_tier/payment_failures…),
+    # incoherent for an employee dataset (M2 mutual_info showed revenue/churn_rate as predictors of
+    # employee attrition). When true (default), the #382 retention RED LINE is narrowed to genuine SaaS
+    # CUSTOMER churn: a retention-by-name target that is ALSO workforce attrition (high-precision HR
+    # tokens in the target/feature names, `_is_workforce_attrition_case`) falls through to the de-churn
+    # path → domain (HR) driver + SaaS template stripped. Set MLDS_DETEMPLATE_WORKFORCE=false to keep
+    # every retention target on the template byte-identically (#382/#507 behavior; instant env-only
+    # revert, no redeploy). Genuine customer churn is NEVER affected (zero predicate FP on the red line).
+    mlds_detemplate_workforce: bool = True
     # Deterministic, data-only EDA chart builder for ml_ds + clustering (Issue #466, Frente 2). When
     # true (default), an ml_ds + clustering case routes M2 charts through `_eda_clustering_python_path`
     # (3 PRE-MODEL, target-free charts: feature distributions → motivates StandardScaler, correlation
