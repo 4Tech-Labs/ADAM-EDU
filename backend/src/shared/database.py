@@ -509,6 +509,16 @@ class Settings(BaseSettings):
     # MLDS_CLUSTERING_M4_VALUE_FRAME). ml_ds-only — business+clf / clustering / other families and the
     # legacy 3-chart path are byte-identical regardless.
     m4_classification_decision_charts: bool = True
+    # M4 investment-chart dual y-axis (ml_ds + clasificación ONLY, decision-charts reframe path, NON-financial
+    # lens). On the reframe Gráfico 1, the deployment COST (always USD) and the projected VALUE in the lens
+    # unit (e.g. "240 estudiantes retenidos") used to share ONE y-axis, so — differing by orders of
+    # magnitude — the value bar rendered invisible. When true (default), `m4_chart_generator` appends a
+    # brace-free hint instructing the LLM to put the non-monetary value on a SECONDARY y-axis (Plotly `y2`).
+    # FINANCIAL lens is unaffected (both series in USD → the clean payback chart is byte-identical). Set
+    # M4_INVESTMENT_DUAL_AXIS=false to skip the hint → byte-identical to the prior (single-axis) behavior
+    # (instant env-only revert, no redeploy; mirrors M4_CLASSIFICATION_DECISION_CHARTS). No-op when the
+    # reframe is off, lens is financial, or profile/family is not ml_ds+clf.
+    m4_investment_dual_axis: bool = True
     # Impact Lens (Issue #437 / ADR 0003, Fase 1, ALL profiles/families). M4's value frame
     # (primary metric, §4.5 KPI rows, chart metrics, questions framing) is no longer hardcoded
     # to ROI/Payback/NPV; it is a lens resolved ONCE from the constrained intake industry and

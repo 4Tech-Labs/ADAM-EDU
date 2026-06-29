@@ -199,6 +199,7 @@ from case_generator.impact_lens import (
     IMPACT_LENS_KEYS,
     build_impact_lens_architect_hint,
     build_impact_lens_hint,
+    build_impact_lens_m4_dual_axis_hint,
     build_impact_lens_m5_hint,
     normalize_impact_lens,
 )
@@ -11546,30 +11547,44 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
             _chart_family,
             lens_on=_lens_on,
         )
-        prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
-        # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
-        # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
-        prompt = _maybe_business_classification_prompt(state, prompt, business_chart_prompt)
-        # Issue #437 — append the «MARCO DE VALOR» hint (brace-free) on the 2-chart lens path.
-        if _lens_on:
-            prompt = prompt + build_impact_lens_hint(_resolve_impact_lens(state))
-        formatted_prompt = prompt.format(**context)
-        result: EDAChartGeneratorOutput = llm.with_structured_output(
-            EDAChartGeneratorOutput
-        ).invoke(formatted_prompt)
-        charts = [c.model_dump() for c in result.charts]
-
-        # Decision-charts reframe gate (ml_ds+clf, NEUTRAL/lens-on path, switch on). Computed ONCE and
-        # reused below for the deterministic Gráfico-2 append — SAME gate as the prompt override, so
-        # they fire together. On this path the LLM was asked for EXACTLY 1 chart (Gráfico 1); cap to the
-        # first defensively so a stray 2nd LLM chart can't combine with the appended deterministic
-        # Gráfico 2 into a 3-chart M4. No-op for every other cohort / lens-off / switch-off.
+        # Decision-charts reframe gate (ml_ds+clf, NEUTRAL/lens-on path, switch on). Computed ONCE here
+        # and reused below for: the dual-axis hint append, the stray-2nd-chart cap, and the deterministic
+        # Gráfico-2 append — SAME gate everywhere, so they fire together (never a stray 3rd chart).
         _clf_reframe = (
             _lens_on
             and _chart_profile == "ml_ds"
             and _chart_family == "clasificacion"
             and settings.m4_classification_decision_charts
         )
+        prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
+        # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
+        # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
+        prompt = _maybe_business_classification_prompt(state, prompt, business_chart_prompt)
+        # Issue #437 — append the «MARCO DE VALOR» hint (brace-free) on the 2-chart lens path.
+        if _lens_on:
+            _resolved_lens = _resolve_impact_lens(state)
+            prompt = prompt + build_impact_lens_hint(_resolved_lens)
+            # Dual-axis fix (decision-charts reframe, ml_ds+clf): the investment Gráfico 1 plots the USD
+            # cost next to a NON-monetary lens value (e.g. "240 estudiantes retenidos"); on a single
+            # y-axis the small-magnitude value bar is invisible. Append a brace-free hint telling the LLM
+            # to put the non-monetary value on a SECONDARY y-axis (y2). FINANCIAL lens → no hint (both
+            # series in USD = the clean payback chart) → byte-identical. Gated by M4_INVESTMENT_DUAL_AXIS.
+            if (
+                _clf_reframe
+                and settings.m4_investment_dual_axis
+                and _resolved_lens != DEFAULT_IMPACT_LENS
+            ):
+                prompt = prompt + build_impact_lens_m4_dual_axis_hint(_resolved_lens)
+        formatted_prompt = prompt.format(**context)
+        result: EDAChartGeneratorOutput = llm.with_structured_output(
+            EDAChartGeneratorOutput
+        ).invoke(formatted_prompt)
+        charts = [c.model_dump() for c in result.charts]
+
+        # On the reframe path the LLM was asked for EXACTLY 1 chart (Gráfico 1); cap to the first
+        # defensively so a stray 2nd LLM chart can't combine with the appended deterministic Gráfico 2
+        # into a 3-chart M4. _clf_reframe was computed ONCE above (same gate everywhere). No-op for every
+        # other cohort / lens-off / switch-off.
         if _clf_reframe and len(charts) > 1:
             charts = charts[:1]
 
