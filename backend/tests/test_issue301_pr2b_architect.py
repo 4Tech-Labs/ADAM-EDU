@@ -72,12 +72,11 @@ _MLDS_CTX: dict[str, object] = {
 # Frozen digest of the assembled ml_ds+clasificación prompt. If this changes, the ml_ds
 # prompt changed — confirm it was NOT the business gate leaking in before updating.
 _MLDS_ARCHITECT_PROMPT_SHA256 = (
-    # Issue #350 (ml_ds clf binary-only) — regenerated deliberately after tightening anchor rule 1
-    # to a binary int 0/1 target (removed "o multiclase", added the multiclass prohibition, mirrored
-    # the business dtype pin) and reframing rule 2's pregunta_eje to a binary intervene/no-intervene
-    # decision. Confirmed via test_mlds_architect_prompt_unchanged_by_business_gate (differential
-    # GREEN → not a business-gate leak). Prior digest 87ba89ed… was the Issue #370 USD-only regen.
-    "1d1894b148a806be7b5db931b3043c4d5b014d2e2fdcafd35d5c8861104d8d4d"
+    # Issue #506 (expected_direction priors) — regenerated deliberately after adding the optional
+    # economic-direction guidance section to the classification anchor (_M1_CLASSIFICATION_ANCHOR_
+    # ARCHITECT). Confirmed via test_mlds_architect_prompt_unchanged_by_business_gate (differential
+    # GREEN → not a business-gate leak). Prior digest 1d1894b1… was the Issue #350 binary-only regen.
+    "0f3d02c979e02cab5cbd8d4588f54df3fdbeb411490f051b6648a990f346db10"
 )
 
 
@@ -113,10 +112,11 @@ def test_mlds_architect_prompt_frozen_hash() -> None:
 # The lens-OFF path keeps the original _MLDS_ARCHITECT_PROMPT_SHA256 (byte-identical, untouched) —
 # this is the additive on-path lock, NOT a regen of the off-path. Update deliberately on a prompt edit.
 _MLDS_ARCHITECT_LENS_PROMPT_SHA256 = (
-    # Issue #505 — regenerated after adding the 5th lens (environmental_outcomes) to the
-    # enumeration + domain mapping + options example in ARCHITECT_IMPACT_LENS_BLOCK. The
-    # lens-OFF hash (_MLDS_ARCHITECT_PROMPT_SHA256) is UNCHANGED (off-path byte-identity).
-    "d41eb50ec63548796b27a9ae9b745aa08d63847129b425d288ca1fc583451aae"
+    # Issue #506 — regenerated after adding the expected_direction guidance to the classification
+    # anchor (shared by base+anchor and base+anchor+lens, so both hashes move). ARCHITECT_IMPACT_
+    # LENS_BLOCK itself is UNCHANGED; the hashes cover the assembled prompt containing the edited
+    # anchor. Prior digest d41eb50e… was the Issue #505 5th-lens regen.
+    "63373619cd1d1b1d323376fcb4bbc8f9d0b5a888a07e5c3d25287a917654b0bc"
 )
 
 

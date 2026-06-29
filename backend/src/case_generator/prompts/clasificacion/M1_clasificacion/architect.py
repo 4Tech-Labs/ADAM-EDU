@@ -136,6 +136,36 @@ Forma exacta (dentro de `dataset_schema_required`):
 {{
   "target_event_rate": 0.083
 }}
+
+## Dirección económica de las features (`expected_direction`) — opcional
+
+Cuando la TEORÍA del dominio fija el SIGNO del efecto de una feature sobre el evento objetivo,
+declara `expected_direction` en esa entrada de `feature_columns`. El generador determinista del
+dataset acopla el target a esas features RESPETANDO el signo, de modo que el coeficiente del
+modelo entrenado NO quede económicamente invertido (sin esta señal el dato puede dar, por azar,
+un coeficiente de signo contrario a la teoría — y en muchos casos el SIGNO ES la lección).
+
+- `"negative"`: a MAYOR valor de la feature, MENOR probabilidad del evento. Ejemplos canónicos:
+  - Valoración contingente / disposición a pagar: la tarifa o monto propuesto (`bid`) — ley de la
+    demanda: a mayor precio, menor aceptación.
+  - Distancia a un recurso (km al humedal, al parque): a mayor distancia, menor valoración.
+  - Precio, costo, fricción, tiempo de espera: casi siempre reducen la adopción/aceptación.
+- `"positive"`: a MAYOR valor, MAYOR probabilidad del evento. Ejemplos: ingreso del hogar,
+  calidad ambiental percibida, nivel educativo, satisfacción.
+- Omite la clave (o `null`) si la dirección es ambigua o desconocida. NUNCA inventes un signo.
+
+Declárala SOLO para las features cuyo signo conozcas con seguridad por la disciplina del caso. Es
+especialmente importante en casos de economía (valoración ambiental, demanda, finanzas del
+comportamiento) donde el SIGNO del coeficiente es justamente lo que el estudiante debe interpretar.
+
+Forma exacta (dentro de una entrada de `feature_columns`):
+{{
+  "name": "proposed_fee_amount",
+  "role": "feature",
+  "dtype": "float",
+  "description": "Tarifa anual propuesta al hogar en el referéndum de valoración",
+  "expected_direction": "negative"
+}}
 """
 
 # ── business + clasificación: bloque de target binario de dominio (Issue #301 PR2b) ──

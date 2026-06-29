@@ -160,6 +160,37 @@ def build_clustering_architect_hint(decision: dict | None) -> str:
     )
 
 
+def build_clustering_entity_hint(expected_count: int) -> str:
+    """Brace-free hint appended in ``case_architect`` (after ``_assemble_architect_prompt``) for
+    ml_ds + clustering (Issue #513).
+
+    Directs the architect to (a) narrate ONE consistent unit-of-analysis entity drawn from THIS
+    case's domain (centros, pacientes, zonas, estudiantes… NOT necessarily "clientes" — the #455
+    anchor's examples lean that way, so this hint goes LAST to override them), (b) emit it as the
+    structured ``entity_descriptor`` (singular, plural, ``snake_prefix`` in ASCII snake_case), and
+    (c) declare that the dataset contains EXACTLY ``expected_count`` of those entities. The
+    deterministic data layer then renames the dataset index to ``{prefix}_00001`` / column
+    ``{prefix}_id`` so the CSV the student downloads matches the M1 story (Opción A). The count is
+    injected from ``_MLDS_CLUSTERING_MAX_ROWS`` (caller-side; never a literal here → I2). Brace-free
+    → safe after the already-formatted architect prompt (no second ``.format``; SHA snapshots
+    untouched, like ``build_clustering_architect_hint``).
+    """
+    n = str(int(expected_count))
+    return (
+        "\n# COHERENCIA DE ENTIDAD Y POBLACIÓN (clustering, Issue #513)\n"
+        "El dataset de este caso es de NIVEL ENTIDAD: cada fila representa una entidad que se "
+        "segmenta. Elige UNA entidad unidad-de-análisis coherente con el DOMINIO de ESTE caso (por "
+        "ejemplo centros, pacientes, zonas, estudiantes, sucursales, vehículos… NO necesariamente "
+        "'clientes') y úsala de forma CONSISTENTE en todo M1 (perfil, dilema, opciones, exhibits). "
+        "Declara explícitamente que el dataset contiene EXACTAMENTE " + n + " de esas entidades; no "
+        "menciones otra población ni un conteo distinto de " + n + ". Además, emite el campo "
+        "`entity_descriptor` con `singular` y `plural` de la entidad en español y `snake_prefix` = "
+        "la raíz en minúsculas ASCII, sin acentos ni espacios (p.ej. 'centro', 'paciente', 'zona'); "
+        "el dataset usará un identificador con ese prefijo (si el prefijo es 'centro', la columna "
+        "será 'centro_id' con valores 'centro_00001').\n"
+    )
+
+
 def build_clustering_m1_questions_hint(decision: dict | None) -> str:
     """Brace-free hint appended to the M1 ``case_questions`` prompt for ml_ds+clustering.
 
@@ -243,6 +274,35 @@ def build_clustering_verdict_hint(
         "La opción estratégica recomendada de este caso es la Opción " + recommended_option + ". "
         "Tu recomendación/veredicto final DEBE ser la Opción " + recommended_option + " (no otra "
         "letra), coherente con el resto del caso. " + sil_clause + "Los costos siguen en USD.\n"
+    )
+
+
+def build_clustering_currency_honesty_hint() -> str:
+    """Brace-free hint appended in ``case_architect`` AND ``case_writer`` for ml_ds+clustering (#514).
+
+    Prohibits absolute money magnitudes on the per-entity / per-segment BEHAVIOR axes of the case
+    (e.g. "$135.000/mes", "$15M") — the per-row dataset (``monetary_value`` at an individual scale)
+    does not back them, so the student would read money the CSV never contains. Exhibit 1 (the COMPANY
+    P&L, an aggregate in USD) is preserved; per-segment value is expressed qualitatively / relatively
+    (quartiles, indices, "% concentrado en el cuartil superior", high/medium/low), coherent with the
+    Impact-Lens value reframe (#437/#469). Names NO concrete feature (feature-agnostic — invariant I3
+    of EPIC #511 — so it serves any domain's feature set). No-arg (carries no per-job data).
+    Brace-free → safe after an already-formatted prompt (no second ``.format``; architect SHA
+    snapshots untouched, like the #437/#467 hints). The deterministic guarantee is the sibling #515.
+    """
+    return (
+        "\n# HONESTIDAD DE MAGNITUDES POR ENTIDAD (clustering, Issue #514)\n"
+        "Este es un caso de SEGMENTACIÓN no supervisada: el dataset describe ENTIDADES individuales "
+        "(clientes, cuentas o usuarios) por ejes de COMPORTAMIENTO a escala individual. El Exhibit 1 "
+        "(P&L de la EMPRESA, agregado, en USD) se MANTIENE: ahí sí van cifras monetarias agregadas de "
+        "la compañía.\n"
+        "PROHIBIDO: atribuir cifras de dinero ABSOLUTO (por ejemplo \"$135.000/mes\" o \"$15M\") a los "
+        "ejes de comportamiento por-entidad o por-segmento de ESTE caso, sean cuales sean esos ejes. "
+        "El dataset por-entidad no respalda esas magnitudes y confunden al estudiante.\n"
+        "EN SU LUGAR: expresa el valor por-segmento de forma CUALITATIVA o RELATIVA — cuartiles, "
+        "índices, proporciones, \"% de ingresos concentrado en el cuartil superior\", o niveles "
+        "alto/medio/bajo. Describe los segmentos por su comportamiento relativo, nunca por un monto en "
+        "dólares inventado.\n"
     )
 
 

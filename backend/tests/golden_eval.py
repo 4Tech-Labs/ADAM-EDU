@@ -24,6 +24,8 @@ executes only under RUN_LIVE_LLM_TESTS with a configured job runner.
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass, field
 
 # ── gate thresholds (5A) ─────────────────────────────────
@@ -53,6 +55,17 @@ class NodeEvalInputs:
     # produce a domain-coherent schema (no churn/SaaS template, domain-driven target). True (n/a) for
     # business / non-classification jobs. Computed deterministically via ``check_domain_coherence``.
     domain_coherence_ok: bool = True
+    # Issue #506 — ml_ds + clasificación economic-direction coherence: when a contract declares feature
+    # `expected_direction` hints, the generated schema's domain target must couple to those features with
+    # the matching SIGN (signed_drivers). True (n/a) when no direction is declared / business / non-clf,
+    # and on the frozen golden set today (no fixture declares directions — like
+    # ``eda_questions_no_chart_id_leak_ok``); the deterministic teeth live in the unit RED/GREEN tests.
+    # Computed via ``check_directional_coherence``.
+    directional_coherence_ok: bool = True
+    # Issue #507 — ml_ds + clasificación cross-section de-template: a NON-retention entity-survey golden
+    # job must carry NO company financial-panel residue (period/revenue/costs/margin_pct). True (n/a) for
+    # business / non-classification / company-panel jobs. Computed via ``check_no_financial_panel_residue``.
+    financial_panel_stripped_ok: bool = True
     # M2 (EDA) question coherence: every classification golden job's EDA questions must be coherent
     # (chart_ref exists; the event rate in each solución matches its enunciado and the dataset
     # prevalence). True (n/a) for non-classification jobs. Computed via
@@ -253,6 +266,11 @@ class NodeEvalInputs:
     # Computed via ``check_clustering_entity_index``; gate-protects against a data-layer regression that
     # reverts to the monthly period index. RED control: rows with a monthly `period` column fail.
     clustering_entity_index_ok: bool = True
+    # The dataset's entity matches the architect's narrated entity (Issue #513): the entity-id column
+    # prefix == entity_descriptor.snake_prefix AND the M1 narrative names that entity. True (n/a) when
+    # the descriptor / narrative are absent (the frozen golden set). Computed via
+    # ``check_clustering_entity_coherence``; the deterministic teeth are the unit RED/GREEN tests.
+    clustering_entity_coherence_ok: bool = True
     # Narrative carries NO literal LaTeX math delimiter (Issue #480), for ALL profiles/families: the
     # case-viewer has no KaTeX/MathJax, so a ``$k$`` / ``$5000.0 - 50.0$`` would reach the student as a
     # literal delimiter. True (n/a) when the narrative is empty/absent. Computed via
@@ -296,6 +314,13 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("AUC distribution degraded toward the 0.55 floor")
     if not r.domain_coherence_ok:
         reasons.append("domain coherence failure: churn-coupled target on ml_ds non-churn job")
+    if not r.directional_coherence_ok:
+        reasons.append(
+            "directional coherence failure: a declared expected_direction is not honored by the "
+            "target's signed_drivers (economically inverted coefficient)"
+        )
+    if not r.financial_panel_stripped_ok:
+        reasons.append("financial-panel residue: company P&L columns survived on an ml_ds cross-section job")
     if not r.eda_questions_coherence_ok:
         reasons.append("M2 EDA question coherence failure: chart_ref or event-rate mismatch")
     if not r.eda_questions_no_chart_id_leak_ok:
@@ -398,6 +423,12 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             "clustering data failure: dataset is time-indexed (monthly `period`) instead of "
             "entity-level (`user_id`) — analysis unit contradicts the segmentation narrative"
         )
+    if not r.clustering_entity_coherence_ok:
+        reasons.append(
+            "clustering entity coherence failure: the dataset entity-id prefix differs from the "
+            "architect's narrated entity (entity_descriptor) — the CSV and the M1 story name "
+            "different entities (Issue #513)"
+        )
     if not r.narrative_no_latex_math_ok:
         reasons.append(
             "narrative coherence failure: literal LaTeX math delimiter ($k$ / $5000 - 50$) "
@@ -470,6 +501,66 @@ def check_domain_coherence(schema: dict) -> bool:
         (t.get("dependency") or {}).get("depends_on") not in (None, "churn_rate")
         for t in domain_targets
     )
+
+
+def check_directional_coherence(schema: dict, contract: dict | None) -> bool:
+    """Pure oracle (Issue #506): does ``schema``'s domain target honor the contract's declared
+    economic-direction priors?
+
+    Structural check (deterministic, no dataset generation): for every contract feature that declares
+    ``expected_direction`` ∈ {"positive","negative"} AND is eligible (numeric, non-leakage, not the
+    target, present in the schema as an INDEPENDENT column — via the SHARED
+    ``_resolve_signed_directions``, the same source the enforcer uses), the ``is_domain_target`` column's
+    ``dependency.signed_drivers`` must contain that feature with the matching sign (+1 for "positive",
+    -1 for "negative"). True (n/a) when the contract declares no usable direction or the schema has no
+    domain target — so business / non-classification / undirected jobs AND the kill-switch-off path
+    pass. A schema where a declared direction is missing from ``signed_drivers`` or carries the wrong
+    sign FAILS (the economically inverted coefficient the issue exists to prevent).
+    """
+    columns = schema.get("columns") or []
+    target = next((c for c in columns if c.get("is_domain_target") is True), None)
+    if target is None:
+        return True  # n/a (no domain target: business / non-clf / undirected)
+
+    # Reusa la fuente ÚNICA de elegibilidad del enforcer (lazy import, como check_domain_coherence)
+    # → la verificación NO re-deriva la regla de la generación (sin drift test↔prod).
+    from case_generator.graph import _resolve_signed_directions
+
+    target_name = target.get("name")
+    expected = {
+        d["name"]: d["sign"]
+        for d in _resolve_signed_directions(columns, contract, target_name=target_name)
+    }
+    if not expected:
+        return True  # n/a (no usable declared direction)
+
+    signed = ((target.get("dependency") or {}).get("signed_drivers")) or []
+    actual = {
+        (d.get("name") or "").strip(): d.get("sign") for d in signed if isinstance(d, dict)
+    }
+    return all(actual.get(name) == sign for name, sign in expected.items())
+
+
+def check_no_financial_panel_residue(schema: dict) -> bool:
+    """Pure oracle (Issue #507): does a de-churned ml_ds + clasificación schema carry NO company
+    financial-panel residue (period/revenue/costs/margin_pct)?
+
+    True iff none of ``_FINANCIAL_PANEL_TEMPLATE_COLUMNS`` survive. For a NON-retention cross-section
+    ENTITY case (household/individual survey: environmental valuation, scoring, approval) those columns
+    are template residue, stripped by ``_enforce_mlds_classification_schema`` when
+    ``detemplate_cross_section`` is on. The single source of truth for the column names is
+    ``case_generator.graph`` (function-level import keeps this module lightweight).
+
+    Same limitation as ``check_domain_coherence``: a contract feature legitimately NAMED like a panel
+    column (a real company-default case that lists ``revenue`` as a predictor) would be protected (kept)
+    by the strip yet trip this set-membership check → a False negative on a correct schema. No golden job
+    collides today; if a future fixture reuses a panel name as a real feature, pass the contract here and
+    exclude its declared features before this check.
+    """
+    from case_generator.graph import _FINANCIAL_PANEL_TEMPLATE_COLUMNS
+
+    names = {c.get("name") for c in (schema.get("columns") or [])}
+    return not (names & _FINANCIAL_PANEL_TEMPLATE_COLUMNS)
 
 
 def check_eda_questions_coherence(
@@ -929,22 +1020,84 @@ def _is_monthly_period(value: object) -> bool:
     )
 
 
-def check_clustering_entity_index(rows: list) -> bool:
-    """Pure oracle (Issue #468): is the ml_ds+clustering dataset ENTITY-level, not time-indexed?
+_ENTITY_ID_VALUE_RE = re.compile(r"^[a-z][a-z0-9_]*_\d{4,}$")
 
-    The unit of analysis for a segmentation case is the entity (user/customer), so the index column
-    must be a ``user_id`` (``user_00001``…), NOT a sequential monthly ``period`` (``2023-01``…).
-    Returns False when a row still carries a monthly ``period``-shaped index (the RED control / a
-    data-layer regression that reverts to the time series). True (n/a) when rows are empty. No LLM /
-    network / API key.
+
+def _fold_accents(text: str) -> str:
+    """Lowercase + strip accents (NFKD → ASCII) for accent-insensitive narrative matching (#513)."""
+    return (
+        unicodedata.normalize("NFKD", text)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .lower()
+    )
+
+
+def check_clustering_entity_index(rows: list) -> bool:
+    """Pure oracle (Issue #468, prefix-generalized #513): is the ml_ds+clustering dataset ENTITY-level?
+
+    The unit of analysis for a segmentation case is the entity, so the index column must be an entity
+    id (``{prefix}_00001``… for ANY prefix — ``user_``/``centro_``/``paciente_``…; #513 made the prefix
+    architect-driven), NOT a sequential monthly ``period`` (``2023-01``…). Prefix-agnostic: scans for a
+    ``*_id`` string column whose value is ``{prefix}_NNNNN``-shaped. Returns False when a row still
+    carries a monthly ``period``-shaped index (the RED control / a data-layer regression to the time
+    series) OR when no entity id is present. True (n/a) when rows are empty. No LLM / network / API key.
     """
     if not rows:
         return True
     first = rows[0]
     if _is_monthly_period(first.get("period")):
         return False
-    uid = first.get("user_id")
-    return isinstance(uid, str) and uid.startswith("user_")
+    for k, v in first.items():
+        if (
+            isinstance(k, str)
+            and k.endswith("_id")
+            and isinstance(v, str)
+            and _ENTITY_ID_VALUE_RE.match(v)
+        ):
+            return True
+    return False
+
+
+def check_clustering_entity_coherence(
+    rows: list,
+    entity_descriptor: dict | None,
+    narrative: str | None,
+) -> bool:
+    """Pure oracle (Issue #513): does the dataset's entity match the architect's narrated entity?
+
+    Two-sided coherence: (a) the dataset's entity-id column prefix == ``entity_descriptor.snake_prefix``
+    (the CSV the student downloads uses the SAME entity handle the architect emitted), AND (b) the M1
+    narrative MENTIONS that entity (its snake_prefix / singular / plural, accent-folded) — so the story
+    the student reads names the entity the CSV is built from. RED when either side diverges. True (n/a)
+    when rows / descriptor / narrative are absent or the descriptor carries no snake_prefix → the frozen
+    golden set (no entity_descriptor) stays green; the deterministic teeth live in the unit RED/GREEN
+    tests (precedent #457/#469/#489/#494). No LLM / network / API key.
+    """
+    if not rows or not isinstance(entity_descriptor, dict) or not narrative:
+        return True
+    prefix = entity_descriptor.get("snake_prefix")
+    if not isinstance(prefix, str) or not prefix:
+        return True
+    # (a) data side: the entity id column's value prefix must equal snake_prefix.
+    first = rows[0]
+    id_vals = [
+        v
+        for k, v in first.items()
+        if isinstance(k, str) and k.endswith("_id") and isinstance(v, str)
+    ]
+    if not id_vals:
+        return False  # entity index missing entirely
+    if id_vals[0].rsplit("_", 1)[0] != prefix:
+        return False
+    # (b) narrative side: the story must name the entity (prefix / singular / plural), accent-folded.
+    folded_narrative = _fold_accents(narrative)
+    candidates = {
+        _fold_accents(prefix),
+        _fold_accents(str(entity_descriptor.get("singular", ""))),
+        _fold_accents(str(entity_descriptor.get("plural", ""))),
+    }
+    return any(c and c in folded_narrative for c in candidates)
 
 
 # ── Issue #467 — deterministic clustering data↔narrative k coherence oracle ───

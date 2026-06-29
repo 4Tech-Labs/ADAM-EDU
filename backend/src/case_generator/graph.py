@@ -202,6 +202,8 @@ from case_generator.impact_lens import (
 )
 from case_generator.clustering_decision import (
     build_clustering_architect_hint,
+    build_clustering_currency_honesty_hint,
+    build_clustering_entity_hint,
     build_clustering_m1_questions_hint,
     build_clustering_m3_questions_hint,
     build_clustering_verdict_hint,
@@ -279,6 +281,7 @@ from case_generator.tools_and_schemas import (
     EDAQuestionsOutput,
     DatasetSchema,
     TeachingNoteIntroOutput,
+    _sanitize_entity_prefix,
 )
 from case_generator.datagen.eda_charts_business import (
     generate_business_eda_charts,
@@ -1436,6 +1439,23 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
     ):
         prompt = prompt + build_clustering_architect_hint(_clustering_decision)
 
+    # Issue #513 — append the entity+population coherence hint (brace-free) so M1 narrates ONE domain
+    # entity and EXACTLY N entities, and emits `entity_descriptor` → the data layer renames the index
+    # to `{prefix}_id` (Opción A). Gated by BOTH the structure premise (the N = _MLDS_CLUSTERING_MAX_ROWS
+    # rows only exist on that lane) AND the entity-coherence kill-switch AND ml_ds+clustering. Appended
+    # LAST so it overrides the #455 anchor's "clientes" examples; post-format (no second .format) →
+    # SHA untouched. N is injected from the constant (I2 — never a literal).
+    if (
+        settings.mlds_clustering_structure
+        and settings.mlds_clustering_entity_coherence
+        and _is_ml_ds_clustering(state)
+    ):
+        prompt = prompt + build_clustering_entity_hint(_MLDS_CLUSTERING_MAX_ROWS)
+
+    # Issue #514 — prohibit absolute per-entity $ in the M1 prose (ml_ds+clustering). Best-effort,
+    # brace-free, node-level append → architect SHA untouched; no-op (byte-identical) elsewhere.
+    prompt = _maybe_append_clustering_currency_hint(prompt, state)
+
     try:
         result, profile_resolved, family_resolved, pregunta_eje = (
             _invoke_case_architect_with_contract(
@@ -1556,9 +1576,26 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             else None
         )
 
+        # Issue #513 — persist the entity descriptor under the SAME dual gate as the entity hint
+        # (structure premise + entity coherence + ml_ds clustering), so the data layer's prefix and
+        # the M1 narrative agree (Opción A). None outside the gate → the data layer falls back to
+        # `user_` (#468, byte-identical). Like value_model: NOT in state_input → survives resume via
+        # the durable checkpoint; single writer (only the architect) → no clobber / fan-out hazard.
+        entity_descriptor_dict = (
+            result.entity_descriptor.model_dump()
+            if (
+                result.entity_descriptor is not None
+                and settings.mlds_clustering_structure
+                and settings.mlds_clustering_entity_coherence
+                and _is_ml_ds_clustering(state)
+            )
+            else None
+        )
+
         return {
             "current_agent": "case_architect",
             "value_model": value_model_dict,
+            "entity_descriptor": entity_descriptor_dict,
             "titulo": result.titulo,
             "industria": result.industria,
             # Issue #377 — relabel any non-USD currency to USD at the source (structured-output
@@ -2183,6 +2220,9 @@ def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
     prompt = CASE_WRITER_PROMPT_BY_FAMILY.get(
         _resolve_m1_prompt_family(context), CASE_WRITER_PROMPT
     ).format(**context)
+    # Issue #514 — same currency-honesty hint on the STUDENT-FACING narrative (ml_ds+clustering).
+    # Brace-free, appended after .format; best-effort; no-op (byte-identical) for every other cohort.
+    prompt = _maybe_append_clustering_currency_hint(prompt, state)
 
     try:
         # Invocación directa de texto crudo (sin JSON schema)
@@ -4739,6 +4779,17 @@ _MLDS_SAAS_TEMPLATE_COLUMNS: frozenset[str] = frozenset({
     "plan_tier", "payment_failures", "monthly_usage_pct",
 })
 
+# Base de panel financiero MENSUAL de empresa (P&L) que `_build_fallback_schema` y el prompt
+# `M2_clasificacion/dataset.py` inyectan SIEMPRE para ml_ds+clf. Para un caso NO-retención de
+# ENTIDADES cross-section (encuesta de hogares/individuos: valoración ambiental, scoring, aprobación)
+# es RESIDUO de plantilla — una entidad no tiene revenue/costs/margin mensual. El de-churn (#382)
+# la CONSERVABA; el de-template (#507) la elimina EXCEPTO las columnas que el contrato declara como
+# feature real (un panel de empresa legítimo las lista → protegidas por el allowlist existente).
+# `period` es un índice temporal sin sentido en cross-section (str → ruido one-hot en el notebook).
+_FINANCIAL_PANEL_TEMPLATE_COLUMNS: frozenset[str] = frozenset({
+    "period", "revenue", "costs", "margin_pct",
+})
+
 
 def _is_retention_target_name(name: str, role: str = "") -> bool:
     """True si el target pertenece a la familia retención/churn (por nombre o rol).
@@ -4922,6 +4973,7 @@ def _enforce_mlds_classification_schema(
     profile: str,
     primary_family: str | None,
     enabled: bool = True,
+    detemplate_cross_section: bool = True,
 ) -> dict:
     """De-churna la SEÑAL del target para ml_ds + clasificación NO-retención (Issue #382).
 
@@ -4944,6 +4996,14 @@ def _enforce_mlds_classification_schema(
       ``(primary_family or "clasificacion")=="clasificacion"`` AND el target del contrato es
       binario (``role==classification_target`` y ``dtype=="int"``) AND
       ``NOT _is_retention_target_name(target_name)``.
+
+    De-template cross-section (Issue #507, ``detemplate_cross_section``, kill-switch
+    ``MLDS_DETEMPLATE_CROSS_SECTION``): cuando está activo (default) el strip AÑADE la base de panel
+    financiero de empresa (``_FINANCIAL_PANEL_TEMPLATE_COLUMNS`` = period/revenue/costs/margin_pct) al
+    conjunto a eliminar. Para una encuesta de ENTIDADES cross-section (hogares/individuos: valoración
+    ambiental, scoring, aprobación) esas columnas son residuo de plantilla, no datos. Tienen la MISMA
+    protección que el resto: una columna declarada feature del contrato (panel de empresa legítimo)
+    NUNCA se elimina. Off → comportamiento #382 byte-idéntico (base financiera conservada).
     """
     if not enabled or profile != "ml_ds":
         return schema
@@ -5007,7 +5067,13 @@ def _enforce_mlds_classification_schema(
         for f in (contract or {}).get("feature_columns") or []
     }
     protected = contract_features | {keep_name, driver_name}
-    strip_set = (_CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS) - protected
+    # Issue #507 — para una encuesta de entidades cross-section (no-retención) la base de panel
+    # financiero de empresa es residuo de plantilla; se añade al strip cuando `detemplate_cross_section`
+    # está activo. Las columnas declaradas por el contrato siguen protegidas (allowlist existente).
+    template_columns = _CHURN_TEMPLATE_COLUMNS | _MLDS_SAAS_TEMPLATE_COLUMNS
+    if detemplate_cross_section:
+        template_columns = template_columns | _FINANCIAL_PANEL_TEMPLATE_COLUMNS
+    strip_set = template_columns - protected
     stripped = [c.get("name") for c in columns if c.get("name") in strip_set]
     columns = [c for c in columns if c.get("name") not in strip_set]
 
@@ -5070,6 +5136,131 @@ def _enforce_mlds_classification_schema(
 
     new_schema = dict(schema)
     new_schema["columns"] = columns
+    return new_schema
+
+
+def _resolve_signed_directions(
+    columns: list, contract: dict | None, *, target_name: str | None
+) -> list[dict]:
+    """Issue #506 — resuelve los drivers con SIGNO económico declarado para el target binario.
+
+    Fuente ÚNICA de la regla de elegibilidad, compartida por el enforcer
+    ``_enforce_mlds_directional_target`` y el golden oracle ``check_directional_coherence`` (DRY: la
+    verificación no debe re-derivar la regla de la generación). Una feature del contrato entra como
+    driver con signo si declara ``expected_direction`` ∈ {positive, negative} Y es numérica (dtype
+    int/float), no-leakage, distinta del target, presente en el schema y una columna INDEPENDIENTE
+    (sin dependency propia → el generador la produce ANTES del target dependiente).
+
+    Devuelve la lista ORDENADA por aparición en el contrato (determinismo del seed) de
+    ``{"name": str, "sign": +1|-1}``; ``sign`` es int de Python (JSON-serializable → seed estable).
+    """
+    schema_by_name = {c.get("name"): c for c in columns}
+    signed: list[dict] = []
+    seen: set[str] = set()
+    for f in (contract or {}).get("feature_columns") or []:
+        raw = f.get("expected_direction")
+        if not isinstance(raw, str):
+            continue
+        direction = raw.strip().lower()
+        if direction == "positive":
+            sign = 1
+        elif direction == "negative":
+            sign = -1
+        else:
+            continue
+        fname = (f.get("name") or "").strip()
+        if not fname or fname == target_name or fname in seen:
+            continue
+        if f.get("is_leakage_risk") or f.get("dtype") not in ("int", "float"):
+            continue
+        scol = schema_by_name.get(fname)
+        if scol is None or scol.get("type") not in ("int", "float") or scol.get("dependency"):
+            continue
+        signed.append({"name": fname, "sign": sign})
+        seen.add(fname)
+    return signed
+
+
+def _enforce_mlds_directional_target(
+    schema: dict,
+    contract: dict | None,
+    *,
+    profile: str,
+    primary_family: str | None,
+    enabled: bool = True,
+) -> dict:
+    """Issue #506 — acopla el target binario ml_ds+clasificación a VARIOS drivers con SIGNO económico.
+
+    Sibling determinista de ``_enforce_mlds_classification_schema`` (NO generalizar). Corre DESPUÉS del
+    de-churn (#382): toma el ``is_domain_target`` ya re-apuntado y, cuando el contrato declara
+    ``expected_direction`` ('positive'/'negative') en ≥1 feature, reescribe la dependencia del target a
+    una forma multi-driver con signo::
+
+        dependency = {
+            "depends_on": signed_drivers[0]["name"],   # compat: golden oracle #382 + reparación colgantes
+            "relationship": "linear",                  # la rama signed del generador lo ignora
+            "signed_drivers": [{"name", "sign": +1|-1}, ...],
+            "noise_factor": <misma fórmula que #301/#382>,
+        }
+
+    El generador (``_signed_driver_values``) construye el target desde ``Σ sign·zscore(feature)`` → el
+    coeficiente del modelo respeta el signo del dominio (ej: ley de demanda → tarifa = negativa, en vez
+    de un coeficiente económicamente invertido). PURO copy-on-write (determinismo del seed +
+    thread-safety). LOG-ONLY (precedente #336).
+
+    Gate (fuera de él → MISMO objeto, byte-idéntico):
+      ``enabled`` (kill-switch ``MLDS_DIRECTIONAL_PRIORS``) AND ``profile=="ml_ds"`` AND
+      ``(primary_family or "clasificacion")=="clasificacion"`` AND existe una columna ``is_domain_target``
+      AND el contrato declara ≥1 ``expected_direction`` UTILIZABLE (numérica, no-leakage, presente en el
+      schema e INDEPENDIENTE — sin dependency propia, para que el generador la produzca ANTES del target).
+    """
+    if not enabled or profile != "ml_ds":
+        return schema
+    if (primary_family or "clasificacion") != "clasificacion":
+        return schema
+
+    columns = schema.get("columns", [])
+    target_col = next((c for c in columns if c.get("is_domain_target") is True), None)
+    if target_col is None:
+        return schema
+    keep_name = target_col.get("name")
+
+    # Drivers con SIGNO declarado — regla de elegibilidad COMPARTIDA con el golden oracle
+    # check_directional_coherence (fuente única `_resolve_signed_directions`, sin drift test↔prod).
+    signed_drivers = _resolve_signed_directions(columns, contract, target_name=keep_name)
+    if not signed_drivers:
+        return schema
+
+    # Copy-on-write: nuevo schema + columnas copiadas; reescribe SOLO la dependencia del target.
+    new_columns = [dict(c) for c in columns]
+    min_signal = float((contract or {}).get("min_signal_strength") or 0.15)
+    noise_factor = round(max(0.08, min(0.30, 0.30 - min_signal)), 3)
+    for c in new_columns:
+        if c.get("name") == keep_name:
+            c["dependency"] = {
+                # `depends_on` conservado (no inerte): mantiene verde el golden oracle
+                # check_domain_coherence (#382) y sobrevive la reparación de dependencias colgantes.
+                "depends_on": signed_drivers[0]["name"],
+                "relationship": "linear",
+                "signed_drivers": signed_drivers,
+                "noise_factor": noise_factor,
+            }
+            c["is_domain_target"] = True
+
+    logger.warning(
+        "[_enforce_mlds_directional_target] Issue #506: target '%s' ← drivers con signo %s",
+        keep_name,
+        [(d["name"], d["sign"]) for d in signed_drivers],
+        extra={
+            "node": "schema_designer",
+            "family": "clasificacion",
+            "target_name": keep_name,
+            "signed_drivers": [(d["name"], d["sign"]) for d in signed_drivers],
+        },
+    )
+
+    new_schema = dict(schema)
+    new_schema["columns"] = new_columns
     return new_schema
 
 
@@ -5490,6 +5681,15 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
             schema_result = _enforce_mlds_classification_schema(
                 schema_result, contract, profile=profile, primary_family=primary_family,
                 enabled=settings.mlds_dechurn_signal,
+                detemplate_cross_section=settings.mlds_detemplate_cross_section,
+            )
+            # Issue #506 — prior de dirección económica: reescribe el target ml_ds+clf de-churnado a un
+            # acoplamiento multi-driver con SIGNO (expected_direction del contrato) para que el
+            # coeficiente del modelo no quede económicamente invertido. Tras el de-churn; no-op
+            # byte-idéntico sin direcciones declaradas, fuera de ml_ds+clf, o con el kill-switch off.
+            schema_result = _enforce_mlds_directional_target(
+                schema_result, contract, profile=profile, primary_family=primary_family,
+                enabled=settings.mlds_directional_priors,
             )
             # Issue #466 — clustering es no supervisado: elimina cualquier target supervisado filtrado
             # (dummy_target alucinado o target del contrato inyectado por el augmenter gateless) ANTES
@@ -5563,6 +5763,12 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     fallback_schema = _enforce_mlds_classification_schema(
         fallback_schema, contract, profile=profile, primary_family=primary_family,
         enabled=settings.mlds_dechurn_signal,
+        detemplate_cross_section=settings.mlds_detemplate_cross_section,
+    )
+    # Issue #506 — mismo prior de dirección económica en el fallback (red de seguridad).
+    fallback_schema = _enforce_mlds_directional_target(
+        fallback_schema, contract, profile=profile, primary_family=primary_family,
+        enabled=settings.mlds_directional_priors,
     )
     # Issue #466 — mismo strip de target supervisado en el fallback (red de seguridad).
     fallback_schema = _enforce_mlds_clustering_no_target(
@@ -5738,6 +5944,76 @@ def _is_event_target(col: dict, target_col_name: str | None) -> bool:
     return name == "categoria"
 
 
+def _signed_driver_values(
+    signed_drivers: list,
+    df_data: dict,
+    columns: list,
+    low: float,
+    high: float,
+    n_rows: int,
+    *,
+    noise_factor: float,
+    rng: "np.random.Generator",
+) -> "np.ndarray | None":
+    """Issue #506 — valores de un target binario acoplado a VARIOS drivers con signo económico.
+
+    ``signed_drivers`` = ``[{"name": str, "sign": +1|-1}, ...]`` (lo emite
+    ``_enforce_mlds_directional_target``). Construye::
+
+        score = Σ_i  sign_i · zscore(feature_i)
+
+    sobre los drivers PRESENTES en ``df_data`` y numéricos con varianza > 0; normaliza el score a
+    [0,1] (min-max, el MISMO ``+1e-9`` que la rama de 1 padre) y lo escala a ``[low, high]`` con UNA
+    sola extracción ``rng.normal`` de ruido — idéntico al contrato de draws de la rama de 1 padre,
+    así el caso de 1 solo driver es FORMULA-equivalente a ``relationship=="linear"`` (sign +1) /
+    ``"inverse"`` (sign -1), porque ``minmax(zscore(x)) == minmax(x)`` para varianza finita.
+
+    Devuelve ``None`` SIN tocar el rng cuando NINGÚN driver es utilizable, para que el llamador caiga
+    al fallback independiente con el ``col`` real (espejo de la rama huérfana). Defensivo: nunca
+    crashea por driver ausente, no numérico, constante o todo-nulo.
+    """
+    import numpy as np
+
+    score = np.zeros(n_rows, dtype=float)
+    used = 0
+    for d in signed_drivers:
+        if not isinstance(d, dict):
+            continue
+        fname = (d.get("name") or "").strip()
+        try:
+            sign = float(d.get("sign", 0) or 0)
+        except (TypeError, ValueError):
+            sign = 0.0
+        if not fname or sign == 0.0 or fname not in df_data:
+            continue
+        col_def = next((c for c in columns if c.get("name") == fname), None)
+        if col_def is not None and col_def.get("type") not in ("int", "float"):
+            continue
+        raw = df_data[fname]
+        if len(raw) != n_rows:
+            continue
+        arr = np.array([float(v) if v is not None else np.nan for v in raw], dtype=float)
+        if np.all(np.isnan(arr)):
+            continue
+        mean = float(np.nanmean(arr))
+        arr = np.where(np.isnan(arr), mean, arr)
+        std = float(arr.std())
+        if std == 0.0:
+            continue
+        score += sign * ((arr - mean) / std)
+        used += 1
+
+    if used == 0:
+        return None
+
+    s_min, s_max = float(score.min()), float(score.max())
+    score_norm = (score - s_min) / (s_max - s_min + 1e-9)
+    target_range = high - low
+    base = low + score_norm * target_range
+    noise = rng.normal(0, target_range * noise_factor, n_rows)
+    return np.clip(base + noise, low, high)
+
+
 def _generate_dataset_from_schema(
     schema: dict,
     profile: str = "business",
@@ -5846,7 +6122,23 @@ def _generate_dataset_from_schema(
         if low >= high:
             high = low + 1.0
 
-        if parent_name in df_data:
+        # Issue #506 — target multi-driver con signos económicos declarados (expected_direction).
+        # Intercepta ANTES de la rama de 1 padre: como `_enforce_mlds_directional_target` conserva
+        # `depends_on` (compat con el golden oracle / la reparación de colgantes #382), esa rama
+        # dispararía y usaría UN solo padre; el signed branch usa TODOS los drivers con su signo.
+        signed_drivers = dep.get("signed_drivers")
+        if isinstance(signed_drivers, list) and signed_drivers:
+            signed_values = _signed_driver_values(
+                signed_drivers, df_data, columns, low, high, n_rows,
+                noise_factor=float(dep.get("noise_factor", 0.1)), rng=rng,
+            )
+            if signed_values is None:
+                # Ningún driver utilizable → espejo de la rama huérfana con el `col` REAL
+                # (conserva el sesgo semántico por nombre del target).
+                values = _generate_independent_values(col, low, high, n_rows, rng)
+            else:
+                values = signed_values
+        elif parent_name in df_data:
             # Guard: el padre debe ser numérico para aplicar la correlación matemática
             parent_col_def = next((c for c in columns if c["name"] == parent_name), None)
             if parent_col_def and parent_col_def.get("type") not in ("int", "float"):
@@ -6193,34 +6485,63 @@ def _enforce_mlds_clustering_structure(
     return new_rows
 
 
+def _resolve_entity_prefix(entity_descriptor: dict | None) -> tuple[str, str]:
+    """Resolve ``(snake_prefix, singular)`` for the clustering entity index (Issue #513).
+
+    Defense-in-depth: re-sanitizes ``snake_prefix`` via ``_sanitize_entity_prefix`` (the SAME helper
+    the ``EntityDescriptor`` schema validator uses) in case a raw/legacy dict reaches the data layer.
+    Falls back to the #468 ``("user", "usuario")`` when the descriptor is absent / malformed /
+    unsanitizable → ``user_id`` / ``user_00001`` (byte-identical to #468; required by its assertions,
+    which call ``_apply_clustering_entity_index`` with no descriptor). NOTE: this data-layer fallback
+    is deliberately ``"user"`` (no descriptor at all → #468 byte-compat), DISTINCT from the
+    schema-level ``EntityDescriptor`` default ``"cliente"`` (which applies when the architect DOES emit
+    a dict but with a missing/garbage ``snake_prefix``).
+    """
+    if isinstance(entity_descriptor, dict):
+        prefix = _sanitize_entity_prefix(entity_descriptor.get("snake_prefix"))
+        if prefix:
+            raw_singular = entity_descriptor.get("singular")
+            singular = (
+                raw_singular.strip()
+                if isinstance(raw_singular, str) and raw_singular.strip()
+                else prefix
+            )
+            return prefix, singular
+    return "user", "usuario"
+
+
 def _apply_clustering_entity_index(
     rows: list,
     schema: dict,
     *,
+    entity_descriptor: dict | None = None,
     profile: str,
     primary_family: str | None,
     enabled: bool = True,
 ) -> tuple[list, dict]:
-    """Renombra el índice temporal ``period`` → ``user_id`` (entity-level) para ml_ds + clustering (Issue #468).
+    """Renombra el índice temporal ``period`` → ``{prefix}_id`` (entity-level) para ml_ds + clustering.
 
-    El generador genérico rellena ``period`` con etiquetas mensuales (``2023-01``…) porque trata la
-    columna como índice temporal. Para clustering la unidad de análisis es la ENTIDAD (cliente/
-    usuario), no el mes — la narrativa segmenta usuarios. Este post-step (espeja
-    ``_enforce_mlds_clustering_structure``) reescribe la columna a un identificador de entidad
-    determinista ``user_00001``… y la renombra a ``user_id`` en las filas Y en una copia del schema,
-    de modo que el CSV que ve el estudiante es entity-level (no una serie temporal mensual).
+    Issue #468 introdujo el rename a ``user_id``; Issue #513 lo PARAMETRIZA por la entidad que narra
+    el architect (``entity_descriptor`` → ``snake_prefix``), de modo que el CSV que ve el estudiante
+    use la MISMA entidad de la historia M1 (Opción A — el dato se adapta a la narrativa). Sin
+    descriptor (entity_coherence off / no emitido) cae a ``user_`` → BYTE-IDÉNTICO a #468.
 
-    PURO copy-on-write (no muta las entradas → determinismo + thread-safety). ``user_id`` (str, token
-    ``id``) queda excluido del fit K-Means y de los charts (``_select_clustering_feature_columns`` lo
-    descarta por no-numérico y por el token ``id``) y el notebook #454 lo dropea por no-numérico.
+    El generador genérico rellena ``period`` con etiquetas mensuales (``2023-01``…). Para clustering
+    la unidad de análisis es la ENTIDAD, no el mes. Este post-step (espeja
+    ``_enforce_mlds_clustering_structure``) reescribe la columna a ``{prefix}_00001``… y la renombra a
+    ``{prefix}_id`` en las filas Y en una copia del schema.
 
-    ROBUSTO a un re-feed del schema renombrado (value-idempotente, no solo no-op): la columna índice
-    es ``period`` en la 1ª pasada (el generador genérico la rellena con etiquetas mensuales) o
-    ``user_id`` si se re-genera contra el schema YA renombrado que ``data_generator`` re-emite (un
-    retry de ``data_validator`` o un futuro checkpoint-skip de ``schema_designer`` haría que el
-    generador genérico rellene ``user_id`` con ``cat_N``). En AMBOS casos se (re)deriva
-    ``user_id = user_NNNNN`` de forma determinista, sobrescribiendo cualquier relleno categórico
-    obsoleto → el índice de entidad nunca se corrompe.
+    PURO copy-on-write (no muta las entradas → determinismo + thread-safety bajo jobs concurrentes),
+    preserva el conteo y el ORDEN de filas (1:1). ``{prefix}_id`` (str, token ``id``) queda excluido
+    del fit K-Means y de los charts (``_select_clustering_feature_columns`` lo descarta por
+    no-numérico y por el token ``id`` — robusto a cualquier prefijo) y el notebook #454 lo dropea por
+    no-numérico.
+
+    ROBUSTO a un re-feed del schema renombrado (value-idempotente): la columna índice es ``period``
+    en la 1ª pasada, el ``{prefix}_id`` actual (re-feed mismo prefijo, el caso durable normal) o el
+    legacy ``user_id``; en todos se (re)deriva ``{prefix}_NNNNN`` de forma determinista. NO se infiere
+    de un ``*_id`` arbitrario → una feature ``*_id`` que el architect declare nunca se confunde con el
+    índice.
 
     Gate (fuera de él → MISMOS objetos, byte-idéntico): ``enabled`` (kill-switch
     ``MLDS_CLUSTERING_STRUCTURE``) AND ``profile == "ml_ds"`` AND ``primary_family == "clustering"``
@@ -6230,27 +6551,40 @@ def _apply_clustering_entity_index(
         return rows, schema
     if not isinstance(rows, list) or not rows:
         return rows, schema
-    # Normaliza la columna índice (``period`` 1ª pasada / ``user_id`` re-feed) al id de entidad.
+
+    prefix, singular = _resolve_entity_prefix(entity_descriptor)
+    id_col = f"{prefix}_id"
+
     if "period" in rows[0]:
         index_key = "period"
+    elif id_col in rows[0]:
+        index_key = id_col
     elif "user_id" in rows[0]:
         index_key = "user_id"
     else:
         return rows, schema
 
+    # Guard de colisión (defensivo; las features de segmentación son RFM/comportamiento, ninguna
+    # termina en ``_id``): si ``{prefix}_id`` ya existe como columna NO-índice, cae al neutral
+    # ``user_id`` para no sobrescribir esa feature; si hasta el neutral colisiona, no toca nada.
+    if id_col != index_key and id_col in rows[0]:
+        prefix, singular, id_col = "user", "usuario", "user_id"
+        if id_col != index_key and id_col in rows[0]:
+            return rows, schema
+
     new_rows: list = []
     for i, r in enumerate(rows):
         rest = {k: v for k, v in r.items() if k != index_key}
-        new_rows.append({"user_id": f"user_{i + 1:05d}", **rest})
+        new_rows.append({id_col: f"{prefix}_{i + 1:05d}", **rest})
 
     new_schema = dict(schema)
     new_columns: list = []
     for col in schema.get("columns", []):
         c = dict(col)
-        if c.get("name") == "period":
-            c["name"] = "user_id"
+        if c.get("name") == index_key:
+            c["name"] = id_col
             c["type"] = "str"
-            c["description"] = "Identificador único de entidad/usuario"
+            c["description"] = f"Identificador único de {singular}"
         new_columns.append(c)
     new_schema["columns"] = new_columns
     return new_rows, new_schema
@@ -6317,12 +6651,22 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             enabled=settings.mlds_clustering_structure,
             target_k=_target_k,
         )
-        # Issue #468 — entity-level index: rename the monthly `period` to a `user_id` (user_00001…)
-        # so the clustering CSV the student reads is per-entity, not a monthly time series. No-op
-        # byte-idéntico fuera de ml_ds+clustering / con el switch off. Copy-on-write, resume-safe.
+        # Issue #468 + #513 — entity-level index: rename the monthly `period` to `{prefix}_id`
+        # (`{prefix}_00001`…) so the clustering CSV the student reads is per-entity AND uses the SAME
+        # entity the architect narrated (entity_descriptor, #513). The descriptor is injected ONLY
+        # under BOTH switches (the N-rows premise lives in `mlds_clustering_structure`; the entity
+        # rename is gated by `mlds_clustering_entity_coherence`) AND it is only persisted by the
+        # architect under that same dual gate → off / absent ⇒ None ⇒ `user_` (byte-identical to
+        # #468). No-op outside ml_ds+clustering. Copy-on-write, resume-safe.
+        _entity_descriptor = (
+            state.get("entity_descriptor")
+            if (settings.mlds_clustering_structure and settings.mlds_clustering_entity_coherence)
+            else None
+        )
         rows, schema = _apply_clustering_entity_index(
             rows,
             schema,
+            entity_descriptor=_entity_descriptor,
             profile=profile,
             primary_family=_clustering_family,
             enabled=settings.mlds_clustering_structure,
@@ -7680,6 +8024,23 @@ def _is_ml_ds_clustering(state: ADAMState) -> bool:
     """
     profile, family = _resolve_generation_focus(state)
     return profile == "ml_ds" and family == "clustering"
+
+
+def _maybe_append_clustering_currency_hint(prompt: str, state: ADAMState) -> str:
+    """Append the #514 currency-honesty hint for ml_ds+clustering when the kill-switch is on.
+
+    Shared by ``case_architect`` and ``case_writer`` (the two M1 prose producers). Best-effort: any
+    internal error returns the prompt UNCHANGED + logs (mirrors the repo's never-fail-a-job
+    augmentation doctrine), so a hint bug can never break M1 generation. Gate is independent of
+    ``mlds_clustering_m1_anchor`` / ``mlds_clustering_structure`` (granular-switch convention); the
+    hint is self-contained and coherent on either the clustering or the generic base prompt.
+    """
+    try:
+        if settings.mlds_clustering_currency_honesty and _is_ml_ds_clustering(state):
+            return prompt + build_clustering_currency_honesty_hint()
+    except Exception as e:  # pragma: no cover - defensive; never fail a job
+        logger.warning("[case] clustering currency hint skipped: %s", e)
+    return prompt
 
 
 def _select_eda_prompt(

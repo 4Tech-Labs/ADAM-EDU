@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     # byte-identically (instant env-only revert; no redeploy). churn/retention is unaffected
     # either way (the sibling no-ops on retention targets).
     mlds_dechurn_signal: bool = True
+    # Economic-direction priors for the ml_ds + clasificación dataset SIGNAL (Issue #506). When true,
+    # the deterministic sibling `_enforce_mlds_directional_target` rewrites the de-churned binary target
+    # into a multi-driver SIGNED coupling (Σ sign·zscore) from the contract's `expected_direction`
+    # hints, so the executed model's coefficients are not economically inverted (e.g. law of demand: a
+    # higher proposed fee LOWERS acceptance, not raises it). Kill-switch: set MLDS_DIRECTIONAL_PRIORS=
+    # false to disable the sibling and ship the prior unsigned schema byte-identically (instant env-only
+    # revert; no redeploy). No-op when no feature declares a direction, or outside ml_ds + clasificación.
+    mlds_directional_priors: bool = True
     # Coerce the ml_ds + clasificación target to a binary int classification_target (Issue #350).
     # When true, the deterministic sibling `_normalize_mlds_classification_target` forces any
     # non-int / non-classification target the LLM emits to int binary {0,1} BEFORE the schema
@@ -155,6 +163,18 @@ class Settings(BaseSettings):
     # hash, no prompt hints, no verdict guard; instant env-only revert, no redeploy). The gate is
     # profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
     mlds_clustering_decision_coherence: bool = True
+    # Entity + population coherence for ml_ds + clustering (Issue #513, EPIC #511). When true
+    # (default), an ml_ds + clustering case has the architect emit an `entity_descriptor`
+    # {singular, plural, snake_prefix} (via a brace-free M1 prompt hint that also declares EXACTLY
+    # `_MLDS_CLUSTERING_MAX_ROWS` entities), and the deterministic data layer renames the dataset
+    # index to `{snake_prefix}_id` / `{snake_prefix}_00001` so the CSV matches the M1 narrative
+    # (Opción A — the data adapts to the story). Gated TOGETHER with MLDS_CLUSTERING_STRUCTURE (the
+    # N-rows premise) so the hint never narrates N over a structure-off (200-row) dataset. Set
+    # MLDS_CLUSTERING_ENTITY_COHERENCE=false to revert byte-identically (no hint, descriptor not
+    # persisted → the data layer falls back to the #468 `user_id`; instant env-only revert, no
+    # redeploy). The gate is profile=="ml_ds" AND family=="clustering"; every other cohort is
+    # unaffected either way.
+    mlds_clustering_entity_coherence: bool = True
     # M4 value-frame for ml_ds + clustering (Issue #469). When true (default), an ml_ds + clustering
     # case on the NEUTRAL Impact-Lens path selects a dedicated M4 content + chart prompt where the
     # first chart is value-BY-SEGMENT (not a fabricated payback / break-even "Mes N"), §4.1/§4.2 are
@@ -219,6 +239,14 @@ class Settings(BaseSettings):
     # keeps the leaked column + §2.1 stays supervised; instant env-only revert, no redeploy). The gate
     # is profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
     mlds_clustering_no_target: bool = True
+    # De-template the company financial panel (period/revenue/costs/margin_pct) for ml_ds +
+    # clasificación NON-retention CROSS-SECTION cases (Issue #507). #382 strips the churn/SaaS template
+    # but KEEPS the financial base; for an entity survey (household/individual: environmental valuation,
+    # scoring, approval) that base is template residue. When true (default), it is ALSO stripped EXCEPT
+    # columns the contract declares as real features. Set MLDS_DETEMPLATE_CROSS_SECTION=false to keep the
+    # financial base byte-identically (the #382-only behavior; instant env-only revert, no redeploy).
+    # Gated INSIDE the #382 de-churn path: churn/retention, business, and other families are unaffected.
+    mlds_detemplate_cross_section: bool = True
     # Deterministic, data-only EDA chart builder for ml_ds + clustering (Issue #466, Frente 2). When
     # true (default), an ml_ds + clustering case routes M2 charts through `_eda_clustering_python_path`
     # (3 PRE-MODEL, target-free charts: feature distributions → motivates StandardScaler, correlation
@@ -230,6 +258,18 @@ class Settings(BaseSettings):
     # chart can never reappear. The gate is profile=="ml_ds" AND family=="clustering"; the builder is
     # profile-agnostic so business+clustering (#317) is a 1-line dispatch follow-up.
     mlds_clustering_charts: bool = True
+    # ml_ds + clustering M1 currency honesty (Issue #514, EPIC #511). When true (default), a brace-free
+    # node-level hint is appended to the case_architect AND case_writer prompts prohibiting absolute $
+    # magnitudes on the per-entity / per-segment behavior axes of the case (e.g. "$135.000/mes", "$15M")
+    # — the per-row dataset (monetary_value at an individual scale) does not back them. Exhibit 1 (the
+    # company P&L, aggregate USD) is preserved; per-segment value is expressed qualitatively/relatively.
+    # The hint names NO concrete feature (feature-agnostic — invariant I3). This is the PREVENTION layer;
+    # the deterministic guarantee is the sibling Issue #515. Gate: profile=="ml_ds" AND family==
+    # "clustering" (STRICT); independent of MLDS_CLUSTERING_STRUCTURE / MLDS_CLUSTERING_M1_ANCHOR. Set
+    # MLDS_CLUSTERING_CURRENCY_HONESTY=false to skip the append → byte-identical (instant env-only revert,
+    # no redeploy). Every other cohort is byte-identical either way; the append is best-effort (a hint
+    # error degrades to the un-hinted prompt, never fails a job).
+    mlds_clustering_currency_honesty: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign
