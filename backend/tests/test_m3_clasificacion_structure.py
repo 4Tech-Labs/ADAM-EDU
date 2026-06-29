@@ -14,6 +14,8 @@ Zero LLM calls. Zero network access. Zero database access.
 
 from __future__ import annotations
 
+import pytest
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Package importability
 # ──────────────────────────────────────────────────────────────────────────────
@@ -190,6 +192,53 @@ def test_contrast_questions_references_both() -> None:
     )
     assert "random forest" in prompt_lower, (
         "Contrast question prompt must reference Random Forest"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Question quality locks — coherence with what the live pipeline actually produces.
+# The deep-dive interpretability cell (interp_lr, VIF) was removed from the executed
+# notebook (#353), and raw cost-matrix keys (fp_cost/fn_cost) must not leak into the
+# student-facing enunciado (#361 presents cost in business-readable language).
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_lr_only_questions_have_no_stale_vif_reference() -> None:
+    """The executed notebook no longer computes VIF (#353 removed interp_lr); the LR
+    conceptual questions must not point the student at a metric the analysis never produces."""
+    import case_generator.prompts.clasificacion.M3_clasificacion.questions as mod
+
+    block = mod._M3_CLASSIFICATION_QUESTIONS_BLOCK_LR_ONLY  # type: ignore[attr-defined]
+    assert "VIF" not in block, "LR-only questions block must not reference VIF (removed in #353)"
+
+
+def test_lr_only_questions_anchor_multicollinearity_to_real_m2_evidence() -> None:
+    """The assumption-fragility question must anchor multicollinearity in evidence the
+    M2 EDA actually provides (predictor correlations), not a removed detection tool."""
+    import case_generator.prompts.clasificacion.M3_clasificacion.questions as mod
+
+    block = mod._M3_CLASSIFICATION_QUESTIONS_BLOCK_LR_ONLY.lower()  # type: ignore[attr-defined]
+    assert "correlacion" in block or "correlación" in block, (
+        "LR-only questions must reference predictor correlations as the multicollinearity anchor"
+    )
+    assert "multicolinealidad" in block
+
+
+@pytest.mark.parametrize(
+    "block_name",
+    ["_M3_CLASSIFICATION_QUESTIONS_BLOCK_LR_ONLY", "_M3_CLASSIFICATION_QUESTIONS_BLOCK_LR_RF_CONTRAST"],
+)
+def test_classification_questions_have_no_raw_cost_keys(block_name: str) -> None:
+    """Student-facing question prose must not leak the raw contract keys fp_cost / fn_cost
+    (presented in readable language: falso positivo / falso negativo)."""
+    import case_generator.prompts.clasificacion.M3_clasificacion.questions as mod
+
+    block = getattr(mod, block_name)
+    assert "fp_cost" not in block and "fn_cost" not in block, (
+        f"{block_name} must not leak raw fp_cost/fn_cost keys into the question prose"
+    )
+    assert "falso positivo" in block and "falso negativo" in block, (
+        f"{block_name} must present the cost asymmetry in readable language"
     )
 
 

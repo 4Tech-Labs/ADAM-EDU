@@ -638,3 +638,243 @@ class TestGoldenOracle:
         )
         assert not blocked.passed
         assert any("M2 EDA question coherence" in reason for reason in blocked.reasons)
+
+    def test_oracle_model_leak_false_for_lr_only(self) -> None:
+        # The golden oracle must fail when an lr_only M2 question names Random Forest.
+        from tests.golden_eval import check_eda_questions_coherence
+
+        q = _q(solucion="comparar con Random Forest", chart_ref="chart_01")
+        assert check_eda_questions_coherence([q], {"chart_01"}, None, variant="lr_only") is False
+        # Same prose is clean when no variant is given (byte-identical to pre-change callers).
+        assert check_eda_questions_coherence([q], {"chart_01"}, None) is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10. Unselected-model leak guard — the M2 sibling of the M3/M4/M5 #337 guard.
+#     For an ml_ds single-model case (lr_only/rf_only) an M2 question must never
+#     name the OTHER classification model. No-op for None / lr_rf_contrast.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestModelLeakValidator:
+    def test_lr_only_flags_random_forest(self) -> None:
+        q = _q(solucion="el modelo se compara contra un Random Forest")
+        out = validate_eda_questions_coherence([q], set(), None, variant="lr_only")
+        assert any(v.startswith("MODELO_NO_SELECCIONADO") for v in out)
+        assert "Random Forest" in out[0]
+
+    @pytest.mark.parametrize(
+        "prose",
+        ["un RandomForestClassifier", "usar bosques aleatorios", "Random Forest gana"],
+    )
+    def test_lr_only_flags_rf_synonyms(self, prose: str) -> None:
+        q = _q(enunciado=prose)
+        out = validate_eda_questions_coherence([q], set(), None, variant="lr_only")
+        assert any(v.startswith("MODELO_NO_SELECCIONADO") for v in out)
+
+    def test_rf_only_flags_logistic_regression(self) -> None:
+        q = _q(solucion="usar Regresión Logística con umbral bajo")
+        out = validate_eda_questions_coherence([q], set(), None, variant="rf_only")
+        assert any(v.startswith("MODELO_NO_SELECCIONADO") for v in out)
+
+    def test_lr_only_does_not_flag_lr_mention(self) -> None:
+        # The SELECTED model is named legitimately — never flagged.
+        q = _q(solucion="el modelo de Regresión Logística usa umbral 0.3")
+        assert validate_eda_questions_coherence([q], set(), None, variant="lr_only") == []
+
+    def test_bare_acronyms_not_flagged(self) -> None:
+        # Zero-FP: bare RF/LR acronyms and substrings (perfil, performance) never match.
+        q = _q(enunciado="el perfil de RF y LR no aplica aquí; performance alta")
+        assert validate_eda_questions_coherence([q], set(), None, variant="lr_only") == []
+
+    @pytest.mark.parametrize("variant", [None, "lr_rf_contrast"])
+    def test_none_and_contrast_are_noop(self, variant: object) -> None:
+        q = _q(solucion="Random Forest y Regresión Logística juntos")
+        assert validate_eda_questions_coherence([q], set(), None, variant=variant) == []  # type: ignore[arg-type]
+
+    def test_default_call_is_noop_for_model_leak(self) -> None:
+        # No variant kwarg → byte-identical to the pre-change 3-check validator.
+        q = _q(solucion="Random Forest aquí")
+        assert validate_eda_questions_coherence([q], set(), None) == []
+
+    def test_per_question_attribution(self) -> None:
+        qs = [_q(numero=1, solucion="ok"), _q(numero=2, solucion="usar Random Forest")]
+        out = validate_eda_questions_coherence(qs, set(), None, variant="lr_only")
+        assert len(out) == 1 and "pregunta 2" in out[0]
+
+    def test_combines_with_chart_check(self) -> None:
+        q = _q(numero=1, solucion="Random Forest", chart_ref="chart_99")
+        out = validate_eda_questions_coherence([q], {"chart_01"}, None, variant="lr_only")
+        kinds = {v.split(":", 1)[0] for v in out}
+        assert kinds == {"CHART_REF_NONEXISTENT", "MODELO_NO_SELECCIONADO"}
+
+
+def _invoke_v(
+    fake: _FakeStructuredLLM, state: dict, preguntas: list[dict], variant: str | None
+) -> list[dict]:
+    return graph_module._apply_eda_questions_coherence(
+        llm=fake,
+        prompt="PROMPT",
+        state=state,
+        preguntas_dict=preguntas,
+        chart_ids=_CHART_IDS,
+        variant=variant,
+    )
+
+
+def _rf_leak_pass1() -> list[dict]:
+    # chart_ref valid + no event rate → ONLY the model leak triggers a reprompt.
+    return [
+        _q(numero=1, solucion="conviene comparar con un Random Forest", chart_ref="chart_01"),
+        _q(numero=2, solucion="usar recall", chart_ref=None),
+    ]
+
+
+class TestModelLeakWrapper:
+    def test_reprompt_corrects_model_leak(self) -> None:
+        corrected = _result(
+            _eda_q(1, solucion="usar Regresión Logística con umbral bajo", chart_ref="chart_01"),
+            _eda_q(2, solucion="usar recall", chart_ref=None),
+        )
+        fake = _FakeStructuredLLM([corrected])
+        out = _invoke_v(fake, _state(), _rf_leak_pass1(), "lr_only")
+        assert fake.calls == 1
+        assert validate_eda_questions_coherence(out, _CHART_IDS, 0.08, variant="lr_only") == []
+
+    def test_degrade_when_reprompt_still_leaks(self) -> None:
+        still_leaks = _result(
+            _eda_q(1, solucion="seguimos con Random Forest", chart_ref="chart_01"),
+            _eda_q(2, solucion="usar recall", chart_ref=None),
+        )
+        fake = _FakeStructuredLLM([still_leaks])
+        pass1 = _rf_leak_pass1()
+        out = _invoke_v(fake, _state(), pass1, "lr_only")
+        assert fake.calls == 1
+        assert out == pass1  # degrade to pass-1
+
+    def test_no_leak_no_reprompt(self) -> None:
+        clean = [
+            _q(numero=1, solucion="el modelo de Regresión Logística", chart_ref="chart_01"),
+            _q(numero=2, solucion="usar recall", chart_ref=None),
+        ]
+        fake = _FakeStructuredLLM()  # raises if invoked
+        out = _invoke_v(fake, _state(), clean, "lr_only")
+        assert fake.calls == 0
+        assert out == clean
+
+    def test_variant_none_ignores_model_leak(self) -> None:
+        # A leaked RF mention with variant=None (business / contrast) is NOT a violation,
+        # so nothing reprompts (chart_ref valid, no rate).
+        fake = _FakeStructuredLLM()
+        pass1 = _rf_leak_pass1()
+        out = _invoke_v(fake, _state(), pass1, None)
+        assert fake.calls == 0
+        assert out == pass1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 11. Model-focus hint + de-specified (model-neutral) base prompt
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestModelFocusHint:
+    def test_lr_only_names_lr_not_rf(self) -> None:
+        hint = graph_module._build_eda_model_focus_hint("lr_only")
+        assert "Regresión Logística" in hint
+        assert "Random Forest" not in hint
+
+    def test_rf_only_names_rf(self) -> None:
+        hint = graph_module._build_eda_model_focus_hint("rf_only")
+        assert "Random Forest" in hint
+        assert "Logistic" not in hint
+
+    @pytest.mark.parametrize("variant", [None, "lr_rf_contrast"])
+    def test_none_and_contrast_empty(self, variant: object) -> None:
+        assert graph_module._build_eda_model_focus_hint(variant) == ""  # type: ignore[arg-type]
+
+    def test_hint_is_brace_free(self) -> None:
+        # Concatenated onto an already-formatted prompt → must carry no .format placeholder.
+        for variant in ("lr_only", "rf_only"):
+            hint = graph_module._build_eda_model_focus_hint(variant)
+            assert "{" not in hint and "}" not in hint
+
+
+class TestPromptModelNeutral:
+    """The de-specified M2 classification prompt must never name a specific model.
+
+    Naming a model in the static prompt re-introduces the original defect (an LR-only case
+    that mentions Random Forest). The selected model is re-anchored at runtime by the
+    model-focus hint, NOT hardcoded in the template.
+    """
+
+    @pytest.mark.parametrize(
+        "needle",
+        ["LR/RF", "LR o RF", "max_features", "Random Forest", "Logistic Regression", "RandomForest"],
+    )
+    def test_no_model_name_in_template(self, needle: str) -> None:
+        assert needle not in EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION
+
+    def test_model_neutral_phrasing_present(self) -> None:
+        assert "modelo de clasificación" in EDA_QUESTIONS_GENERATOR_PROMPT_CLASSIFICATION
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 12. Node wiring — eda_questions_generator resolves the variant, appends the
+#     model-focus hint, and passes the variant to the coherence wrapper.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _node_state(profile: str, algoritmos: list[str]) -> dict:
+    mode = "contrast" if len(algoritmos) == 2 else "single"
+    return {
+        "studentProfile": profile,
+        "algoritmos": algoritmos,
+        "algorithm_mode": mode,
+        "task_payload": {"algoritmos": algoritmos, "algorithm_mode": mode},
+        "doc2_eda": "Reporte EDA del caso.",
+        "doc2_eda_charts": [],
+        "dataset_schema_required": {},
+        "case_id": "case-node",
+        "output_language": "es",
+    }
+
+
+def _run_node_capture_prompt(state: dict) -> str:
+    from unittest.mock import MagicMock, patch
+
+    from langchain_core.runnables import RunnableConfig
+
+    ctx = {
+        "case_id": "case-node",
+        "student_profile": state["studentProfile"],
+        "primary_family": "clasificacion",
+        "pregunta_eje": "decision",
+        "output_language": "es",
+    }
+    mock_output = MagicMock()
+    mock_output.preguntas = []
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value.invoke.return_value = mock_output
+    with (
+        patch("case_generator.graph._get_writer_llm", return_value=mock_llm),
+        patch("case_generator.graph._build_base_context", return_value=dict(ctx)),
+    ):
+        graph_module.eda_questions_generator(state, RunnableConfig())  # type: ignore[arg-type]
+    return mock_llm.with_structured_output.return_value.invoke.call_args.args[0]
+
+
+class TestNodeHintWiring:
+    def test_lr_only_prompt_carries_lr_hint(self) -> None:
+        prompt = _run_node_capture_prompt(_node_state("ml_ds", ["Logistic Regression"]))
+        assert "Modelo del caso" in prompt
+        assert "Regresión Logística" in prompt
+        # The de-specified base never names RF, and the lr_only hint must not introduce it.
+        assert "Random Forest" not in prompt
+
+    def test_rf_only_prompt_carries_rf_hint(self) -> None:
+        prompt = _run_node_capture_prompt(_node_state("ml_ds", ["Random Forest"]))
+        assert "Random Forest" in prompt
+
+    def test_business_prompt_has_no_model_hint(self) -> None:
+        prompt = _run_node_capture_prompt(_node_state("business", ["Logistic Regression"]))
+        assert "Modelo del caso" not in prompt

@@ -3342,6 +3342,7 @@ _M2_VIOLATION_CODES = (
     ("CHART_REF_NONEXISTENT", "chart_ref"),
     ("EVENT_RATE_INCOHERENT", "rate_internal"),
     ("EVENT_RATE_VS_CONTRACT", "rate_contract"),
+    ("MODELO_NO_SELECCIONADO", "model_leak"),
 )
 
 
@@ -3356,13 +3357,18 @@ def _m2_violation_types(violations: list[str]) -> list[str]:
 
 
 def _build_m2_coherence_reprompt(
-    chart_ids: set[str], rate_pct: float | None, violations: list[str]
+    chart_ids: set[str],
+    rate_pct: float | None,
+    violations: list[str],
+    *,
+    variant: str | None = None,
 ) -> str:
     """Focused reprompt (CONCATENATED, never ``.format`` — prose may carry ``{}``).
 
-    Carries the CONCRETE fix (valid chart ids + the real event rate) so the model
-    corrects the specific figures, and demands the SAME 2 questions with the SAME
-    ``numero`` (1 and 2) so the downstream ``M2-Q{numero}`` answer/grading key is preserved.
+    Carries the CONCRETE fix (valid chart ids + the real event rate + the single selected
+    model when a model-leak is present) so the model corrects the specific issues, and demands
+    the SAME 2 questions with the SAME ``numero`` (1 and 2) so the downstream ``M2-Q{numero}``
+    answer/grading key is preserved.
     """
     bullet_list = "\n".join(f"- {violation}" for violation in violations)
     valid_charts = ", ".join(sorted(chart_ids)) if chart_ids else "ninguna"
@@ -3371,16 +3377,56 @@ def _build_m2_coherence_reprompt(
         if rate_pct is not None
         else ""
     )
+    model_line = ""
+    if any(v.startswith("MODELO_NO_SELECCIONADO") for v in violations):
+        if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY:
+            selected = "Regresión Logística"
+        elif variant == CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY:
+            selected = "Random Forest"
+        else:
+            selected = "el modelo seleccionado por el caso"
+        model_line = (
+            f"El caso construye un único modelo de clasificación: {selected}. Refiérete SOLO a "
+            "ese modelo y elimina toda mención de cualquier otro algoritmo de clasificación.\n"
+        )
     return (
         "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA (Módulo 2)\n"
-        "Algunas preguntas citan una gráfica inexistente o una tasa del evento en "
-        "`solucion_esperada` que NO coincide con su propio `enunciado` ni con el dataset. "
+        "Algunas preguntas citan una gráfica inexistente, una tasa del evento en "
+        "`solucion_esperada` que NO coincide con su propio `enunciado` ni con el dataset, o un "
+        "modelo de clasificación que el caso no seleccionó. "
         "Regenera EXACTAMENTE 2 preguntas con el MISMO schema y los MISMOS `numero` (1 y 2): "
         "cada `chart_ref` debe ser uno de los ids válidos del manifest (o null), y toda cifra "
         "de la tasa del evento en `solucion_esperada` debe ser EXACTAMENTE la de su enunciado.\n"
         f"Gráficas válidas (ids): {valid_charts}.\n"
         f"{rate_line}"
+        f"{model_line}"
         "Incoherencias detectadas:\n" + bullet_list
+    )
+
+
+def _build_eda_model_focus_hint(variant: str | None) -> str:
+    """Brace-free model-focus addendum for the M2 EDA questions prompt (ml_ds single-model).
+
+    The classification model is selected at intake, so for an ``lr_only`` / ``rf_only`` case the
+    M2 questions should name THAT model and never another — the M2 counterpart of the variant-aware
+    M3/M4/M5 surfaces. The M2 base prompt was de-specified to be model-neutral; this re-anchors it to
+    the actual model so M2 stays coherent with M3/M4/M5. ``lr_rf_contrast`` / ``None`` (business and
+    ml_ds contrast) → ``""`` (no-op): contrast legitimately reasons about both models and business is
+    already model-neutral. CONCATENATED onto the already-formatted prompt (never ``.format``), so it
+    carries no placeholder. A one-way prompt improvement (mirrors the de-specify; no kill-switch).
+    """
+    if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY:
+        modelo = "Regresión Logística"
+    elif variant == CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY:
+        modelo = "Random Forest"
+    else:
+        return ""
+    return (
+        "\n\n# Modelo del caso (coherencia M2 ↔ M3)\n"
+        f"El caso construirá un único modelo de clasificación: {modelo}. Cuando una pregunta razone "
+        f"sobre el clasificador (umbral de decisión, recall, precisión, regularización), refiérete a "
+        f"{modelo}. NUNCA nombres ningún otro algoritmo de clasificación que el caso no haya "
+        "seleccionado."
     )
 
 
@@ -3391,6 +3437,7 @@ def _apply_eda_questions_coherence(
     state: ADAMState,
     preguntas_dict: list[dict],
     chart_ids: set[str],
+    variant: str | None = None,
 ) -> list[dict]:
     """Validate + reprompt-once-then-DEGRADE the M2 EDA question coherence.
 
@@ -3401,6 +3448,10 @@ def _apply_eda_questions_coherence(
     key ``M2-Q{numero}``) AND is now coherent — otherwise it degrades to the pass-1 questions.
     Best-effort: ANY throw (including a reprompt ``RuntimeError``, which the node would
     otherwise re-raise and fail the job) degrades to pass-1. Never raises.
+
+    ``variant`` is the resolved classification notebook variant (or ``None``) — passed by the
+    caller; it drives the ``MODELO_NO_SELECCIONADO`` leak check (no-op for ``None`` /
+    ``lr_rf_contrast``, i.e. business and ml_ds contrast).
     """
     log_extra = {"node": "eda_questions_generator", "case_id": state.get("case_id")}
     try:
@@ -3413,7 +3464,9 @@ def _apply_eda_questions_coherence(
             if isinstance(raw_rate, (int, float)) and not isinstance(raw_rate, bool)
             else None
         )
-        violations = validate_eda_questions_coherence(preguntas_dict, chart_ids, rate)
+        violations = validate_eda_questions_coherence(
+            preguntas_dict, chart_ids, rate, variant=variant
+        )
         if not violations:
             return preguntas_dict
         logger.info(
@@ -3425,7 +3478,9 @@ def _apply_eda_questions_coherence(
             },
         )
         rate_pct = rate * 100.0 if rate is not None and 0.0 < rate <= 1.0 else None
-        reprompt = prompt + _build_m2_coherence_reprompt(chart_ids, rate_pct, violations)
+        reprompt = prompt + _build_m2_coherence_reprompt(
+            chart_ids, rate_pct, violations, variant=variant
+        )
         try:
             resultado: EDAQuestionsOutput = llm.with_structured_output(
                 EDAQuestionsOutput
@@ -3446,7 +3501,7 @@ def _apply_eda_questions_coherence(
                 extra=log_extra,
             )
             return preguntas_dict
-        residual = validate_eda_questions_coherence(corrected, chart_ids, rate)
+        residual = validate_eda_questions_coherence(corrected, chart_ids, rate, variant=variant)
         if not residual:
             logger.info(
                 "[eda_questions] coherencia M2 corregida por reprompt",
@@ -3577,6 +3632,17 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "chart_manifest": chart_manifest,
         })
 
+        # Resolve the classification variant ONLY for ml_ds+clf (mirror m3_questions_generator).
+        # The model is selected at intake, so M2 already knows it. business / other families →
+        # None → both the model-focus hint and the MODELO_NO_SELECCIONADO guard are no-ops.
+        _eda_profile, _eda_family = _resolve_generation_focus(state)
+        eda_variant: str | None = None
+        if _eda_profile == "ml_ds" and _eda_family == "clasificacion":
+            eda_variant, _ = _resolve_classification_notebook_variant(
+                algorithm_mode=_extract_state_algorithm_mode(state),
+                algoritmos=_extract_state_algoritmos(state),
+            )
+
         prompt = _select_eda_prompt(
             state,
             context.get("primary_family", ""),
@@ -3584,6 +3650,9 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             generic=EDA_QUESTIONS_GENERATOR_PROMPT,
             clustering_override=EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING,
         ).format(**context)
+        # ml_ds single-model → re-anchor the (de-specified, model-neutral) prompt to the selected
+        # model so M2 stays coherent with M3/M4/M5. Brace-free concat; no-op ("") elsewhere.
+        prompt = prompt + _build_eda_model_focus_hint(eda_variant)
 
         # v9 M2-Redesign: EDAQuestionsOutput con EDASocraticQuestion (solucion_esperada = objeto)
         resultado: EDAQuestionsOutput = llm.with_structured_output(
@@ -3604,6 +3673,7 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             state=state,
             preguntas_dict=preguntas_eda_dict,
             chart_ids=chart_ids,
+            variant=eda_variant,
         )
 
         # Issue #499: relabel any raw chart id leaked into the student-visible prose with its
@@ -6420,6 +6490,7 @@ def _generate_dataset_from_schema(
     *,
     target_event_rate: float | None = None,
     target_col_name: str | None = None,
+    outlier_respect_range: bool = True,
 ) -> list:
     """
     Genera filas de datos a partir del schema producido por schema_designer.
@@ -6730,11 +6801,24 @@ def _generate_dataset_from_schema(
                 original = float(rows[idx][target_col])
                 outlier_val = original * 3.5
                 if col_range_max is not None and float(col_range_max) > 0:
-                    # business: el atípico respeta el range_max declarado en vez de
-                    # 2× (evita p. ej. churn 0.30 cuando el schema declaró [0.02,0.15],
-                    # que además debilitaba la correlación nps↔churn que el panel
-                    # presenta como driver real). ml_ds conserva el cap ×2 histórico.
-                    cap_mult = 1.0 if profile == "business" else 2.0
+                    # El atípico respeta el range_max DECLARADO (cap ×1.0) en business —
+                    # evita p. ej. churn 0.30 cuando el schema declaró [0.02,0.15], que además
+                    # debilitaba la correlación nps↔churn que el panel presenta como driver real.
+                    # ml_ds hacía ×2 histórico, lo que producía valores SEMÁNTICAMENTE IMPOSIBLES
+                    # para una feature acotada (un credit_score declarado [300,850] llegaba a 1700,
+                    # un porcentaje pasaba de 100). El generador YA clipa todo a [low,high]; el
+                    # atípico era la única violación de los rangos declarados. Con
+                    # `outlier_respect_range` (kill-switch `MLDS_OUTLIER_RESPECT_RANGE`, default true)
+                    # ml_ds también capa en range_max → el punto sigue siendo un atípico ~5σ (el
+                    # grueso está concentrado en el centro) pero un valor VÁLIDO. Off → ×2 legacy
+                    # byte-idéntico. business cae siempre en la rama ×1.0 (intacto). Solo se capa el
+                    # range_max (la única violación observada): el range_min queda garantizado por el
+                    # clip de generación SOLO para features no-negativas (atípico = original×3.5 ≥
+                    # original ≥ range_min cuando range_min ≥ 0, el caso de toda feature ml_ds —
+                    # score/monto/conteo/ratio/edad). No se añade un floor explícito: lo mantendría
+                    # OFF byte-idéntico es la prioridad, y un range_min negativo no ocurre en este
+                    # dominio (su underflow sería el comportamiento legacy pre-existente, sin cambio).
+                    cap_mult = 1.0 if (profile == "business" or outlier_respect_range) else 2.0
                     outlier_val = min(outlier_val, float(col_range_max) * cap_mult)
                 rows[idx][target_col] = round(outlier_val, 2)
 
@@ -6758,6 +6842,66 @@ def _generate_dataset_from_schema(
 _CLUSTERING_BLOB_SPREAD_FRAC = 0.115
 # K (number of latent segments) is chosen deterministically per case from this set.
 _CLUSTERING_K_CHOICES: tuple[int, ...] = (3, 4)
+
+# ── Simplex blob placement (k-coherence fix) ──────────────────────────────────
+# The pre-existing placement put each feature's k blob centers at an INDEPENDENT random
+# permutation of ``linspace(0.18, 0.82, k)``. That keeps every pair of blobs apart on every
+# feature, but does NOT make the k-cluster structure the silhouette-OPTIMAL one: with few
+# features and ``target_k == 4`` the four centroids frequently collapse into two visual groups,
+# so the notebook's data-driven k-selection (``argmax_k silhouette`` over k=2..10) lands on
+# k=2/3 — CONTRADICTING the #467 narrative that frames ``target_k`` segments. The student then
+# reads "4 segmentos" in M1/M4/M5 while their own notebook reports 2. (Measured: target_k=4 with
+# F∈{3,4} mismatched the notebook in the majority of seeds; F=2 never — but F≥3 always in
+# production via ``_CLUSTERING_MIN_DOMAIN_FEATURES``/RFM.)
+#
+# The fix places the k centroids as a regular SIMPLEX (mutually equidistant) randomly rotated
+# into the feature space, so no spurious sub-grouping exists and ``argmax_k silhouette`` lands
+# on ``target_k`` for every k∈{3,4} and F∈{3..8} (validated 10/10 seeds, full silhouette, n=1000).
+# Equidistant blobs are tighter-separated, so the spread is raised to keep the silhouette inside
+# the calibrated band [0.45, 0.70] (measured k3≈0.65 / k4≈0.58, ARI≥0.98). Gated by the
+# ``MLDS_CLUSTERING_SIMPLEX_CENTERS`` kill-switch: OFF → the legacy permutation placement +
+# ``_CLUSTERING_BLOB_SPREAD_FRAC`` (byte-identical to pre-fix; the RED control for the new oracle).
+_CLUSTERING_SIMPLEX_SPREAD_FRAC = 0.15
+# Interior box (normalized [0,1]) the rotated simplex centroids are min-max scaled into per
+# feature. Slightly wider than the legacy [0.18, 0.82] so the rotated geometry has room.
+_CLUSTERING_CENTER_BOX: tuple[float, float] = (0.12, 0.88)
+
+
+def _clustering_blob_centers(k: int, n_features: int, rng) -> "Any":
+    """Return a ``(k, n_features)`` matrix of blob centers in the normalized interior box.
+
+    The k centers form a regular simplex (k mutually-equidistant vertices, the unique geometry
+    with no spurious sub-grouping) embedded in ``n_features``-dim space and randomly rotated so
+    every feature carries cluster signal, then min-max scaled per feature into
+    ``_CLUSTERING_CENTER_BOX``. With equidistant centroids the silhouette is maximized at exactly
+    ``k`` clusters, so the notebook's ``argmax_k silhouette`` k-selection agrees with the injected
+    ``target_k`` (Issue #467 coherence) — the defect the legacy per-feature permutation could not
+    guarantee. Deterministic given ``rng`` (seeded from ``sha256(schema)``) → resume-stable +
+    thread-safe. Robust for ``n_features < k-1`` (the simplex partially embeds; never occurs in
+    production where ``n_features >= 3 >= k-1`` for ``k <= 4``).
+    """
+    import numpy as np
+
+    lo, hi = _CLUSTERING_CENTER_BOX
+    # Regular simplex: rows of the mean-centered identity are mutually equidistant; SVD reduces
+    # them to (k-1) coordinates preserving those distances.
+    eye = np.eye(k)
+    centered = eye - eye.mean(axis=0, keepdims=True)
+    u, s, _vt = np.linalg.svd(centered, full_matrices=False)
+    simplex = u[:, : k - 1] * s[: k - 1]  # (k, k-1), mutually equidistant
+    dims = min(k - 1, n_features)
+    embedded = np.zeros((k, n_features))
+    embedded[:, :dims] = simplex[:, :dims]
+    # Random orthogonal rotation (QR of a seeded Gaussian) so the simplex spreads across ALL
+    # features instead of only the first (k-1) → every feature discriminates segments.
+    q, _r = np.linalg.qr(rng.standard_normal((n_features, n_features)))
+    rotated = embedded @ q
+    # Min-max scale each feature into the interior box so per-feature variances are comparable
+    # (StandardScaler in the notebook then leaves the simplex geometry intact).
+    mn = rotated.min(axis=0)
+    mx = rotated.max(axis=0)
+    span = np.where(mx - mn > 1e-9, mx - mn, 1.0)
+    return lo + (rotated - mn) / span * (hi - lo)
 
 
 def _clustering_scalable_feature_columns(schema: dict) -> list[dict]:
@@ -6787,6 +6931,7 @@ def _enforce_mlds_clustering_structure(
     enabled: bool = True,
     return_labels: bool = False,
     target_k: int | None = None,
+    simplex_centers: bool = True,
 ):
     """Inyecta estructura de clusters REAL en el dataset ml_ds + clustering (Issue #452).
 
@@ -6795,6 +6940,14 @@ def _enforce_mlds_clustering_structure(
     segmentos latentes") queda hueca. Este helper reescribe las features numéricas escalables
     como una **mezcla de K∈{3,4} blobs gaussianos separables**, de modo que K-Means descubre
     segmentos genuinos e interpretables.
+
+    ``simplex_centers`` (kill-switch ``MLDS_CLUSTERING_SIMPLEX_CENTERS``, default on) selects the
+    centroid geometry: ON → a regular SIMPLEX (``_clustering_blob_centers``, mutually-equidistant
+    centroids) so the notebook's data-driven ``argmax_k silhouette`` k-selection lands on the
+    injected ``target_k`` (the #467 narrative↔notebook coherence guarantee); OFF → the legacy
+    per-feature permutation of ``linspace(0.18, 0.82, k)`` (byte-identical to pre-fix, the RED
+    control). The spread follows the geometry (simplex blobs are tighter-separated, so a larger
+    spread keeps the silhouette in band).
 
     Es PURO copy-on-write (no muta el dict/lista de entrada → determinismo del seed +
     thread-safety bajo jobs concurrentes), preserva el conteo y el ORDEN de filas (los blobs
@@ -6855,22 +7008,35 @@ def _enforce_mlds_clustering_structure(
     labels = np.array([i % k for i in range(n)], dtype=int)
     rng.shuffle(labels)
 
+    # Placement de centroides (gateado): SIMPLEX equidistante (silhouette pica en k → coherencia
+    # con target_k) vs. el legacy de permutación por-feature. El spread acompaña la geometría.
+    # La matriz simplex se computa UNA vez (consume rng para la rotación QR) antes del loop.
+    if simplex_centers:
+        center_matrix = _clustering_blob_centers(k, len(feats), rng)
+        spread = _CLUSTERING_SIMPLEX_SPREAD_FRAC
+    else:
+        center_matrix = None
+        spread = _CLUSTERING_BLOB_SPREAD_FRAC
+
     new_rows = [dict(r) for r in rows]
-    for col in feats:
+    for j, col in enumerate(feats):
         name = col["name"]
         low = float(col["range_min"]) if col.get("range_min") is not None else 0.0
         high = float(col["range_max"]) if col.get("range_max") is not None else low + 1.0
         if low >= high:
             high = low + 1.0
         span = high - low
-        # Centros por-blob = niveles EQUI-ESPACIADOS en el interior del rango normalizado,
-        # BARAJADOS por feature. Como cada blob recibe un nivel distinto (permutación biyectiva),
-        # cualquier par de blobs difiere en TODA feature por ≥ el gap mínimo → separación fuerte y
-        # consistente (a diferencia de centros uniformes-aleatorios, que pueden caer juntos); la
-        # permutación por-feature evita que los blobs queden colineales (separación isotrópica).
-        centers = rng.permutation(np.linspace(0.18, 0.82, k))
+        if center_matrix is not None:
+            # Columna de la matriz simplex: los k centros de ESTA feature (rotación + min-max ya
+            # aplicados). Centroides mutuamente equidistantes → sin sub-agrupamiento espurio → el
+            # silhouette del notebook pica exactamente en k (= target_k).
+            centers = center_matrix[:, j]
+        else:
+            # Legacy: niveles EQUI-ESPACIADOS barajados por feature (cada blob un nivel distinto →
+            # difieren en toda feature, pero NO garantizan que el silhouette pique en k).
+            centers = rng.permutation(np.linspace(0.18, 0.82, k))
         vals_norm = np.clip(
-            centers[labels] + rng.normal(0.0, _CLUSTERING_BLOB_SPREAD_FRAC, n), 0.0, 1.0
+            centers[labels] + rng.normal(0.0, spread, n), 0.0, 1.0
         )
         vals = low + vals_norm * span
         is_int = col.get("type") == "int"
@@ -7024,6 +7190,10 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             profile=profile,
             target_event_rate=target_event_rate,
             target_col_name=target_col_name,
+            # Kill-switch MLDS_OUTLIER_RESPECT_RANGE (default true): keep the EDA outlier inside the
+            # feature's declared range_max for ml_ds too (no impossible 1700 credit_score). The
+            # generator stays pure (no settings import) — the flag is threaded in. Off → ×2 legacy.
+            outlier_respect_range=settings.mlds_outlier_respect_range,
         )
         # Issue #452 — inyecta estructura de clusters real para ml_ds + clustering (determinista,
         # gateado por kill-switch). No-op byte-idéntico para business/clasificación/regresión/
@@ -7050,6 +7220,7 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             primary_family=_clustering_family,
             enabled=settings.mlds_clustering_structure,
             target_k=_target_k,
+            simplex_centers=settings.mlds_clustering_simplex_centers,
         )
         # Issue #468 + #513 — entity-level index: rename the monthly `period` to `{prefix}_id`
         # (`{prefix}_00001`…) so the clustering CSV the student reads is per-entity AND uses the SAME

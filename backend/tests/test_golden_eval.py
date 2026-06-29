@@ -20,6 +20,8 @@ from golden_eval import (
     JUDGE_MAX_DROP,
     NodeEvalInputs,
     check_architect_value_model_lens_valid,
+    check_clustering_decision_coherence,
+    check_clustering_kselection_matches_target,
     check_clustering_structure,
     check_domain_coherence,
     check_m4_deployment_section_unique,
@@ -200,9 +202,19 @@ def test_domain_coherence_oracle_discriminates_churn_coupled() -> None:
 
 def test_g07_fixture_has_clustering_structure() -> None:
     """Issue #452 — the materialized g07 fixture (real ml_ds+clustering dataset with injected
-    blobs) carries genuine latent structure: silhouette ∈ band AND ARI ≥ 0.6 vs the latent label."""
+    blobs) carries genuine latent structure: silhouette ∈ band AND ARI ≥ 0.6 vs the latent label.
+
+    Regenerated with the simplex centroid placement (k-coherence fix): the fixture is a target_k=4
+    case, so it ALSO asserts the notebook's data-driven k-selection lands on 4 — the coherence the
+    legacy placement could not guarantee (it would have peaked at k=2). Gives the frozen golden set
+    real teeth for the keystone fix."""
     fixture = json.loads((_FIXTURES / "g07_mlds_clu_single.json").read_text(encoding="utf-8"))
     assert check_clustering_structure(fixture["rows"], fixture["latent_labels"]) is True
+    target_k = len(set(fixture["latent_labels"]))
+    assert check_clustering_kselection_matches_target(fixture["rows"], target_k) is True
+    assert check_clustering_decision_coherence(
+        fixture["rows"], fixture["latent_labels"], target_k
+    ) is True
 
 
 def test_domain_coherence_oracle_on_rebuilt_dechurned_schema() -> None:
