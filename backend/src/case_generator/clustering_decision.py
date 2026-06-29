@@ -540,6 +540,185 @@ def detect_unanchored_n_clusters(prose: str | None, valid_counts: set[int] | Non
     return violations
 
 
+# ── M4 value-by-segment chart fabrication guard (Issue #498) ──────────────────────────────────────
+# The ml_ds + clustering M4 "Valor por Segmento" chart (#469) historically FABRICATED its per-segment
+# bar heights (it only received the qualitative M4 narrative, no real per-cluster data): it put the
+# case-level average on ONE segment and 0 on the rest ([135000, 0, 0, 0]), or the same number on every
+# segment. The per-segment "value" is a DERIVED case quantity (e.g. cost per center), NOT a
+# ``cluster_profiles`` feature mean, so anchoring bar heights to the means would FALSE-DROP legitimate
+# dollarized charts. Instead this guard is SOURCE-AGNOSTIC and STRUCTURAL: a real segmentation
+# DIFFERENTIATES, so a value trace over >= 3 segments with <= 1 DISTINCT non-zero value is the exact
+# fabrication signature (one-bar-rest-zero OR same-everywhere). Zero-FP for this product's
+# blob-structured data (#452 gives every segment a non-trivial, differentiated mean); a legitimately
+# differentiated derived / size / normalized chart has >= 2 distinct values and passes.
+#
+# Scoped to the value-by-segment chart ONLY (never chart 2, the A/B/C strategic comparison whose
+# normalized 0-100 bars over 2-4 metric categories must not be touched): a chart qualifies iff it has
+# NO "Opción A/B/C"-named trace, at most 2 traces (chart 2 has 3, one per option), and a category axis
+# with at least 3 entries (the discovered segments). ``n_clusters`` GATES the check (only a real
+# clustering result with >= 3 clusters is validated) — it is deliberately NOT used as an exact category
+# count, because the LLM can draw a fabricated distribution with a different bar count than the real
+# cluster count and an exact ``== n_clusters`` test would silently MISS it. Returns
+# ``[(chart_index, violations), ...]`` to match the reprompt-then-DROP survivor math in
+# ``_apply_clustering_m4_chart_grounding``. Pure, total — never raises.
+_OPTION_TRACE_RE = re.compile(r"\bopci[oó]n\s*[abc]\b|\boption\s*[abc]\b", re.IGNORECASE)
+_GENERIC_SEGMENT_NAME_RE = re.compile(
+    r"\b(?:segmento|cluster|grupo|segment|group)\s*\d+\b", re.IGNORECASE
+)
+_RAW_IDENTIFIER_RE = re.compile(r"\b[a-z][a-z0-9]*__[a-z0-9_]+\b")
+_SEGMENT_CHART_PROSE_FIELDS = ("title", "subtitle", "description", "notes", "academic_rationale")
+
+
+def _iter_chart_traces(chart: object) -> list[dict]:
+    """Return the chart's list[dict] traces (empty for any malformed input)."""
+    if not isinstance(chart, dict):
+        return []
+    traces = chart.get("traces")
+    return [t for t in traces if isinstance(t, dict)] if isinstance(traces, list) else []
+
+
+def _trace_numeric_y(trace: dict) -> list[float]:
+    """Return the finite numeric values of ``trace['y']`` (booleans / non-numeric skipped)."""
+    y = trace.get("y")
+    if not isinstance(y, list):
+        return []
+    out: list[float] = []
+    for value in y:
+        if isinstance(value, bool):
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric):
+            out.append(numeric)
+    return out
+
+
+def _chart_category_lengths(chart: object) -> set[int]:
+    """Lengths of the chart's category axis (every ``traces[].x`` + ``layout.xaxis.ticktext``)."""
+    counts: set[int] = set()
+    if not isinstance(chart, dict):
+        return counts
+    for trace in _iter_chart_traces(chart):
+        x = trace.get("x")
+        if isinstance(x, list):
+            counts.add(len(x))
+    layout = chart.get("layout")
+    if isinstance(layout, dict):
+        xaxis = layout.get("xaxis")
+        if isinstance(xaxis, dict):
+            ticktext = xaxis.get("ticktext")
+            if isinstance(ticktext, list):
+                counts.add(len(ticktext))
+    return counts
+
+
+def _is_segment_value_chart(chart: object) -> bool:
+    """True iff ``chart`` is the value-by-segment chart (NOT the A/B/C strategic comparison).
+
+    Identified STRUCTURALLY (not by an exact ``== n_clusters`` bar count, which silently MISSES a
+    fabrication when the LLM draws a different bar count than the real cluster count): a clustering M4
+    emits exactly 2 charts, and the A/B/C comparison is excluded by its 3 ``Opción A/B/C`` traces, so the
+    remaining ``<= 2``-trace chart with a ``>= 3``-entry category axis is the value-by-segment chart.
+    """
+    traces = _iter_chart_traces(chart)
+    if not traces or len(traces) > 2:
+        return False  # chart 2 has 3 traces (one per strategic option)
+    for trace in traces:
+        name = trace.get("name")
+        if isinstance(name, str) and _OPTION_TRACE_RE.search(name):
+            return False  # an "Opción A/B/C" trace → the comparison chart
+    return any(length >= 3 for length in _chart_category_lengths(chart))
+
+
+def detect_fabricated_segment_distribution(
+    charts: list[dict] | None, *, n_clusters: int | float | None
+) -> list[tuple[int, list[str]]]:
+    """Return ``[(chart_index, ["DISTRIBUCION_FABRICADA:<trace>", ...]), ...]`` for the value-by-segment
+    chart whose per-segment bars are fabricated (Issue #498).
+
+    A value trace over >= 3 segments with <= 1 DISTINCT non-zero value is the fabrication signature
+    (one-bar-rest-zero or same-everywhere). Source-agnostic (no anchoring to ``cluster_profiles`` — the
+    per-segment value is a derived case quantity). ``n_clusters`` GATES the check (a real clustering
+    result with >= 3 clusters) but does NOT have to equal the bar count — the chart is identified
+    structurally (see ``_is_segment_value_chart``) so a fabrication with a mismatched bar count is still
+    caught. ``[]`` when ``charts`` is empty, ``n_clusters`` is absent / non-integer / < 3, or no chart
+    qualifies (degrade-safe). Pure, total — never raises.
+    """
+    if not isinstance(charts, list) or not charts or n_clusters is None:
+        return []
+    try:
+        k = int(n_clusters)
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if k < 3:
+        return []
+    results: list[tuple[int, list[str]]] = []
+    for index, chart in enumerate(charts):
+        try:
+            if not _is_segment_value_chart(chart):
+                continue
+            violations: list[str] = []
+            for t_idx, trace in enumerate(_iter_chart_traces(chart)):
+                ys = _trace_numeric_y(trace)
+                if len(ys) < 3:
+                    continue
+                # Distinctness on the raw LLM-emitted literals (no rounding: bar heights are emitted
+                # values, not float-arithmetic products, so there is no float noise to collapse — and
+                # rounding could wrongly merge two genuinely-distinct sub-unit values into a false DROP).
+                distinct_nonzero = {v for v in ys if v != 0.0}
+                if len(distinct_nonzero) <= 1:
+                    name = trace.get("name")
+                    label = name if isinstance(name, str) and name else f"trace_{t_idx}"
+                    violations.append(f"DISTRIBUCION_FABRICADA:{label}")
+            if violations:
+                results.append((index, violations))
+        except Exception:  # pragma: no cover - defensive; one bad chart never breaks the pass
+            continue
+    return results
+
+
+def detect_segment_chart_warnings(
+    charts: list[dict] | None,
+    *,
+    n_clusters: int | float | None,
+    cluster_profiles: dict | None = None,
+) -> list[str]:
+    """Logger-ONLY (never a DROP): flag a generic ``Segmento N`` / ``Cluster N`` label (when a real
+    profile exists) or a raw column identifier (``num__x`` / ``snake__case``) leaking into the
+    value-by-segment chart's labels or prose (Issue #498). Returns dedup'd, sorted warning codes.
+    ``[]`` when the segment chart can not be identified (``n_clusters`` absent / < 3). Pure, total.
+    """
+    if not isinstance(charts, list) or not charts or n_clusters is None:
+        return []
+    try:
+        k = int(n_clusters)
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if k < 3:
+        return []
+    has_profile = isinstance(cluster_profiles, dict) and bool(cluster_profiles)
+    warnings: set[str] = set()
+    for chart in charts:
+        if not _is_segment_value_chart(chart):
+            continue
+        labels: list[str] = []
+        for trace in _iter_chart_traces(chart):
+            x = trace.get("x")
+            if isinstance(x, list):
+                labels.extend(str(v) for v in x)
+        prose = " ".join(
+            str(chart.get(f)) for f in _SEGMENT_CHART_PROSE_FIELDS if isinstance(chart.get(f), str)
+        )
+        blob = " ".join(labels) + " " + prose
+        if has_profile and _GENERIC_SEGMENT_NAME_RE.search(blob):
+            warnings.add("NOMBRE_SEGMENTO_GENERICO")
+        if _RAW_IDENTIFIER_RE.search(blob):
+            warnings.add("IDENTIFICADOR_CRUDO_EN_ETIQUETA")
+    return sorted(warnings)
+
+
 __all__ = [
     "resolve_clustering_decision",
     "recommended_option_of",
@@ -552,4 +731,6 @@ __all__ = [
     "detect_unanchored_silhouette",
     "detect_unanchored_cluster_profiles",
     "detect_unanchored_n_clusters",
+    "detect_fabricated_segment_distribution",
+    "detect_segment_chart_warnings",
 ]
