@@ -242,6 +242,12 @@ def _patch_chart_node(monkeypatch: pytest.MonkeyPatch, fake: _RecordingStructure
         "from_runnable_config",
         MagicMock(return_value=SimpleNamespace(writer_model="fake")),
     )
+    # These node tests assert the tornado-drop + legacy-revert behavior on the 2/3-chart LLM prompt,
+    # which is orthogonal to (and predates) the ml_ds+clf decision-charts reframe. Under that reframe
+    # (default ON) ml_ds+clf instead gets a 1-chart investment prompt + a deterministic cost chart;
+    # disable it here so the ml_ds cohort still exercises the legacy multi-chart prompt path. The reframe
+    # ON-path is covered in test_m4_classification_decision_charts.py. business is ml_ds-gated → no-op.
+    monkeypatch.setattr(graph.settings, "m4_classification_decision_charts", False)
 
 
 @pytest.mark.parametrize("state, branch_marker", _NODE_COHORTS)

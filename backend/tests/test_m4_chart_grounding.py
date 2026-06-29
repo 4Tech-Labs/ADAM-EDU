@@ -264,6 +264,11 @@ def _patch_chart_node(monkeypatch: pytest.MonkeyPatch, fake: _SeqStructuredLLM) 
     )
     monkeypatch.setattr(graph.settings, "m4_chart_drop_sensitivity", True)
     monkeypatch.setattr(graph.settings, "m4_chart_grounding", True)
+    # These tests exercise the EXISTING _apply_m4_chart_grounding (reprompt-then-DROP) on a 2-chart LLM
+    # output. The ml_ds+clf decision-charts reframe (default ON) instead caps the LLM to 1 chart +
+    # appends a deterministic cost chart; disable it here so these grounding tests keep their 2-chart
+    # premise. The reframe's own grounding compose is covered in test_m4_classification_decision_charts.py.
+    monkeypatch.setattr(graph.settings, "m4_classification_decision_charts", False)
 
 
 def _ml_ds_clf_state() -> dict:

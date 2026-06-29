@@ -455,6 +455,19 @@ class Settings(BaseSettings):
     # guard, no redeploy). The deterministic guarantee on the frozen golden set lives in
     # `tests/golden_eval` (`check_m4_narrative_no_fabrication` / `check_m4_charts_no_fabrication`).
     m4_fabrication_guard: bool = True
+    # M4 decision-charts reframe (ml_ds + clasificación ONLY, NEUTRAL/lens-on 2-chart path). When true
+    # (default), `m4_chart_generator` reframes the ml_ds+clf charts to be coherent + grounded: Gráfico 1
+    # = the lens-aware investment case (LLM, anchored to the M4 narrative; no invented per-period cash
+    # schedule, no forced monetization of a non-financial lens), and Gráfico 2 = the cost-of-errors
+    # economics built DETERMINISTICALLY in Python from the contract `business_cost_matrix` (fp/fn, USD)
+    # — zero fabrication by construction (no LLM, no guard); omitted when the case has no real
+    # asymmetric cost matrix (M4 then ships only Gráfico 1, honest). This replaces the old prompt that
+    # ORDERED the LLM to invent an "A) Full deploy / B) Piloto / C) Heurístico" comparison with
+    # ROI/NPV/Payback absent from the case. Set M4_CLASSIFICATION_DECISION_CHARTS=false to keep the
+    # prior 2-chart LLM prompt byte-identically (instant env-only revert, no redeploy; mirrors
+    # MLDS_CLUSTERING_M4_VALUE_FRAME). ml_ds-only — business+clf / clustering / other families and the
+    # legacy 3-chart path are byte-identical regardless.
+    m4_classification_decision_charts: bool = True
     # Impact Lens (Issue #437 / ADR 0003, Fase 1, ALL profiles/families). M4's value frame
     # (primary metric, §4.5 KPI rows, chart metrics, questions framing) is no longer hardcoded
     # to ROI/Payback/NPV; it is a lens resolved ONCE from the constrained intake industry and
