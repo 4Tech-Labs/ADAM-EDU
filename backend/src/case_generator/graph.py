@@ -6723,6 +6723,66 @@ _CLUSTERING_BLOB_SPREAD_FRAC = 0.115
 # K (number of latent segments) is chosen deterministically per case from this set.
 _CLUSTERING_K_CHOICES: tuple[int, ...] = (3, 4)
 
+# ── Simplex blob placement (k-coherence fix) ──────────────────────────────────
+# The pre-existing placement put each feature's k blob centers at an INDEPENDENT random
+# permutation of ``linspace(0.18, 0.82, k)``. That keeps every pair of blobs apart on every
+# feature, but does NOT make the k-cluster structure the silhouette-OPTIMAL one: with few
+# features and ``target_k == 4`` the four centroids frequently collapse into two visual groups,
+# so the notebook's data-driven k-selection (``argmax_k silhouette`` over k=2..10) lands on
+# k=2/3 — CONTRADICTING the #467 narrative that frames ``target_k`` segments. The student then
+# reads "4 segmentos" in M1/M4/M5 while their own notebook reports 2. (Measured: target_k=4 with
+# F∈{3,4} mismatched the notebook in the majority of seeds; F=2 never — but F≥3 always in
+# production via ``_CLUSTERING_MIN_DOMAIN_FEATURES``/RFM.)
+#
+# The fix places the k centroids as a regular SIMPLEX (mutually equidistant) randomly rotated
+# into the feature space, so no spurious sub-grouping exists and ``argmax_k silhouette`` lands
+# on ``target_k`` for every k∈{3,4} and F∈{3..8} (validated 10/10 seeds, full silhouette, n=1000).
+# Equidistant blobs are tighter-separated, so the spread is raised to keep the silhouette inside
+# the calibrated band [0.45, 0.70] (measured k3≈0.65 / k4≈0.58, ARI≥0.98). Gated by the
+# ``MLDS_CLUSTERING_SIMPLEX_CENTERS`` kill-switch: OFF → the legacy permutation placement +
+# ``_CLUSTERING_BLOB_SPREAD_FRAC`` (byte-identical to pre-fix; the RED control for the new oracle).
+_CLUSTERING_SIMPLEX_SPREAD_FRAC = 0.15
+# Interior box (normalized [0,1]) the rotated simplex centroids are min-max scaled into per
+# feature. Slightly wider than the legacy [0.18, 0.82] so the rotated geometry has room.
+_CLUSTERING_CENTER_BOX: tuple[float, float] = (0.12, 0.88)
+
+
+def _clustering_blob_centers(k: int, n_features: int, rng) -> "Any":
+    """Return a ``(k, n_features)`` matrix of blob centers in the normalized interior box.
+
+    The k centers form a regular simplex (k mutually-equidistant vertices, the unique geometry
+    with no spurious sub-grouping) embedded in ``n_features``-dim space and randomly rotated so
+    every feature carries cluster signal, then min-max scaled per feature into
+    ``_CLUSTERING_CENTER_BOX``. With equidistant centroids the silhouette is maximized at exactly
+    ``k`` clusters, so the notebook's ``argmax_k silhouette`` k-selection agrees with the injected
+    ``target_k`` (Issue #467 coherence) — the defect the legacy per-feature permutation could not
+    guarantee. Deterministic given ``rng`` (seeded from ``sha256(schema)``) → resume-stable +
+    thread-safe. Robust for ``n_features < k-1`` (the simplex partially embeds; never occurs in
+    production where ``n_features >= 3 >= k-1`` for ``k <= 4``).
+    """
+    import numpy as np
+
+    lo, hi = _CLUSTERING_CENTER_BOX
+    # Regular simplex: rows of the mean-centered identity are mutually equidistant; SVD reduces
+    # them to (k-1) coordinates preserving those distances.
+    eye = np.eye(k)
+    centered = eye - eye.mean(axis=0, keepdims=True)
+    u, s, _vt = np.linalg.svd(centered, full_matrices=False)
+    simplex = u[:, : k - 1] * s[: k - 1]  # (k, k-1), mutually equidistant
+    dims = min(k - 1, n_features)
+    embedded = np.zeros((k, n_features))
+    embedded[:, :dims] = simplex[:, :dims]
+    # Random orthogonal rotation (QR of a seeded Gaussian) so the simplex spreads across ALL
+    # features instead of only the first (k-1) → every feature discriminates segments.
+    q, _r = np.linalg.qr(rng.standard_normal((n_features, n_features)))
+    rotated = embedded @ q
+    # Min-max scale each feature into the interior box so per-feature variances are comparable
+    # (StandardScaler in the notebook then leaves the simplex geometry intact).
+    mn = rotated.min(axis=0)
+    mx = rotated.max(axis=0)
+    span = np.where(mx - mn > 1e-9, mx - mn, 1.0)
+    return lo + (rotated - mn) / span * (hi - lo)
+
 
 def _clustering_scalable_feature_columns(schema: dict) -> list[dict]:
     """Numeric, scalable feature columns a K-Means fit would use (Issue #452).
@@ -6751,6 +6811,7 @@ def _enforce_mlds_clustering_structure(
     enabled: bool = True,
     return_labels: bool = False,
     target_k: int | None = None,
+    simplex_centers: bool = True,
 ):
     """Inyecta estructura de clusters REAL en el dataset ml_ds + clustering (Issue #452).
 
@@ -6759,6 +6820,14 @@ def _enforce_mlds_clustering_structure(
     segmentos latentes") queda hueca. Este helper reescribe las features numéricas escalables
     como una **mezcla de K∈{3,4} blobs gaussianos separables**, de modo que K-Means descubre
     segmentos genuinos e interpretables.
+
+    ``simplex_centers`` (kill-switch ``MLDS_CLUSTERING_SIMPLEX_CENTERS``, default on) selects the
+    centroid geometry: ON → a regular SIMPLEX (``_clustering_blob_centers``, mutually-equidistant
+    centroids) so the notebook's data-driven ``argmax_k silhouette`` k-selection lands on the
+    injected ``target_k`` (the #467 narrative↔notebook coherence guarantee); OFF → the legacy
+    per-feature permutation of ``linspace(0.18, 0.82, k)`` (byte-identical to pre-fix, the RED
+    control). The spread follows the geometry (simplex blobs are tighter-separated, so a larger
+    spread keeps the silhouette in band).
 
     Es PURO copy-on-write (no muta el dict/lista de entrada → determinismo del seed +
     thread-safety bajo jobs concurrentes), preserva el conteo y el ORDEN de filas (los blobs
@@ -6819,22 +6888,35 @@ def _enforce_mlds_clustering_structure(
     labels = np.array([i % k for i in range(n)], dtype=int)
     rng.shuffle(labels)
 
+    # Placement de centroides (gateado): SIMPLEX equidistante (silhouette pica en k → coherencia
+    # con target_k) vs. el legacy de permutación por-feature. El spread acompaña la geometría.
+    # La matriz simplex se computa UNA vez (consume rng para la rotación QR) antes del loop.
+    if simplex_centers:
+        center_matrix = _clustering_blob_centers(k, len(feats), rng)
+        spread = _CLUSTERING_SIMPLEX_SPREAD_FRAC
+    else:
+        center_matrix = None
+        spread = _CLUSTERING_BLOB_SPREAD_FRAC
+
     new_rows = [dict(r) for r in rows]
-    for col in feats:
+    for j, col in enumerate(feats):
         name = col["name"]
         low = float(col["range_min"]) if col.get("range_min") is not None else 0.0
         high = float(col["range_max"]) if col.get("range_max") is not None else low + 1.0
         if low >= high:
             high = low + 1.0
         span = high - low
-        # Centros por-blob = niveles EQUI-ESPACIADOS en el interior del rango normalizado,
-        # BARAJADOS por feature. Como cada blob recibe un nivel distinto (permutación biyectiva),
-        # cualquier par de blobs difiere en TODA feature por ≥ el gap mínimo → separación fuerte y
-        # consistente (a diferencia de centros uniformes-aleatorios, que pueden caer juntos); la
-        # permutación por-feature evita que los blobs queden colineales (separación isotrópica).
-        centers = rng.permutation(np.linspace(0.18, 0.82, k))
+        if center_matrix is not None:
+            # Columna de la matriz simplex: los k centros de ESTA feature (rotación + min-max ya
+            # aplicados). Centroides mutuamente equidistantes → sin sub-agrupamiento espurio → el
+            # silhouette del notebook pica exactamente en k (= target_k).
+            centers = center_matrix[:, j]
+        else:
+            # Legacy: niveles EQUI-ESPACIADOS barajados por feature (cada blob un nivel distinto →
+            # difieren en toda feature, pero NO garantizan que el silhouette pique en k).
+            centers = rng.permutation(np.linspace(0.18, 0.82, k))
         vals_norm = np.clip(
-            centers[labels] + rng.normal(0.0, _CLUSTERING_BLOB_SPREAD_FRAC, n), 0.0, 1.0
+            centers[labels] + rng.normal(0.0, spread, n), 0.0, 1.0
         )
         vals = low + vals_norm * span
         is_int = col.get("type") == "int"
@@ -7014,6 +7096,7 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             primary_family=_clustering_family,
             enabled=settings.mlds_clustering_structure,
             target_k=_target_k,
+            simplex_centers=settings.mlds_clustering_simplex_centers,
         )
         # Issue #468 + #513 — entity-level index: rename the monthly `period` to `{prefix}_id`
         # (`{prefix}_00001`…) so the clustering CSV the student reads is per-entity AND uses the SAME
