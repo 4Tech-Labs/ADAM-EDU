@@ -118,7 +118,11 @@ def test_signal_preserved_correlation_positive() -> None:
 # ─────────────────────────────────────────────────────────
 
 
-def test_business_byte_identical() -> None:
+def test_business_no_rate_byte_identical() -> None:
+    """Issue #518 — business SIN tasa (o con ``target_event_rate=None``) es byte-idéntico al
+    default: la calibración top-k SOLO dispara con una tasa presente (kill-switch off / architect
+    la omite → la rama OFF). Antes de #518 este test pasaba una tasa y asertaba que se IGNORABA;
+    eso era exactamente el bug — ahora business+tasa calibra (ver test_issue518)."""
     biz = {
         "columns": [
             {"name": "period", "type": "str", "range_min": None, "range_max": None,
@@ -129,10 +133,10 @@ def test_business_byte_identical() -> None:
         "n_rows": 100, "time_granularity": "monthly", "constraints": {},
     }
     base = _generate_dataset_from_schema(biz, profile="business")
-    with_rate = _generate_dataset_from_schema(
-        biz, profile="business", target_event_rate=0.083, target_col_name="flag"
+    no_rate = _generate_dataset_from_schema(
+        biz, profile="business", target_event_rate=None, target_col_name="flag"
     )
-    assert base == with_rate
+    assert base == no_rate
 
 
 def test_ml_ds_no_rate_byte_identical() -> None:

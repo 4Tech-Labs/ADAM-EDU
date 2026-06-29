@@ -1540,7 +1540,8 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         # Issue F1 — valida la tasa de evento (fuente única M1↔M2) con la misma
         # resolución de perfil/familia. Gateada a ml_ds + clasificación binaria.
         contract_dict, rate_warnings = _validate_target_event_rate(
-            contract_dict, family_resolved, result.titulo, profile_resolved
+            contract_dict, family_resolved, result.titulo, profile_resolved,
+            business_calibration_enabled=settings.business_event_rate_calibration,
         )
         coherence_warnings = list(coherence_warnings) + rate_warnings
         if target_enforced:
@@ -2052,18 +2053,29 @@ def _invoke_m1_exhibit2_coherence(
 ) -> str:
     """Validate + reprompt-once-then-DEGRADE the Exhibit 2 rate row (Issue #372).
 
-    Gated to ml_ds + clasificacion (byte-identical no-op otherwise). PRIMARY check is the
+    Gated to ml_ds + clasificacion ALWAYS, and to business + clasificacion when a calibrated
+    target_event_rate is present AND BUSINESS_EVENT_RATE_CALIBRATION is on (Issue #518);
+    byte-identical no-op otherwise. PRIMARY check is the
     deterministic F1 coupling: a miss triggers ONE targeted text reprompt that rewrites the
     full Exhibit 2 with the exact number; the rewrite is accepted only if it now prints the
     rate AND preserves the anexo's bulk, otherwise the original is kept. The completeness row
     is a SECONDARY heuristic that only logs a warning — it NEVER drives the reprompt.
     Best-effort: any internal error keeps the original anexo and the job continues. Never raises.
     """
-    if not _is_ml_ds_classification(state):
+    rate = contract.get("target_event_rate") if isinstance(contract, dict) else None
+    # Issue #518 — el guard #372 (Exhibit 2 imprime la tasa) se amplía a business+clf cuando hay
+    # una tasa calibrada y el kill-switch está on. ml_ds queda IDÉNTICO (primer disyunto). Para
+    # business sin tasa (rate None) o con el switch off, `business_clf_with_rate` es False → no-op
+    # byte-idéntico (la tasa business solo existe cuando C2 dejó pasar el valor con el switch on).
+    business_clf_with_rate = (
+        settings.business_event_rate_calibration
+        and _is_classification_family(state)
+        and isinstance(rate, (int, float))
+        and not isinstance(rate, bool)
+    )
+    if not _is_ml_ds_classification(state) and not business_clf_with_rate:
         return anexo_operativo
     try:
-        rate = contract.get("target_event_rate") if isinstance(contract, dict) else None
-
         # SECONDARY heuristic — warning-only, never reprompt (D2).
         completeness_violations = detect_exhibit2_completeness_row(anexo_operativo)
         if completeness_violations:
@@ -4336,15 +4348,18 @@ def _validate_target_event_rate(
     family: str | None,
     case_title: str | None,
     profile: str | None,
+    *,
+    business_calibration_enabled: bool = False,
 ) -> tuple[dict | None, list[str]]:
-    """Valida y sanitiza ``target_event_rate`` del contrato (Issue F1).
+    """Valida y sanitiza ``target_event_rate`` del contrato (Issue F1, #518).
 
     Fuente única de verdad de la prevalencia del evento: el architect la emite, Exhibit 2 la
     imprime, y el generador determinista calibra la columna target a ella. Best-effort
     (case_architect-style), NUNCA lanza ni muta el dict in-place:
-      * Gate = ml_ds + clasificación + target binario (``role==classification_target`` y
-        ``dtype==int``). Fuera del gate y poblado → warning + nulificado (no aplica a
-        business/multiclase/otras familias).
+      * Gate = clasificación + target binario (``role==classification_target`` y ``dtype==int``):
+        ml_ds SIEMPRE, y business cuando ``business_calibration_enabled`` (Issue #518 — ÚNICO punto
+        que gatea el kill-switch). Fuera del gate y poblado → warning + nulificado (no aplica a
+        multiclase/otras familias, ni a business con el kill-switch off → byte-idéntico al previo).
       * Dentro del gate y ausente → warning estructurado (el generador cae al umbral ~0.50 y
         Exhibit 2 quedará incoherente — señal accionable para operadores).
       * Dentro del gate, presente pero fuera de [_MIN, _MAX] o no finito → warning + nulificado.
@@ -4364,12 +4379,18 @@ def _validate_target_event_rate(
     family_norm = (family or "").strip().lower()
     profile_norm = (profile or "").strip().lower()
     target = contract.get("target_column") or {}
-    is_binary_clf = (
-        profile_norm == "ml_ds"
-        and family_norm == "clasificacion"
+    is_clf_binary_shape = (
+        family_norm == "clasificacion"
         and isinstance(target, dict)
         and target.get("role") == "classification_target"
         and target.get("dtype") == "int"
+    )
+    # Issue #518 — el gate se amplía a business+clf detrás del kill-switch (ÚNICO punto de gate).
+    # El brazo ml_ds queda idéntico; business entra al gate SOLO con el switch on, de modo que el
+    # camino OFF nulifica el rate business exactamente como antes (byte-idéntico al previo).
+    is_binary_clf = is_clf_binary_shape and (
+        profile_norm == "ml_ds"
+        or (business_calibration_enabled and profile_norm == "business")
     )
 
     # Fuera del gate: si viene poblado, nulificar (no aplica).
@@ -5907,12 +5928,13 @@ def _is_declared_binary_int(col: dict) -> bool:
 # HELPER — _generate_dataset_from_schema (Python puro, 0 tokens LLM)
 # ─────────────────────────────────────────────────────────
 
-def _is_mlds_event_target(col: dict, target_col_name: str | None) -> bool:
-    """¿Es ``col`` el target binario ml_ds a calibrar (Issue F1)?
+def _is_event_target(col: dict, target_col_name: str | None) -> bool:
+    """¿Es ``col`` el target binario a calibrar (Issue F1, #518)?
 
-    El target del contrato (ya reconciliado a una binaria por ``_align_ml_ds_classification_target``)
-    o ``categoria`` como fallback alias-first cuando no hay nombre de contrato — espejo de la
-    resolución contract-first del notebook (#348). Solo binarias {0,1} int.
+    Profile-agnóstica: el target del contrato (reconciliado a binaria por
+    ``_align_ml_ds_classification_target`` en ml_ds, o por ``_enforce_business_classification_schema``
+    en business) o ``categoria`` como fallback alias-first cuando no hay nombre de contrato — espejo
+    de la resolución contract-first del notebook (#348). Solo binarias {0,1} int.
     """
     if not _is_declared_binary_int(col):
         return False
@@ -6159,19 +6181,24 @@ def _generate_dataset_from_schema(
         if col_type == "float":
             result = [None if null_mask[i] else round(float(values[i]), 2) for i in range(n_rows)]
         elif (
-            profile == "ml_ds"
+            # Issue #518 — calibración para business Y ml_ds. NO se gatea con el kill-switch aquí:
+            # auto-gatea por el null-guard `isinstance(target_event_rate, ...)` de abajo (con el
+            # switch off, `_validate_target_event_rate` nulifica el rate business → llega None →
+            # cae al `else` byte-idéntico). El generador queda puro (sin leer `settings`).
+            profile in ("business", "ml_ds")
             # isinstance (no solo `is not None`): defensa-en-profundidad sobre un valor de
             # origen LLM, por si un rate malformado (str/bool/None) llegara sin pasar por
             # `_validate_target_event_rate` — cae al camino round normal en vez de crashear.
             and isinstance(target_event_rate, (int, float))
             and not isinstance(target_event_rate, bool)
-            and _is_mlds_event_target(col, target_col_name)
+            and _is_event_target(col, target_col_name)
         ):
-            # Issue F1 — calibra la prevalencia del target binario ml_ds al `target_event_rate`
-            # anunciado en Exhibit 2 (fuente única M1↔M2). Umbral top-k por argsort sobre los
-            # `values` (= clip(base+noise), que ya codifican la señal driver→target): preserva
-            # el ORDEN (señal/AUC intacta) y fija la prevalencia EXACTA a la tasa. `k` con
-            # piso/techo garantiza ambas clases. Mutuamente excluyente con el balance business.
+            # Issue F1/#518 — calibra la prevalencia del target binario (business/ml_ds) al
+            # `target_event_rate` anunciado en Exhibit 2 (fuente única M1↔M2). Umbral top-k por
+            # argsort sobre los `values` (= clip(base+noise), que ya codifican la señal
+            # driver→target): preserva el ORDEN (señal/AUC intacta) y fija la prevalencia EXACTA a
+            # la tasa. `k` con piso/techo garantiza ambas clases. Mutuamente excluyente con el
+            # `_ensure_both_classes` del `else` (que ahora solo corre sin rate).
             scores = np.asarray(values, dtype=float)
             n = scores.size
             k = max(1, min(n - 1, int(round(float(target_event_rate) * n))))
