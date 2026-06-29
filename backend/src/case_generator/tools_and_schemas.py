@@ -280,10 +280,11 @@ class ValueModel(BaseModel):
         default=DEFAULT_IMPACT_LENS,
         description=(
             "Marco de valor del caso, uno de: financial_roi, operational_efficiency, "
-            "clinical_outcomes, learning_outcomes. Elige el que mejor refleje el DOMINIO del caso "
-            "(salud→clinical_outcomes, educación→learning_outcomes, manufactura/logística→"
-            "operational_efficiency, comercial/financiero→financial_roi). Valor inválido se coerce "
-            "al default (no se rechaza)."
+            "clinical_outcomes, learning_outcomes, environmental_outcomes. Elige el que mejor "
+            "refleje el DOMINIO del caso (salud→clinical_outcomes, educación→learning_outcomes, "
+            "manufactura/logística→operational_efficiency, medio ambiente/sostenibilidad/servicios "
+            "ecosistémicos→environmental_outcomes, comercial/financiero→financial_roi). Valor "
+            "inválido se coerce al default (no se rechaza)."
         ),
     )
     primary_metric_name: str = Field(

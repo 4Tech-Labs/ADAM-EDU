@@ -113,7 +113,10 @@ def test_mlds_architect_prompt_frozen_hash() -> None:
 # The lens-OFF path keeps the original _MLDS_ARCHITECT_PROMPT_SHA256 (byte-identical, untouched) —
 # this is the additive on-path lock, NOT a regen of the off-path. Update deliberately on a prompt edit.
 _MLDS_ARCHITECT_LENS_PROMPT_SHA256 = (
-    "71a9c54deb9fc0fbaae34ef3bd18c9899ab5e1352bdc962be3bc92fcb2a9cb29"
+    # Issue #505 — regenerated after adding the 5th lens (environmental_outcomes) to the
+    # enumeration + domain mapping + options example in ARCHITECT_IMPACT_LENS_BLOCK. The
+    # lens-OFF hash (_MLDS_ARCHITECT_PROMPT_SHA256) is UNCHANGED (off-path byte-identity).
+    "d41eb50ec63548796b27a9ae9b745aa08d63847129b425d288ca1fc583451aae"
 )
 
 

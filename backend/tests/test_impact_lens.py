@@ -13,6 +13,7 @@ from case_generator.impact_lens import (
     DEFAULT_IMPACT_LENS,
     IMPACT_LENS_CATALOG,
     IMPACT_LENS_CLINICAL_OUTCOMES,
+    IMPACT_LENS_ENVIRONMENTAL_OUTCOMES,
     IMPACT_LENS_FINANCIAL_ROI,
     IMPACT_LENS_KEYS,
     IMPACT_LENS_LEARNING_OUTCOMES,
@@ -37,15 +38,17 @@ _INDUSTRIAS_OPTIONS: list[tuple[str, str, str]] = [
     ("educacion", "Educación", IMPACT_LENS_LEARNING_OUTCOMES),
     ("telecomunicaciones", "Telecomunicaciones", IMPACT_LENS_FINANCIAL_ROI),
     ("manufactura", "Manufactura", IMPACT_LENS_OPERATIONAL_EFFICIENCY),
+    ("medio_ambiente", "Medio ambiente / Sector público", IMPACT_LENS_ENVIRONMENTAL_OUTCOMES),
 ]
 
 
-def test_catalog_has_exactly_four_lenses_with_required_fields() -> None:
+def test_catalog_has_exactly_five_lenses_with_required_fields() -> None:
     assert IMPACT_LENS_KEYS == {
         IMPACT_LENS_FINANCIAL_ROI,
         IMPACT_LENS_OPERATIONAL_EFFICIENCY,
         IMPACT_LENS_CLINICAL_OUTCOMES,
         IMPACT_LENS_LEARNING_OUTCOMES,
+        IMPACT_LENS_ENVIRONMENTAL_OUTCOMES,
     }
     for spec in IMPACT_LENS_CATALOG.values():
         assert isinstance(spec["label"], str) and spec["label"]
@@ -77,6 +80,18 @@ def test_learning_lens_uses_clarified_kpi_labels() -> None:
     assert "$/estudiante-retenido (USD)" not in rows
     assert "Costo por estudiante retenido (USD)" in rows
     assert "Cambio en retención/graduación (puntos %)" in rows
+
+
+def test_environmental_lens_uses_ecosystem_value_kpi_labels() -> None:
+    # Issue #505 — environmental economics value frame (contingent valuation): ecosystem-services
+    # value, cost per hectare, and aggregate willingness-to-pay. Natural language, no ROI/NPV.
+    spec = IMPACT_LENS_CATALOG[IMPACT_LENS_ENVIRONMENTAL_OUTCOMES]
+    rows = [str(r) for r in spec["kpi_rows"]]
+    assert "Valor de servicios ecosistémicos (USD)" in rows
+    assert "Costo por hectárea conservada/restaurada (USD)" in rows
+    assert "Disposición a pagar agregada de la comunidad (USD)" in rows
+    # Never reintroduces the forced financial rows.
+    assert "ROI proyectado (%)" not in rows and "NPV estimado (USD)" not in rows
 
 
 @pytest.mark.parametrize("value,label,expected", _INDUSTRIAS_OPTIONS)

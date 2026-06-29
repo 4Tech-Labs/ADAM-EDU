@@ -15,7 +15,9 @@ from case_generator import graph as _graph
 from case_generator.impact_lens import (
     DEFAULT_IMPACT_LENS,
     IMPACT_LENS_CLINICAL_OUTCOMES,
+    IMPACT_LENS_ENVIRONMENTAL_OUTCOMES,
     IMPACT_LENS_FINANCIAL_ROI,
+    IMPACT_LENS_KEYS,
     IMPACT_LENS_LEARNING_OUTCOMES,
     IMPACT_LENS_OPERATIONAL_EFFICIENCY,
 )
@@ -34,6 +36,17 @@ def test_value_model_coerces_lens_never_rejects() -> None:
     assert CaseArchitectOutput.model_fields["value_model"].default is None
 
 
+def test_value_model_lens_description_names_every_catalog_lens() -> None:
+    # Issue #505 drift-lock: the `lens` field description is serialized into the structured-output
+    # JSON schema the LLM sees, so it is a live, precedence-sensitive instruction (value_model.lens
+    # outranks the intake industry lens in _resolve_impact_lens). It MUST name EVERY catalog lens, or
+    # the model gets guidance conflicting with ARCHITECT_IMPACT_LENS_BLOCK and may emit a stale lens
+    # that clobbers the correct industry-resolved one. This guards against re-introducing that skew.
+    description = ValueModel.model_fields["lens"].description or ""
+    for key in IMPACT_LENS_KEYS:
+        assert key in description, f"ValueModel.lens description omits lens key {key!r}"
+
+
 # ── 2. The lens block: brace-free, DD3-bounded, instructs value_model + options ─
 def test_lens_block_is_brace_free_and_dd3_bounded() -> None:
     assert "{" not in ARCHITECT_IMPACT_LENS_BLOCK and "}" not in ARCHITECT_IMPACT_LENS_BLOCK
@@ -43,9 +56,10 @@ def test_lens_block_is_brace_free_and_dd3_bounded() -> None:
     # DD3: Exhibit 1 stays a USD P&L; never converts to non-monetary units
     assert "Exhibit 1 sigue siendo un P&L en USD" in ARCHITECT_IMPACT_LENS_BLOCK
     assert "NUNCA convierte el P&L" in ARCHITECT_IMPACT_LENS_BLOCK
-    # all 4 lens keys named so the LLM can pick
+    # all 5 lens keys named so the LLM can pick (Issue #505 added environmental_outcomes)
     for k in (IMPACT_LENS_FINANCIAL_ROI, IMPACT_LENS_OPERATIONAL_EFFICIENCY,
-              IMPACT_LENS_CLINICAL_OUTCOMES, IMPACT_LENS_LEARNING_OUTCOMES):
+              IMPACT_LENS_CLINICAL_OUTCOMES, IMPACT_LENS_LEARNING_OUTCOMES,
+              IMPACT_LENS_ENVIRONMENTAL_OUTCOMES):
         assert k in ARCHITECT_IMPACT_LENS_BLOCK
 
 

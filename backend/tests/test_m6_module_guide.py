@@ -273,7 +273,7 @@ def test_m4_verdict_literals_bound_to_source():
 
 
 def test_value_frame_keys_match_lens_catalog() -> None:
-    # Drift lock: the per-lens M4 value frame must cover EXACTLY the 4 canonical lens keys.
+    # Drift lock: the per-lens M4 value frame must cover EXACTLY the canonical lens keys.
     assert set(_M4_VALUE_FRAME_BY_LENS) == IMPACT_LENS_KEYS
 
 

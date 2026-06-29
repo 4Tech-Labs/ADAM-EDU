@@ -56,6 +56,9 @@ describe("buildAuthoringJobCreateRequest", () => {
         expect(
             buildAuthoringJobCreateRequest({ ...EMPTY_FORM, impactLens: "clinical_outcomes" }).impact_lens,
         ).toBe("clinical_outcomes");
+        expect(
+            buildAuthoringJobCreateRequest({ ...EMPTY_FORM, impactLens: "environmental_outcomes" }).impact_lens,
+        ).toBe("environmental_outcomes");
         expect(buildAuthoringJobCreateRequest({ ...EMPTY_FORM, impactLens: null }).impact_lens).toBeNull();
     });
 });
