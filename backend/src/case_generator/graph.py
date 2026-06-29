@@ -148,6 +148,7 @@ from case_generator.prompts import (
     M3_CONTENT_PROMPT_CLUSTERING,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES,
+    M3_QUESTIONS_PROMPT_CLUSTERING,
     M4_CHART_PROMPT_CLUSTERING,
     M4_CHART_PROMPT_CLUSTERING_PROFILES,
     M4_CONTENT_PROMPT_CLUSTERING,
@@ -2964,43 +2965,50 @@ def _annotate_validate_emit(
     if len(charts) > 5:
         charts = charts[:5]
 
-    try:
-        cfg = Configuration.from_runnable_config(config)
-        llm = _get_chart_llm(cfg.writer_model, temperature=0.3, thinking_level="minimal")
-        charts_context = [
-            {
-                "id": c.get("id", ""),
-                "title": c.get("title", ""),
-                "subtitle": c.get("subtitle", ""),
-                "chart_type": c.get("chart_type", ""),
-            }
-            for c in charts
-            if c.get("id", "") not in deterministic_text_ids
-        ]
-        prompt = annotate_prompt.format(
-            charts_context_json=json.dumps(charts_context, ensure_ascii=False),
-            case_id=state.get("case_id", "") or state.get("titulo", ""),
-            student_profile=state.get("studentProfile", "business"),
-            output_language=state.get("output_language", "es"),
-        )
-        ann_result: EDAAnnotateOnlyOutput = llm.with_structured_output(
-            EDAAnnotateOnlyOutput
-        ).invoke(prompt)
-        ann_by_id: dict[str, tuple[str, str]] = {}
-        for ann in (ann_result.annotations or []):
-            if not ann.id:
-                continue
-            ann_by_id[ann.id] = (
-                _clamp(ann.description or "", 500),
-                _clamp(ann.notes or "", 300),
+    # Charts con texto determinista (lo escribe el builder) se EXCLUYEN de la petición
+    # al LLM. Si NO queda ninguno por anotar (p. ej. el panel ml_ds+clf cuando los
+    # kill-switches de texto honesto están activos → los 3 charts deterministas), nos
+    # saltamos por completo la llamada al LLM: no hay nada que anotar, ahorra una llamada
+    # Flash y elimina ese punto de fallo. Business/clustering pasan `deterministic_text_ids`
+    # vacío → `charts_context` no vacío → la llamada se hace como antes (byte-idéntico).
+    charts_context = [
+        {
+            "id": c.get("id", ""),
+            "title": c.get("title", ""),
+            "subtitle": c.get("subtitle", ""),
+            "chart_type": c.get("chart_type", ""),
+        }
+        for c in charts
+        if c.get("id", "") not in deterministic_text_ids
+    ]
+    ann_by_id: dict[str, tuple[str, str]] = {}
+    if charts_context:
+        try:
+            cfg = Configuration.from_runnable_config(config)
+            llm = _get_chart_llm(cfg.writer_model, temperature=0.3, thinking_level="minimal")
+            prompt = annotate_prompt.format(
+                charts_context_json=json.dumps(charts_context, ensure_ascii=False),
+                case_id=state.get("case_id", "") or state.get("titulo", ""),
+                student_profile=state.get("studentProfile", "business"),
+                output_language=state.get("output_language", "es"),
             )
-    except Exception as ann_err:  # noqa: BLE001
-        # Boundary: errores del LLM nunca tumban el panel.
-        logger.warning(
-            "[eda_chart_generator/py] annotate-only LLM falló (%s) — sirviendo charts sin anotaciones",
-            ann_err,
-        )
-        ann_by_id = {}
+            ann_result: EDAAnnotateOnlyOutput = llm.with_structured_output(
+                EDAAnnotateOnlyOutput
+            ).invoke(prompt)
+            for ann in (ann_result.annotations or []):
+                if not ann.id:
+                    continue
+                ann_by_id[ann.id] = (
+                    _clamp(ann.description or "", 500),
+                    _clamp(ann.notes or "", 300),
+                )
+        except Exception as ann_err:  # noqa: BLE001
+            # Boundary: errores del LLM nunca tumban el panel.
+            logger.warning(
+                "[eda_chart_generator/py] annotate-only LLM falló (%s) — sirviendo charts sin anotaciones",
+                ann_err,
+            )
+            ann_by_id = {}
 
     # Charts con texto determinista: descartar cualquier anotación LLM (incl. una
     # que un modelo díscolo devuelva sin habérsela pedido) para preservar el texto
@@ -3066,6 +3074,17 @@ def _eda_classification_python_path(
             return None
         df = pd.DataFrame(dataset)
         target_col = _identify_target_variable(state, df)
+        # Coherencia (ml_ds+clf): prefiere el MISMO target que cita la narrativa M2 y
+        # modela el notebook M3 (`_resolve_eda_target_name`: contract-first, robusto a la
+        # colisión de rename y verificado contra las columnas reales del dataset) cuando es
+        # una columna real del df. Garantiza que `class_distribution` nunca discrepe de la
+        # prosa sobre CUÁL es el target (cierra los bordes de colisión / caso-sin-contrato
+        # donde el heurístico podría caer a una feature continua). En el happy path ambos
+        # resolvedores ya coinciden → no-op; solo corrige el caso incoherente. Fallback
+        # seguro al heurístico cuando el narrativo no es una columna real.
+        narrative_target = _resolve_eda_target_name(state)
+        if narrative_target and narrative_target in df.columns:
+            target_col = narrative_target
         if not target_col:
             logger.warning(
                 "[eda_chart_generator/py] target no identificable — fallback a path LLM"
@@ -3080,8 +3099,19 @@ def _eda_classification_python_path(
         # columnas que inflan la métrica por alta cardinalidad discreta (period/IDs/texto).
         # Off → todas las columnas salvo el target (comportamiento legacy byte-idéntico).
         exclude_index = settings.m2_mi_exclude_index
+        # Kill-switch `m2_classification_chart_honest_text` (default true): el builder
+        # escribe texto determinista para `class_distribution` (balance exacto + línea base
+        # mayoritaria / Paradoja de la Exactitud) y `mutual_info_top8` (feature más
+        # informativa + caveat MI≠causalidad/leakage), en vez de dejar que el LLM anotador
+        # —que NO ve los datos— adivine. Off → texto vacío + el LLM los anota (previo).
+        caption_text = settings.m2_classification_chart_honest_text
         charts = generate_classification_eda_charts(
-            df, target_col, contract, honest_text=honest_text, exclude_index=exclude_index
+            df,
+            target_col,
+            contract,
+            honest_text=honest_text,
+            exclude_index=exclude_index,
+            caption_text=caption_text,
         )
         if not charts:
             logger.warning(
@@ -3089,17 +3119,20 @@ def _eda_classification_python_path(
             )
             return None
 
-        # El id está acoplado al builder (`_build_missingness_heatmap`); el test E2E
-        # de coherencia de texto lo bloquea contra un rename silencioso.
-        deterministic_text_ids = (
-            frozenset({"missingness_heatmap"}) if honest_text else frozenset()
-        )
+        # Los ids están acoplados al builder; los tests deterministas los bloquean contra
+        # un rename silencioso. Con ambos switches on los 3 charts son deterministas →
+        # `_annotate_validate_emit` se salta el LLM por completo (cero anotación que pisar).
+        deterministic_text_ids: set[str] = set()
+        if honest_text:
+            deterministic_text_ids.add("missingness_heatmap")
+        if caption_text:
+            deterministic_text_ids |= {"class_distribution", "mutual_info_top8"}
         return _annotate_validate_emit(
             charts,
             state,
             config,
             EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
-            deterministic_text_ids=deterministic_text_ids,
+            deterministic_text_ids=frozenset(deterministic_text_ids),
         )
     except Exception as e:  # noqa: BLE001
         logger.error(
@@ -8694,6 +8727,22 @@ def _select_eda_prompt(
     return by_family.get(primary_family, generic)
 
 
+def _select_m3_ml_ds_nonclf_questions_prompt(family: str | None) -> tuple[str, str]:
+    """Pick the M3 conceptual-questions prompt + log tag for an ml_ds NON-classification cohort (EPIC #458).
+
+    ml_ds + clustering (gated by ``MLDS_CLUSTERING_M3_QUESTIONS``) gets the dedicated
+    segmentation-native ``M3_QUESTIONS_PROMPT_CLUSTERING`` (so the supervised-experiment framing of
+    ``M3_EXPERIMENT_QUESTIONS_PROMPT`` no longer fights the #467 reframing hint); every other ml_ds
+    non-clf cohort (regresión / serie_temporal, or clustering with the kill-switch off) keeps the
+    generic experiment prompt byte-identically. The #467 hint still appends downstream (it anchors
+    ``target_k`` and is brace-free). Pure (modulo the settings read) so the dispatch is unit-testable
+    without an LLM — mirrors ``_select_eda_prompt`` (#456).
+    """
+    if family == "clustering" and settings.mlds_clustering_m3_questions:
+        return M3_QUESTIONS_PROMPT_CLUSTERING, "m3_clustering_questions"
+    return M3_EXPERIMENT_QUESTIONS_PROMPT, "m3_experiment_questions"
+
+
 def _is_classification_family(state: ADAMState) -> bool:
     """True for ANY profile (business OR ml_ds) when the resolved family is clasificación.
 
@@ -9394,9 +9443,14 @@ def _apply_m3_questions_coherence(
 
 
 def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
-    """Genera preguntas de M3 bifurcadas por perfil:
-    - business: M3_AUDIT_QUESTIONS_PROMPT    (3 preguntas, refs 3.1–3.5, auditoría de evidencia)
-    - ml_ds:    M3_EXPERIMENT_QUESTIONS_PROMPT (3 preguntas, refs exp.*, diseño experimental)
+    """Genera las 3 preguntas CONCEPTUALES de M3 bifurcadas por perfil/familia:
+    - business:           M3_AUDIT_QUESTIONS_PROMPT      (refs 3.1–3.5, auditoría de evidencia)
+    - ml_ds clasificación: M3_CLASSIFICATION_QUESTIONS_BY_VARIANT (lr_only/rf_only/lr_rf_contrast, refs exp.*)
+    - ml_ds clustering:   M3_QUESTIONS_PROMPT_CLUSTERING (EPIC #458, segmentación, refs seg.*; kill-switch
+                          MLDS_CLUSTERING_M3_QUESTIONS — off revierte al genérico + hint #467)
+    - ml_ds otras:        M3_EXPERIMENT_QUESTIONS_PROMPT (refs exp.*, diseño experimental)
+    Las 2 preguntas output-grounded del notebook (numero 4/5) las genera el nodo POST-executor
+    `m3_notebook_questions_generator` (#489/#494) y se mergean en el adapter canónico.
     """
     try:
         cfg = Configuration.from_runnable_config(config)
@@ -9441,8 +9495,11 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 )
                 tag = f"m3_classification_questions_{_variant}"
             else:
-                prompt = M3_EXPERIMENT_QUESTIONS_PROMPT
-                tag = "m3_experiment_questions"
+                # EPIC #458 — ml_ds + clustering selects the dedicated segmentation-native conceptual
+                # questions prompt (kill-switch MLDS_CLUSTERING_M3_QUESTIONS); regresión / serie_temporal
+                # / clustering-with-switch-off keep the generic experiment prompt byte-identically. The
+                # #467 hint (below) still appends to anchor target_k.
+                prompt, tag = _select_m3_ml_ds_nonclf_questions_prompt(family)
         else:
             prompt = M3_AUDIT_QUESTIONS_PROMPT
             tag = "m3_audit_questions"

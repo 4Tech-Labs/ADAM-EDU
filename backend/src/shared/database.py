@@ -172,6 +172,20 @@ class Settings(BaseSettings):
     # family=="clustering"; clasificación / regresión / serie_temporal / business (including
     # business+clustering, which uses the audit prompt) are unaffected either way.
     mlds_clustering_m3_content: bool = True
+    # M3 conceptual (methodological) questions for ml_ds + clustering (EPIC #458). When true
+    # (default), an ml_ds + clustering case selects the dedicated `M3_QUESTIONS_PROMPT_CLUSTERING`
+    # (segmentation-native 3-question arc: how k is chosen, segment validity, segments → the M1
+    # strategic decision) instead of the generic supervised-experiment `M3_EXPERIMENT_QUESTIONS_PROMPT`
+    # (fragile hypothesis / algorithmic bias / discard-before-deploy) that the #467 hint only reframed
+    # on top of contradictory examples. The brace-free #467 hint still appends (anchoring target_k), so
+    # the prompts compose; quality is judged qualitatively (the notebook executor runs AFTER this node,
+    # so no real silhouette exists — anti-fabrication is enforced at the prompt boundary, the #457
+    # pattern). The 3 conceptual questions stay non-redundant with the 2 output-grounded notebook
+    # questions (#489/#494). Set MLDS_CLUSTERING_M3_QUESTIONS=false to revert to the generic prompt +
+    # #467 hint byte-identically (instant env-only revert, no redeploy). The gate is profile=="ml_ds"
+    # AND family=="clustering"; clasificación / regresión / serie_temporal / business (including
+    # business+clustering, which uses the audit prompt) are unaffected either way.
+    mlds_clustering_m3_questions: bool = True
     # Cross-module clustering coherence source of truth (Issue #467). When true (default), an
     # ml_ds + clustering case resolves a deterministic `clustering_decision`
     # {target_k∈{3,4}, recommended_option∈{A,B,C}, silhouette_floor} ONCE at intake and propagates it:
@@ -419,6 +433,21 @@ class Settings(BaseSettings):
     # M2_MI_EXCLUDE_INDEX=false to restore the prior behavior byte-identically (all columns
     # except the target enter the ranking; instant env-only revert, no redeploy).
     m2_mi_exclude_index: bool = True
+    # Honest, deterministic text for the M2 "Distribución de la variable objetivo"
+    # (class_distribution) and "Top features por Mutual Information" (mutual_info_top8)
+    # charts (ml_ds + clasificación). When true, `_build_class_distribution` writes the
+    # exact class balance + the majority-baseline reading (Accuracy Paradox) and
+    # `_build_mutual_info_top8` writes the real MI ranking top feature + the
+    # MI≠causation/leakage caveat into `description`/`notes`, and
+    # `_eda_classification_python_path` excludes both charts from LLM annotation — so the
+    # LLM annotator (which never sees the data) can no longer write a caption that
+    # contradicts the chart. With `m2_missingness_honest_text` also on, all 3 charts are
+    # deterministic and the annotate-only LLM call is skipped entirely. Best-effort +
+    # scoped to the classification python path, so business/other-family/non-clf cases are
+    # unaffected. Kill-switch: set M2_CLASSIFICATION_CHART_HONEST_TEXT=false to restore the
+    # prior behavior byte-identically (empty builder text + LLM annotates the two charts;
+    # instant env-only revert, no redeploy).
+    m2_classification_chart_honest_text: bool = True
     # M6 Teaching Note as a concise per-module teacher guide. When true, `teaching_note_part1`
     # emits §1 "Resumen para el Docente" + a Python-OWNED §2 "Recorrido por Módulo"
     # (`build_module_guide_block` — module set/numbering/labels correct by construction,
