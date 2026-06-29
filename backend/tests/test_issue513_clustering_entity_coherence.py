@@ -127,6 +127,16 @@ def test_architect_output_field_optional_default_none():
     assert CaseArchitectOutput.model_fields["entity_descriptor"].default is None
 
 
+def test_architect_output_accepts_entity_descriptor_instance():
+    """The parent mode='before' coercer passes an EntityDescriptor instance through unchanged (the
+    isinstance(v, EntityDescriptor) arm) — inert in production (model_dump yields a dict) but locked
+    so the coercer never drops a valid instance to None."""
+    ed = EntityDescriptor(singular="centro", plural="centros", snake_prefix="centro")
+    out = CaseArchitectOutput(**_REQUIRED_ARCHITECT_FIELDS, entity_descriptor=ed)
+    assert out.entity_descriptor is not None
+    assert out.entity_descriptor.snake_prefix == "centro"
+
+
 # ── build_clustering_entity_hint: brace-free, I1/I2 ──────
 
 
@@ -162,6 +172,7 @@ def test_entity_hint_does_not_force_clientes():
         ("centro", "centro de distribución", "centros"),
         ("paciente", "paciente", "pacientes"),
         ("zona", "zona", "zonas"),
+        ("centro_distribucion", "centro de distribución", "centros de distribución"),
     ],
 )
 def test_entity_index_three_domains(prefix, singular, plural):
@@ -220,6 +231,46 @@ def test_entity_index_collision_guard_falls_back_to_user():
     assert out[0]["centro_id"] == 1.0  # feature preserved, not overwritten
 
 
+def test_entity_index_double_collision_returns_unchanged():
+    """Inner give-up: if BOTH {prefix}_id AND the neutral user_id already exist as features
+    (alongside the period index), no safe id column remains → return unchanged, overwrite nothing."""
+    schema, rows = _clustering_rows()
+    rows = [{**r, "centro_id": 1.0, "user_id": 2.0} for r in rows]  # both candidates clash
+    desc = {"singular": "centro", "plural": "centros", "snake_prefix": "centro"}
+    out, sch = g._apply_clustering_entity_index(
+        rows, schema, entity_descriptor=desc,
+        profile="ml_ds", primary_family="clustering", enabled=True,
+    )
+    assert out is rows and sch is schema  # unchanged
+    assert all("period" in r for r in out)  # index left intact
+
+
+def test_entity_index_no_index_column_returns_unchanged():
+    """In-gate rows with no period / {prefix}_id / user_id index column → no-op (defensive)."""
+    schema, rows = _clustering_rows()
+    rows = [{"recency_days": 5, "monetary_value": 10} for _ in rows]  # no index key at all
+    desc = {"singular": "centro", "plural": "centros", "snake_prefix": "centro"}
+    out, sch = g._apply_clustering_entity_index(
+        rows, schema, entity_descriptor=desc,
+        profile="ml_ds", primary_family="clustering", enabled=True,
+    )
+    assert out is rows and sch is schema
+
+
+def test_entity_index_singular_fallback_and_description():
+    """A dict with a valid snake_prefix but NO singular → singular falls back to the prefix, and the
+    renamed schema column description names that entity."""
+    schema, rows = _clustering_rows()
+    desc = {"snake_prefix": "centro"}  # no singular/plural
+    out, new_schema = g._apply_clustering_entity_index(
+        rows, schema, entity_descriptor=desc,
+        profile="ml_ds", primary_family="clustering", enabled=True,
+    )
+    assert out[0]["centro_id"] == "centro_00001"
+    id_col = next(c for c in new_schema["columns"] if c["name"] == "centro_id")
+    assert id_col["description"].endswith("centro")  # f"...único de {singular==prefix}"
+
+
 def test_entity_index_defensive_resanitize_bad_dict():
     """Defense-in-depth: a raw dict with a garbage snake_prefix → re-sanitize → user_."""
     schema, rows = _clustering_rows()
@@ -245,7 +296,7 @@ def test_entity_index_copy_on_write_with_descriptor():
 def test_entity_index_downstream_feature_exclusion_all_domains():
     """E9: {prefix}_id stays excluded from the K-Means fit features for any prefix (token _id)."""
     schema, rows = _clustering_rows()
-    for prefix in ("centro", "paciente", "zona"):
+    for prefix in ("centro", "paciente", "zona", "centro_distribucion"):
         desc = {"singular": prefix, "plural": prefix + "s", "snake_prefix": prefix}
         out, _ = g._apply_clustering_entity_index(
             rows, schema, entity_descriptor=desc,
@@ -375,6 +426,19 @@ def test_coherence_oracle_accent_insensitive():
     desc = {"singular": "niño", "plural": "niños", "snake_prefix": "nino"}
     assert check_clustering_entity_coherence(
         rows, desc, "El programa atiende a 1000 niños en riesgo."
+    ) is True
+
+
+def test_coherence_oracle_multi_underscore_prefix():
+    """The data-prefix extraction (rsplit on the last _) handles a multi-underscore prefix."""
+    rows = [{"centro_distribucion_id": "centro_distribucion_00001", "recency_days": 5}]
+    desc = {
+        "singular": "centro de distribución",
+        "plural": "centros de distribución",
+        "snake_prefix": "centro_distribucion",
+    }
+    assert check_clustering_entity_coherence(
+        rows, desc, "La red opera 1000 centros de distribución."
     ) is True
 
 

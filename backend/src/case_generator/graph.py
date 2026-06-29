@@ -6233,7 +6233,10 @@ def _resolve_entity_prefix(entity_descriptor: dict | None) -> tuple[str, str]:
     the ``EntityDescriptor`` schema validator uses) in case a raw/legacy dict reaches the data layer.
     Falls back to the #468 ``("user", "usuario")`` when the descriptor is absent / malformed /
     unsanitizable → ``user_id`` / ``user_00001`` (byte-identical to #468; required by its assertions,
-    which call ``_apply_clustering_entity_index`` with no descriptor).
+    which call ``_apply_clustering_entity_index`` with no descriptor). NOTE: this data-layer fallback
+    is deliberately ``"user"`` (no descriptor at all → #468 byte-compat), DISTINCT from the
+    schema-level ``EntityDescriptor`` default ``"cliente"`` (which applies when the architect DOES emit
+    a dict but with a missing/garbage ``snake_prefix``).
     """
     if isinstance(entity_descriptor, dict):
         prefix = _sanitize_entity_prefix(entity_descriptor.get("snake_prefix"))
