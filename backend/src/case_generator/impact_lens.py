@@ -28,8 +28,9 @@ test ``test_impact_lens`` asserts every value AND label maps.
 
 from __future__ import annotations
 
-import unicodedata
 from typing import Literal, cast
+
+from case_generator.text_normalize import fold_accents
 
 # ── Lens keys (the canonical catalog of 5, Issue #437 decision D-B + Issue #505) ─
 IMPACT_LENS_FINANCIAL_ROI = "financial_roi"
@@ -139,9 +140,7 @@ _INDUSTRY_LENS_BY_KEY: dict[str, str] = {
 
 def _normalize_industry(raw: str) -> str:
     """Casefold + strip diacritics so 'Salud & Medicina' / 'salud' / 'SALUD' match."""
-    decomposed = unicodedata.normalize("NFKD", raw)
-    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
-    return stripped.strip().casefold()
+    return fold_accents(raw).strip().casefold()
 
 
 def resolve_impact_lens_from_industry(raw: str | None) -> str:
@@ -209,6 +208,42 @@ def build_impact_lens_m5_hint(lens: str | None) -> str:
     )
 
 
+def build_impact_lens_m4_dual_axis_hint(lens: str | None) -> str:
+    """Brace-free dual-axis hint for the M4 investment chart when the lens is NON-financial.
+
+    On the decision-charts reframe (ml_ds + clasificación, ``M4_CHART_PROMPT_CLASSIFICATION_INVESTMENT_NEUTRAL``)
+    Gráfico 1 plots the deployment COST (always USD) next to the projected VALUE expressed in the lens
+    unit (e.g. "240 estudiantes retenidos", eventos clínicos evitados, hectáreas restauradas). Those two
+    magnitudes differ by orders of magnitude, so on a SINGLE y-axis the small-magnitude value bar renders
+    invisible — defeating the chart's purpose. This hint instructs the LLM to put the non-monetary value
+    series on a SECONDARY y-axis (Plotly ``y2``), keeping the cost on the primary axis in USD.
+
+    Callers append it ONLY for a NON-default (non-financial) lens, so the financial cohort — where both
+    series are USD on one axis (the clean payback chart) — stays byte-identical. Brace-free (no ``{}``)
+    → safe to concatenate before ``str.format`` (mirrors the other ``build_impact_lens_*`` hints; uses
+    quotes/backticks only, never curly braces, so it never trips the prompt's ``.format``).
+    """
+    spec = IMPACT_LENS_CATALOG.get(normalize_impact_lens(lens), IMPACT_LENS_CATALOG[DEFAULT_IMPACT_LENS])
+    return (
+        "\n# EJE Y DOBLE OBLIGATORIO (el valor no es monetario)\n"
+        "Este gráfico pone el COSTO/inversión (SIEMPRE en USD) junto al VALOR proyectado, que se expresa "
+        "en la unidad de la lente (" + str(spec["primary_metric_name"]) + "). Esas dos magnitudes "
+        "difieren en órdenes de magnitud (p. ej. cientos de miles de USD frente a unos cientos de "
+        "unidades de la lente), así que en UN SOLO eje Y la barra de valor queda invisible. Por eso "
+        "DEBES usar DOS ejes Y (el eje Y secundario de Plotly):\n"
+        "- La traza del COSTO/inversión (USD) va en el eje Y primario: NO le pongas el campo `yaxis` "
+        "(se queda en el eje `y` por defecto). Su título de eje va en USD.\n"
+        "- La traza del VALOR (en la unidad de la lente) DEBE incluir el campo `yaxis` con el valor "
+        "textual `\"y2\"`.\n"
+        "- En `layout` DEBES definir el eje secundario `yaxis2` con: `title` en la unidad de la lente, "
+        "`overlaying` con el valor textual `\"y\"`, y `side` con el valor textual `\"right\"`.\n"
+        "- Cada eje lleva su propio `title` (USD en el primario; la unidad de la lente en el secundario) "
+        "para que AMBAS series sean legibles.\n"
+        "Mantén el COSTO en USD; el eje doble existe precisamente para NO monetizar el valor no "
+        "financiero.\n"
+    )
+
+
 def build_impact_lens_architect_hint(lens: str | None) -> str:
     """Brace-free TEACHER-OVERRIDE hint appended in the ``case_architect`` node (Issue #437 Fase 3).
 
@@ -247,5 +282,6 @@ __all__ = [
     "normalize_impact_lens",
     "build_impact_lens_hint",
     "build_impact_lens_m5_hint",
+    "build_impact_lens_m4_dual_axis_hint",
     "build_impact_lens_architect_hint",
 ]

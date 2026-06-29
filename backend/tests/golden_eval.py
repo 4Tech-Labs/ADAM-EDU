@@ -24,6 +24,7 @@ executes only under RUN_LIVE_LLM_TESTS with a configured job runner.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 # ── gate thresholds (5A) ─────────────────────────────────
@@ -95,6 +96,14 @@ class NodeEvalInputs:
     # that re-embeds MCQ answer-choices fails the golden gate. Applies to ALL families (the defect is
     # general, not classification-only).
     m4_questions_no_embedded_mcq_ok: bool = True
+    # M4 question model coherence (ml_ds + clasificación single-model): no question may name the
+    # unselected model (lr_only must not name Random Forest; rf_only must not name Logistic Regression)
+    # nor cite a model metric (AUC/F1/recall) absent from the executed M3 metrics. True (n/a) for
+    # contrast / business / non-clf jobs (variant None) and pre-execution (anchorless block). Computed
+    # via ``check_m4_questions_model_coherence`` (reuses the production validator). Wired into the gate
+    # so a future m4_questions_generator / m4_content downgrade that reintroduces the leak/fabrication is
+    # blocked (the M4 sibling of ``m5_questions_coherence_ok``).
+    m4_questions_model_coherence_ok: bool = True
     # M5 memorándum coherence: every classification golden job's M5 memo must be coherent (does not
     # name the unselected model; cites no model metric absent from the executed M3 metrics; does not
     # recommend a strategic option that does not exist in the case). True (n/a) for non-classification
@@ -128,6 +137,14 @@ class NodeEvalInputs:
     # re-invites benchmark estimates fails the golden gate. (The metric-anchoring + unselected-model
     # guarantees are unit-tested — they require per-job metrics/variant fixtures the golden set lacks.)
     m4_charts_no_fabrication_ok: bool = True
+    # ml_ds + clasificación M4 cost-of-errors chart (when present) plots ONLY the REAL contract costs.
+    # The decision-charts reframe builds Gráfico 2 DETERMINISTICALLY from business_cost_matrix (fp/fn),
+    # so a `python_builder` cost chart whose bar values diverge from the real fp_cost/fn_cost is a
+    # regression (e.g. a future change that lets the LLM author it). True (n/a) for non-ml_ds+clf jobs,
+    # an absent cost matrix, or no cost chart. Computed via ``check_m4_classification_cost_chart_grounded``.
+    # Trivially green by construction today; the teeth are in test_m4_classification_decision_charts
+    # unit RED/GREEN (the golden set lacks a per-job cost-matrix fixture).
+    m4_classification_cost_chart_grounded_ok: bool = True
     # M4 narrative avoids the benchmark-fabrication disclaimer ("estimaciones de benchmarks de
     # industria"), for both profiles / all families (Issue #436). True (n/a) when a job carries no M4
     # narrative. Computed via ``check_m4_narrative_no_fabrication`` (reuses the production
@@ -154,6 +171,13 @@ class NodeEvalInputs:
     # that reintroduces the leak fails the gate. The DETERMINISTIC cure is the strip in
     # ``build_computed_metrics_block``; this gate-protects it on the frozen golden set.
     narrative_no_raw_identifier_ok: bool = True
+    # business/ml_ds + clasificación synthetic dataset prevalence EQUALS the architect's declared
+    # target_event_rate (Issue #518). True (n/a) when no rate is declared, the target column is not
+    # resolvable, or it is not a binary {0,1} column (covers every non-classification family and the
+    # no-rate path). Computed via ``check_dataset_prevalence_matches_contract``. The RED control
+    # (kill-switch off → business target ~0.50 vs a contract rate of 0.083) proves non-tautology;
+    # gate-protects against a future regression that ships an uncalibrated prevalence.
+    dataset_prevalence_matches_contract_ok: bool = True
     # ml_ds + clustering synthetic dataset carries REAL latent structure (Issue #452): K-Means over
     # the StandardScaler-ed segmentation features must land the silhouette in ~[0.45, 0.70] AND
     # recover the injected blobs (adjusted Rand index ≥ 0.6). True (n/a) for non-clustering jobs.
@@ -190,6 +214,27 @@ class NodeEvalInputs:
     # a future m3_content_generator Pro->Flash downgrade that starts fabricating reported metrics. RED
     # control: prose with a metric keyword adjacent to a >=2-decimal value fails.
     clustering_m3_content_no_metric_ok: bool = True
+    # ml_ds + clustering M3 CONCEPTUAL questions stay segmentation-native (EPIC #458): no supervised
+    # leak (variable objetivo / clase a predecir / confusion matrix / accuracy / AUC) and no fabricated
+    # silhouette value (the executor runs AFTER this node — any concrete metric is invented). True
+    # (n/a) for non-clustering jobs / empty question set. Computed via
+    # ``check_clustering_m3_questions_segmentation``; gate-protects an m3_questions_generator regression
+    # that reframes clustering as a supervised experiment or invents a silhouette number. The frozen
+    # golden set carries no clustering questions fixture yet (n/a today); deterministic teeth live in
+    # the unit RED/GREEN (pure oracle + kill-switch dispatch test).
+    clustering_m3_questions_segmentation_ok: bool = True
+    # ml_ds + clustering M4 (Impacto) QUESTIONS stay segmentation-native (EPIC #458): no supervised leak
+    # (variable objetivo / modelo de clasificación / confusion matrix / accuracy / AUC). True (n/a) for
+    # non-clustering jobs / empty question set. Computed via ``check_clustering_m4_questions_segmentation``;
+    # gate-protects an m4_questions_generator regression back to the supervised/financial generic framing.
+    # M4 runs post-executor so a cited silhouette is the real one — NOT flagged (unlike the pre-execution
+    # M3 conceptual oracle). n/a in the frozen golden set; teeth in the unit RED/GREEN.
+    clustering_m4_questions_segmentation_ok: bool = True
+    # ml_ds + clustering M5 final memorándum stays segmentation-native (EPIC #458): the model answer key
+    # must not reframe the decision as a supervised model-deployment verdict. True (n/a) for non-clustering
+    # jobs / empty set. Computed via ``check_clustering_m5_questions_segmentation``; gate-protects an
+    # m5_questions_generator regression. n/a in the frozen golden set; teeth in the unit RED/GREEN.
+    clustering_m5_questions_segmentation_ok: bool = True
     # ml_ds + clustering data↔narrative cluster-count coherence (Issue #467): the data layer must inject
     # EXACTLY the coordinated ``target_k`` blobs (so the k the student measures == the k the narrative
     # frames) AND that data must still carry real latent structure (silhouette in band + ARI). True
@@ -257,6 +302,11 @@ class NodeEvalInputs:
     # Computed via ``check_clustering_entity_index``; gate-protects against a data-layer regression that
     # reverts to the monthly period index. RED control: rows with a monthly `period` column fail.
     clustering_entity_index_ok: bool = True
+    # The dataset's entity matches the architect's narrated entity (Issue #513): the entity-id column
+    # prefix == entity_descriptor.snake_prefix AND the M1 narrative names that entity. True (n/a) when
+    # the descriptor / narrative are absent (the frozen golden set). Computed via
+    # ``check_clustering_entity_coherence``; the deterministic teeth are the unit RED/GREEN tests.
+    clustering_entity_coherence_ok: bool = True
     # Narrative carries NO literal LaTeX math delimiter (Issue #480), for ALL profiles/families: the
     # case-viewer has no KaTeX/MathJax, so a ``$k$`` / ``$5000.0 - 50.0$`` would reach the student as a
     # literal delimiter. True (n/a) when the narrative is empty/absent. Computed via
@@ -274,6 +324,21 @@ class NodeEvalInputs:
     # target-naming warning. RED control: a warnings list with a ``target '…'`` or
     # ``target_semantic_mismatch`` entry fails.
     clustering_no_target_warning_ok: bool = True
+    # Issue #515: the M1 narrative does not contradict the deterministic clustering dataset — no
+    # per-entity/per-segment USD figure beyond the monetary scale ceiling, no wrong entity/count.
+    # True (n/a) for non-clustering jobs / absent inputs. Computed via
+    # ``check_m1_dataset_coherence``; gate-protects against a regression that ships a narrative
+    # citing money the CSV can't back. RED control: a narrative with a per-entity $ above the
+    # ceiling (or the kill-switch-off path that lets it through) fails.
+    m1_dataset_coherence_ok: bool = True
+    # Every generated value stays inside its column's DECLARED [range_min, range_max] (ml_ds outlier
+    # respects the bound): the EDA-outlier injection (Fix B-05) no longer ships a semantically
+    # impossible value (a credit_score declared [300,850] reaching 1700, a percentage exceeding 100)
+    # for ml_ds. True (n/a) when rows/schema are absent. Computed via
+    # ``check_outliers_within_declared_bounds``; gate-protects against a regression that reopens the
+    # legacy ×2 ml_ds cap. RED control: a dataset generated with the kill-switch off (ml_ds ×2) ships
+    # values above range_max and fails.
+    outliers_within_declared_bounds_ok: bool = True
 
 
 @dataclass
@@ -317,6 +382,10 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M4 question option coherence failure: nonexistent or unpresented option")
     if not r.m4_questions_no_embedded_mcq_ok:
         reasons.append("M4 question coherence failure: enunciado embeds MCQ answer-choices A/B/C")
+    if not r.m4_questions_model_coherence_ok:
+        reasons.append(
+            "M4 question coherence failure: unselected-model leak or unanchored model metric"
+        )
     if not r.m5_questions_coherence_ok:
         reasons.append(
             "M5 memorándum coherence failure: unselected-model leak, unanchored metric, or "
@@ -330,12 +399,19 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append("M4 chart coherence failure: retired sensitivity/tornado chart emitted")
     if not r.m4_charts_no_fabrication_ok:
         reasons.append("M4 chart coherence failure: invented benchmark figure in chart prose")
+    if not r.m4_classification_cost_chart_grounded_ok:
+        reasons.append(
+            "M4 chart coherence failure: the cost-of-errors chart plots a cost that diverges from the "
+            "real contract business_cost_matrix (fp_cost/fn_cost)"
+        )
     if not r.m4_narrative_no_fabrication_ok:
         reasons.append("M4 narrative coherence failure: invented benchmark figure in narrative prose")
     if not r.m4_lens_kpi_coherence_ok:
         reasons.append("M4 lens coherence failure: non-financial lens emitted forced ROI/NPV KPI rows")
     if not r.narrative_no_raw_identifier_ok:
         reasons.append("narrative coherence failure: raw machine identifier (word__x) leaked into M4/M5 prose")
+    if not r.dataset_prevalence_matches_contract_ok:
+        reasons.append("dataset prevalence mismatch: target prevalence != declared target_event_rate (Issue #518)")
     if not r.architect_value_model_lens_valid_ok:
         reasons.append("architect value_model failure: emitted an unknown/missing Impact Lens key")
     if not r.clustering_structure_ok:
@@ -355,6 +431,21 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "clustering M3-content failure: narrative cites a fabricated cluster-metric value "
             "(silhouette / Davies-Bouldin) pre-execution"
+        )
+    if not r.clustering_m3_questions_segmentation_ok:
+        reasons.append(
+            "clustering M3 conceptual-questions failure: a question frames the task as supervised "
+            "(target / accuracy / AUC / confusion matrix) or cites a fabricated silhouette value"
+        )
+    if not r.clustering_m4_questions_segmentation_ok:
+        reasons.append(
+            "clustering M4 questions failure: a question reframes the segmentation as a supervised "
+            "model-ROI verdict (variable objetivo / modelo de clasificación / accuracy / AUC)"
+        )
+    if not r.clustering_m5_questions_segmentation_ok:
+        reasons.append(
+            "clustering M5 memorándum failure: the answer key reframes the decision as a supervised "
+            "model-deployment verdict (modelo de clasificación / accuracy / AUC / confusion matrix)"
         )
     if not r.clustering_decision_coherence_ok:
         reasons.append(
@@ -407,6 +498,12 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             "clustering data failure: dataset is time-indexed (monthly `period`) instead of "
             "entity-level (`user_id`) — analysis unit contradicts the segmentation narrative"
         )
+    if not r.clustering_entity_coherence_ok:
+        reasons.append(
+            "clustering entity coherence failure: the dataset entity-id prefix differs from the "
+            "architect's narrated entity (entity_descriptor) — the CSV and the M1 story name "
+            "different entities (Issue #513)"
+        )
     if not r.narrative_no_latex_math_ok:
         reasons.append(
             "narrative coherence failure: literal LaTeX math delimiter ($k$ / $5000 - 50$) "
@@ -417,6 +514,17 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             "clustering narrative failure: a data_gap_warning names a stripped supervised target, "
             "leaking a column absent from the CSV into M2 EDA / M3-content"
         )
+    if not r.m1_dataset_coherence_ok:
+        reasons.append(
+            "M1 dataset coherence failure: the narrative cites a per-entity/per-segment money "
+            "figure (or entity/population) the deterministic clustering dataset cannot back (Issue #515)"
+        )
+    if not r.outliers_within_declared_bounds_ok:
+        reasons.append(
+            "dataset bounds failure: a generated value exceeds its column's declared "
+            "[range_min, range_max] (the EDA outlier injection shipped a semantically impossible "
+            "value, e.g. a credit_score declared [300,850] reaching 1700)"
+        )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
         if drop > JUDGE_MAX_DROP:
@@ -426,6 +534,44 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             f"pairwise Pro-win {r.pairwise_pro_win_rate:.2f} > {PAIRWISE_MAX_PRO_WIN:.2f}"
         )
     return GateResult(node=r.node, passed=not reasons, reasons=reasons)
+
+
+# ── Issue #515 — deterministic M1↔dataset coherence oracle ───
+
+
+def check_m1_dataset_coherence(
+    narrative: str | None,
+    *,
+    entity_descriptor: dict | None,
+    rows: list | None,
+    dataset_schema: dict | None,
+) -> bool:
+    """Pure oracle (Issue #515): does the M1 narrative honor the clustering dataset's reality?
+
+    Reuses the production validator (single source of truth): coherent iff
+    ``validate_m1_dataset_coherence`` finds no violation. Runs POST-job, so it feeds the validator
+    the REAL dataset — ``expected_population = len(rows)`` and the monetary ceiling computed by the
+    SAME shared ``monetary_ceiling_from_columns`` the runtime guard uses (over the real schema).
+    True (n/a) when narrative / rows / schema are absent (non-clustering job / no dataset). RED
+    control: a narrative citing a per-entity $ above the ceiling ("$135.000 por centro" vs a 5000
+    cap), or the kill-switch-off path that lets it through, yields a violation → False. No LLM /
+    network / API key. Function-level imports keep this support module light.
+    """
+    if not narrative or not rows or not isinstance(dataset_schema, dict):
+        return True
+    from case_generator.m1_dataset_coherence import (
+        monetary_ceiling_from_columns,
+        validate_m1_dataset_coherence,
+    )
+
+    columns = dataset_schema.get("columns") or []
+    violations = validate_m1_dataset_coherence(
+        narrative,
+        entity_descriptor=entity_descriptor if isinstance(entity_descriptor, dict) else None,
+        expected_population=len(rows),
+        monetary_ceiling=monetary_ceiling_from_columns(columns),
+    )
+    return not violations
 
 
 # ── Issue #480 — deterministic LaTeX-math-free narrative oracle ───
@@ -542,17 +688,25 @@ def check_no_financial_panel_residue(schema: dict) -> bool:
 
 
 def check_eda_questions_coherence(
-    preguntas: list[dict], chart_ids: set[str], target_event_rate: float | None
+    preguntas: list[dict],
+    chart_ids: set[str],
+    target_event_rate: float | None,
+    *,
+    variant: str | None = None,
 ) -> bool:
-    """Pure oracle: are the M2 EDA questions coherent (no chart_ref / event-rate mismatch)?
+    """Pure oracle: are the M2 EDA questions coherent (no chart_ref / event-rate / model-leak)?
 
     Reuses the production validator ``m2_grounding.validate_eda_questions_coherence`` (single
     source of truth), so a future M2-prompt regression that reintroduces the example-number leak
-    fails the golden gate. Function-level import keeps this support module lightweight.
+    OR names the unselected classification model fails the golden gate. ``variant`` drives the
+    MODELO_NO_SELECCIONADO check (no-op for ``None`` / ``lr_rf_contrast``). Function-level import
+    keeps this support module lightweight.
     """
     from case_generator.m2_grounding import validate_eda_questions_coherence
 
-    return not validate_eda_questions_coherence(preguntas, chart_ids, target_event_rate)
+    return not validate_eda_questions_coherence(
+        preguntas, chart_ids, target_event_rate, variant=variant
+    )
 
 
 def check_eda_questions_no_chart_id_leak(
@@ -634,6 +788,28 @@ def check_m4_questions_no_embedded_mcq(preguntas: list[dict]) -> bool:
         if isinstance(pregunta, dict) and detect_embedded_mcq_options(pregunta.get("enunciado")):
             return False
     return True
+
+
+def check_m4_questions_model_coherence(
+    preguntas: list[dict], *, variant: str | None, metrics_block: str
+) -> bool:
+    """Pure oracle: are the M4 questions free of an unselected-model leak / fabricated model metric?
+
+    Reuses the production validator ``m4_grounding.validate_m4_questions_coherence`` (single source of
+    truth), filtered to the ml_ds+clf model-coherence violations (the option/MCQ dimension has its own
+    oracles ``check_m4_question_option_coherence`` / ``check_m4_questions_no_embedded_mcq``), so a future
+    M4-questions prompt or m4_content tier downgrade that lets an ``lr_only`` question name Random Forest
+    or cite an AUC absent from the executed M3 metrics fails the golden gate. The M4 sibling of
+    ``check_m5_questions_coherence``. Function-level import keeps this support module lightweight.
+    """
+    from case_generator.m4_grounding import validate_m4_questions_coherence
+
+    violations = validate_m4_questions_coherence(
+        preguntas, variant=variant, metrics_block=metrics_block
+    )
+    return not any(
+        v.startswith(("MODELO_NO_SELECCIONADO", "METRICA_NO_ANCLADA")) for v in violations
+    )
 
 
 def check_m4_deployment_section_unique(m4_content: str) -> bool:
@@ -778,9 +954,11 @@ def check_m4_clustering_segment_differentiated(
 
     Reuses the production detector ``clustering_decision.detect_fabricated_segment_distribution`` (single
     source of truth): a value trace over >= 3 segments with <= 1 distinct non-zero value is a fabrication.
-    True (n/a) when ``n_clusters`` is absent / < 3 or there are no charts. RED control: a chart whose
-    segment trace is ``[135000, 0, 0, 0]`` fails. Symbolic in the frozen golden set (no chart + n_clusters
-    fixture), like #469/#494; the deterministic teeth live in ``test_issue498`` unit RED/GREEN.
+    True (n/a) when ``n_clusters`` is < 3 or there are no charts. When ``n_clusters`` is ABSENT (executor
+    degraded) the structural fabrication is STILL caught (a ``[135000, 0, 0, 0]`` chart fails regardless),
+    so a degraded case cannot mask a fabricated distribution. RED control: a fabricated segment trace
+    fails. Symbolic in the frozen golden set (no chart + n_clusters fixture), like #469/#494; the
+    deterministic teeth live in ``test_issue498`` unit RED/GREEN.
     """
     from case_generator.clustering_decision import detect_fabricated_segment_distribution
 
@@ -799,6 +977,47 @@ def check_m4_charts_no_fabrication(charts: list[dict]) -> bool:
     from case_generator.m4_grounding import _chart_prose_blob, detect_benchmark_fabrication
 
     return not any(detect_benchmark_fabrication(_chart_prose_blob(c)) for c in charts or [])
+
+
+def check_m4_classification_cost_chart_grounded(
+    charts: list[dict] | None, fp_cost: float | None, fn_cost: float | None
+) -> bool:
+    """Pure oracle: does the ml_ds+clf M4 cost-of-errors chart plot ONLY the REAL contract costs?
+
+    The decision-charts reframe builds Gráfico 2 (``id == "m4_cost_of_errors"``,
+    ``data_source == "python_builder"``) DETERMINISTICALLY from the contract ``business_cost_matrix``,
+    so its two bars MUST be the real ``fp_cost`` / ``fn_cost``. This oracle re-derives that: if such a
+    chart exists, both real costs (rounded to the builder's 2 decimals) must appear among its numeric
+    bar values; a divergent value is a regression (e.g. a future change that lets the LLM author it).
+    True (n/a) when there is no real cost matrix (``fp_cost``/``fn_cost`` absent) or no cost chart.
+    Trivially green by construction today; the teeth are in the unit RED/GREEN tests. Pure, total.
+    """
+    if not isinstance(fp_cost, (int, float)) or isinstance(fp_cost, bool):
+        return True
+    if not isinstance(fn_cost, (int, float)) or isinstance(fn_cost, bool):
+        return True
+    cost_chart = next(
+        (
+            c
+            for c in (charts or [])
+            if isinstance(c, dict) and c.get("id") == "m4_cost_of_errors"
+        ),
+        None,
+    )
+    if cost_chart is None:
+        return True
+    values: list[float] = []
+    for trace in cost_chart.get("traces") or []:
+        if not isinstance(trace, dict):
+            continue
+        for v in trace.get("y") or []:
+            if isinstance(v, bool):
+                continue
+            try:
+                values.append(round(float(v), 2))
+            except (TypeError, ValueError):
+                continue
+    return round(float(fp_cost), 2) in values and round(float(fn_cost), 2) in values
 
 
 def check_m4_narrative_no_fabrication(narrative: str | None) -> bool:
@@ -826,6 +1045,84 @@ def check_no_raw_identifier_leak(narrative: str | None) -> bool:
     from case_generator.narrative_grounding import detect_raw_identifier_leak
 
     return not detect_raw_identifier_leak(narrative or "")
+
+
+def check_dataset_prevalence_matches_contract(
+    rows: list | None, contract: dict | None, *, tol_rows: int = 1
+) -> bool:
+    """Pure oracle (Issue #518): the binary target's prevalence == the declared target_event_rate.
+
+    Profile-agnostic. True (n/a) when there is no rate, no resolvable target column name, or the
+    column is not binary {0,1} (covers ml_ds/business without a rate AND every non-classification
+    family). When a rate IS declared, ``count(target == 1)`` must equal ``round(rate * n)`` within
+    ``tol_rows`` — the deterministic top-k calibration is exact, and the slack absorbs the
+    ``k = max(1, min(n - 1, ...))`` both-classes flooring at extreme rates / tiny n. Reuses the SAME
+    contract target resolution as production (``graph._safe_contract_target_name``).
+    """
+    from case_generator.graph import _safe_contract_target_name
+
+    if not rows or not isinstance(contract, dict):
+        return True
+    rate = contract.get("target_event_rate")
+    if not isinstance(rate, (int, float)) or isinstance(rate, bool):
+        return True
+    name = _safe_contract_target_name(contract)
+    if not name:
+        return True
+    vals = [r.get(name) for r in rows if isinstance(r, dict)]
+    vals = [v for v in vals if v is not None]
+    if not vals or any(v not in (0, 1) for v in vals):
+        return True
+    n = len(vals)
+    expected_k = max(1, min(n - 1, round(float(rate) * n)))
+    return abs(sum(vals) - expected_k) <= tol_rows
+
+
+# Columns whose values are legitimately transformed AFTER generation (revenue/cost scaling to the
+# annual total, ebitda/margin recompute, the m1>=m3>=m6>=m12 retention enforcement, the period index)
+# and may therefore drift outside their per-row declared [range_min, range_max]. The bounds oracle
+# skips them — it targets the FEATURE/TARGET columns the EDA-outlier injection can violate.
+_BOUNDS_SKIP_TOKENS: tuple[str, ...] = ("revenue", "cost", "ebitda", "margin", "retention_", "period")
+
+
+def check_outliers_within_declared_bounds(
+    rows: list | None, schema: dict | None, *, rel_tol: float = 1e-6, abs_tol: float = 0.02
+) -> bool:
+    """Pure oracle: every generated value stays inside its column's DECLARED [range_min, range_max].
+
+    The generator clips all generated values to ``[low, high]``; the EDA-outlier injection (Fix B-05)
+    was the ONLY violator — it pushed ``numeric_non_revenue[0]`` to ``range_max × 2`` for ml_ds,
+    shipping a semantically impossible value (a credit_score declared ``[300, 850]`` reaching 1700, a
+    percentage past 100). With ``MLDS_OUTLIER_RESPECT_RANGE`` (default on) the ml_ds cap matches the
+    already-correct business path (``range_max``), so every value is in-bounds.
+
+    Profile/family-agnostic, zero-FP: skips the columns that are legitimately rescaled / recomputed /
+    range-enforced after generation (``_BOUNDS_SKIP_TOKENS``); only flags a numeric value above
+    ``range_max`` (or below ``range_min``) beyond a small rounding tolerance. True (n/a) for empty
+    rows / absent schema. RED control: a dataset generated with the kill-switch OFF (ml_ds ×2) ships a
+    value above ``range_max`` → False.
+    """
+    if not rows or not isinstance(schema, dict):
+        return True
+    for col in schema.get("columns") or []:
+        if col.get("type") not in ("int", "float"):
+            continue
+        name = str(col.get("name") or "")
+        if any(tok in name.lower() for tok in _BOUNDS_SKIP_TOKENS):
+            continue
+        rmin, rmax = col.get("range_min"), col.get("range_max")
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            v = r.get(name)
+            if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
+                continue
+            fv = float(v)
+            if rmax is not None and fv > float(rmax) + abs_tol + rel_tol * abs(float(rmax)):
+                return False
+            if rmin is not None and fv < float(rmin) - abs_tol - rel_tol * abs(float(rmin)):
+                return False
+    return True
 
 
 def check_m4_lens_kpi_coherence(narrative: str | None, *, lens: str | None) -> bool:
@@ -865,16 +1162,22 @@ def check_clustering_m1_no_target_anchors(contract: dict | None) -> bool:
     """Pure oracle (Issue #455): an ml_ds + clustering M1 ``dataset_schema_required`` contract
     carries NO supervised anchor — clustering is unsupervised.
 
-    True iff the contract has NO supervised ``target_column``, NO ``business_cost_matrix``, and NO
+    True iff the contract has NO SUPERVISED ``target_column``, NO ``business_cost_matrix``, and NO
     ``target_event_rate`` (all three are contract-nested keys the classification architect anchor
-    emits). True (n/a) when the contract is None (architect emitted no contract). A clustering case
-    that populates any of them FAILS — the clustering M1 prompt forbids them and the clf-gated
-    validators no-op for clustering, so a populated anchor means the generic/classification framing
-    leaked in. RED control: a contract with any anchor returns False (non-tautological)."""
+    emits). Issue #531 — the clustering anchor now emits ``target_column`` as an UNSUPERVISED
+    ``role: "clustering_target"`` MARKER (to satisfy the required schema field; the data layer never
+    materializes it as a column), so that role is ALLOWED here; only a SUPERVISED target role (or a
+    malformed/non-dict target_column) is a leak. True (n/a) when the contract is None (architect
+    emitted no contract). RED control: a contract with a supervised target / cost matrix / event rate
+    returns False (non-tautological)."""
     if not isinstance(contract, dict):
         return True
+    tgt = contract.get("target_column")
+    target_ok = tgt is None or (
+        isinstance(tgt, dict) and (tgt.get("role") or "") == "clustering_target"
+    )
     return (
-        contract.get("target_column") is None
+        target_ok
         and contract.get("business_cost_matrix") is None
         and contract.get("target_event_rate") is None
     )
@@ -967,22 +1270,81 @@ def _is_monthly_period(value: object) -> bool:
     )
 
 
-def check_clustering_entity_index(rows: list) -> bool:
-    """Pure oracle (Issue #468): is the ml_ds+clustering dataset ENTITY-level, not time-indexed?
+_ENTITY_ID_VALUE_RE = re.compile(r"^[a-z][a-z0-9_]*_\d{4,}$")
 
-    The unit of analysis for a segmentation case is the entity (user/customer), so the index column
-    must be a ``user_id`` (``user_00001``…), NOT a sequential monthly ``period`` (``2023-01``…).
-    Returns False when a row still carries a monthly ``period``-shaped index (the RED control / a
-    data-layer regression that reverts to the time series). True (n/a) when rows are empty. No LLM /
-    network / API key.
+
+def _fold_accents(text: str) -> str:
+    """Lowercase + strip accents (NFKD → ASCII) for accent-insensitive narrative matching (#513)."""
+    from case_generator.text_normalize import fold_accents
+
+    return fold_accents(text).encode("ascii", "ignore").decode("ascii").lower()
+
+
+def check_clustering_entity_index(rows: list) -> bool:
+    """Pure oracle (Issue #468, prefix-generalized #513): is the ml_ds+clustering dataset ENTITY-level?
+
+    The unit of analysis for a segmentation case is the entity, so the index column must be an entity
+    id (``{prefix}_00001``… for ANY prefix — ``user_``/``centro_``/``paciente_``…; #513 made the prefix
+    architect-driven), NOT a sequential monthly ``period`` (``2023-01``…). Prefix-agnostic: scans for a
+    ``*_id`` string column whose value is ``{prefix}_NNNNN``-shaped. Returns False when a row still
+    carries a monthly ``period``-shaped index (the RED control / a data-layer regression to the time
+    series) OR when no entity id is present. True (n/a) when rows are empty. No LLM / network / API key.
     """
     if not rows:
         return True
     first = rows[0]
     if _is_monthly_period(first.get("period")):
         return False
-    uid = first.get("user_id")
-    return isinstance(uid, str) and uid.startswith("user_")
+    for k, v in first.items():
+        if (
+            isinstance(k, str)
+            and k.endswith("_id")
+            and isinstance(v, str)
+            and _ENTITY_ID_VALUE_RE.match(v)
+        ):
+            return True
+    return False
+
+
+def check_clustering_entity_coherence(
+    rows: list,
+    entity_descriptor: dict | None,
+    narrative: str | None,
+) -> bool:
+    """Pure oracle (Issue #513): does the dataset's entity match the architect's narrated entity?
+
+    Two-sided coherence: (a) the dataset's entity-id column prefix == ``entity_descriptor.snake_prefix``
+    (the CSV the student downloads uses the SAME entity handle the architect emitted), AND (b) the M1
+    narrative MENTIONS that entity (its snake_prefix / singular / plural, accent-folded) — so the story
+    the student reads names the entity the CSV is built from. RED when either side diverges. True (n/a)
+    when rows / descriptor / narrative are absent or the descriptor carries no snake_prefix → the frozen
+    golden set (no entity_descriptor) stays green; the deterministic teeth live in the unit RED/GREEN
+    tests (precedent #457/#469/#489/#494). No LLM / network / API key.
+    """
+    if not rows or not isinstance(entity_descriptor, dict) or not narrative:
+        return True
+    prefix = entity_descriptor.get("snake_prefix")
+    if not isinstance(prefix, str) or not prefix:
+        return True
+    # (a) data side: the entity id column's value prefix must equal snake_prefix.
+    first = rows[0]
+    id_vals = [
+        v
+        for k, v in first.items()
+        if isinstance(k, str) and k.endswith("_id") and isinstance(v, str)
+    ]
+    if not id_vals:
+        return False  # entity index missing entirely
+    if id_vals[0].rsplit("_", 1)[0] != prefix:
+        return False
+    # (b) narrative side: the story must name the entity (prefix / singular / plural), accent-folded.
+    folded_narrative = _fold_accents(narrative)
+    candidates = {
+        _fold_accents(prefix),
+        _fold_accents(str(entity_descriptor.get("singular", ""))),
+        _fold_accents(str(entity_descriptor.get("plural", ""))),
+    }
+    return any(c and c in folded_narrative for c in candidates)
 
 
 # ── Issue #467 — deterministic clustering data↔narrative k coherence oracle ───
@@ -1008,7 +1370,65 @@ def check_clustering_decision_coherence(
         return True
     if len(set(latent_labels)) != int(target_k):
         return False
+    # k-coherence (the defect check_clustering_structure was blind to): the student RUNS the
+    # notebook, whose data-driven k-selection is argmax_k silhouette over k=2..10. For the case to
+    # be coherent that k must equal target_k — NOT merely "silhouette AT target_k is in band" (a
+    # different k can score higher, which the legacy placement shipped: target_k=4 → notebook 2).
+    if not check_clustering_kselection_matches_target(rows, target_k):
+        return False
     return check_clustering_structure(rows, latent_labels)
+
+
+def check_clustering_kselection_matches_target(
+    rows: list, target_k: int | None
+) -> bool:
+    """Pure oracle (k-coherence fix): does the notebook's data-driven k-selection land on target_k?
+
+    The student runs the K-Means notebook, whose ``kmeans_fit`` cell picks ``k = argmax`` over
+    ``k=2..10`` of the FULL silhouette (``KMeans(n_init=10, random_state=42)`` + ``silhouette_score``).
+    For the case to be COHERENT that ``k`` must equal the ``target_k`` the M1/M4/M5 narrative frames
+    (Issue #467). ``check_clustering_structure`` only verifies the silhouette AT ``target_k`` is in
+    band — it is BLIND to a DIFFERENT ``k`` scoring higher, which is exactly the defect the legacy
+    per-feature-permutation placement shipped (``target_k=4`` with few features → notebook picked 2).
+
+    This oracle mirrors the notebook's selection EXACTLY (same KMeans params, full silhouette,
+    ``range(2, min(11, n))`` search) so it predicts what the student observes. Returns True (n/a)
+    when ``target_k`` is None or the data is too small / has < 2 numeric segmentation features.
+    RED control: the legacy placement (``MLDS_CLUSTERING_SIMPLEX_CENTERS=false``) for ``target_k=4``
+    with 3-4 features. No LLM / network / API key; never raises on well-formed input.
+    """
+    if target_k is None or not rows:
+        return True
+    import numpy as np
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score
+    from sklearn.preprocessing import StandardScaler
+
+    feat_names = [
+        name
+        for name in rows[0].keys()
+        if name != "period"
+        and not str(name).startswith("period")
+        and all(
+            isinstance(r.get(name), (int, float)) and not isinstance(r.get(name), bool)
+            for r in rows
+        )
+    ]
+    if len(feat_names) < 2:
+        return True
+    X = np.array([[float(r[name]) for name in feat_names] for r in rows], dtype=float)
+    if X.shape[0] < 6:
+        return True
+    x_scaled = StandardScaler().fit_transform(X)
+    best_k, best_sil = None, float("-inf")
+    for k in range(2, min(11, X.shape[0])):
+        labels = KMeans(n_clusters=k, n_init=10, random_state=42).fit_predict(x_scaled)
+        if len(set(labels.tolist())) < 2:
+            continue
+        sil = float(silhouette_score(x_scaled, labels))
+        if sil > best_sil:
+            best_sil, best_k = sil, k
+    return best_k == int(target_k)
 
 
 # ── Issue #454 — deterministic K-Means notebook shape oracle ───
@@ -1218,6 +1638,126 @@ def check_clustering_m3_content_no_metric_numbers(prose: str) -> bool:
         re.IGNORECASE,
     )
     return pattern.search(prose) is None
+
+
+# ── EPIC #458 — deterministic clustering M3 conceptual-questions coherence oracle ───
+
+
+def check_clustering_m3_questions_segmentation(preguntas: list[dict] | None) -> bool:
+    """Pure oracle (EPIC #458): are the ml_ds + clustering M3 CONCEPTUAL questions segmentation-native?
+
+    The 3 conceptual M3 questions for an unsupervised K-Means case are generated by the dedicated
+    ``M3_QUESTIONS_PROMPT_CLUSTERING`` (pre-execution). Two regressions would break their coherence and
+    quality, and both are user-visible (the question/solution text the student and teacher read):
+
+    * **Supervised leak** — a clustering question must not frame the task as prediction: it cannot cite
+      a "variable objetivo" / "clase a predecir" / a confusion matrix / accuracy / AUC. These are
+      unambiguous classification tells with no place in a segmentation question (zero-FP phrase set).
+    * **Fabricated silhouette value** — by graph order the notebook executor runs AFTER this node, so no
+      real silhouette exists yet; any concrete silhouette / Davies-Bouldin number is invented. Reuses
+      ``check_clustering_m3_content_no_metric_numbers`` (the #457 detector) over the concatenated prose.
+
+    Returns ``True`` (n/a) for a non-clustering / empty / malformed question set. NOTE: the frozen golden
+    set carries no clustering questions fixture yet, so this is n/a today — the deterministic teeth live
+    in the unit RED/GREEN (the pure oracle + the kill-switch dispatch test); this gate wiring is
+    future-proofing for when such a fixture (or an m3_questions_generator downgrade) lands. Pure, no
+    LLM/network. Mirrors ``check_clustering_eda_no_target`` (#456) + ``check_clustering_m3_content_no_metric_numbers`` (#457).
+    """
+    import re as _re
+
+    if not preguntas or not isinstance(preguntas, list):
+        return True
+    prose = " ".join(
+        " ".join(str(q.get(k, "") or "") for k in ("titulo", "enunciado", "solucion_esperada"))
+        for q in preguntas
+        if isinstance(q, dict)
+    )
+    if not prose:
+        return True
+    lowered = prose.lower()
+    supervised_markers = (
+        "variable objetivo",
+        "clase a predecir",
+        "variable a predecir",
+        "matriz de confusión",
+        "matriz de confusion",
+        "accuracy",
+    )
+    if any(marker in lowered for marker in supervised_markers):
+        return False
+    if _re.search(r"\bauc\b", lowered):
+        return False
+    return check_clustering_m3_content_no_metric_numbers(prose)
+
+
+def _clustering_questions_no_supervised_leak(preguntas: list[dict] | None) -> bool:
+    """Shared zero-FP supervised-leak detector over a question set's student/teacher-facing prose
+    (EPIC #458). Returns ``False`` only when the concatenated ``titulo + enunciado + solucion_esperada``
+    frames the K-Means task as SUPERVISED prediction — an unambiguous classification tell with no place
+    in a segmentation question/memo: ``variable objetivo`` / ``clase a predecir`` / ``modelo de
+    clasificación`` / ``matriz de confusión`` / ``accuracy`` / a word-bounded ``auc``. ``True`` (n/a)
+    for an empty / malformed set. Pure, no LLM/network. The phrase set is deliberately narrow (no bare
+    ``modelo``, which would false-positive on ``modelo de negocio``).
+    """
+    import re as _re
+
+    if not preguntas or not isinstance(preguntas, list):
+        return True
+    prose = " ".join(
+        " ".join(str(q.get(k, "") or "") for k in ("titulo", "enunciado", "solucion_esperada"))
+        for q in preguntas
+        if isinstance(q, dict)
+    )
+    if not prose:
+        return True
+    lowered = prose.lower()
+    supervised_markers = (
+        "variable objetivo",
+        "clase a predecir",
+        "variable a predecir",
+        "modelo de clasificación",
+        "modelo de clasificacion",
+        "matriz de confusión",
+        "matriz de confusion",
+        "accuracy",
+    )
+    if any(marker in lowered for marker in supervised_markers):
+        return False
+    return _re.search(r"\bauc\b", lowered) is None
+
+
+def check_clustering_m4_questions_segmentation(preguntas: list[dict] | None) -> bool:
+    """Pure oracle (EPIC #458): are the ml_ds + clustering M4 (Impacto) questions segmentation-native?
+
+    The 3 M4 questions for a K-Means case are generated by the dedicated ``M4_QUESTIONS_PROMPT_CLUSTERING``
+    (the generic prompt frames P2 as a SUPERVISED model-ROI verdict). This gate flags the user-visible
+    regression where a question reframes the segmentation as supervised prediction (``variable objetivo``
+    / ``modelo de clasificación`` / ``matriz de confusión`` / ``accuracy`` / ``AUC``). Unlike the M3
+    CONCEPTUAL oracle it does NOT flag a silhouette VALUE: M4 runs POST-executor, so a cited silhouette
+    is the REAL executed one (legitimate; the prompt + #467/#469 verdict hint forbid a fabricated
+    threshold). ``True`` (n/a) for a non-clustering / empty / malformed set. Pure, no LLM/network. The
+    frozen golden set carries no clustering M4-questions fixture yet (n/a today); deterministic teeth live
+    in the unit RED/GREEN (this oracle + the kill-switch dispatch test). gate-protects an
+    m4_questions_generator regression back to the supervised generic framing.
+    """
+    return _clustering_questions_no_supervised_leak(preguntas)
+
+
+def check_clustering_m5_questions_segmentation(preguntas: list[dict] | None) -> bool:
+    """Pure oracle (EPIC #458): is the ml_ds + clustering M5 final memorándum segmentation-native?
+
+    The single M5 consigna for a K-Means case is generated by the dedicated ``M5_QUESTIONS_PROMPT_CLUSTERING``
+    (the generic prompt frames the memo around a SUPERVISED model decision — "límites del modelo … rol del
+    CTO"). This gate flags the user-visible regression where the memo (the model answer key the teacher
+    grades) reframes the executive decision as a model-deployment verdict (``modelo de clasificación`` /
+    ``variable objetivo`` / ``accuracy`` / ``AUC`` / ``matriz de confusión``). Like M4 it does NOT flag a
+    silhouette VALUE (M5 runs post-executor; the #467 verdict hint + ``_apply_clustering_m5_verdict_coherence``
+    keep any cited silhouette real and the verdict on the shared option). ``True`` (n/a) for a
+    non-clustering / empty / malformed set. Pure, no LLM/network. n/a in the frozen golden set today;
+    deterministic teeth in the unit RED/GREEN. gate-protects an m5_questions_generator regression back to
+    the supervised generic framing.
+    """
+    return _clustering_questions_no_supervised_leak(preguntas)
 
 
 # ── frozen golden set ────────────────────────────────────

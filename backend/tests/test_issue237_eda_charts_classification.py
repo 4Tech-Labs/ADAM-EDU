@@ -63,9 +63,11 @@ CONTRACT = {"case_id": "test_case_237"}
 
 
 def test_happy_path_invariants(df_binary: pd.DataFrame) -> None:
-    """El happy path emite EXACTAMENTE 3 charts en el orden esperado, todos
-    con `data_source=python_builder`. Solo `missingness_heatmap` lleva texto
-    determinista del builder (honest_text); los otros dos siguen vacíos (anti-LLM).
+    """El happy path emite EXACTAMENTE 3 charts en el orden esperado, todos con
+    `data_source=python_builder` y todos con texto determinista del builder
+    (`honest_text`/`caption_text` por defecto on): el builder conoce la verdad de
+    los datos y la escribe, así el LLM anotador (que no ve los datos) no puede
+    contradecir el chart.
     """
     charts = generate_classification_eda_charts(df_binary, "churn", CONTRACT)
     assert len(charts) == 3
@@ -79,16 +81,11 @@ def test_happy_path_invariants(df_binary: pd.DataFrame) -> None:
         assert c["library"] == "plotly"
         assert c["data_source"] == "python_builder"
         assert c["source"].startswith("Dataset ADAM")
+        # Los 3 charts llevan texto determinista y honesto del builder (no LLM).
+        assert c["description"] != ""
+        assert c["notes"] != ""
         if c["id"] == "missingness_heatmap":
-            # Texto determinista y honesto del builder (no LLM): df_binary no tiene
-            # nulos → describe completitud, no deja que el LLM invente un MNAR.
             assert "faltantes" in c["subtitle"]
-            assert c["description"] != ""
-            assert c["notes"] != ""
-        else:
-            # Anti-LLM-fabricated: los demás builders NO escriben textos pedagógicos.
-            assert c["description"] == ""
-            assert c["notes"] == ""
 
 
 def test_target_multiclass(df_multiclass: pd.DataFrame) -> None:
@@ -296,13 +293,182 @@ def test_missingness_no_sample_clause_at_exact_boundary() -> None:
 
 
 # ─────────────────────────────────────────────────────────
+# Texto honesto del builder: class_distribution + mutual_info_top8
+# (kill-switch `m2_classification_chart_honest_text`)
+# ─────────────────────────────────────────────────────────
+
+
+def test_class_distribution_honest_text_binary(df_binary: pd.DataFrame) -> None:
+    """class_distribution describe el balance EXACTO + la línea base mayoritaria
+    (Paradoja de la Exactitud) y nombra la clase 1 como evento. El % de la clase
+    mayoritaria citado coincide con el conteo real del df (no es un invento del LLM).
+    """
+    charts = generate_classification_eda_charts(df_binary, "churn", CONTRACT)
+    cd = next(c for c in charts if c["id"] == "class_distribution")
+    counts = df_binary["churn"].value_counts(dropna=False).sort_index()
+    total = int(counts.sum())
+    maj_pct = int(counts.max()) * 100.0 / total
+    assert cd["description"] != "" and cd["notes"] != ""
+    assert "churn" in cd["description"]
+    assert "clase 1 es el evento" in cd["description"].lower()
+    assert f"{maj_pct:.1f}%" in cd["notes"]  # % real, 1 decimal
+    assert "Paradoja de la Exactitud" in cd["notes"]
+    assert any(m in cd["notes"] for m in ("F1", "recall", "AUC"))
+
+
+def test_class_distribution_honest_text_multiclass(df_multiclass: pd.DataFrame) -> None:
+    """Multiclase (no 0/1): enumera las clases reales SIN el clause 'clase 1 = evento'
+    y no rompe."""
+    charts = generate_classification_eda_charts(df_multiclass, "label", CONTRACT)
+    cd = next(c for c in charts if c["id"] == "class_distribution")
+    assert cd["description"] != ""
+    assert "clase 1 es el evento" not in cd["description"].lower()
+    for cls in ("bronze", "silver", "gold"):
+        assert cls in cd["description"]
+
+
+def test_class_distribution_single_class_is_honest() -> None:
+    """Target degenerado (una sola clase): el texto lo DICE en vez de fingir un
+    balance, y no crashea."""
+    df = pd.DataFrame({"f": [1.0, 2.0, 3.0, 4.0], "y": [1, 1, 1, 1]})
+    charts = generate_classification_eda_charts(df, "y", CONTRACT)
+    cd = next(c for c in charts if c["id"] == "class_distribution")
+    assert "una sola clase" in cd["description"].lower()
+
+
+def test_class_distribution_bar_labels_one_decimal() -> None:
+    """Las etiquetas de % de cada barra son de DISPLAY y se muestran con ≤1 decimal,
+    incluso para un split no-redondo (no '16.428571%')."""
+    rng = np.random.default_rng(1)
+    n = 834
+    df = pd.DataFrame(
+        {"x": rng.normal(0, 1, n), "y": (np.arange(n) < 137).astype(int)}
+    )
+    charts = generate_classification_eda_charts(df, "y", CONTRACT)
+    cd = next(c for c in charts if c["id"] == "class_distribution")
+    labels = cd["traces"][0]["text"]
+    assert labels  # hay etiquetas
+    for label in labels:
+        frac = label.rstrip("%").split(".")
+        assert len(frac) == 1 or len(frac[1]) <= 1, label
+
+
+def test_class_distribution_enum_cap_for_many_classes() -> None:
+    """Defensivo: un target con >6 clases (p. ej. mal resuelto a una columna de muchos
+    valores) topa la enumeración a 6 + resumen '(+N clases)' — sin caption gigante. La
+    corrección de target (`_resolve_eda_target_name`) previene esto en producción ml_ds+clf
+    (target binario), pero la rama defensiva queda blindada y no nombra 'clase 1 = evento'."""
+    n = 90
+    df = pd.DataFrame({"f": range(n), "y": [f"c{i % 9}" for i in range(n)]})  # 9 clases
+    charts = generate_classification_eda_charts(df, "y", CONTRACT)
+    cd = next(c for c in charts if c["id"] == "class_distribution")
+    assert "(+3 clases)" in cd["description"]  # 9 clases − 6 mostradas = 3
+    assert "clase 1 es el evento" not in cd["description"].lower()
+
+
+def test_mutual_info_honest_text_names_top_feature() -> None:
+    """mutual_info_top8 nombra la feature más informativa REAL (la del ranking) y trae
+    el caveat MI≠causalidad + leakage."""
+    rng = np.random.default_rng(3)
+    n = 600
+    driver = rng.normal(500, 150, n)
+    score = driver + rng.normal(0, 60, n)
+    target = (score >= np.quantile(score, 0.88)).astype(int)
+    df = pd.DataFrame(
+        {
+            "transaction_amount": driver.round(2),
+            "account_age_days": rng.integers(1, 2000, n),
+            "num_devices": rng.integers(1, 6, n),
+            "fraud_flag": target,
+        }
+    )
+    charts = generate_classification_eda_charts(df, "fraud_flag", CONTRACT)
+    mi = next(c for c in charts if c["id"] == "mutual_info_top8")
+    top_feat = mi["traces"][0]["y"][0]
+    # El driver con señal debe encabezar el ranking (coherencia con lo que modela M3).
+    assert top_feat == "transaction_amount"
+    # La descripción nombra la feature top REAL del ranking (acoplamiento, no invento).
+    assert top_feat in mi["description"]
+    assert "MI" in mi["description"]
+    assert "causalidad" in mi["notes"].lower()
+    assert "leakage" in mi["notes"].lower()
+
+
+def test_mutual_info_empty_chart_has_no_caption() -> None:
+    """Sin features model-ready (placeholder vacío): no se inventa un texto de
+    'feature más informativa'."""
+    n = 24
+    df = pd.DataFrame({"period": _periods_monthly(n), "churn": [0, 1] * (n // 2)})
+    charts = generate_classification_eda_charts(df, "churn", CONTRACT)
+    mi = next(c for c in charts if c["id"] == "mutual_info_top8")
+    assert mi["traces"] == []
+    assert mi["description"] == ""
+
+
+def test_mutual_info_no_signal_branch_is_honest() -> None:
+    """Cuando el MI más alto redondea a 0 (target sin señal aprovechable en las
+    features), el caption lo DECLARA honestamente en vez de sobrevender una feature
+    'más informativa' irrelevante. Se fuerza MI=0 (estado defensivo, casi imposible con
+    datos reales — el estimador k-NN da ruido positivo) para ejercitar la rama
+    determinista sin depender del azar del estimador."""
+    rng = np.random.default_rng(0)
+    n = 120
+    df = pd.DataFrame(
+        {
+            "noise_a": rng.normal(0, 1, n),
+            "noise_b": rng.integers(0, 5, n),
+            "y": rng.choice([0, 1], size=n, p=[0.5, 0.5]),
+        }
+    )
+    # mutual_info_classif se importa dentro de la función → se parchea en su origen.
+    with patch(
+        "sklearn.feature_selection.mutual_info_classif",
+        side_effect=lambda X, *a, **k: np.zeros(X.shape[1]),
+    ):
+        charts = generate_classification_eda_charts(df, "y", CONTRACT)
+    mi = next(c for c in charts if c["id"] == "mutual_info_top8")
+    assert "ninguna feature" in mi["description"].lower()
+    assert "señal" in mi["description"].lower()
+    assert "leakage" in mi["notes"].lower()  # el caveat se mantiene
+
+
+def test_caption_text_off_is_byte_identical(df_binary: pd.DataFrame) -> None:
+    """Kill-switch OFF (`caption_text=False`): class_distribution y mutual_info_top8
+    vuelven a texto vacío (el LLM los anota) — revert byte-idéntico al previo.
+    missingness_heatmap sigue gobernado por su propio switch (default on)."""
+    charts = generate_classification_eda_charts(
+        df_binary, "churn", CONTRACT, caption_text=False
+    )
+    cd = next(c for c in charts if c["id"] == "class_distribution")
+    mi = next(c for c in charts if c["id"] == "mutual_info_top8")
+    assert cd["description"] == "" and cd["notes"] == ""
+    assert mi["description"] == "" and mi["notes"] == ""
+    mh = next(c for c in charts if c["id"] == "missingness_heatmap")
+    assert mh["description"] != ""
+
+
+def test_caption_honest_text_kill_switch_default_is_true() -> None:
+    from shared.database import Settings
+
+    assert (
+        Settings.model_fields["m2_classification_chart_honest_text"].default is True
+    )
+
+
+# ─────────────────────────────────────────────────────────
 # Boundary del LLM stub (annotate-only path)
 # ─────────────────────────────────────────────────────────
 
 
 def test_boundary_llm_cannot_alter_traces(df_binary: pd.DataFrame) -> None:
-    """Aunque el LLM annotate-only intente devolver traces falsos,
-    el merge defensivo del nodo solo pisa description/notes.
+    """Aunque el LLM annotate-only intente devolver traces falsos, el merge
+    defensivo del nodo solo pisa description/notes.
+
+    Se corre con `m2_classification_chart_honest_text` OFF para EJERCITAR el path de
+    anotación LLM sobre `class_distribution` (con el switch on ese chart es
+    determinista y el LLM ni se llama; ese caso lo cubre
+    `test_all_three_deterministic_skips_llm`). `missingness_heatmap` sigue
+    determinista (honest_text on), así que su texto del builder gana igual.
     """
     from case_generator.graph import _eda_classification_python_path
 
@@ -330,6 +496,8 @@ def test_boundary_llm_cannot_alter_traces(df_binary: pd.DataFrame) -> None:
     ), patch(
         "case_generator.graph.Configuration.from_runnable_config",
         return_value=MagicMock(writer_model="gemini-2.5-flash"),
+    ), patch(
+        "case_generator.graph.settings.m2_classification_chart_honest_text", False
     ):
         update = _eda_classification_python_path(state, config=None, contract=CONTRACT)
 
@@ -357,8 +525,12 @@ def test_boundary_llm_cannot_alter_traces(df_binary: pd.DataFrame) -> None:
 
 
 def test_llm_ghost_chart_id_is_silently_dropped(df_binary: pd.DataFrame) -> None:
-    """Si el LLM annotate-only devuelve un id que NO existe entre los 4
-    charts del builder, el id fantasma se descarta y NO se añade chart.
+    """Si el LLM annotate-only devuelve un id que NO existe entre los charts del
+    builder, el id fantasma se descarta y NO se añade chart.
+
+    Corre con `m2_classification_chart_honest_text` OFF para que el LLM SÍ anote
+    `class_distribution` (con el switch on ese chart es determinista y el LLM ni se
+    llama).
     """
     from case_generator.graph import _eda_classification_python_path
 
@@ -383,6 +555,8 @@ def test_llm_ghost_chart_id_is_silently_dropped(df_binary: pd.DataFrame) -> None
     ), patch(
         "case_generator.graph.Configuration.from_runnable_config",
         return_value=MagicMock(writer_model="gemini-2.5-flash"),
+    ), patch(
+        "case_generator.graph.settings.m2_classification_chart_honest_text", False
     ):
         update = _eda_classification_python_path(state, config=None, contract=CONTRACT)
 
@@ -395,6 +569,41 @@ def test_llm_ghost_chart_id_is_silently_dropped(df_binary: pd.DataFrame) -> None
     # La annotation real sí se aplicó.
     cd = next(c for c in charts if c["id"] == "class_distribution")
     assert cd["description"] == "real"
+
+
+def test_all_three_deterministic_skips_llm(df_binary: pd.DataFrame) -> None:
+    """Con ambos switches de texto honesto on (default), los 3 charts son
+    deterministas → el nodo NO construye ni llama al LLM annotate-only (cero coste,
+    un punto de fallo menos) y los 3 traen texto del builder.
+    """
+    from case_generator.graph import _eda_classification_python_path
+
+    state: dict[str, Any] = {
+        "doc7_dataset": df_binary.to_dict(orient="records"),
+        "studentProfile": "ml_ds",
+        "dataset_schema_required": CONTRACT,
+        "dataset_metadata": {"target_variable": "churn"},
+        "task_payload": {"algoritmos": ["Logistic Regression"]},
+        "case_id": "test_case_237",
+    }
+    chained = MagicMock()
+
+    with patch(
+        "case_generator.graph._get_chart_llm", return_value=chained
+    ) as mock_get_llm, patch(
+        "case_generator.graph.Configuration.from_runnable_config",
+        return_value=MagicMock(writer_model="gemini-2.5-flash"),
+    ):
+        update = _eda_classification_python_path(state, config=None, contract=CONTRACT)
+
+    assert update is not None
+    charts = update["doc2_eda_charts"]
+    assert len(charts) == 3
+    for c in charts:
+        assert c["description"] != "" and c["notes"] != ""
+    # El LLM annotate-only NO se construyó ni invocó (nada que anotar).
+    mock_get_llm.assert_not_called()
+    chained.with_structured_output.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────

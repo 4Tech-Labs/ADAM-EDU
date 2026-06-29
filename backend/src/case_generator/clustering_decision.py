@@ -160,6 +160,37 @@ def build_clustering_architect_hint(decision: dict | None) -> str:
     )
 
 
+def build_clustering_entity_hint(expected_count: int) -> str:
+    """Brace-free hint appended in ``case_architect`` (after ``_assemble_architect_prompt``) for
+    ml_ds + clustering (Issue #513).
+
+    Directs the architect to (a) narrate ONE consistent unit-of-analysis entity drawn from THIS
+    case's domain (centros, pacientes, zonas, estudiantes… NOT necessarily "clientes" — the #455
+    anchor's examples lean that way, so this hint goes LAST to override them), (b) emit it as the
+    structured ``entity_descriptor`` (singular, plural, ``snake_prefix`` in ASCII snake_case), and
+    (c) declare that the dataset contains EXACTLY ``expected_count`` of those entities. The
+    deterministic data layer then renames the dataset index to ``{prefix}_00001`` / column
+    ``{prefix}_id`` so the CSV the student downloads matches the M1 story (Opción A). The count is
+    injected from ``_MLDS_CLUSTERING_MAX_ROWS`` (caller-side; never a literal here → I2). Brace-free
+    → safe after the already-formatted architect prompt (no second ``.format``; SHA snapshots
+    untouched, like ``build_clustering_architect_hint``).
+    """
+    n = str(int(expected_count))
+    return (
+        "\n# COHERENCIA DE ENTIDAD Y POBLACIÓN (clustering, Issue #513)\n"
+        "El dataset de este caso es de NIVEL ENTIDAD: cada fila representa una entidad que se "
+        "segmenta. Elige UNA entidad unidad-de-análisis coherente con el DOMINIO de ESTE caso (por "
+        "ejemplo centros, pacientes, zonas, estudiantes, sucursales, vehículos… NO necesariamente "
+        "'clientes') y úsala de forma CONSISTENTE en todo M1 (perfil, dilema, opciones, exhibits). "
+        "Declara explícitamente que el dataset contiene EXACTAMENTE " + n + " de esas entidades; no "
+        "menciones otra población ni un conteo distinto de " + n + ". Además, emite el campo "
+        "`entity_descriptor` con `singular` y `plural` de la entidad en español y `snake_prefix` = "
+        "la raíz en minúsculas ASCII, sin acentos ni espacios (p.ej. 'centro', 'paciente', 'zona'); "
+        "el dataset usará un identificador con ese prefijo (si el prefijo es 'centro', la columna "
+        "será 'centro_id' con valores 'centro_00001').\n"
+    )
+
+
 def build_clustering_m1_questions_hint(decision: dict | None) -> str:
     """Brace-free hint appended to the M1 ``case_questions`` prompt for ml_ds+clustering.
 
@@ -243,6 +274,35 @@ def build_clustering_verdict_hint(
         "La opción estratégica recomendada de este caso es la Opción " + recommended_option + ". "
         "Tu recomendación/veredicto final DEBE ser la Opción " + recommended_option + " (no otra "
         "letra), coherente con el resto del caso. " + sil_clause + "Los costos siguen en USD.\n"
+    )
+
+
+def build_clustering_currency_honesty_hint() -> str:
+    """Brace-free hint appended in ``case_architect`` AND ``case_writer`` for ml_ds+clustering (#514).
+
+    Prohibits absolute money magnitudes on the per-entity / per-segment BEHAVIOR axes of the case
+    (e.g. "$135.000/mes", "$15M") — the per-row dataset (``monetary_value`` at an individual scale)
+    does not back them, so the student would read money the CSV never contains. Exhibit 1 (the COMPANY
+    P&L, an aggregate in USD) is preserved; per-segment value is expressed qualitatively / relatively
+    (quartiles, indices, "% concentrado en el cuartil superior", high/medium/low), coherent with the
+    Impact-Lens value reframe (#437/#469). Names NO concrete feature (feature-agnostic — invariant I3
+    of EPIC #511 — so it serves any domain's feature set). No-arg (carries no per-job data).
+    Brace-free → safe after an already-formatted prompt (no second ``.format``; architect SHA
+    snapshots untouched, like the #437/#467 hints). The deterministic guarantee is the sibling #515.
+    """
+    return (
+        "\n# HONESTIDAD DE MAGNITUDES POR ENTIDAD (clustering, Issue #514)\n"
+        "Este es un caso de SEGMENTACIÓN no supervisada: el dataset describe ENTIDADES individuales "
+        "(clientes, cuentas o usuarios) por ejes de COMPORTAMIENTO a escala individual. El Exhibit 1 "
+        "(P&L de la EMPRESA, agregado, en USD) se MANTIENE: ahí sí van cifras monetarias agregadas de "
+        "la compañía.\n"
+        "PROHIBIDO: atribuir cifras de dinero ABSOLUTO (por ejemplo \"$135.000/mes\" o \"$15M\") a los "
+        "ejes de comportamiento por-entidad o por-segmento de ESTE caso, sean cuales sean esos ejes. "
+        "El dataset por-entidad no respalda esas magnitudes y confunden al estudiante.\n"
+        "EN SU LUGAR: expresa el valor por-segmento de forma CUALITATIVA o RELATIVA — cuartiles, "
+        "índices, proporciones, \"% de ingresos concentrado en el cuartil superior\", o niveles "
+        "alto/medio/bajo. Describe los segmentos por su comportamiento relativo, nunca por un monto en "
+        "dólares inventado.\n"
     )
 
 
@@ -555,12 +615,14 @@ def detect_unanchored_n_clusters(prose: str | None, valid_counts: set[int] | Non
 # Scoped to the value-by-segment chart ONLY (never chart 2, the A/B/C strategic comparison whose
 # normalized 0-100 bars over 2-4 metric categories must not be touched): a chart qualifies iff it has
 # NO "Opción A/B/C"-named trace, at most 2 traces (chart 2 has 3, one per option), and a category axis
-# with at least 3 entries (the discovered segments). ``n_clusters`` GATES the check (only a real
-# clustering result with >= 3 clusters is validated) — it is deliberately NOT used as an exact category
-# count, because the LLM can draw a fabricated distribution with a different bar count than the real
-# cluster count and an exact ``== n_clusters`` test would silently MISS it. Returns
-# ``[(chart_index, violations), ...]`` to match the reprompt-then-DROP survivor math in
-# ``_apply_clustering_m4_chart_grounding``. Pure, total — never raises.
+# with at least 3 entries (the discovered segments). When PRESENT, ``n_clusters`` gates the check to a
+# real clustering result with >= 3 clusters — it is deliberately NOT used as an exact category count,
+# because the LLM can draw a fabricated distribution with a different bar count than the real cluster
+# count and an exact ``== n_clusters`` test would silently MISS it. When ABSENT (``None`` — the executor
+# degraded, no metrics), the check still runs: the fabrication is INTRINSICALLY structural (the chart's
+# own >= 3-segment axis carries the gate), so a degraded case drops a fabricated ``[v, 0, 0, …]`` chart
+# instead of shipping it ungrounded. Returns ``[(chart_index, violations), ...]`` to match the
+# reprompt-then-DROP survivor math in ``_apply_clustering_m4_chart_grounding``. Pure, total — never raises.
 _OPTION_TRACE_RE = re.compile(r"\bopci[oó]n\s*[abc]\b|\boption\s*[abc]\b", re.IGNORECASE)
 _GENERIC_SEGMENT_NAME_RE = re.compile(
     r"\b(?:segmento|cluster|grupo|segment|group)\s*\d+\b", re.IGNORECASE
@@ -619,16 +681,18 @@ def _is_segment_value_chart(chart: object) -> bool:
 
     Identified STRUCTURALLY (not by an exact ``== n_clusters`` bar count, which silently MISSES a
     fabrication when the LLM draws a different bar count than the real cluster count): a clustering M4
-    emits exactly 2 charts, and the A/B/C comparison is excluded by its 3 ``Opción A/B/C`` traces, so the
-    remaining ``<= 2``-trace chart with a ``>= 3``-entry category axis is the value-by-segment chart.
+    emits exactly 2 charts, and the second chart (the per-segment PROFILE/fingerprint, one trace per
+    discovered segment → 3-4 traces; or a legacy A/B/C comparison on a replayed old job) is excluded by
+    its ``> 2`` traces, so the remaining ``<= 2``-trace chart with a ``>= 3``-entry category axis is the
+    value-by-segment chart.
     """
     traces = _iter_chart_traces(chart)
     if not traces or len(traces) > 2:
-        return False  # chart 2 has 3 traces (one per strategic option)
+        return False  # chart 2 (per-segment profile, 3-4 traces; or legacy A/B/C) → not chart 1
     for trace in traces:
         name = trace.get("name")
         if isinstance(name, str) and _OPTION_TRACE_RE.search(name):
-            return False  # an "Opción A/B/C" trace → the comparison chart
+            return False  # a legacy "Opción A/B/C" trace (pre-reframe replay) → not chart 1
     return any(length >= 3 for length in _chart_category_lengths(chart))
 
 
@@ -640,20 +704,25 @@ def detect_fabricated_segment_distribution(
 
     A value trace over >= 3 segments with <= 1 DISTINCT non-zero value is the fabrication signature
     (one-bar-rest-zero or same-everywhere). Source-agnostic (no anchoring to ``cluster_profiles`` — the
-    per-segment value is a derived case quantity). ``n_clusters`` GATES the check (a real clustering
-    result with >= 3 clusters) but does NOT have to equal the bar count — the chart is identified
-    structurally (see ``_is_segment_value_chart``) so a fabrication with a mismatched bar count is still
-    caught. ``[]`` when ``charts`` is empty, ``n_clusters`` is absent / non-integer / < 3, or no chart
-    qualifies (degrade-safe). Pure, total — never raises.
+    per-segment value is a derived case quantity). When PRESENT, ``n_clusters`` gates the check (a real
+    clustering result with >= 3 clusters) but does NOT have to equal the bar count — the chart is
+    identified structurally (see ``_is_segment_value_chart``) so a fabrication with a mismatched bar
+    count is still caught. When ABSENT (``None`` — executor degraded), the check STILL runs on the
+    chart's own >= 3-segment structure, so a fabricated distribution is dropped on a degraded case
+    instead of shipped ungrounded. ``[]`` when ``charts`` is empty, ``n_clusters`` is non-integer / < 3,
+    or no chart qualifies (degrade-safe). Pure, total — never raises.
     """
-    if not isinstance(charts, list) or not charts or n_clusters is None:
+    if not isinstance(charts, list) or not charts:
         return []
-    try:
-        k = int(n_clusters)
-    except (TypeError, ValueError, OverflowError):
-        return []
-    if k < 3:
-        return []
+    if n_clusters is not None:
+        try:
+            k = int(n_clusters)
+        except (TypeError, ValueError, OverflowError):
+            return []
+        if k < 3:
+            return []
+    # n_clusters absent (executor degraded) → no metric gate; rely on the chart's own >= 3-segment
+    # structure (``_is_segment_value_chart`` + the >= 3 numeric-y check below) to catch the fabrication.
     results: list[tuple[int, list[str]]] = []
     for index, chart in enumerate(charts):
         try:

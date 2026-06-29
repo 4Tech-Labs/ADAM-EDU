@@ -208,7 +208,7 @@ def test_other_family_is_byte_identical_noop() -> None:
 
 
 def test_align_handles_none_family_for_ml_ds() -> None:
-    # schema_designer trata ml_ds+None como 'clasificacion' (categoria, 600 filas);
+    # schema_designer trata ml_ds+None como 'clasificacion' (categoria, 1000 filas);
     # _align DEBE reconciliar también con primary_family=None (si no, leakage duplicado).
     schema = _ml_ds_fixed_schema()
     aligned = _align_ml_ds_classification_target(

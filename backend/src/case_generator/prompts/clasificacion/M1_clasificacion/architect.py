@@ -198,6 +198,14 @@ M1_CLASSIFICATION_BUSINESS_TARGET_BLOCK = """
      - abandono / churn → `churn_flag`
    Evita el genérico `target_event_flag` salvo que el dilema no sugiera ningún evento concreto.
 4. Declara al menos 1 feature de dominio con señal plausible hacia ese evento (no leakage).
+5. `dataset_schema_required.target_event_rate` es OBLIGATORIO para este caso: la fracción de la
+   población con el evento (target = 1), un decimal en el rango [0.01, 0.50] (8.3 % → 0.083).
+   DEBE ser EXACTAMENTE el MISMO número que la fila «Tasa de ocurrencia del evento objetivo» que
+   imprimes en Exhibit 2 (regla 4 del ancla). El generador determinista del dataset calibra la
+   columna objetivo a esa prevalencia (fuente única M1↔M2), de modo que el dataset y Exhibit 2
+   coinciden por construcción. IMPORTANTE: esta instrucción ANULA, para business + clasificación,
+   la nota de la sección base «Tasa de ocurrencia del evento (`target_event_rate`)» que dice que
+   solo se emite para ml_ds — para este perfil SÍ debes emitirla.
 """
 
 

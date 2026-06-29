@@ -57,13 +57,13 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import re
 import textwrap
 import threading
 import time
-import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -148,9 +148,12 @@ from case_generator.prompts import (
     M3_CONTENT_PROMPT_CLUSTERING,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLUSTERING_PROFILES,
+    M3_QUESTIONS_PROMPT_CLUSTERING,
     M4_CHART_PROMPT_CLUSTERING,
     M4_CHART_PROMPT_CLUSTERING_PROFILES,
     M4_CONTENT_PROMPT_CLUSTERING,
+    M4_QUESTIONS_PROMPT_CLUSTERING,
+    M5_QUESTIONS_PROMPT_CLUSTERING,
     M3_CLASSIFICATION_QUESTIONS_BY_VARIANT,
     M3_NOTEBOOK_QUESTIONS_PROMPT_CLASSIFICATION_BY_VARIANT,
     PROMPT_BY_FAMILY,
@@ -169,6 +172,7 @@ from case_generator.prompts import (
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_LEGACY,
     M4_CHART_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL,
+    M4_CHART_PROMPT_CLASSIFICATION_INVESTMENT_NEUTRAL,
     M4_CHARTS_PROMPT_BY_FAMILY,
     M4_CHARTS_PROMPT_BY_FAMILY_LEGACY,
     M4_CHARTS_PROMPT_BY_FAMILY_NEUTRAL,
@@ -197,11 +201,14 @@ from case_generator.impact_lens import (
     IMPACT_LENS_KEYS,
     build_impact_lens_architect_hint,
     build_impact_lens_hint,
+    build_impact_lens_m4_dual_axis_hint,
     build_impact_lens_m5_hint,
     normalize_impact_lens,
 )
 from case_generator.clustering_decision import (
     build_clustering_architect_hint,
+    build_clustering_currency_honesty_hint,
+    build_clustering_entity_hint,
     build_clustering_m1_questions_hint,
     build_clustering_m3_questions_hint,
     build_clustering_verdict_hint,
@@ -238,6 +245,11 @@ from case_generator.m1_grounding import (
     validate_questions_exhibit_coherence,
 )
 from case_generator.m1_grounding import strip_latex_math as _strip_latex_math
+from case_generator.m1_dataset_coherence import (
+    CURRENCY_ON_FEATURE,
+    monetary_ceiling_from_columns,
+    validate_m1_dataset_coherence,
+)
 from case_generator.m2_grounding import (
     detect_chart_id_leak,
     relabel_chart_ids_in_prose,
@@ -251,12 +263,12 @@ from case_generator.m5_grounding import validate_m5_questions_coherence
 from case_generator.m6_grounding import log_out_of_roster_mentions
 from case_generator.m4_grounding import (
     build_m4_chart_grounding_reprompt,
-    detect_embedded_mcq_options,
     drop_sensitivity_charts,
     log_chart_benchmark_fabrication,
     log_duplicate_deployment_sections,
     log_narrative_benchmark_fabrication,
     validate_m4_chart_grounding,
+    validate_m4_questions_coherence,
 )
 from case_generator.m3_notebook_execution import (
     M3NotebookExecutionError,
@@ -269,6 +281,7 @@ from case_generator.m3_notebook_execution import (
     scrub_notebook_for_safe_execution,
 )
 from case_generator.m3_notebook_repair import repair_locals_existence_guards
+from case_generator.text_normalize import fold_accents
 from case_generator.tools_and_schemas import (
     CaseArchitectOutput,
     EDAAnnotateOnlyOutput,
@@ -279,6 +292,7 @@ from case_generator.tools_and_schemas import (
     EDAQuestionsOutput,
     DatasetSchema,
     TeachingNoteIntroOutput,
+    _sanitize_entity_prefix,
 )
 from case_generator.datagen.eda_charts_business import (
     generate_business_eda_charts,
@@ -288,6 +302,9 @@ from case_generator.datagen.eda_charts_classification import (
 )
 from case_generator.datagen.eda_charts_clustering import (
     generate_clustering_eda_charts,
+)
+from case_generator.datagen.m4_charts_classification import (
+    generate_m4_cost_chart,
 )
 from case_generator.orchestration.frontend_adapter import adapter_canonical_to_legacy
 from case_generator.orchestration.frontend_output_adapter import adapter_legacy_to_canonical_output
@@ -1436,6 +1453,23 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
     ):
         prompt = prompt + build_clustering_architect_hint(_clustering_decision)
 
+    # Issue #513 — append the entity+population coherence hint (brace-free) so M1 narrates ONE domain
+    # entity and EXACTLY N entities, and emits `entity_descriptor` → the data layer renames the index
+    # to `{prefix}_id` (Opción A). Gated by BOTH the structure premise (the N = _MLDS_CLUSTERING_MAX_ROWS
+    # rows only exist on that lane) AND the entity-coherence kill-switch AND ml_ds+clustering. Appended
+    # LAST so it overrides the #455 anchor's "clientes" examples; post-format (no second .format) →
+    # SHA untouched. N is injected from the constant (I2 — never a literal).
+    if (
+        settings.mlds_clustering_structure
+        and settings.mlds_clustering_entity_coherence
+        and _is_ml_ds_clustering(state)
+    ):
+        prompt = prompt + build_clustering_entity_hint(_MLDS_CLUSTERING_MAX_ROWS)
+
+    # Issue #514 — prohibit absolute per-entity $ in the M1 prose (ml_ds+clustering). Best-effort,
+    # brace-free, node-level append → architect SHA untouched; no-op (byte-identical) elsewhere.
+    prompt = _maybe_append_clustering_currency_hint(prompt, state)
+
     try:
         result, profile_resolved, family_resolved, pregunta_eje = (
             _invoke_case_architect_with_contract(
@@ -1520,7 +1554,8 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
         # Issue F1 — valida la tasa de evento (fuente única M1↔M2) con la misma
         # resolución de perfil/familia. Gateada a ml_ds + clasificación binaria.
         contract_dict, rate_warnings = _validate_target_event_rate(
-            contract_dict, family_resolved, result.titulo, profile_resolved
+            contract_dict, family_resolved, result.titulo, profile_resolved,
+            business_calibration_enabled=settings.business_event_rate_calibration,
         )
         coherence_warnings = list(coherence_warnings) + rate_warnings
         if target_enforced:
@@ -1555,9 +1590,36 @@ def case_architect(state: ADAMState, config: RunnableConfig) -> dict:
             else None
         )
 
+        # Issue #513 — persist the entity descriptor under the SAME dual gate as the entity hint
+        # (structure premise + entity coherence + ml_ds clustering), so the data layer's prefix and
+        # the M1 narrative agree (Opción A). None outside the gate → the data layer falls back to
+        # `user_` (#468, byte-identical). Like value_model: NOT in state_input → survives resume via
+        # the durable checkpoint; single writer (only the architect) → no clobber / fan-out hazard.
+        entity_descriptor_dict = (
+            result.entity_descriptor.model_dump()
+            if (
+                result.entity_descriptor is not None
+                and settings.mlds_clustering_structure
+                and settings.mlds_clustering_entity_coherence
+                and _is_ml_ds_clustering(state)
+            )
+            else None
+        )
+
+        # Issue #515 — logger-only M1↔dataset coherence on the architect prose. Receives the
+        # just-computed entity_descriptor_dict EXPLICITLY (it is NOT yet in state — H3). No
+        # reprompt, no mutation (the writer is the guarantee); best-effort, never fails the job.
+        _log_m1_dataset_coherence_architect(
+            state=state,
+            entity_descriptor=entity_descriptor_dict,
+            company_profile=result.company_profile,
+            dilema_brief=result.dilema_brief,
+        )
+
         return {
             "current_agent": "case_architect",
             "value_model": value_model_dict,
+            "entity_descriptor": entity_descriptor_dict,
             "titulo": result.titulo,
             "industria": result.industria,
             # Issue #377 — relabel any non-USD currency to USD at the source (structured-output
@@ -1647,16 +1709,6 @@ _M1_QUESTIONS_OPTION_REPROMPT_HEADER = (
     "NUNCA recomiendes una opción inexistente ni ausente del enunciado. Incoherencias "
     "detectadas:\n"
 )
-_M4_QUESTIONS_OPTION_REPROMPT_HEADER = (
-    "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE OPCIONES (Módulo 4)\n"
-    "Las preguntas del Módulo 4 son ABIERTAS: el enunciado NO debe incrustar opciones de "
-    "respuesta etiquetadas A/B/C (colisionan con las opciones estratégicas A/B/C del caso). "
-    "Regenera EXACTAMENTE 3 preguntas con el MISMO schema y los MISMOS `numero` (1, 2, 3): "
-    "reescribe cada enunciado como pregunta abierta SIN answer-choices A/B/C. Si "
-    "`solucion_esperada` recomienda una opción estratégica del caso, nómbrala por su LETRA "
-    "REAL tal como aparece en el análisis del Módulo 4 (§4.5), sin inventar ni cruzar una "
-    "letra de respuesta. NUNCA recomiendes una opción inexistente. Incoherencias detectadas:\n"
-)
 
 
 def _build_m1_exhibit_anexos(state: ADAMState) -> dict[str, str]:
@@ -1688,6 +1740,171 @@ def _extract_business_cost_matrix(state: ADAMState) -> dict | None:
         return None
     matrix = contract.get("business_cost_matrix")
     return matrix if isinstance(matrix, dict) else None
+
+
+# ── Issue #515 — M1↔dataset coherence (the deterministic GUARANTEE) ───────────
+# CURRENCY violations (per-entity $ the clustering dataset can't back) are reprompt-grade;
+# ENTITY/POPULATION are logger-only (the #513 hint prevents them by construction and a
+# closed-lexicon/exact-count reprompt would degrade correct narratives — E1). Concatenated,
+# never .format (the violation bullets carry figures/braces).
+_M1_DATASET_REPROMPT_HEADER = (
+    "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA CON EL DATASET\n"
+    "Tu salida anterior citó una cifra monetaria absoluta por-entidad o por-segmento que el "
+    "dataset de este caso NO respalda (cada entidad tiene un valor a escala individual, no de "
+    "empresa). Reescribe la narrativa COMPLETA expresando el valor por-entidad/segmento de forma "
+    "CUALITATIVA o RELATIVA (cuartiles, índices, alto/medio/bajo), o dentro de la escala del "
+    "dato; NUNCA inventes un monto absoluto por-entidad. El Exhibit 1 (P&L de la empresa, "
+    "agregado) se conserva intacto. Incoherencias detectadas:\n"
+)
+
+
+def _m1_dataset_coherence_active(state: ADAMState) -> bool:
+    """Gate for the #515 guard: kill-switch ON + STRUCTURE ON + ml_ds clustering (STRICT).
+
+    The STRUCTURE gate is load-bearing: with ``MLDS_CLUSTERING_STRUCTURE`` OFF the dataset is a
+    generic 200-row ml_ds schema (not the RFM fallback), so the deterministic ceiling/population
+    do not hold — the guard must no-op (the issue's dependency invariant).
+    """
+    return bool(
+        settings.mlds_clustering_m1_coherence_guard
+        and settings.mlds_clustering_structure
+        and _is_ml_ds_clustering(state)
+    )
+
+
+def _resolve_m1_dataset_monetary_ceiling(state: ADAMState) -> float | None:
+    """Per-entity monetary scale ceiling for the ml_ds + clustering segmentation dataset.
+
+    Delegates to the shared ``monetary_ceiling_from_columns`` over the SAME columns the data layer
+    will generate — ``_resolve_clustering_segmentation_columns`` (Issue #531: the architect's DOMAIN
+    features when present, else the fixed RFM). So the #515 CURRENCY guard's ceiling TRACKS the
+    monetary feature of the dataset the student downloads (a domain ``willingness_to_pay_usd ∈
+    [10, 800]`` ceiling, not a stale RFM ``monetary_value`` 5000). Detection is best-effort via the
+    shared ``_MONETARY_COLUMN_SIGNALS`` token set; a money column whose name carries no money token
+    is missed → the CURRENCY guard just no-ops for it (safe-failing — a silent guard, never a false
+    reprompt). No fixed feature list (I3). ``None`` when no monetary column is found. Domain-off / no
+    contract → the fixed RFM ceiling (byte-identical to pre-#531).
+    """
+    columns = _resolve_clustering_segmentation_columns(
+        state.get("dataset_schema_required"),
+        domain_enabled=settings.mlds_clustering_domain_columns,
+    )
+    return monetary_ceiling_from_columns(columns)
+
+
+def _apply_m1_dataset_coherence_writer(
+    *, llm: Any, prompt: str, state: ADAMState, narrativa_raw: str
+) -> str:
+    """Validate + reprompt-once-then-DEGRADE the M1 narrative against the dataset (Issue #515).
+
+    Gated to ml_ds + clustering with STRUCTURE on (byte-identical no-op otherwise). Only the
+    CURRENCY_ON_FEATURE class reprompts (the documented $135k/center defect); ENTITY/POPULATION
+    are logged, never rewritten (E1). Best-effort: any error keeps the best narrative; never
+    raises, never fails the job.
+    """
+    if not _m1_dataset_coherence_active(state):
+        return narrativa_raw
+    try:
+        entity = state.get("entity_descriptor")
+        entity = entity if isinstance(entity, dict) else None
+        ceiling = _resolve_m1_dataset_monetary_ceiling(state)
+        violations = validate_m1_dataset_coherence(
+            narrativa_raw,
+            entity_descriptor=entity,
+            expected_population=_MLDS_CLUSTERING_MAX_ROWS,
+            monetary_ceiling=ceiling,
+        )
+        if not violations:
+            return narrativa_raw
+        currency = [v for v in violations if v.startswith(CURRENCY_ON_FEATURE)]
+        other = [v for v in violations if not v.startswith(CURRENCY_ON_FEATURE)]
+        if other:  # ENTITY/POPULATION — logger-only (E1), narrative untouched
+            logger.warning(
+                "[case_writer] coherencia M1↔dataset (entity/población) — solo log",
+                extra={
+                    "node": "case_writer",
+                    "violations": other,
+                    "case_id": state.get("case_id"),
+                },
+            )
+        if not currency:
+            return narrativa_raw
+        bullet_list = "\n".join(f"- {v}" for v in currency)
+        print(
+            f"[case_writer] Incoherencia moneda↔dataset M1 detectada: {currency}. "
+            "Reprompt explícito (1/1)."
+        )
+        reprompt = prompt + _M1_DATASET_REPROMPT_HEADER + bullet_list
+        corrected = sanitize_markdown(_extract_text(llm.invoke(reprompt)))
+        currency_2 = [
+            v
+            for v in validate_m1_dataset_coherence(
+                corrected,
+                entity_descriptor=entity,
+                expected_population=_MLDS_CLUSTERING_MAX_ROWS,
+                monetary_ceiling=ceiling,
+            )
+            if v.startswith(CURRENCY_ON_FEATURE)
+        ]
+        if not currency_2:
+            print("[case_writer] Reprompt moneda↔dataset M1 OK")
+            return corrected
+        logger.warning(
+            "[case_writer] coherencia moneda↔dataset M1 degradada tras reprompt",
+            extra={
+                "node": "case_writer",
+                "violations": currency_2,
+                "case_id": state.get("case_id"),
+            },
+        )
+        # DEGRADE: keep whichever pass has fewer CURRENCY violations.
+        return corrected if len(currency_2) < len(currency) else narrativa_raw
+    except Exception as exc:  # best-effort — a validator bug must never fail M1
+        logger.warning(
+            "[case_writer] validador coherencia M1↔dataset falló (best-effort): %s",
+            exc,
+            extra={"node": "case_writer", "case_id": state.get("case_id")},
+        )
+        return narrativa_raw
+
+
+def _log_m1_dataset_coherence_architect(
+    *,
+    state: ADAMState,
+    entity_descriptor: dict | None,
+    company_profile: str,
+    dilema_brief: str,
+) -> None:
+    """Logger-only M1↔dataset coherence on the architect prose (Issue #515, D1).
+
+    Observability of WHERE a contradiction originates; NO reprompt, NO mutation (the writer is
+    the guarantee). Receives ``entity_descriptor`` EXPLICITLY — at ``case_architect`` time it is
+    being returned, NOT yet in ``state`` (H3). Best-effort: never raises.
+    """
+    if not _m1_dataset_coherence_active(state):
+        return
+    try:
+        violations = validate_m1_dataset_coherence(
+            f"{company_profile or ''}\n{dilema_brief or ''}",
+            entity_descriptor=entity_descriptor if isinstance(entity_descriptor, dict) else None,
+            expected_population=_MLDS_CLUSTERING_MAX_ROWS,
+            monetary_ceiling=_resolve_m1_dataset_monetary_ceiling(state),
+        )
+        if violations:
+            logger.warning(
+                "[case_architect] coherencia M1↔dataset en prosa del architect — solo log",
+                extra={
+                    "node": "case_architect",
+                    "violations": violations,
+                    "case_id": state.get("case_id"),
+                },
+            )
+    except Exception as exc:  # best-effort
+        logger.warning(
+            "[case_architect] validador coherencia M1↔dataset falló (best-effort): %s",
+            exc,
+            extra={"node": "case_architect", "case_id": state.get("case_id")},
+        )
 
 
 def _invoke_m1_writer_with_exhibit_coherence(
@@ -1854,13 +2071,16 @@ def _apply_m1_questions_option_coherence(
 
 
 # ─────────────────────────────────────────────────────────
-# M4 (Impacto) question option coherence — reuses the M1 validator with the FLOOR
-# universe {A,B,C} (M4 has no dilema_brief). See m1_grounding.validate_question_option_coherence.
+# M4 (Impacto) question coherence — option/MCQ (all families) + single-model leak +
+# model-metric anchoring (ml_ds+clf). The pure validator lives in m4_grounding
+# (``validate_m4_questions_coherence``, the M4 sibling of ``validate_m5_questions_coherence``).
 # ─────────────────────────────────────────────────────────
 _M4_VIOLATION_CODES = (
     ("OPTION_NONEXISTENT", "option_nonexistent"),
     ("OPTION_NOT_PRESENTED", "option_not_presented"),
     ("MCQ_OPCIONES_EMBEBIDAS", "mcq_opciones_embebidas"),
+    ("MODELO_NO_SELECCIONADO", "unselected_model"),
+    ("METRICA_NO_ANCLADA", "unanchored_metric"),
 )
 
 
@@ -1874,62 +2094,98 @@ def _m4_violation_types(violations: list[str]) -> list[str]:
     return codes
 
 
-def _m4_question_violations(preguntas_dict: list[dict]) -> list[str]:
-    """All M4 question option-coherence violations (#481).
-
-    Two pure rules over the same set, so the pass-1 check and the post-reprompt re-validation apply the
-    SAME contract: (1) the shared #416 validator with the FLOOR universe (``dilema_brief=""``) — a
-    ``solucion_esperada`` that recommends a nonexistent / unpresented A/B/C option; (2) the embedded-MCQ
-    detector — an ``enunciado`` that incrusta its OWN answer-choices ("A) … B) … C) …"), which collide
-    and historically cross-map with the strategic Opción A/B/C. The validator is letter-agnostic on the
-    WORD "Opción X"; the detector covers the answer-letter "X)" form it cannot see.
+def _build_m4_coherence_reprompt(
+    violations: list[str],
+    *,
+    variant: str | None,
+    metrics_block: str,
+    numeros: list[Any],
+) -> str:
+    """Focused reprompt (CONCATENATED, never ``.format`` — the formatted prompt and any cited cifras
+    carry ``{}``). Carries the concrete fix: open questions with no embedded A/B/C answer-choices, the
+    real strategic letter, the forbidden model when single-model, the verified-metrics rule, and the
+    SAME 3 ``numero`` so the downstream ``M4-Q{numero}`` grading key holds. Mirrors
+    ``_build_m5_coherence_reprompt``.
     """
-    violations = list(validate_question_option_coherence(preguntas_dict, ""))
-    for pregunta in preguntas_dict:
-        if isinstance(pregunta, dict):
-            violations.extend(detect_embedded_mcq_options(pregunta.get("enunciado")))
-    return violations
+    bullet_list = "\n".join(f"- {violation}" for violation in violations)
+    forbidden_line = ""
+    if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY:
+        forbidden_line = "NO menciones Random Forest (el modelo seleccionado es Logistic Regression).\n"
+    elif variant == CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY:
+        forbidden_line = "NO menciones Logistic Regression (el modelo seleccionado es Random Forest).\n"
+    metrics_line = ""
+    if has_metric_anchors(metrics_block):
+        metrics_line = (
+            "Cita SOLO métricas del modelo (AUC/F1/precision/recall) que figuren en las métricas "
+            "verificadas del M3; no inventes valores.\n"
+        )
+    numeros_str = ", ".join(str(numero) for numero in numeros)
+    return (
+        "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA (Módulo 4)\n"
+        "Las preguntas del Módulo 4 son ABIERTAS: el enunciado NO debe incrustar opciones de "
+        "respuesta etiquetadas A/B/C (colisionan con las opciones estratégicas A/B/C del caso). "
+        f"Regenera EXACTAMENTE {len(numeros)} pregunta(s) con el MISMO schema y los MISMOS "
+        f"`numero` ({numeros_str}): reescribe cada enunciado como pregunta abierta SIN "
+        "answer-choices A/B/C. Si `solucion_esperada` recomienda una opción estratégica del caso, "
+        "nómbrala por su LETRA REAL tal como aparece en el análisis del Módulo 4 (§4.5), sin "
+        "inventar ni cruzar una letra de respuesta. NUNCA recomiendes una opción inexistente.\n"
+        f"{forbidden_line}"
+        f"{metrics_line}"
+        "Incoherencias detectadas:\n" + bullet_list
+    )
 
 
-def _apply_m4_questions_option_coherence(
-    *, llm: Any, prompt: str, state: ADAMState, preguntas_dict: list[dict]
+def _apply_m4_questions_coherence(
+    *,
+    llm: Any,
+    prompt: str,
+    state: ADAMState,
+    preguntas_dict: list[dict],
+    variant: str | None,
+    metrics_block: str,
 ) -> list[dict]:
-    """Validate + reprompt-once-then-DEGRADE the M4 (Impacto) question option coherence.
+    """Validate + reprompt-once-then-DEGRADE the M4 (Impacto) question coherence.
 
-    The M4 questions are OPEN (#481): the only A/B/C in a case are the M1 *strategic* options, named by
-    their REAL letter in ``solucion_esperada``. ``_m4_question_violations`` flags both a recommended
-    option that is nonexistent/unpresented (the shared #416 validator) AND an ``enunciado`` that
-    embeds its own answer-choices A/B/C (the #481 detector). Runs for ALL families (the defect is
-    general, not classification-only) behind the ``m4_question_coherence`` kill-switch; a no-op when the
-    switch is off. On a violation it reprompts ONCE (one Flash call); the corrected set is accepted ONLY
-    if it preserves the question count AND the ``numero`` sequence (the grading key ``M4-Q{numero}`` in
+    Runs the pure ``m4_grounding.validate_m4_questions_coherence`` (the M4 sibling of
+    ``validate_m5_questions_coherence``), which aggregates FOUR checks: (1) option nonexistent/
+    unpresented (#416, ALL families, floor universe) + (2) embedded A/B/C answer-choices (#481, ALL
+    families) — both PRESERVED byte-for-byte — PLUS (3) the single-model leak ``MODELO_NO_SELECCIONADO``
+    (ml_ds ``lr_only``/``rf_only``; a no-op for contrast / business / non-clf via ``variant``) and
+    (4) model-metric anchoring ``METRICA_NO_ANCLADA`` (ml_ds with an executed M3 notebook; a no-op when
+    ``metrics_block`` has no anchors). The new checks close the asymmetry with M2/M3/M5 questions and
+    M4 content/charts, which already guard the unselected-model leak.
+
+    Behind the ``m4_question_coherence`` kill-switch; a no-op when off. On a violation it reprompts ONCE
+    (one Flash call) with the concrete fix; the corrected set is accepted ONLY if it preserves the
+    question count AND the ``numero`` sequence (the grading key ``M4-Q{numero}`` in
     shared.student_reads/teacher_reads) AND is now coherent — otherwise it degrades to the pass-1
     questions. ``GeneradorPreguntasOutput`` (unlike M1's schema) does NOT enforce count/numbering, so
-    the identity guard is load-bearing. Best-effort: ANY throw (including a reprompt ``RuntimeError``)
-    degrades to pass-1. Never raises, so the job always completes.
-
-    Known coverage limit (zero false negatives are not promised): only UPPERCASE A/B/C letter forms are
-    checked. A lowercase MCQ, or a pure-``solucion_esperada`` cross-map with no enunciado markers, is
-    not flagged; the prompt fix (open questions, name the real letter) is the primary defense and a
-    detector false positive only degrades to the already-good pass-1 question (never fails a job).
+    the identity guard is load-bearing. ``variant`` is the RESOLVED notebook variant (NEVER
+    ``algorithm_mode``); ``metrics_block`` is the ``computed_metrics_block`` the node built. Best-effort:
+    ANY throw (including a reprompt ``RuntimeError``) degrades to pass-1. Never raises, so the job always
+    completes.
     """
     log_extra = {"node": "m4_questions_generator", "case_id": state.get("case_id")}
     try:
         if not settings.m4_question_coherence:
             return preguntas_dict
-        violations = _m4_question_violations(preguntas_dict)
+        violations = validate_m4_questions_coherence(
+            preguntas_dict, variant=variant, metrics_block=metrics_block
+        )
         if not violations:
             return preguntas_dict
+        numeros = [q.get("numero") for q in preguntas_dict]
         logger.info(
-            "[m4_questions] reprompt de coherencia de opciones M4 disparado",
+            "[m4_questions] reprompt de coherencia M4 disparado",
             extra={
                 **log_extra,
                 "violation_count": len(violations),
                 "violation_types": _m4_violation_types(violations),
             },
         )
-        bullet_list = "\n".join(f"- {violation}" for violation in violations)
-        reprompt = prompt + _M4_QUESTIONS_OPTION_REPROMPT_HEADER + bullet_list
+        reprompt = prompt + _build_m4_coherence_reprompt(
+            violations, variant=variant, metrics_block=metrics_block, numeros=numeros
+        )
         try:
             resultado: GeneradorPreguntasOutput = llm.with_structured_output(
                 GeneradorPreguntasOutput
@@ -1937,34 +2193,36 @@ def _apply_m4_questions_option_coherence(
             corrected = [p.model_dump() for p in resultado.preguntas]
         except (ValidationError, OutputParserException, ValueError) as exc:
             logger.warning(
-                "[m4_questions] reprompt coherencia de opciones M4 inválido — degrada a pass-1: %s",
+                "[m4_questions] reprompt coherencia M4 inválido — degrada a pass-1: %s",
                 exc,
                 extra=log_extra,
             )
             return preguntas_dict
         # Identity guard: a reprompt that drops/adds/renumbers a question would corrupt the
         # ``M4-Q{numero}`` grading key (shared.student_reads) — reject it, keep pass-1.
-        if [q.get("numero") for q in corrected] != [q.get("numero") for q in preguntas_dict]:
+        if [q.get("numero") for q in corrected] != numeros:
             logger.warning(
                 "[m4_questions] reprompt M4 alteró conteo/numero — degrada a pass-1",
                 extra=log_extra,
             )
             return preguntas_dict
-        residual = _m4_question_violations(corrected)
+        residual = validate_m4_questions_coherence(
+            corrected, variant=variant, metrics_block=metrics_block
+        )
         if not residual:
             logger.info(
-                "[m4_questions] coherencia de opciones M4 corregida por reprompt",
+                "[m4_questions] coherencia M4 corregida por reprompt",
                 extra={**log_extra, "degraded": False},
             )
             return corrected
         logger.warning(
-            "[m4_questions] coherencia de opciones M4 degradada tras reprompt",
+            "[m4_questions] coherencia M4 degradada tras reprompt",
             extra={**log_extra, "violation_types": _m4_violation_types(residual), "degraded": True},
         )
         return preguntas_dict
     except Exception as exc:  # best-effort — a coherence pass must never fail the job
         logger.warning(
-            "[m4_questions] validador coherencia de opciones M4 falló (best-effort): %s",
+            "[m4_questions] validador coherencia M4 falló (best-effort): %s",
             exc,
             extra=log_extra,
         )
@@ -2015,18 +2273,29 @@ def _invoke_m1_exhibit2_coherence(
 ) -> str:
     """Validate + reprompt-once-then-DEGRADE the Exhibit 2 rate row (Issue #372).
 
-    Gated to ml_ds + clasificacion (byte-identical no-op otherwise). PRIMARY check is the
+    Gated to ml_ds + clasificacion ALWAYS, and to business + clasificacion when a calibrated
+    target_event_rate is present AND BUSINESS_EVENT_RATE_CALIBRATION is on (Issue #518);
+    byte-identical no-op otherwise. PRIMARY check is the
     deterministic F1 coupling: a miss triggers ONE targeted text reprompt that rewrites the
     full Exhibit 2 with the exact number; the rewrite is accepted only if it now prints the
     rate AND preserves the anexo's bulk, otherwise the original is kept. The completeness row
     is a SECONDARY heuristic that only logs a warning — it NEVER drives the reprompt.
     Best-effort: any internal error keeps the original anexo and the job continues. Never raises.
     """
-    if not _is_ml_ds_classification(state):
+    rate = contract.get("target_event_rate") if isinstance(contract, dict) else None
+    # Issue #518 — el guard #372 (Exhibit 2 imprime la tasa) se amplía a business+clf cuando hay
+    # una tasa calibrada y el kill-switch está on. ml_ds queda IDÉNTICO (primer disyunto). Para
+    # business sin tasa (rate None) o con el switch off, `business_clf_with_rate` es False → no-op
+    # byte-idéntico (la tasa business solo existe cuando C2 dejó pasar el valor con el switch on).
+    business_clf_with_rate = (
+        settings.business_event_rate_calibration
+        and _is_classification_family(state)
+        and isinstance(rate, (int, float))
+        and not isinstance(rate, bool)
+    )
+    if not _is_ml_ds_classification(state) and not business_clf_with_rate:
         return anexo_operativo
     try:
-        rate = contract.get("target_event_rate") if isinstance(contract, dict) else None
-
         # SECONDARY heuristic — warning-only, never reprompt (D2).
         completeness_violations = detect_exhibit2_completeness_row(anexo_operativo)
         if completeness_violations:
@@ -2171,6 +2440,9 @@ def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
     prompt = CASE_WRITER_PROMPT_BY_FAMILY.get(
         _resolve_m1_prompt_family(context), CASE_WRITER_PROMPT
     ).format(**context)
+    # Issue #514 — same currency-honesty hint on the STUDENT-FACING narrative (ml_ds+clustering).
+    # Brace-free, appended after .format; best-effort; no-op (byte-identical) for every other cohort.
+    prompt = _maybe_append_clustering_currency_hint(prompt, state)
 
     try:
         # Invocación directa de texto crudo (sin JSON schema)
@@ -2178,6 +2450,12 @@ def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
         response = llm.invoke(prompt)
         narrativa_raw = sanitize_markdown(_extract_text(response))
         narrativa_raw = _invoke_m1_writer_with_exhibit_coherence(
+            llm=llm, prompt=prompt, state=state, narrativa_raw=narrativa_raw
+        )
+        # Issue #515 — M1↔dataset coherence GUARANTEE (ml_ds+clustering). Reprompts-once-then-
+        # DEGRADE on a per-entity currency fabrication the dataset can't back; ENTITY/POPULATION
+        # are logger-only. No-op (byte-identical) for #360's clf cohort and every other case.
+        narrativa_raw = _apply_m1_dataset_coherence_writer(
             llm=llm, prompt=prompt, state=state, narrativa_raw=narrativa_raw
         )
         print(f"[case_writer] narrativa={len(narrativa_raw)} chars")
@@ -2690,43 +2968,50 @@ def _annotate_validate_emit(
     if len(charts) > 5:
         charts = charts[:5]
 
-    try:
-        cfg = Configuration.from_runnable_config(config)
-        llm = _get_chart_llm(cfg.writer_model, temperature=0.3, thinking_level="minimal")
-        charts_context = [
-            {
-                "id": c.get("id", ""),
-                "title": c.get("title", ""),
-                "subtitle": c.get("subtitle", ""),
-                "chart_type": c.get("chart_type", ""),
-            }
-            for c in charts
-            if c.get("id", "") not in deterministic_text_ids
-        ]
-        prompt = annotate_prompt.format(
-            charts_context_json=json.dumps(charts_context, ensure_ascii=False),
-            case_id=state.get("case_id", "") or state.get("titulo", ""),
-            student_profile=state.get("studentProfile", "business"),
-            output_language=state.get("output_language", "es"),
-        )
-        ann_result: EDAAnnotateOnlyOutput = llm.with_structured_output(
-            EDAAnnotateOnlyOutput
-        ).invoke(prompt)
-        ann_by_id: dict[str, tuple[str, str]] = {}
-        for ann in (ann_result.annotations or []):
-            if not ann.id:
-                continue
-            ann_by_id[ann.id] = (
-                _clamp(ann.description or "", 500),
-                _clamp(ann.notes or "", 300),
+    # Charts con texto determinista (lo escribe el builder) se EXCLUYEN de la petición
+    # al LLM. Si NO queda ninguno por anotar (p. ej. el panel ml_ds+clf cuando los
+    # kill-switches de texto honesto están activos → los 3 charts deterministas), nos
+    # saltamos por completo la llamada al LLM: no hay nada que anotar, ahorra una llamada
+    # Flash y elimina ese punto de fallo. Business/clustering pasan `deterministic_text_ids`
+    # vacío → `charts_context` no vacío → la llamada se hace como antes (byte-idéntico).
+    charts_context = [
+        {
+            "id": c.get("id", ""),
+            "title": c.get("title", ""),
+            "subtitle": c.get("subtitle", ""),
+            "chart_type": c.get("chart_type", ""),
+        }
+        for c in charts
+        if c.get("id", "") not in deterministic_text_ids
+    ]
+    ann_by_id: dict[str, tuple[str, str]] = {}
+    if charts_context:
+        try:
+            cfg = Configuration.from_runnable_config(config)
+            llm = _get_chart_llm(cfg.writer_model, temperature=0.3, thinking_level="minimal")
+            prompt = annotate_prompt.format(
+                charts_context_json=json.dumps(charts_context, ensure_ascii=False),
+                case_id=state.get("case_id", "") or state.get("titulo", ""),
+                student_profile=state.get("studentProfile", "business"),
+                output_language=state.get("output_language", "es"),
             )
-    except Exception as ann_err:  # noqa: BLE001
-        # Boundary: errores del LLM nunca tumban el panel.
-        logger.warning(
-            "[eda_chart_generator/py] annotate-only LLM falló (%s) — sirviendo charts sin anotaciones",
-            ann_err,
-        )
-        ann_by_id = {}
+            ann_result: EDAAnnotateOnlyOutput = llm.with_structured_output(
+                EDAAnnotateOnlyOutput
+            ).invoke(prompt)
+            for ann in (ann_result.annotations or []):
+                if not ann.id:
+                    continue
+                ann_by_id[ann.id] = (
+                    _clamp(ann.description or "", 500),
+                    _clamp(ann.notes or "", 300),
+                )
+        except Exception as ann_err:  # noqa: BLE001
+            # Boundary: errores del LLM nunca tumban el panel.
+            logger.warning(
+                "[eda_chart_generator/py] annotate-only LLM falló (%s) — sirviendo charts sin anotaciones",
+                ann_err,
+            )
+            ann_by_id = {}
 
     # Charts con texto determinista: descartar cualquier anotación LLM (incl. una
     # que un modelo díscolo devuelva sin habérsela pedido) para preservar el texto
@@ -2792,6 +3077,17 @@ def _eda_classification_python_path(
             return None
         df = pd.DataFrame(dataset)
         target_col = _identify_target_variable(state, df)
+        # Coherencia (ml_ds+clf): prefiere el MISMO target que cita la narrativa M2 y
+        # modela el notebook M3 (`_resolve_eda_target_name`: contract-first, robusto a la
+        # colisión de rename y verificado contra las columnas reales del dataset) cuando es
+        # una columna real del df. Garantiza que `class_distribution` nunca discrepe de la
+        # prosa sobre CUÁL es el target (cierra los bordes de colisión / caso-sin-contrato
+        # donde el heurístico podría caer a una feature continua). En el happy path ambos
+        # resolvedores ya coinciden → no-op; solo corrige el caso incoherente. Fallback
+        # seguro al heurístico cuando el narrativo no es una columna real.
+        narrative_target = _resolve_eda_target_name(state)
+        if narrative_target and narrative_target in df.columns:
+            target_col = narrative_target
         if not target_col:
             logger.warning(
                 "[eda_chart_generator/py] target no identificable — fallback a path LLM"
@@ -2806,8 +3102,19 @@ def _eda_classification_python_path(
         # columnas que inflan la métrica por alta cardinalidad discreta (period/IDs/texto).
         # Off → todas las columnas salvo el target (comportamiento legacy byte-idéntico).
         exclude_index = settings.m2_mi_exclude_index
+        # Kill-switch `m2_classification_chart_honest_text` (default true): el builder
+        # escribe texto determinista para `class_distribution` (balance exacto + línea base
+        # mayoritaria / Paradoja de la Exactitud) y `mutual_info_top8` (feature más
+        # informativa + caveat MI≠causalidad/leakage), en vez de dejar que el LLM anotador
+        # —que NO ve los datos— adivine. Off → texto vacío + el LLM los anota (previo).
+        caption_text = settings.m2_classification_chart_honest_text
         charts = generate_classification_eda_charts(
-            df, target_col, contract, honest_text=honest_text, exclude_index=exclude_index
+            df,
+            target_col,
+            contract,
+            honest_text=honest_text,
+            exclude_index=exclude_index,
+            caption_text=caption_text,
         )
         if not charts:
             logger.warning(
@@ -2815,17 +3122,20 @@ def _eda_classification_python_path(
             )
             return None
 
-        # El id está acoplado al builder (`_build_missingness_heatmap`); el test E2E
-        # de coherencia de texto lo bloquea contra un rename silencioso.
-        deterministic_text_ids = (
-            frozenset({"missingness_heatmap"}) if honest_text else frozenset()
-        )
+        # Los ids están acoplados al builder; los tests deterministas los bloquean contra
+        # un rename silencioso. Con ambos switches on los 3 charts son deterministas →
+        # `_annotate_validate_emit` se salta el LLM por completo (cero anotación que pisar).
+        deterministic_text_ids: set[str] = set()
+        if honest_text:
+            deterministic_text_ids.add("missingness_heatmap")
+        if caption_text:
+            deterministic_text_ids |= {"class_distribution", "mutual_info_top8"}
         return _annotate_validate_emit(
             charts,
             state,
             config,
             EDA_ANNOTATE_ONLY_PROMPT_CLASSIFICATION,
-            deterministic_text_ids=deterministic_text_ids,
+            deterministic_text_ids=frozenset(deterministic_text_ids),
         )
     except Exception as e:  # noqa: BLE001
         logger.error(
@@ -3067,6 +3377,7 @@ _M2_VIOLATION_CODES = (
     ("CHART_REF_NONEXISTENT", "chart_ref"),
     ("EVENT_RATE_INCOHERENT", "rate_internal"),
     ("EVENT_RATE_VS_CONTRACT", "rate_contract"),
+    ("MODELO_NO_SELECCIONADO", "model_leak"),
 )
 
 
@@ -3081,13 +3392,18 @@ def _m2_violation_types(violations: list[str]) -> list[str]:
 
 
 def _build_m2_coherence_reprompt(
-    chart_ids: set[str], rate_pct: float | None, violations: list[str]
+    chart_ids: set[str],
+    rate_pct: float | None,
+    violations: list[str],
+    *,
+    variant: str | None = None,
 ) -> str:
     """Focused reprompt (CONCATENATED, never ``.format`` — prose may carry ``{}``).
 
-    Carries the CONCRETE fix (valid chart ids + the real event rate) so the model
-    corrects the specific figures, and demands the SAME 2 questions with the SAME
-    ``numero`` (1 and 2) so the downstream ``M2-Q{numero}`` answer/grading key is preserved.
+    Carries the CONCRETE fix (valid chart ids + the real event rate + the single selected
+    model when a model-leak is present) so the model corrects the specific issues, and demands
+    the SAME 2 questions with the SAME ``numero`` (1 and 2) so the downstream ``M2-Q{numero}``
+    answer/grading key is preserved.
     """
     bullet_list = "\n".join(f"- {violation}" for violation in violations)
     valid_charts = ", ".join(sorted(chart_ids)) if chart_ids else "ninguna"
@@ -3096,16 +3412,56 @@ def _build_m2_coherence_reprompt(
         if rate_pct is not None
         else ""
     )
+    model_line = ""
+    if any(v.startswith("MODELO_NO_SELECCIONADO") for v in violations):
+        if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY:
+            selected = "Regresión Logística"
+        elif variant == CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY:
+            selected = "Random Forest"
+        else:
+            selected = "el modelo seleccionado por el caso"
+        model_line = (
+            f"El caso construye un único modelo de clasificación: {selected}. Refiérete SOLO a "
+            "ese modelo y elimina toda mención de cualquier otro algoritmo de clasificación.\n"
+        )
     return (
         "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA (Módulo 2)\n"
-        "Algunas preguntas citan una gráfica inexistente o una tasa del evento en "
-        "`solucion_esperada` que NO coincide con su propio `enunciado` ni con el dataset. "
+        "Algunas preguntas citan una gráfica inexistente, una tasa del evento en "
+        "`solucion_esperada` que NO coincide con su propio `enunciado` ni con el dataset, o un "
+        "modelo de clasificación que el caso no seleccionó. "
         "Regenera EXACTAMENTE 2 preguntas con el MISMO schema y los MISMOS `numero` (1 y 2): "
         "cada `chart_ref` debe ser uno de los ids válidos del manifest (o null), y toda cifra "
         "de la tasa del evento en `solucion_esperada` debe ser EXACTAMENTE la de su enunciado.\n"
         f"Gráficas válidas (ids): {valid_charts}.\n"
         f"{rate_line}"
+        f"{model_line}"
         "Incoherencias detectadas:\n" + bullet_list
+    )
+
+
+def _build_eda_model_focus_hint(variant: str | None) -> str:
+    """Brace-free model-focus addendum for the M2 EDA questions prompt (ml_ds single-model).
+
+    The classification model is selected at intake, so for an ``lr_only`` / ``rf_only`` case the
+    M2 questions should name THAT model and never another — the M2 counterpart of the variant-aware
+    M3/M4/M5 surfaces. The M2 base prompt was de-specified to be model-neutral; this re-anchors it to
+    the actual model so M2 stays coherent with M3/M4/M5. ``lr_rf_contrast`` / ``None`` (business and
+    ml_ds contrast) → ``""`` (no-op): contrast legitimately reasons about both models and business is
+    already model-neutral. CONCATENATED onto the already-formatted prompt (never ``.format``), so it
+    carries no placeholder. A one-way prompt improvement (mirrors the de-specify; no kill-switch).
+    """
+    if variant == CLASSIFICATION_NOTEBOOK_VARIANT_LR_ONLY:
+        modelo = "Regresión Logística"
+    elif variant == CLASSIFICATION_NOTEBOOK_VARIANT_RF_ONLY:
+        modelo = "Random Forest"
+    else:
+        return ""
+    return (
+        "\n\n# Modelo del caso (coherencia M2 ↔ M3)\n"
+        f"El caso construirá un único modelo de clasificación: {modelo}. Cuando una pregunta razone "
+        f"sobre el clasificador (umbral de decisión, recall, precisión, regularización), refiérete a "
+        f"{modelo}. NUNCA nombres ningún otro algoritmo de clasificación que el caso no haya "
+        "seleccionado."
     )
 
 
@@ -3116,6 +3472,7 @@ def _apply_eda_questions_coherence(
     state: ADAMState,
     preguntas_dict: list[dict],
     chart_ids: set[str],
+    variant: str | None = None,
 ) -> list[dict]:
     """Validate + reprompt-once-then-DEGRADE the M2 EDA question coherence.
 
@@ -3126,6 +3483,10 @@ def _apply_eda_questions_coherence(
     key ``M2-Q{numero}``) AND is now coherent — otherwise it degrades to the pass-1 questions.
     Best-effort: ANY throw (including a reprompt ``RuntimeError``, which the node would
     otherwise re-raise and fail the job) degrades to pass-1. Never raises.
+
+    ``variant`` is the resolved classification notebook variant (or ``None``) — passed by the
+    caller; it drives the ``MODELO_NO_SELECCIONADO`` leak check (no-op for ``None`` /
+    ``lr_rf_contrast``, i.e. business and ml_ds contrast).
     """
     log_extra = {"node": "eda_questions_generator", "case_id": state.get("case_id")}
     try:
@@ -3138,7 +3499,9 @@ def _apply_eda_questions_coherence(
             if isinstance(raw_rate, (int, float)) and not isinstance(raw_rate, bool)
             else None
         )
-        violations = validate_eda_questions_coherence(preguntas_dict, chart_ids, rate)
+        violations = validate_eda_questions_coherence(
+            preguntas_dict, chart_ids, rate, variant=variant
+        )
         if not violations:
             return preguntas_dict
         logger.info(
@@ -3150,7 +3513,9 @@ def _apply_eda_questions_coherence(
             },
         )
         rate_pct = rate * 100.0 if rate is not None and 0.0 < rate <= 1.0 else None
-        reprompt = prompt + _build_m2_coherence_reprompt(chart_ids, rate_pct, violations)
+        reprompt = prompt + _build_m2_coherence_reprompt(
+            chart_ids, rate_pct, violations, variant=variant
+        )
         try:
             resultado: EDAQuestionsOutput = llm.with_structured_output(
                 EDAQuestionsOutput
@@ -3171,7 +3536,7 @@ def _apply_eda_questions_coherence(
                 extra=log_extra,
             )
             return preguntas_dict
-        residual = validate_eda_questions_coherence(corrected, chart_ids, rate)
+        residual = validate_eda_questions_coherence(corrected, chart_ids, rate, variant=variant)
         if not residual:
             logger.info(
                 "[eda_questions] coherencia M2 corregida por reprompt",
@@ -3302,6 +3667,17 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             "chart_manifest": chart_manifest,
         })
 
+        # Resolve the classification variant ONLY for ml_ds+clf (mirror m3_questions_generator).
+        # The model is selected at intake, so M2 already knows it. business / other families →
+        # None → both the model-focus hint and the MODELO_NO_SELECCIONADO guard are no-ops.
+        _eda_profile, _eda_family = _resolve_generation_focus(state)
+        eda_variant: str | None = None
+        if _eda_profile == "ml_ds" and _eda_family == "clasificacion":
+            eda_variant, _ = _resolve_classification_notebook_variant(
+                algorithm_mode=_extract_state_algorithm_mode(state),
+                algoritmos=_extract_state_algoritmos(state),
+            )
+
         prompt = _select_eda_prompt(
             state,
             context.get("primary_family", ""),
@@ -3309,6 +3685,9 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             generic=EDA_QUESTIONS_GENERATOR_PROMPT,
             clustering_override=EDA_QUESTIONS_GENERATOR_PROMPT_CLUSTERING,
         ).format(**context)
+        # ml_ds single-model → re-anchor the (de-specified, model-neutral) prompt to the selected
+        # model so M2 stays coherent with M3/M4/M5. Brace-free concat; no-op ("") elsewhere.
+        prompt = prompt + _build_eda_model_focus_hint(eda_variant)
 
         # v9 M2-Redesign: EDAQuestionsOutput con EDASocraticQuestion (solucion_esperada = objeto)
         resultado: EDAQuestionsOutput = llm.with_structured_output(
@@ -3329,6 +3708,7 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             state=state,
             preguntas_dict=preguntas_eda_dict,
             chart_ids=chart_ids,
+            variant=eda_variant,
         )
 
         # Issue #499: relabel any raw chart id leaked into the student-visible prose with its
@@ -3589,6 +3969,15 @@ _CLUSTERING_SEGMENTATION_COLUMNS: tuple[dict, ...] = (
     {"name": "support_intensity", "type": "float", "description": "Intensidad de uso de soporte (interacciones/mes)",     "range_min": 0.0,  "range_max": 10.0, "nullable": False, "trend": None, "dependency": None},
 )
 
+# Issue #531 — domain-adaptive segmentation columns. When the architect contract declares enough
+# usable numeric `feature_columns`, those (renamed/ranged for the case domain) REPLACE the generic
+# RFM above, so the CSV the student downloads is coherent with ANY case domain (educación, salud,
+# ambiental, manufactura…), not always generic e-commerce RFM. `_CLUSTERING_MIN_DOMAIN_FEATURES`
+# is the floor below which we fall back to the fixed RFM (≥2 needed for separable blobs; 3 gives a
+# buffer); `_CLUSTERING_MAX_DOMAIN_FEATURES` caps the fit dimensionality.
+_CLUSTERING_MIN_DOMAIN_FEATURES = 3
+_CLUSTERING_MAX_DOMAIN_FEATURES = 8
+
 # Row count for the ml_ds + clustering dataset (Issue #468). 200 was too few for a 12-D K-Means
 # fit (~50 points/cluster → noisy silhouette, unstable re-seeding) and clashed with the "segment N
 # users" narrative. 1000 entity rows stabilises the clusters; the silhouette band is recalibrated
@@ -3596,26 +3985,170 @@ _CLUSTERING_SEGMENTATION_COLUMNS: tuple[dict, ...] = (
 # deterministic band-lock tests; gated by `MLDS_CLUSTERING_STRUCTURE` (OFF → 200 generic ml_ds).
 _MLDS_CLUSTERING_MAX_ROWS = 1000
 
+# Row count for the ml_ds + clasificación dataset (Issue #525; 600 → 1000). More rows give LR/RF more
+# signal (AUC equal-or-better, bounded above by the target's noise_factor → no "too-perfect" degeneration).
+# 1000 ≤ 2000, so the notebook GridSearchCV cascade (#240) stays on the full-tuning branch — no behaviour
+# change. Sibling of `_MLDS_CLUSTERING_MAX_ROWS`; monotonic-safe constant, revert = git (no kill-switch).
+_MLDS_CLASSIFICATION_MAX_ROWS = 1000
 
-def _build_clustering_fallback_schema(max_rows: int) -> dict:
-    """Entity-level segmentation fallback schema for ml_ds + clustering (Issue #452).
 
-    ``period`` is kept as a row id (str → excluded from the numeric K-Means fit); the rest are
-    interpretable segmentation features that `_enforce_mlds_clustering_structure` blobs. No
-    revenue/costs/margin/ebitda → the financial scaling + ebitda/margin recompute + outlier
-    target selection in `_generate_dataset_from_schema`/`data_validator` all no-op cleanly.
+def _clustering_feature_range_heuristic(name: str, dtype: str) -> tuple[float, float]:
+    """Sensible ``(low, high)`` for a domain clustering feature lacking an architect range (#531).
+
+    The range affects ONLY display realism: ``StandardScaler`` makes the K-Means silhouette
+    invariant to each feature's linear scale, so a rough bucket by name token is enough to avoid
+    the original ``_default_column`` defect (a ``willingness_to_pay_usd`` shown as ``0.65``). The
+    buckets mirror the fixed RFM ranges. First match wins; falls back to a generic ``[0, 100]``.
+    Pure, deterministic. Architect-declared ranges take precedence over this (see the resolver).
+
+    Matching is WORD-boundary (split the snake_case name into tokens) rather than raw substring, so
+    an unrelated word is never mis-read by an embedded substring (e.g. ``du[ratio]n`` → NOT a rate,
+    ``dis[count]`` → NOT a count, ``dis[pay]`` → NOT money). Multi-concept names (``days_to_payment``)
+    stay a first-match judgment call — acceptable since this is display-only and a fallback (the
+    architect supplies real ranges on the happy path).
+    """
+    words = {w for w in re.split(r"[^a-z0-9]+", (name or "").lower()) if w}
+
+    def has(*toks: str) -> bool:
+        return any(t in words for t in toks)
+
+    # Strong money signals first (unambiguous units) → mirror `monetary_value` [50, 5000].
+    if has("usd", "dollar", "dollars", "revenue", "income", "price", "spend", "spending", "ltv",
+           "arpu", "monetary", "monetar", "budget", "payment", "payments", "pay", "donation",
+           "donations", "sales", "valor", "precio", "costo", "ingreso", "ingresos"):
+        return (50.0, 5000.0)
+    if has("recency", "day", "days", "dias"):
+        return (1.0, 365.0)
+    if has("tenure", "month", "months", "mes", "meses", "antiguedad"):
+        return (1.0, 72.0)
+    if has("year", "years", "anio", "anios", "ano", "anos"):
+        return (1.0, 10.0)
+    # Intensity, then normalized score/rate — BEFORE the count bucket.
+    if has("intensity", "intensidad"):
+        return (0.0, 10.0)
+    if has("score", "index", "indice", "rate", "ratio", "pct", "percent", "percentage",
+           "proportion", "share", "probability", "prob", "engagement", "satisfaction",
+           "likelihood", "propensity"):
+        return (0.0, 1.0)
+    if has("count", "freq", "frequency", "visit", "visits", "order", "orders", "session",
+           "sessions", "interaction", "interactions", "transaction", "transactions", "purchase",
+           "purchases", "login", "logins", "click", "clicks", "trip", "trips", "num", "number",
+           "qty", "quantity"):
+        return (1.0, 60.0)
+    # Weak money signals (could be non-money) checked late.
+    if has("value", "valor", "amount", "monto", "cost", "costs"):
+        return (50.0, 5000.0)
+    return (0.0, 100.0)
+
+
+def _resolve_clustering_segmentation_columns(
+    contract: dict | None, *, domain_enabled: bool = True
+) -> list[dict]:
+    """SINGLE SOURCE of the ml_ds + clustering segmentation feature columns (Issue #531).
+
+    Domain-adaptive: when ``domain_enabled`` AND the architect contract declares at least
+    ``_CLUSTERING_MIN_DOMAIN_FEATURES`` USABLE numeric ``feature_columns``, those features (with the
+    architect's ``range_min``/``range_max`` or a name/dtype heuristic) ARE the segmentation set — so
+    the CSV is coherent with the case domain (a wetland case gets ``willingness_to_pay_usd`` /
+    ``visit_recency_days`` instead of generic e-commerce RFM), with NO duplicate generic RFM and NO
+    broken ``_default_column`` ranges. Otherwise (kill-switch off, no/insufficient contract) it falls
+    back to the fixed RFM ``_CLUSTERING_SEGMENTATION_COLUMNS``.
+
+    Pure, deterministic, no LLM. Used by BOTH the schema builder (``_build_clustering_fallback_schema``)
+    AND the #515 monetary-ceiling resolver, so the runtime guard and the generated dataset agree by
+    construction. Skips non-numeric (str/date) features, the entity index (``period``/``*_id``),
+    cluster-label artifacts (``cluster*``/``kmeans*``), and de-dups by name; caps at
+    ``_CLUSTERING_MAX_DOMAIN_FEATURES``.
+    """
+    if domain_enabled and isinstance(contract, dict):
+        cols: list[dict] = []
+        seen: set[str] = set()
+        for feat in contract.get("feature_columns") or []:
+            if not isinstance(feat, dict):
+                continue
+            # Defensive: in production `feat` is a Pydantic `DatasetFeatureSpec` dump (name is str),
+            # but schema_designer's clustering path has no try/except, so a malformed feature must be
+            # SKIPPED, never crash a job (e.g. a non-str name would break `.strip()`). If too few
+            # usable features survive, the function falls back to the fixed RFM.
+            raw_name = feat.get("name")
+            if not isinstance(raw_name, str) or not raw_name.strip():
+                continue
+            name = raw_name.strip()
+            lname = name.lower()
+            if lname == "period" or lname.endswith("_id") or lname in seen:
+                continue
+            if any(tok in lname for tok in _CLUSTERING_LABEL_NAME_TOKENS):
+                continue
+            raw_dtype = feat.get("dtype", "float")
+            # Defensive: a non-str dtype (e.g. a list) is unhashable and would raise in `.get`;
+            # default it to "float" (the resolver must be total — see name guard above).
+            ctype = (
+                _CONTRACT_TYPE_TO_SCHEMA_TYPE.get(raw_dtype, "float")
+                if isinstance(raw_dtype, str) else "float"
+            )
+            if ctype not in ("int", "float"):
+                continue  # str/date cannot be a numeric K-Means feature
+            lo, hi = feat.get("range_min"), feat.get("range_max")
+            # `math.isfinite` is load-bearing (mirrors DatasetFeatureSpec._sanitize_range): without
+            # it an inf range_max passes `lo < hi` and an `inf` value would reach the dataset as
+            # invalid JSON (`Infinity`). Any non-finite/inverted/non-numeric pair → name/dtype heuristic.
+            if not (
+                isinstance(lo, (int, float)) and isinstance(hi, (int, float))
+                and not isinstance(lo, bool) and not isinstance(hi, bool)
+                and math.isfinite(lo) and math.isfinite(hi) and lo < hi
+            ):
+                lo, hi = _clustering_feature_range_heuristic(name, ctype)
+            if ctype == "int":
+                lo, hi = float(int(round(lo))), float(int(round(hi)))
+                if lo >= hi:
+                    hi = lo + 1.0
+            raw_desc = feat.get("description")
+            desc = raw_desc.strip() if isinstance(raw_desc, str) and raw_desc.strip() else (
+                f"Eje de segmentación ({name})"
+            )
+            cols.append({
+                "name": name,
+                "type": ctype,
+                "description": desc,
+                "range_min": lo,
+                "range_max": hi,
+                "nullable": False,
+                "trend": None,
+                "dependency": None,
+            })
+            seen.add(lname)
+            if len(cols) >= _CLUSTERING_MAX_DOMAIN_FEATURES:
+                break
+        if len(cols) >= _CLUSTERING_MIN_DOMAIN_FEATURES:
+            return cols
+    return [dict(c) for c in _CLUSTERING_SEGMENTATION_COLUMNS]
+
+
+def _build_clustering_fallback_schema(
+    max_rows: int, contract: dict | None = None, *, domain_enabled: bool = True
+) -> dict:
+    """Entity-level segmentation schema for ml_ds + clustering (Issue #452, domain-adaptive #531).
+
+    ``period`` is kept as a row id (str → excluded from the numeric K-Means fit); the segmentation
+    features come from ``_resolve_clustering_segmentation_columns`` — the architect's DOMAIN features
+    when present (``domain_enabled`` + a contract with ≥ min usable numeric features), else the fixed
+    RFM. `_enforce_mlds_clustering_structure` blobs whichever features result. No revenue/costs/
+    margin/ebitda → the financial scaling + ebitda/margin recompute + outlier target selection in
+    `_generate_dataset_from_schema`/`data_validator` all no-op cleanly.
     """
     columns: list[dict] = [
         {"name": "period", "type": "str", "description": "Identificador de entidad/registro",
          "range_min": None, "range_max": None, "nullable": False, "trend": None, "dependency": None},
     ]
-    columns.extend(dict(c) for c in _CLUSTERING_SEGMENTATION_COLUMNS)
+    columns.extend(
+        _resolve_clustering_segmentation_columns(contract, domain_enabled=domain_enabled)
+    )
     return {
         "columns": columns,
         "n_rows": max_rows,
         "time_granularity": "monthly",
         "constraints": {"tolerance_pct": 0.05},
-        "reasoning_summary": "Fallback schema clustering — features de segmentación (Issue #452)",
+        "reasoning_summary": "Fallback schema clustering — features de segmentación (Issue #452/#531)",
     }
 
 
@@ -3630,6 +4163,7 @@ def _build_fallback_schema(
     primary_family: str = "clasificacion",
     *,
     clustering_structure_enabled: bool = True,
+    clustering_domain_columns_enabled: bool = True,
 ) -> dict:
     """Schema mínimo si schema_designer falla. Extrae revenue con regex del Exhibit 1.
 
@@ -3648,7 +4182,13 @@ def _build_fallback_schema(
         and profile == "ml_ds"
         and primary_family == "clustering"
     ):
-        return _build_clustering_fallback_schema(max_rows)
+        # Issue #531 — domain-adaptive segmentation columns from the architect contract (when present
+        # + the kill-switch is on); else the fixed RFM. The data adapts to the case domain.
+        return _build_clustering_fallback_schema(
+            max_rows,
+            state.get("dataset_schema_required"),
+            domain_enabled=clustering_domain_columns_enabled,
+        )
 
     financial_text = state.get("doc1_anexo_financiero", "")
 
@@ -4296,15 +4836,18 @@ def _validate_target_event_rate(
     family: str | None,
     case_title: str | None,
     profile: str | None,
+    *,
+    business_calibration_enabled: bool = False,
 ) -> tuple[dict | None, list[str]]:
-    """Valida y sanitiza ``target_event_rate`` del contrato (Issue F1).
+    """Valida y sanitiza ``target_event_rate`` del contrato (Issue F1, #518).
 
     Fuente única de verdad de la prevalencia del evento: el architect la emite, Exhibit 2 la
     imprime, y el generador determinista calibra la columna target a ella. Best-effort
     (case_architect-style), NUNCA lanza ni muta el dict in-place:
-      * Gate = ml_ds + clasificación + target binario (``role==classification_target`` y
-        ``dtype==int``). Fuera del gate y poblado → warning + nulificado (no aplica a
-        business/multiclase/otras familias).
+      * Gate = clasificación + target binario (``role==classification_target`` y ``dtype==int``):
+        ml_ds SIEMPRE, y business cuando ``business_calibration_enabled`` (Issue #518 — ÚNICO punto
+        que gatea el kill-switch). Fuera del gate y poblado → warning + nulificado (no aplica a
+        multiclase/otras familias, ni a business con el kill-switch off → byte-idéntico al previo).
       * Dentro del gate y ausente → warning estructurado (el generador cae al umbral ~0.50 y
         Exhibit 2 quedará incoherente — señal accionable para operadores).
       * Dentro del gate, presente pero fuera de [_MIN, _MAX] o no finito → warning + nulificado.
@@ -4324,12 +4867,18 @@ def _validate_target_event_rate(
     family_norm = (family or "").strip().lower()
     profile_norm = (profile or "").strip().lower()
     target = contract.get("target_column") or {}
-    is_binary_clf = (
-        profile_norm == "ml_ds"
-        and family_norm == "clasificacion"
+    is_clf_binary_shape = (
+        family_norm == "clasificacion"
         and isinstance(target, dict)
         and target.get("role") == "classification_target"
         and target.get("dtype") == "int"
+    )
+    # Issue #518 — el gate se amplía a business+clf detrás del kill-switch (ÚNICO punto de gate).
+    # El brazo ml_ds queda idéntico; business entra al gate SOLO con el switch on, de modo que el
+    # camino OFF nulifica el rate business exactamente como antes (byte-idéntico al previo).
+    is_binary_clf = is_clf_binary_shape and (
+        profile_norm == "ml_ds"
+        or (business_calibration_enabled and profile_norm == "business")
     )
 
     # Fuera del gate: si viene poblado, nulificar (no aplica).
@@ -4743,6 +5292,68 @@ def _is_retention_target_name(name: str, role: str = "") -> bool:
     return (role or "").strip().lower() == "forecasting_target" and "retention" in n
 
 
+# Workforce/HR de-template carve-out (sibling de #382/#507). `_is_retention_target_name` marca
+# `attrition_flag`/`employee_attrition` como retención (token DURO `attrition`), así que el de-churn
+# #382 los saltaba y conservaban el template SaaS de CLIENTES (customer_ltv/plan_tier/payment_failures
+# …) — incoherente para un dataset de RRHH (M2 mutual_info mostraba revenue/churn_rate como predictores
+# de la atrición de EMPLEADOS). La atrición de empleados NO es churn de clientes SaaS. Dos niveles de
+# alta precisión, normalizados sin separadores → robustos a `job_level`/`JobLevel`/`joblevel`:
+#   • ENTIDAD (la entidad ES empleados): solo cuenta en el NOMBRE DEL TARGET. En una FEATURE es ambiguo
+#     — un churn de clientes B2B legítimamente lleva `num_employees` (tamaño de la empresa-cliente).
+#   • ATRIBUTO de un empleado individual: alta precisión en CUALQUIER sitio (target o feature); no
+#     describe a un cliente/empresa.
+# EXCLUYE a propósito tokens ambiguos cliente-también (`tenure`=antigüedad de suscripción,
+# `attrition`/`turnover`=atrición/rotación de CLIENTES, `department`/`salary`/`manager`) → NUNCA se
+# dispara sobre un churn de clientes genuino (cero FP sobre la LÍNEA ROJA churn). Un caso de RRHH sin
+# ninguno de estos tokens degrada de forma segura al comportamiento previo (conserva el template).
+_WORKFORCE_ENTITY_TOKENS: tuple[str, ...] = (
+    "employee", "empleado", "staff", "workforce", "headcount", "plantilla",
+    "personnel", "worker", "trabajador",
+)
+_WORKFORCE_ATTRIBUTE_TOKENS: tuple[str, ...] = (
+    "overtime", "seniority", "absentee", "worklife", "years_at_company", "years_in_role",
+    "job_level", "job_role", "job_title", "job_satisfaction", "job_involvement",
+)
+
+
+def _norm_identifier(text: str | None) -> str:
+    """Minúsculas + sin separadores (snake_case/camelCase/espacios → un token contiguo)."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+_WORKFORCE_ENTITY_TOKENS_NORM: tuple[str, ...] = tuple(
+    _norm_identifier(t) for t in _WORKFORCE_ENTITY_TOKENS
+)
+_WORKFORCE_ATTRIBUTE_TOKENS_NORM: tuple[str, ...] = tuple(
+    _norm_identifier(t) for t in _WORKFORCE_ATTRIBUTE_TOKENS
+)
+
+
+def _is_workforce_attrition_case(contract: dict | None) -> bool:
+    """True si el contrato describe ATRICIÓN DE EMPLEADOS (no churn de clientes SaaS).
+
+    Alta precisión, determinista, 0 LLM, no muta el contrato. Devuelve ``False`` si el contrato es
+    ``None``/vacío o no hay señal de empleados (degradación segura → conserva el template, byte-
+    idéntico al comportamiento previo). Usado SOLO para acotar la LÍNEA ROJA de retención del de-churn
+    (#382): un target retención-por-nombre que ADEMÁS es RRHH sale del early-return y sigue la ruta
+    de-template contract-first del dominio. Un token de ENTIDAD cuenta solo en el nombre del target;
+    un token de ATRIBUTO cuenta en el target o en cualquier feature (ver constantes arriba).
+    """
+    if not contract:
+        return False
+    tgt = contract.get("target_column") or {}
+    target_name = _norm_identifier(tgt.get("name") if isinstance(tgt, dict) else "")
+    if target_name and any(tok in target_name for tok in _WORKFORCE_ENTITY_TOKENS_NORM):
+        return True
+    haystacks = [target_name]
+    for feat in contract.get("feature_columns") or []:
+        if isinstance(feat, dict):
+            haystacks.append(_norm_identifier(feat.get("name")))
+    return any(
+        tok in hs for hs in haystacks if hs for tok in _WORKFORCE_ATTRIBUTE_TOKENS_NORM
+    )
+
+
 def _select_driver_feature(
     contract: dict | None, *, target_name: str | None = None
 ) -> tuple[str, dict | None]:
@@ -4913,6 +5524,7 @@ def _enforce_mlds_classification_schema(
     primary_family: str | None,
     enabled: bool = True,
     detemplate_cross_section: bool = True,
+    detemplate_workforce: bool = True,
 ) -> dict:
     """De-churna la SEÑAL del target para ml_ds + clasificación NO-retención (Issue #382).
 
@@ -4943,6 +5555,15 @@ def _enforce_mlds_classification_schema(
     ambiental, scoring, aprobación) esas columnas son residuo de plantilla, no datos. Tienen la MISMA
     protección que el resto: una columna declarada feature del contrato (panel de empresa legítimo)
     NUNCA se elimina. Off → comportamiento #382 byte-idéntico (base financiera conservada).
+
+    De-template workforce (``detemplate_workforce``, kill-switch ``MLDS_DETEMPLATE_WORKFORCE``): la
+    LÍNEA ROJA de retención (early-return byte-idéntico) se ACOTA a churn de CLIENTES SaaS. Un target
+    retención-por-nombre que ADEMÁS es atrición de EMPLEADOS (``_is_workforce_attrition_case``: tokens
+    RRHH de alta precisión en el nombre del target/features) SALE del early-return y sigue esta misma
+    ruta de-template: re-apunta el target a un driver de DOMINIO (RRHH) y elimina el template SaaS de
+    clientes, de modo que el dataset hable de RRHH (antigüedad/satisfacción/nivel del puesto) y no de
+    churn_rate/customer_ltv. Off → todo target retención conserva el template (#382/#507 byte-idéntico).
+    El churn de clientes genuino NUNCA se ve afectado (cero FP del predicado sobre la línea roja).
     """
     if not enabled or profile != "ml_ds":
         return schema
@@ -4957,8 +5578,12 @@ def _enforce_mlds_classification_schema(
     contract_target = _safe_contract_target_name(contract)
     if not contract_target:
         return schema
-    # LÍNEA ROJA: churn/retención conserva el template intacto (byte-idéntico).
-    if _is_retention_target_name(contract_target):
+    # LÍNEA ROJA: churn de CLIENTES SaaS conserva el template intacto (byte-idéntico). Carve-out
+    # workforce: la atrición de EMPLEADOS es retención-por-nombre pero NO churn de clientes → sale del
+    # early-return y sigue la ruta de-template del dominio (kill-switch MLDS_DETEMPLATE_WORKFORCE).
+    if _is_retention_target_name(contract_target) and not (
+        detemplate_workforce and _is_workforce_attrition_case(contract)
+    ):
         return schema
 
     columns = [dict(c) for c in schema.get("columns", [])]
@@ -5298,6 +5923,14 @@ def _enforce_mlds_clustering_no_target(
         return schema
 
     stripped = [c.get("name") for c in columns if c.get("name") in strip_names]
+    # Issue #531 — a contract `target_column` (incl. the clustering_target PLACEHOLDER the architect
+    # now emits to satisfy the required field) lands in `strip_names` via Regla A, but with the
+    # domain-adaptive builder it is NEVER materialized as a column (the builder only emits
+    # feature_columns; the generic augmenter is skipped for clustering). So `stripped` is empty →
+    # nothing to remove, no dangling-dependency repair needed → return the SAME schema (byte-identical
+    # no-op, no spurious "removidas: []" log).
+    if not stripped:
+        return schema
     columns = [c for c in columns if c.get("name") not in strip_names]
 
     # Reparación de dependencias colgantes: una columna cuyo padre fue eliminado genera independiente
@@ -5431,15 +6064,15 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     # (the resolved family, not "") gates that spine.
     _effective_family = (primary_family or "clasificacion") if profile == "ml_ds" else ""
 
-    # ml_ds+clasificacion: 600 filas (Issue #240 cascade: 600 ≤ 2000 → full GridSearchCV).
+    # ml_ds+clasificacion: 1000 filas (Issue #525, antes 600; cascada #240: 1000 ≤ 2000 → full GridSearchCV).
     # ml_ds+clustering: 1000 filas (Issue #468 — entity-level segmentation needs more points than
     #   the 12-D K-Means fit had at 200; recalibrated band). Gated por el switch → OFF = 200 genérico.
     # ml_ds+otras familias: 200 filas — el GridSearchCV size cascade es exclusivo del
-    # notebook de clasificacion; regresion no necesita 600 filas.
+    # notebook de clasificacion; regresion no necesita 1000 filas.
     # business: 100 (midpoint de 80-120; el LLM elige n_rows estrictamente entre 80-120).
     _is_clasificacion_ml = profile == "ml_ds" and _effective_family == "clasificacion"
     if _is_clasificacion_ml:
-        max_rows = 600
+        max_rows = _MLDS_CLASSIFICATION_MAX_ROWS
     elif _effective_family == "clustering" and settings.mlds_clustering_structure:
         max_rows = _MLDS_CLUSTERING_MAX_ROWS
     elif profile == "ml_ds":
@@ -5621,6 +6254,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
                 schema_result, contract, profile=profile, primary_family=primary_family,
                 enabled=settings.mlds_dechurn_signal,
                 detemplate_cross_section=settings.mlds_detemplate_cross_section,
+                detemplate_workforce=settings.mlds_detemplate_workforce,
             )
             # Issue #506 — prior de dirección económica: reescribe el target ml_ds+clf de-churnado a un
             # acoplamiento multi-driver con SIGNO (expected_direction del contrato) para que el
@@ -5685,6 +6319,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     fallback_schema = _build_fallback_schema(
         state, max_rows, profile, primary_family=_effective_family,
         clustering_structure_enabled=settings.mlds_clustering_structure,
+        clustering_domain_columns_enabled=settings.mlds_clustering_domain_columns,
     )
     # Issue #225 — incluso en fallback respetamos el contrato del architect.
     contract = state.get("dataset_schema_required")
@@ -5692,7 +6327,15 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
     fallback_schema = _align_ml_ds_classification_target(
         fallback_schema, contract, profile=profile, primary_family=primary_family
     )
-    fallback_schema = _augment_schema_with_contract(fallback_schema, contract)
+    # Issue #531 — for the ml_ds + clustering DETERMINISTIC path the segmentation columns already
+    # come from the contract (domain-adaptive) inside `_build_clustering_fallback_schema`, so the
+    # generic feature/target augmenter MUST NOT run here: it would (a) re-append the contract's
+    # `feature_columns` as DUPLICATE generic-ranged columns (the original defect) and (b) inject the
+    # (placeholder) `clustering_target`. Clustering has no target, so skipping it is correct. This is
+    # the UNCONDITIONAL bug fix (independent of MLDS_CLUSTERING_DOMAIN_COLUMNS) — restoring the
+    # duplicate-column path on an off-switch would re-expose the bug (anti-pattern; cf. #470).
+    if not _use_deterministic_clustering_schema:
+        fallback_schema = _augment_schema_with_contract(fallback_schema, contract)
     # Issue #301 — el spine determinista también aplica en fallback (red de seguridad).
     fallback_schema, biz_notes, biz_target = _enforce_business_classification_schema(
         fallback_schema, contract, profile=profile, primary_family=primary_family
@@ -5703,6 +6346,7 @@ def schema_designer(state: ADAMState, config: RunnableConfig) -> dict:
         fallback_schema, contract, profile=profile, primary_family=primary_family,
         enabled=settings.mlds_dechurn_signal,
         detemplate_cross_section=settings.mlds_detemplate_cross_section,
+        detemplate_workforce=settings.mlds_detemplate_workforce,
     )
     # Issue #506 — mismo prior de dirección económica en el fallback (red de seguridad).
     fallback_schema = _enforce_mlds_directional_target(
@@ -5867,12 +6511,13 @@ def _is_declared_binary_int(col: dict) -> bool:
 # HELPER — _generate_dataset_from_schema (Python puro, 0 tokens LLM)
 # ─────────────────────────────────────────────────────────
 
-def _is_mlds_event_target(col: dict, target_col_name: str | None) -> bool:
-    """¿Es ``col`` el target binario ml_ds a calibrar (Issue F1)?
+def _is_event_target(col: dict, target_col_name: str | None) -> bool:
+    """¿Es ``col`` el target binario a calibrar (Issue F1, #518)?
 
-    El target del contrato (ya reconciliado a una binaria por ``_align_ml_ds_classification_target``)
-    o ``categoria`` como fallback alias-first cuando no hay nombre de contrato — espejo de la
-    resolución contract-first del notebook (#348). Solo binarias {0,1} int.
+    Profile-agnóstica: el target del contrato (reconciliado a binaria por
+    ``_align_ml_ds_classification_target`` en ml_ds, o por ``_enforce_business_classification_schema``
+    en business) o ``categoria`` como fallback alias-first cuando no hay nombre de contrato — espejo
+    de la resolución contract-first del notebook (#348). Solo binarias {0,1} int.
     """
     if not _is_declared_binary_int(col):
         return False
@@ -5958,6 +6603,7 @@ def _generate_dataset_from_schema(
     *,
     target_event_rate: float | None = None,
     target_col_name: str | None = None,
+    outlier_respect_range: bool = True,
 ) -> list:
     """
     Genera filas de datos a partir del schema producido por schema_designer.
@@ -6119,19 +6765,24 @@ def _generate_dataset_from_schema(
         if col_type == "float":
             result = [None if null_mask[i] else round(float(values[i]), 2) for i in range(n_rows)]
         elif (
-            profile == "ml_ds"
+            # Issue #518 — calibración para business Y ml_ds. NO se gatea con el kill-switch aquí:
+            # auto-gatea por el null-guard `isinstance(target_event_rate, ...)` de abajo (con el
+            # switch off, `_validate_target_event_rate` nulifica el rate business → llega None →
+            # cae al `else` byte-idéntico). El generador queda puro (sin leer `settings`).
+            profile in ("business", "ml_ds")
             # isinstance (no solo `is not None`): defensa-en-profundidad sobre un valor de
             # origen LLM, por si un rate malformado (str/bool/None) llegara sin pasar por
             # `_validate_target_event_rate` — cae al camino round normal en vez de crashear.
             and isinstance(target_event_rate, (int, float))
             and not isinstance(target_event_rate, bool)
-            and _is_mlds_event_target(col, target_col_name)
+            and _is_event_target(col, target_col_name)
         ):
-            # Issue F1 — calibra la prevalencia del target binario ml_ds al `target_event_rate`
-            # anunciado en Exhibit 2 (fuente única M1↔M2). Umbral top-k por argsort sobre los
-            # `values` (= clip(base+noise), que ya codifican la señal driver→target): preserva
-            # el ORDEN (señal/AUC intacta) y fija la prevalencia EXACTA a la tasa. `k` con
-            # piso/techo garantiza ambas clases. Mutuamente excluyente con el balance business.
+            # Issue F1/#518 — calibra la prevalencia del target binario (business/ml_ds) al
+            # `target_event_rate` anunciado en Exhibit 2 (fuente única M1↔M2). Umbral top-k por
+            # argsort sobre los `values` (= clip(base+noise), que ya codifican la señal
+            # driver→target): preserva el ORDEN (señal/AUC intacta) y fija la prevalencia EXACTA a
+            # la tasa. `k` con piso/techo garantiza ambas clases. Mutuamente excluyente con el
+            # `_ensure_both_classes` del `else` (que ahora solo corre sin rate).
             scores = np.asarray(values, dtype=float)
             n = scores.size
             k = max(1, min(n - 1, int(round(float(target_event_rate) * n))))
@@ -6263,11 +6914,24 @@ def _generate_dataset_from_schema(
                 original = float(rows[idx][target_col])
                 outlier_val = original * 3.5
                 if col_range_max is not None and float(col_range_max) > 0:
-                    # business: el atípico respeta el range_max declarado en vez de
-                    # 2× (evita p. ej. churn 0.30 cuando el schema declaró [0.02,0.15],
-                    # que además debilitaba la correlación nps↔churn que el panel
-                    # presenta como driver real). ml_ds conserva el cap ×2 histórico.
-                    cap_mult = 1.0 if profile == "business" else 2.0
+                    # El atípico respeta el range_max DECLARADO (cap ×1.0) en business —
+                    # evita p. ej. churn 0.30 cuando el schema declaró [0.02,0.15], que además
+                    # debilitaba la correlación nps↔churn que el panel presenta como driver real.
+                    # ml_ds hacía ×2 histórico, lo que producía valores SEMÁNTICAMENTE IMPOSIBLES
+                    # para una feature acotada (un credit_score declarado [300,850] llegaba a 1700,
+                    # un porcentaje pasaba de 100). El generador YA clipa todo a [low,high]; el
+                    # atípico era la única violación de los rangos declarados. Con
+                    # `outlier_respect_range` (kill-switch `MLDS_OUTLIER_RESPECT_RANGE`, default true)
+                    # ml_ds también capa en range_max → el punto sigue siendo un atípico ~5σ (el
+                    # grueso está concentrado en el centro) pero un valor VÁLIDO. Off → ×2 legacy
+                    # byte-idéntico. business cae siempre en la rama ×1.0 (intacto). Solo se capa el
+                    # range_max (la única violación observada): el range_min queda garantizado por el
+                    # clip de generación SOLO para features no-negativas (atípico = original×3.5 ≥
+                    # original ≥ range_min cuando range_min ≥ 0, el caso de toda feature ml_ds —
+                    # score/monto/conteo/ratio/edad). No se añade un floor explícito: lo mantendría
+                    # OFF byte-idéntico es la prioridad, y un range_min negativo no ocurre en este
+                    # dominio (su underflow sería el comportamiento legacy pre-existente, sin cambio).
+                    cap_mult = 1.0 if (profile == "business" or outlier_respect_range) else 2.0
                     outlier_val = min(outlier_val, float(col_range_max) * cap_mult)
                 rows[idx][target_col] = round(outlier_val, 2)
 
@@ -6291,6 +6955,66 @@ def _generate_dataset_from_schema(
 _CLUSTERING_BLOB_SPREAD_FRAC = 0.115
 # K (number of latent segments) is chosen deterministically per case from this set.
 _CLUSTERING_K_CHOICES: tuple[int, ...] = (3, 4)
+
+# ── Simplex blob placement (k-coherence fix) ──────────────────────────────────
+# The pre-existing placement put each feature's k blob centers at an INDEPENDENT random
+# permutation of ``linspace(0.18, 0.82, k)``. That keeps every pair of blobs apart on every
+# feature, but does NOT make the k-cluster structure the silhouette-OPTIMAL one: with few
+# features and ``target_k == 4`` the four centroids frequently collapse into two visual groups,
+# so the notebook's data-driven k-selection (``argmax_k silhouette`` over k=2..10) lands on
+# k=2/3 — CONTRADICTING the #467 narrative that frames ``target_k`` segments. The student then
+# reads "4 segmentos" in M1/M4/M5 while their own notebook reports 2. (Measured: target_k=4 with
+# F∈{3,4} mismatched the notebook in the majority of seeds; F=2 never — but F≥3 always in
+# production via ``_CLUSTERING_MIN_DOMAIN_FEATURES``/RFM.)
+#
+# The fix places the k centroids as a regular SIMPLEX (mutually equidistant) randomly rotated
+# into the feature space, so no spurious sub-grouping exists and ``argmax_k silhouette`` lands
+# on ``target_k`` for every k∈{3,4} and F∈{3..8} (validated 10/10 seeds, full silhouette, n=1000).
+# Equidistant blobs are tighter-separated, so the spread is raised to keep the silhouette inside
+# the calibrated band [0.45, 0.70] (measured k3≈0.65 / k4≈0.58, ARI≥0.98). Gated by the
+# ``MLDS_CLUSTERING_SIMPLEX_CENTERS`` kill-switch: OFF → the legacy permutation placement +
+# ``_CLUSTERING_BLOB_SPREAD_FRAC`` (byte-identical to pre-fix; the RED control for the new oracle).
+_CLUSTERING_SIMPLEX_SPREAD_FRAC = 0.15
+# Interior box (normalized [0,1]) the rotated simplex centroids are min-max scaled into per
+# feature. Slightly wider than the legacy [0.18, 0.82] so the rotated geometry has room.
+_CLUSTERING_CENTER_BOX: tuple[float, float] = (0.12, 0.88)
+
+
+def _clustering_blob_centers(k: int, n_features: int, rng) -> "Any":
+    """Return a ``(k, n_features)`` matrix of blob centers in the normalized interior box.
+
+    The k centers form a regular simplex (k mutually-equidistant vertices, the unique geometry
+    with no spurious sub-grouping) embedded in ``n_features``-dim space and randomly rotated so
+    every feature carries cluster signal, then min-max scaled per feature into
+    ``_CLUSTERING_CENTER_BOX``. With equidistant centroids the silhouette is maximized at exactly
+    ``k`` clusters, so the notebook's ``argmax_k silhouette`` k-selection agrees with the injected
+    ``target_k`` (Issue #467 coherence) — the defect the legacy per-feature permutation could not
+    guarantee. Deterministic given ``rng`` (seeded from ``sha256(schema)``) → resume-stable +
+    thread-safe. Robust for ``n_features < k-1`` (the simplex partially embeds; never occurs in
+    production where ``n_features >= 3 >= k-1`` for ``k <= 4``).
+    """
+    import numpy as np
+
+    lo, hi = _CLUSTERING_CENTER_BOX
+    # Regular simplex: rows of the mean-centered identity are mutually equidistant; SVD reduces
+    # them to (k-1) coordinates preserving those distances.
+    eye = np.eye(k)
+    centered = eye - eye.mean(axis=0, keepdims=True)
+    u, s, _vt = np.linalg.svd(centered, full_matrices=False)
+    simplex = u[:, : k - 1] * s[: k - 1]  # (k, k-1), mutually equidistant
+    dims = min(k - 1, n_features)
+    embedded = np.zeros((k, n_features))
+    embedded[:, :dims] = simplex[:, :dims]
+    # Random orthogonal rotation (QR of a seeded Gaussian) so the simplex spreads across ALL
+    # features instead of only the first (k-1) → every feature discriminates segments.
+    q, _r = np.linalg.qr(rng.standard_normal((n_features, n_features)))
+    rotated = embedded @ q
+    # Min-max scale each feature into the interior box so per-feature variances are comparable
+    # (StandardScaler in the notebook then leaves the simplex geometry intact).
+    mn = rotated.min(axis=0)
+    mx = rotated.max(axis=0)
+    span = np.where(mx - mn > 1e-9, mx - mn, 1.0)
+    return lo + (rotated - mn) / span * (hi - lo)
 
 
 def _clustering_scalable_feature_columns(schema: dict) -> list[dict]:
@@ -6320,6 +7044,7 @@ def _enforce_mlds_clustering_structure(
     enabled: bool = True,
     return_labels: bool = False,
     target_k: int | None = None,
+    simplex_centers: bool = True,
 ):
     """Inyecta estructura de clusters REAL en el dataset ml_ds + clustering (Issue #452).
 
@@ -6328,6 +7053,14 @@ def _enforce_mlds_clustering_structure(
     segmentos latentes") queda hueca. Este helper reescribe las features numéricas escalables
     como una **mezcla de K∈{3,4} blobs gaussianos separables**, de modo que K-Means descubre
     segmentos genuinos e interpretables.
+
+    ``simplex_centers`` (kill-switch ``MLDS_CLUSTERING_SIMPLEX_CENTERS``, default on) selects the
+    centroid geometry: ON → a regular SIMPLEX (``_clustering_blob_centers``, mutually-equidistant
+    centroids) so the notebook's data-driven ``argmax_k silhouette`` k-selection lands on the
+    injected ``target_k`` (the #467 narrative↔notebook coherence guarantee); OFF → the legacy
+    per-feature permutation of ``linspace(0.18, 0.82, k)`` (byte-identical to pre-fix, the RED
+    control). The spread follows the geometry (simplex blobs are tighter-separated, so a larger
+    spread keeps the silhouette in band).
 
     Es PURO copy-on-write (no muta el dict/lista de entrada → determinismo del seed +
     thread-safety bajo jobs concurrentes), preserva el conteo y el ORDEN de filas (los blobs
@@ -6388,22 +7121,35 @@ def _enforce_mlds_clustering_structure(
     labels = np.array([i % k for i in range(n)], dtype=int)
     rng.shuffle(labels)
 
+    # Placement de centroides (gateado): SIMPLEX equidistante (silhouette pica en k → coherencia
+    # con target_k) vs. el legacy de permutación por-feature. El spread acompaña la geometría.
+    # La matriz simplex se computa UNA vez (consume rng para la rotación QR) antes del loop.
+    if simplex_centers:
+        center_matrix = _clustering_blob_centers(k, len(feats), rng)
+        spread = _CLUSTERING_SIMPLEX_SPREAD_FRAC
+    else:
+        center_matrix = None
+        spread = _CLUSTERING_BLOB_SPREAD_FRAC
+
     new_rows = [dict(r) for r in rows]
-    for col in feats:
+    for j, col in enumerate(feats):
         name = col["name"]
         low = float(col["range_min"]) if col.get("range_min") is not None else 0.0
         high = float(col["range_max"]) if col.get("range_max") is not None else low + 1.0
         if low >= high:
             high = low + 1.0
         span = high - low
-        # Centros por-blob = niveles EQUI-ESPACIADOS en el interior del rango normalizado,
-        # BARAJADOS por feature. Como cada blob recibe un nivel distinto (permutación biyectiva),
-        # cualquier par de blobs difiere en TODA feature por ≥ el gap mínimo → separación fuerte y
-        # consistente (a diferencia de centros uniformes-aleatorios, que pueden caer juntos); la
-        # permutación por-feature evita que los blobs queden colineales (separación isotrópica).
-        centers = rng.permutation(np.linspace(0.18, 0.82, k))
+        if center_matrix is not None:
+            # Columna de la matriz simplex: los k centros de ESTA feature (rotación + min-max ya
+            # aplicados). Centroides mutuamente equidistantes → sin sub-agrupamiento espurio → el
+            # silhouette del notebook pica exactamente en k (= target_k).
+            centers = center_matrix[:, j]
+        else:
+            # Legacy: niveles EQUI-ESPACIADOS barajados por feature (cada blob un nivel distinto →
+            # difieren en toda feature, pero NO garantizan que el silhouette pique en k).
+            centers = rng.permutation(np.linspace(0.18, 0.82, k))
         vals_norm = np.clip(
-            centers[labels] + rng.normal(0.0, _CLUSTERING_BLOB_SPREAD_FRAC, n), 0.0, 1.0
+            centers[labels] + rng.normal(0.0, spread, n), 0.0, 1.0
         )
         vals = low + vals_norm * span
         is_int = col.get("type") == "int"
@@ -6418,34 +7164,63 @@ def _enforce_mlds_clustering_structure(
     return new_rows
 
 
+def _resolve_entity_prefix(entity_descriptor: dict | None) -> tuple[str, str]:
+    """Resolve ``(snake_prefix, singular)`` for the clustering entity index (Issue #513).
+
+    Defense-in-depth: re-sanitizes ``snake_prefix`` via ``_sanitize_entity_prefix`` (the SAME helper
+    the ``EntityDescriptor`` schema validator uses) in case a raw/legacy dict reaches the data layer.
+    Falls back to the #468 ``("user", "usuario")`` when the descriptor is absent / malformed /
+    unsanitizable → ``user_id`` / ``user_00001`` (byte-identical to #468; required by its assertions,
+    which call ``_apply_clustering_entity_index`` with no descriptor). NOTE: this data-layer fallback
+    is deliberately ``"user"`` (no descriptor at all → #468 byte-compat), DISTINCT from the
+    schema-level ``EntityDescriptor`` default ``"cliente"`` (which applies when the architect DOES emit
+    a dict but with a missing/garbage ``snake_prefix``).
+    """
+    if isinstance(entity_descriptor, dict):
+        prefix = _sanitize_entity_prefix(entity_descriptor.get("snake_prefix"))
+        if prefix:
+            raw_singular = entity_descriptor.get("singular")
+            singular = (
+                raw_singular.strip()
+                if isinstance(raw_singular, str) and raw_singular.strip()
+                else prefix
+            )
+            return prefix, singular
+    return "user", "usuario"
+
+
 def _apply_clustering_entity_index(
     rows: list,
     schema: dict,
     *,
+    entity_descriptor: dict | None = None,
     profile: str,
     primary_family: str | None,
     enabled: bool = True,
 ) -> tuple[list, dict]:
-    """Renombra el índice temporal ``period`` → ``user_id`` (entity-level) para ml_ds + clustering (Issue #468).
+    """Renombra el índice temporal ``period`` → ``{prefix}_id`` (entity-level) para ml_ds + clustering.
 
-    El generador genérico rellena ``period`` con etiquetas mensuales (``2023-01``…) porque trata la
-    columna como índice temporal. Para clustering la unidad de análisis es la ENTIDAD (cliente/
-    usuario), no el mes — la narrativa segmenta usuarios. Este post-step (espeja
-    ``_enforce_mlds_clustering_structure``) reescribe la columna a un identificador de entidad
-    determinista ``user_00001``… y la renombra a ``user_id`` en las filas Y en una copia del schema,
-    de modo que el CSV que ve el estudiante es entity-level (no una serie temporal mensual).
+    Issue #468 introdujo el rename a ``user_id``; Issue #513 lo PARAMETRIZA por la entidad que narra
+    el architect (``entity_descriptor`` → ``snake_prefix``), de modo que el CSV que ve el estudiante
+    use la MISMA entidad de la historia M1 (Opción A — el dato se adapta a la narrativa). Sin
+    descriptor (entity_coherence off / no emitido) cae a ``user_`` → BYTE-IDÉNTICO a #468.
 
-    PURO copy-on-write (no muta las entradas → determinismo + thread-safety). ``user_id`` (str, token
-    ``id``) queda excluido del fit K-Means y de los charts (``_select_clustering_feature_columns`` lo
-    descarta por no-numérico y por el token ``id``) y el notebook #454 lo dropea por no-numérico.
+    El generador genérico rellena ``period`` con etiquetas mensuales (``2023-01``…). Para clustering
+    la unidad de análisis es la ENTIDAD, no el mes. Este post-step (espeja
+    ``_enforce_mlds_clustering_structure``) reescribe la columna a ``{prefix}_00001``… y la renombra a
+    ``{prefix}_id`` en las filas Y en una copia del schema.
 
-    ROBUSTO a un re-feed del schema renombrado (value-idempotente, no solo no-op): la columna índice
-    es ``period`` en la 1ª pasada (el generador genérico la rellena con etiquetas mensuales) o
-    ``user_id`` si se re-genera contra el schema YA renombrado que ``data_generator`` re-emite (un
-    retry de ``data_validator`` o un futuro checkpoint-skip de ``schema_designer`` haría que el
-    generador genérico rellene ``user_id`` con ``cat_N``). En AMBOS casos se (re)deriva
-    ``user_id = user_NNNNN`` de forma determinista, sobrescribiendo cualquier relleno categórico
-    obsoleto → el índice de entidad nunca se corrompe.
+    PURO copy-on-write (no muta las entradas → determinismo + thread-safety bajo jobs concurrentes),
+    preserva el conteo y el ORDEN de filas (1:1). ``{prefix}_id`` (str, token ``id``) queda excluido
+    del fit K-Means y de los charts (``_select_clustering_feature_columns`` lo descarta por
+    no-numérico y por el token ``id`` — robusto a cualquier prefijo) y el notebook #454 lo dropea por
+    no-numérico.
+
+    ROBUSTO a un re-feed del schema renombrado (value-idempotente): la columna índice es ``period``
+    en la 1ª pasada, el ``{prefix}_id`` actual (re-feed mismo prefijo, el caso durable normal) o el
+    legacy ``user_id``; en todos se (re)deriva ``{prefix}_NNNNN`` de forma determinista. NO se infiere
+    de un ``*_id`` arbitrario → una feature ``*_id`` que el architect declare nunca se confunde con el
+    índice.
 
     Gate (fuera de él → MISMOS objetos, byte-idéntico): ``enabled`` (kill-switch
     ``MLDS_CLUSTERING_STRUCTURE``) AND ``profile == "ml_ds"`` AND ``primary_family == "clustering"``
@@ -6455,27 +7230,40 @@ def _apply_clustering_entity_index(
         return rows, schema
     if not isinstance(rows, list) or not rows:
         return rows, schema
-    # Normaliza la columna índice (``period`` 1ª pasada / ``user_id`` re-feed) al id de entidad.
+
+    prefix, singular = _resolve_entity_prefix(entity_descriptor)
+    id_col = f"{prefix}_id"
+
     if "period" in rows[0]:
         index_key = "period"
+    elif id_col in rows[0]:
+        index_key = id_col
     elif "user_id" in rows[0]:
         index_key = "user_id"
     else:
         return rows, schema
 
+    # Guard de colisión (defensivo; las features de segmentación son RFM/comportamiento, ninguna
+    # termina en ``_id``): si ``{prefix}_id`` ya existe como columna NO-índice, cae al neutral
+    # ``user_id`` para no sobrescribir esa feature; si hasta el neutral colisiona, no toca nada.
+    if id_col != index_key and id_col in rows[0]:
+        prefix, singular, id_col = "user", "usuario", "user_id"
+        if id_col != index_key and id_col in rows[0]:
+            return rows, schema
+
     new_rows: list = []
     for i, r in enumerate(rows):
         rest = {k: v for k, v in r.items() if k != index_key}
-        new_rows.append({"user_id": f"user_{i + 1:05d}", **rest})
+        new_rows.append({id_col: f"{prefix}_{i + 1:05d}", **rest})
 
     new_schema = dict(schema)
     new_columns: list = []
     for col in schema.get("columns", []):
         c = dict(col)
-        if c.get("name") == "period":
-            c["name"] = "user_id"
+        if c.get("name") == index_key:
+            c["name"] = id_col
             c["type"] = "str"
-            c["description"] = "Identificador único de entidad/usuario"
+            c["description"] = f"Identificador único de {singular}"
         new_columns.append(c)
     new_schema["columns"] = new_columns
     return new_rows, new_schema
@@ -6515,6 +7303,10 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             profile=profile,
             target_event_rate=target_event_rate,
             target_col_name=target_col_name,
+            # Kill-switch MLDS_OUTLIER_RESPECT_RANGE (default true): keep the EDA outlier inside the
+            # feature's declared range_max for ml_ds too (no impossible 1700 credit_score). The
+            # generator stays pure (no settings import) — the flag is threaded in. Off → ×2 legacy.
+            outlier_respect_range=settings.mlds_outlier_respect_range,
         )
         # Issue #452 — inyecta estructura de clusters real para ml_ds + clustering (determinista,
         # gateado por kill-switch). No-op byte-idéntico para business/clasificación/regresión/
@@ -6541,13 +7333,24 @@ def data_generator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             primary_family=_clustering_family,
             enabled=settings.mlds_clustering_structure,
             target_k=_target_k,
+            simplex_centers=settings.mlds_clustering_simplex_centers,
         )
-        # Issue #468 — entity-level index: rename the monthly `period` to a `user_id` (user_00001…)
-        # so the clustering CSV the student reads is per-entity, not a monthly time series. No-op
-        # byte-idéntico fuera de ml_ds+clustering / con el switch off. Copy-on-write, resume-safe.
+        # Issue #468 + #513 — entity-level index: rename the monthly `period` to `{prefix}_id`
+        # (`{prefix}_00001`…) so the clustering CSV the student reads is per-entity AND uses the SAME
+        # entity the architect narrated (entity_descriptor, #513). The descriptor is injected ONLY
+        # under BOTH switches (the N-rows premise lives in `mlds_clustering_structure`; the entity
+        # rename is gated by `mlds_clustering_entity_coherence`) AND it is only persisted by the
+        # architect under that same dual gate → off / absent ⇒ None ⇒ `user_` (byte-identical to
+        # #468). No-op outside ml_ds+clustering. Copy-on-write, resume-safe.
+        _entity_descriptor = (
+            state.get("entity_descriptor")
+            if (settings.mlds_clustering_structure and settings.mlds_clustering_entity_coherence)
+            else None
+        )
         rows, schema = _apply_clustering_entity_index(
             rows,
             schema,
+            entity_descriptor=_entity_descriptor,
             profile=profile,
             primary_family=_clustering_family,
             enabled=settings.mlds_clustering_structure,
@@ -6953,11 +7756,14 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         llm = _get_writer_llm(cfg.writer_model, temperature=0.5, thinking_level="low")
 
         context = _build_base_context(state)
+        # Built once: feeds the prompt AND the metric-anchoring coherence check below (so the
+        # questions cannot fabricate an AUC/F1 absent from the executed M3 metrics).
+        computed_metrics_block = build_computed_metrics_block(state.get("m3_metrics_summary"))
         context.update({
             "m4_content": state.get("m4_content", ""),
             "anexo_financiero": state.get("doc1_anexo_financiero", ""),
             "algorithm_mode": _extract_state_algorithm_mode(state) or "single",
-            "computed_metrics_block": build_computed_metrics_block(state.get("m3_metrics_summary")),
+            "computed_metrics_block": computed_metrics_block,
         })
 
         # Issue #437 (ADR 0003, Fase 1) — NEUTRAL questions set + «MARCO DE VALOR» hint when
@@ -6976,6 +7782,11 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
             M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION_NEUTRAL
             if _lens_on else M4_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION,
         )
+        # EPIC #458 — for ml_ds+clustering, swap the generic (supervised/financial-framed) M4 questions
+        # prompt for the dedicated segmentation-native one (no model-ROI verdict, no projected uplift).
+        # Byte-identical no-op for every other cohort and when MLDS_CLUSTERING_M4_QUESTIONS is off; the
+        # lens hint (below) + the #467/#469 verdict hint still append to it.
+        prompt = _select_m4_questions_clustering_prompt(state, prompt)
         if _lens_on:
             prompt = prompt + build_impact_lens_hint(_resolve_impact_lens(state))
         # Issue #469 — for ml_ds+clustering, append the decision hint (recommended option + the REAL
@@ -6998,10 +7809,41 @@ def m4_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
         preguntas = [p.model_dump() for p in resultado.preguntas]
         print(f"[m4_questions_generator] {len(preguntas)} preguntas")
-        # Option coherence (clasificación, both profiles) — best-effort, reprompt-once-then-
-        # degrade. The wrapper concatenates onto the rendered prompt (never re-.format, cifras `{}`).
-        preguntas = _apply_m4_questions_option_coherence(
-            llm=llm, prompt=rendered_prompt, state=state, preguntas_dict=preguntas
+        # Resolve the notebook variant ONLY for ml_ds+clf (mirror m5_questions_generator); it stays
+        # None for every other cohort, so the unselected-model leak check inside the wrapper is a no-op
+        # there. This is the RESOLVED variant (lr_only/rf_only/lr_rf_contrast), NEVER algorithm_mode
+        # (passing the mode would silently disable the guard).
+        _profile, _family = _resolve_generation_focus(
+            state, default_unresolved_ml_ds_to_classification=True
+        )
+        resolved_variant: str | None = None
+        if _profile == "ml_ds" and _family == "clasificacion":
+            _variant, _q_variant_warning = _resolve_classification_notebook_variant(
+                algorithm_mode=_extract_state_algorithm_mode(state),
+                algoritmos=_extract_state_algoritmos(state),
+            )
+            if _q_variant_warning:
+                logger.warning(
+                    "[m4_questions_generator] question variant fallback: %s", _q_variant_warning
+                )
+            resolved_variant = _variant
+        # The metric-anchoring check is a CLASSIFICATION guard (keys on AUC/F1/recall keywords), so the
+        # coherence wrapper receives the metrics block ONLY for clasificacion — mirror
+        # m5_questions_generator. For ml_ds+clustering the prompt still gets the full block above, but an
+        # ungated block would carry silhouette anchors and the classification-keyword check could
+        # false-positive on a segment number (e.g. "importancia 0.83") → a spurious reprompt. Business+clf
+        # passes the fallback marker here (no executor → no anchors → already a no-op).
+        _coherence_metrics_block = computed_metrics_block if _family == "clasificacion" else ""
+        # Coherence — best-effort, reprompt-once-then-degrade. Option/MCQ for ALL families PLUS the
+        # single-model leak + model-metric anchoring for ml_ds+clf (the M4 sibling of the M5 memo guard).
+        # The wrapper concatenates onto the rendered prompt (never re-.format, cifras `{}`).
+        preguntas = _apply_m4_questions_coherence(
+            llm=llm,
+            prompt=rendered_prompt,
+            state=state,
+            preguntas_dict=preguntas,
+            variant=resolved_variant,
+            metrics_block=_coherence_metrics_block,
         )
         return {"m4_questions": preguntas, "current_agent": "m4_questions_generator"}
     except Exception as e:
@@ -7466,6 +8308,12 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         prompt_text = _maybe_business_classification_prompt(
             state, prompt_text, M5_QUESTIONS_BUSINESS_PROMPT_CLASSIFICATION
         )
+        # EPIC #458 — for ml_ds+clustering, swap the generic (supervised-framed) M5 memo prompt for the
+        # dedicated segmentation-native one (decision = which segmentation strategy A/B/C, no model
+        # deployment verdict). Byte-identical no-op for every other cohort and when
+        # MLDS_CLUSTERING_M5_QUESTIONS is off; the #467 verdict hint (below) + the verdict guard still
+        # apply to it.
+        prompt_text = _select_m5_questions_clustering_prompt(state, prompt_text)
         # Issue #467 — for ml_ds+clustering, append the decision hint (recommended option + the REAL
         # executed silhouette) so the M5 memo recommends the shared option and anchors any silhouette
         # to reality. Brace-free → safe before .format. No-op (byte-identical) for every other cohort.
@@ -7827,6 +8675,33 @@ def _effective_m4_clustering_prompts(
     return by_family
 
 
+def _effective_m4_classification_prompts(
+    by_family: dict[str, str],
+    profile: str | None,
+    primary_family: str | None,
+    *,
+    lens_on: bool,
+) -> dict[str, str]:
+    """Override ``"clasificacion"`` with the G1-only investment prompt (decision-charts reframe).
+
+    Mirrors ``_effective_m4_clustering_prompts``: returns the SAME ``by_family`` object for every
+    cohort EXCEPT ml_ds+clasificación on the NEUTRAL path (``lens_on``) under the
+    ``M4_CLASSIFICATION_DECISION_CHARTS`` switch, where it returns a shallow copy with
+    ``"clasificacion"`` overridden to the LLM-authored Gráfico-1 (investment) prompt — the
+    DETERMINISTIC cost-of-errors Gráfico 2 is built in Python and appended by the node afterwards.
+    Off / non-clf / business (``profile != "ml_ds"``) / lens-off → identity object → byte-identical.
+    Pure (no LLM/state) so the gate is unit-testable. Used for the M4 CHARTS dict only.
+    """
+    if (
+        lens_on
+        and profile == "ml_ds"
+        and primary_family == "clasificacion"
+        and settings.m4_classification_decision_charts
+    ):
+        return {**by_family, "clasificacion": M4_CHART_PROMPT_CLASSIFICATION_INVESTMENT_NEUTRAL}
+    return by_family
+
+
 def _resolve_impact_lens(state: ADAMState) -> str:
     """Return the case's resolved Impact Lens (value frame for M4) — Issue #437.
 
@@ -7907,6 +8782,23 @@ def _is_ml_ds_clustering(state: ADAMState) -> bool:
     return profile == "ml_ds" and family == "clustering"
 
 
+def _maybe_append_clustering_currency_hint(prompt: str, state: ADAMState) -> str:
+    """Append the #514 currency-honesty hint for ml_ds+clustering when the kill-switch is on.
+
+    Shared by ``case_architect`` and ``case_writer`` (the two M1 prose producers). Best-effort: any
+    internal error returns the prompt UNCHANGED + logs (mirrors the repo's never-fail-a-job
+    augmentation doctrine), so a hint bug can never break M1 generation. Gate is independent of
+    ``mlds_clustering_m1_anchor`` / ``mlds_clustering_structure`` (granular-switch convention); the
+    hint is self-contained and coherent on either the clustering or the generic base prompt.
+    """
+    try:
+        if settings.mlds_clustering_currency_honesty and _is_ml_ds_clustering(state):
+            return prompt + build_clustering_currency_honesty_hint()
+    except Exception as e:  # pragma: no cover - defensive; never fail a job
+        logger.warning("[case] clustering currency hint skipped: %s", e)
+    return prompt
+
+
 def _select_eda_prompt(
     state: ADAMState,
     primary_family: str,
@@ -7925,6 +8817,58 @@ def _select_eda_prompt(
     if settings.mlds_clustering_m2_eda and _is_ml_ds_clustering(state):
         return clustering_override
     return by_family.get(primary_family, generic)
+
+
+def _select_m3_ml_ds_nonclf_questions_prompt(family: str | None) -> tuple[str, str]:
+    """Pick the M3 conceptual-questions prompt + log tag for an ml_ds NON-classification cohort (EPIC #458).
+
+    ml_ds + clustering (gated by ``MLDS_CLUSTERING_M3_QUESTIONS``) gets the dedicated
+    segmentation-native ``M3_QUESTIONS_PROMPT_CLUSTERING`` (so the supervised-experiment framing of
+    ``M3_EXPERIMENT_QUESTIONS_PROMPT`` no longer fights the #467 reframing hint); every other ml_ds
+    non-clf cohort (regresión / serie_temporal, or clustering with the kill-switch off) keeps the
+    generic experiment prompt byte-identically. The #467 hint still appends downstream (it anchors
+    ``target_k`` and is brace-free). Pure (modulo the settings read) so the dispatch is unit-testable
+    without an LLM — mirrors ``_select_eda_prompt`` (#456).
+    """
+    if family == "clustering" and settings.mlds_clustering_m3_questions:
+        return M3_QUESTIONS_PROMPT_CLUSTERING, "m3_clustering_questions"
+    return M3_EXPERIMENT_QUESTIONS_PROMPT, "m3_experiment_questions"
+
+
+def _select_m4_questions_clustering_prompt(state: ADAMState, base_prompt: str) -> str:
+    """Override the resolved M4 (Impacto) questions prompt with the dedicated segmentation-native
+    ``M4_QUESTIONS_PROMPT_CLUSTERING`` for an ml_ds + clustering case (EPIC #458).
+
+    The generic M4-questions prompt frames P2 as a SUPERVISED model-ROI verdict ("¿el valor proyectado
+    del modelo justifica la inversión dado el veredicto de M3?") and demands citing M4 metrics — incoherent
+    for a K-Means segmentation, which has no predictive model and no projected uplift. This returns the
+    dedicated prompt ONLY for ml_ds+clustering under the ``MLDS_CLUSTERING_M4_QUESTIONS`` kill-switch;
+    every other cohort (and clustering with the switch off) returns ``base_prompt`` UNCHANGED (byte-
+    identical revert). The node still appends the lens hint (#437) and the #467/#469 verdict hint AFTER
+    this — the dedicated prompt is value-frame-compatible. Pure (modulo the settings read) so the dispatch
+    is unit-testable; mirrors ``_select_m3_ml_ds_nonclf_questions_prompt`` / ``_effective_m4_clustering_prompts``.
+    """
+    if settings.mlds_clustering_m4_questions and _is_ml_ds_clustering(state):
+        return M4_QUESTIONS_PROMPT_CLUSTERING
+    return base_prompt
+
+
+def _select_m5_questions_clustering_prompt(state: ADAMState, base_prompt: str) -> str:
+    """Override the resolved M5 final-memorándum questions prompt with the dedicated segmentation-native
+    ``M5_QUESTIONS_PROMPT_CLUSTERING`` for an ml_ds + clustering case (EPIC #458).
+
+    The generic M5-questions prompt frames the memo around a SUPERVISED model decision ("límites del
+    modelo … rol del CTO") — incoherent for a segmentation, where the executive decision is which
+    segmentation strategy (Opción A/B/C) to adopt. Returns the dedicated prompt ONLY for ml_ds+clustering
+    under the ``MLDS_CLUSTERING_M5_QUESTIONS`` kill-switch; every other cohort (and clustering with the
+    switch off) returns ``base_prompt`` UNCHANGED (byte-identical revert). The node still appends the #467
+    verdict hint and still runs ``_apply_clustering_m5_verdict_coherence`` (the deterministic verdict-
+    option guarantee) AFTER this. Pure (modulo the settings read); mirrors
+    ``_select_m4_questions_clustering_prompt``.
+    """
+    if settings.mlds_clustering_m5_questions and _is_ml_ds_clustering(state):
+        return M5_QUESTIONS_PROMPT_CLUSTERING
+    return base_prompt
 
 
 def _is_classification_family(state: ADAMState) -> bool:
@@ -8245,11 +9189,7 @@ def _is_markdown_separator_row(cells: list[str]) -> bool:
 
 def _normalize_m5_matrix_header_cell(cell: str) -> str:
     compact = " ".join(cell.lower().split())
-    without_accents = "".join(
-        char
-        for char in unicodedata.normalize("NFKD", compact)
-        if not unicodedata.combining(char)
-    )
+    without_accents = fold_accents(compact)
     return _M5_DECISION_MATRIX_HEADER_ALIASES.get(without_accents, without_accents)
 
 
@@ -8631,9 +9571,14 @@ def _apply_m3_questions_coherence(
 
 
 def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
-    """Genera preguntas de M3 bifurcadas por perfil:
-    - business: M3_AUDIT_QUESTIONS_PROMPT    (3 preguntas, refs 3.1–3.5, auditoría de evidencia)
-    - ml_ds:    M3_EXPERIMENT_QUESTIONS_PROMPT (3 preguntas, refs exp.*, diseño experimental)
+    """Genera las 3 preguntas CONCEPTUALES de M3 bifurcadas por perfil/familia:
+    - business:           M3_AUDIT_QUESTIONS_PROMPT      (refs 3.1–3.5, auditoría de evidencia)
+    - ml_ds clasificación: M3_CLASSIFICATION_QUESTIONS_BY_VARIANT (lr_only/rf_only/lr_rf_contrast, refs exp.*)
+    - ml_ds clustering:   M3_QUESTIONS_PROMPT_CLUSTERING (EPIC #458, segmentación, refs seg.*; kill-switch
+                          MLDS_CLUSTERING_M3_QUESTIONS — off revierte al genérico + hint #467)
+    - ml_ds otras:        M3_EXPERIMENT_QUESTIONS_PROMPT (refs exp.*, diseño experimental)
+    Las 2 preguntas output-grounded del notebook (numero 4/5) las genera el nodo POST-executor
+    `m3_notebook_questions_generator` (#489/#494) y se mergean en el adapter canónico.
     """
     try:
         cfg = Configuration.from_runnable_config(config)
@@ -8678,8 +9623,11 @@ def m3_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 )
                 tag = f"m3_classification_questions_{_variant}"
             else:
-                prompt = M3_EXPERIMENT_QUESTIONS_PROMPT
-                tag = "m3_experiment_questions"
+                # EPIC #458 — ml_ds + clustering selects the dedicated segmentation-native conceptual
+                # questions prompt (kill-switch MLDS_CLUSTERING_M3_QUESTIONS); regresión / serie_temporal
+                # / clustering-with-switch-off keep the generic experiment prompt byte-identically. The
+                # #467 hint (below) still appends to anchor target_k.
+                prompt, tag = _select_m3_ml_ds_nonclf_questions_prompt(family)
         else:
             prompt = M3_AUDIT_QUESTIONS_PROMPT
             tag = "m3_audit_questions"
@@ -8850,11 +9798,14 @@ def _render_cluster_profiles_table(cluster_profiles: dict) -> str:
 def _render_segment_data_table(cluster_sizes: Any, cluster_profiles: dict | None) -> str:
     """Render the REAL per-segment data table for the M4 value-by-segment chart (Issue #498).
 
-    Columns: ``segmento | tamaño | <feature…>`` — ``cluster_sizes`` (always present post-executor) plus
-    the per-cluster feature means from ``cluster_profiles`` (#494, when present). Passed as a ``.format``
-    VALUE (its ``|`` / braces are not re-interpreted by the template). Returns ``""`` when there is no
-    real per-segment data at all (the node then keeps the base prompt → byte-identical to #469). Pure,
-    total — never raises.
+    Columns: ``segmento | tamaño | <feature…>``. ``cluster_sizes`` (always present post-executor) is a
+    LIST ``[size0, size1, …]`` index-aligned to the sorted cluster ids ``0..k-1`` — the SHAPE the
+    executed ``metrics_summary_json`` cell emits and that #489's notebook-questions context already
+    reads; a dict is also accepted defensively. ``cluster_profiles`` (#494, when present) carries the
+    per-cluster feature means keyed by the SAME ``str(0..k-1)`` ids. Passed as a ``.format`` VALUE (its
+    ``|`` / braces are not re-interpreted by the template). Returns ``""`` when there is no real
+    per-segment data at all (the node then keeps the base prompt → byte-identical to #469). Pure, total
+    — never raises.
     """
     sizes: dict[str, float] = {}
     if isinstance(cluster_sizes, dict):
@@ -8862,6 +9813,16 @@ def _render_segment_data_table(cluster_sizes: Any, cluster_profiles: dict | None
             value = _finite_float(count)
             if value is not None:
                 sizes[str(cid)] = value
+    elif isinstance(cluster_sizes, list):
+        # The executor emits ``cluster_sizes`` as a LIST index-aligned to the sorted cluster ids 0..k-1
+        # (``_sizes = [int((labels == c).sum()) for c in sorted(set(labels) - {-1})]``), the SAME ids
+        # ``cluster_profiles`` is keyed by. Map index → ``str(index)`` so the size column aligns with the
+        # profile columns. The original #498 dict-only branch silently dropped EVERY real size (and, with
+        # profiles absent, collapsed the whole table to ``""`` → base prompt → Chart 1 ungrounded).
+        for index, count in enumerate(cluster_sizes):
+            value = _finite_float(count)
+            if value is not None:
+                sizes[str(index)] = value
     profiles = cluster_profiles if isinstance(cluster_profiles, dict) else {}
     features = [str(f) for f, pc in profiles.items() if isinstance(pc, dict) and pc]
     clusters: list[str] = []
@@ -10768,18 +11729,56 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
             lens_on=_lens_on,
             clustering_prompt=_clustering_chart_prompt,
         )
+        # Decision-charts reframe (ml_ds+clf): override "clasificacion" with the G1-only investment
+        # prompt; the deterministic cost-of-errors Gráfico 2 is built + appended after grounding (below).
+        # Same gate (_chart_profile/_chart_family) as that append → they fire together (never a stray
+        # 3rd chart). Identity object for every other cohort / lens-off / switch-off → byte-identical.
+        charts_by_family = _effective_m4_classification_prompts(
+            charts_by_family,
+            _chart_profile,
+            _chart_family,
+            lens_on=_lens_on,
+        )
+        # Decision-charts reframe gate (ml_ds+clf, NEUTRAL/lens-on path, switch on). Computed ONCE here
+        # and reused below for: the dual-axis hint append, the stray-2nd-chart cap, and the deterministic
+        # Gráfico-2 append — SAME gate everywhere, so they fire together (never a stray 3rd chart).
+        _clf_reframe = (
+            _lens_on
+            and _chart_profile == "ml_ds"
+            and _chart_family == "clasificacion"
+            and settings.m4_classification_decision_charts
+        )
         prompt = _resolve_family_prompt(state, charts_by_family, default_chart_prompt)
         # Issue #319 — business+clasificación alinea los gráficos con la narrativa LR (#306):
         # priorización por probabilidad de evento × valor en riesgo. No-op para ml_ds y demás familias.
         prompt = _maybe_business_classification_prompt(state, prompt, business_chart_prompt)
         # Issue #437 — append the «MARCO DE VALOR» hint (brace-free) on the 2-chart lens path.
         if _lens_on:
-            prompt = prompt + build_impact_lens_hint(_resolve_impact_lens(state))
+            _resolved_lens = _resolve_impact_lens(state)
+            prompt = prompt + build_impact_lens_hint(_resolved_lens)
+            # Dual-axis fix (decision-charts reframe, ml_ds+clf): the investment Gráfico 1 plots the USD
+            # cost next to a NON-monetary lens value (e.g. "240 estudiantes retenidos"); on a single
+            # y-axis the small-magnitude value bar is invisible. Append a brace-free hint telling the LLM
+            # to put the non-monetary value on a SECONDARY y-axis (y2). FINANCIAL lens → no hint (both
+            # series in USD = the clean payback chart) → byte-identical. Gated by M4_INVESTMENT_DUAL_AXIS.
+            if (
+                _clf_reframe
+                and settings.m4_investment_dual_axis
+                and _resolved_lens != DEFAULT_IMPACT_LENS
+            ):
+                prompt = prompt + build_impact_lens_m4_dual_axis_hint(_resolved_lens)
         formatted_prompt = prompt.format(**context)
         result: EDAChartGeneratorOutput = llm.with_structured_output(
             EDAChartGeneratorOutput
         ).invoke(formatted_prompt)
         charts = [c.model_dump() for c in result.charts]
+
+        # On the reframe path the LLM was asked for EXACTLY 1 chart (Gráfico 1); cap to the first
+        # defensively so a stray 2nd LLM chart can't combine with the appended deterministic Gráfico 2
+        # into a 3-chart M4. _clf_reframe was computed ONCE above (same gate everywhere). No-op for every
+        # other cohort / lens-off / switch-off.
+        if _clf_reframe and len(charts) > 1:
+            charts = charts[:1]
 
         # Grounding de coherencia de gráficos (ml_ds+clf y business+clf): reprompt-once-then-DROP de
         # cualquier gráfico que cite una métrica del modelo no verificada (anclada al M3 ejecutado),
@@ -10804,9 +11803,12 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
 
         # Issue #498 — ml_ds+clustering value-by-segment guard: DROP a fabricated per-segment
         # distribution (one bar with a value and the rest 0, or the same value on every segment).
-        # Source-agnostic structural check scoped to chart 1 only; reprompt-once-then-DROP. Mutually
-        # exclusive with the classification grounding above (clf vs clustering). No-op (byte-identical)
-        # for every other cohort and on the legacy 3-chart path. Best-effort; never fails the job.
+        # Source-agnostic structural check scoped to chart 1 only; reprompt-once-then-DROP. The guard
+        # runs even when the executor degraded and ``n_clusters`` is absent (the fabrication is
+        # structural — the chart's own >= 3-segment axis carries the gate), so a degraded case never
+        # ships an ungrounded fabricated chart. Mutually exclusive with the classification grounding
+        # above (clf vs clustering). No-op (byte-identical) for every other cohort and on the legacy
+        # 3-chart path. Best-effort; never fails the job.
         if (
             _lens_on
             and _is_ml_ds_clustering(state)
@@ -10819,6 +11821,33 @@ def m4_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 charts=charts,
                 n_clusters=_finite_metric(state.get("m3_metrics_summary"), "n_clusters"),
             )
+
+        # Decision-charts reframe (ml_ds+clf): the LLM authored ONLY Gráfico 1 (investment); build the
+        # cost-of-errors Gráfico 2 DETERMINISTICALLY from the contract cost matrix and APPEND it. Zero
+        # fabrication by construction (no LLM, no guard). Returns None → M4 ships only Gráfico 1 when
+        # the case has no real asymmetric cost matrix (honest; never a fabricated chart). SAME gate as
+        # the prompt override above (they fire together → never a stray 3rd chart). Mutually exclusive
+        # with the clustering branch. No-op (byte-identical) for every other cohort / lens-off / legacy.
+        # INNER try so a builder fault never empties the set nor hits the node's outer except.
+        if _clf_reframe:
+            try:
+                _cost_chart = generate_m4_cost_chart(
+                    _extract_business_cost_matrix(state),
+                    prevalence=_finite_metric(state.get("m3_metrics_summary"), "prevalence"),
+                    contract=state.get("dataset_schema_required"),
+                )
+                if _cost_chart is not None:
+                    # Schema-validate before emitting (mirrors _annotate_validate_emit); a malformed
+                    # builder dict is dropped, never crashes the node.
+                    _validated_cost = EDAChartGeneratorOutput.model_validate(
+                        {"charts": [_cost_chart]}
+                    )
+                    charts = charts + [_validated_cost.charts[0].model_dump()]
+            except Exception:  # pragma: no cover - defensive; never fail/empty a job
+                logger.exception(
+                    "[m4_chart_generator] deterministic cost chart failed — omitting",
+                    extra={"node": "m4_chart_generator", "case_id": state.get("case_id")},
+                )
 
         # Backstop determinista (solo en el camino vigente): elimina cualquier gráfico de
         # sensibilidad/tornado residual que el LLM emita pese al prompt de 2 gráficos. INNER try para

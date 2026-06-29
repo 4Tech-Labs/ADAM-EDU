@@ -5,11 +5,13 @@ that feed the teacher preview and downstream synthesis steps.
 """
 
 import math
+import re
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from case_generator.impact_lens import DEFAULT_IMPACT_LENS, normalize_impact_lens
+from case_generator.text_normalize import fold_accents
 
 
 # USD-only product (Issue #370): el producto opera exclusivamente en dólares. Este sigue siendo
@@ -20,7 +22,7 @@ _MAX_BUSINESS_COST = 1_000_000_000.0
 _MAX_BUSINESS_COST_RATIO = 1_000.0
 
 # Issue F1 — prevalencia del evento objetivo anunciada en Exhibit 2. Un evento de
-# clasificación debe ser una minoría aprendible: piso 1% (≥1 positivo a n=600), techo 50%
+# clasificación debe ser una minoría aprendible: piso 1% (≥10 positivos a n=1000), techo 50%
 # (un evento "raro" no debería ser mayoría; > 0.5 sería el complemento).
 _MIN_TARGET_EVENT_RATE = 0.01
 _MAX_TARGET_EVENT_RATE = 0.50
@@ -112,6 +114,27 @@ class DatasetFeatureSpec(BaseModel):
             "distancia al recurso ambiental = 'negative'; ingreso/calidad percibida = 'positive')."
         ),
     )
+    # Issue #531 — rango típico realista de la feature en SUS unidades naturales (ej: un
+    # `willingness_to_pay_usd` ∈ [10, 800], un `visit_recency_days` ∈ [1, 365]). OPCIONAL y
+    # ADITIVO: default None → cero impacto en clasificación/regresión/serie_temporal/business
+    # (sus builders no leen estos campos). Consumido SOLO por el builder de segmentación de
+    # ml_ds + clustering (`graph._resolve_clustering_segmentation_columns`), que genera columnas
+    # de dominio con valores plausibles en vez de los defaults genéricos [0,1]/[0,100] del
+    # augmenter. Si el architect no los declara, el builder cae a una heurística por nombre/tipo.
+    range_min: Optional[float] = Field(
+        default=None,
+        description=(
+            "Mínimo típico de la feature en sus unidades naturales (solo clustering). "
+            "Ej: willingness_to_pay_usd → 10. Déjalo null si no aplica."
+        ),
+    )
+    range_max: Optional[float] = Field(
+        default=None,
+        description=(
+            "Máximo típico de la feature en sus unidades naturales (solo clustering). "
+            "Ej: willingness_to_pay_usd → 800. Déjalo null si no aplica."
+        ),
+    )
 
     @field_validator("expected_direction", mode="before")
     @classmethod
@@ -124,6 +147,27 @@ class DatasetFeatureSpec(BaseModel):
             return None
         normalized = v.strip().lower()
         return normalized if normalized in {"positive", "negative"} else None
+
+    @model_validator(mode="after")
+    def _sanitize_range(self) -> "DatasetFeatureSpec":
+        # Coerce-never-reject (espejo de _coerce_expected_direction / EntityDescriptor): un par de
+        # rango inválido (no-finito, o min >= max) se NULIFICA a (None, None) en vez de levantar —
+        # un ValidationError abortaría el parse de TODO el CaseArchitectOutput y degradaría el caso
+        # a un placeholder de error. El builder de clustering cae entonces a su heurística por nombre.
+        lo, hi = self.range_min, self.range_max
+        valid = (
+            isinstance(lo, (int, float))
+            and isinstance(hi, (int, float))
+            and not isinstance(lo, bool)
+            and not isinstance(hi, bool)
+            and math.isfinite(lo)
+            and math.isfinite(hi)
+            and lo < hi
+        )
+        if not valid:
+            self.range_min = None
+            self.range_max = None
+        return self
 
 
 class DatasetSchemaRequired(BaseModel):
@@ -344,6 +388,92 @@ class ValueModel(BaseModel):
 # ═══════════════════════════════════════════════════════
 
 
+# Issue #513 (EPIC #511) — entity descriptor for ml_ds + clustering coherence.
+_ENTITY_PREFIX_DEFAULT = "cliente"
+_ENTITY_PREFIX_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _sanitize_entity_prefix(raw: object) -> str | None:
+    """Sanitize an LLM-emitted entity ``snake_prefix`` to a safe column-name stem, or ``None``.
+
+    The prefix becomes a DataFrame/CSV column ``{prefix}_id`` and an index value
+    ``{prefix}_00001`` consumed by the student notebook + Plotly, so it must be a plain ASCII
+    snake_case identifier. Rules (coerce-never-reject; the caller falls back to the default on
+    ``None``): NFKD accent-fold (``niño`` → ``nino``), lowercase, collapse any run of non
+    ``[a-z0-9_]`` into ``_``, strip leading digits/underscores and trailing underscores, drop a
+    redundant trailing ``_id`` (so a stray ``cliente_id`` does not become ``cliente_id_id``), then
+    require ``^[a-z][a-z0-9_]*$``. Returns ``None`` when the input is not a non-empty string or
+    cannot be reduced to a valid stem.
+    """
+    if not isinstance(raw, str):
+        return None
+    # fold_accents (NFKD) → drop remaining non-ASCII → lowercase (accent-fold to a safe stem).
+    ascii_only = (
+        fold_accents(raw)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .lower()
+        .strip()
+    )
+    cleaned = re.sub(r"[^a-z0-9_]+", "_", ascii_only)
+    cleaned = re.sub(r"^[_0-9]+", "", cleaned).strip("_")
+    if cleaned.endswith("_id"):
+        cleaned = cleaned[:-3].strip("_")
+    if not _ENTITY_PREFIX_RE.match(cleaned):
+        return None
+    return cleaned
+
+
+class EntityDescriptor(BaseModel):
+    """Unit-of-analysis entity for an ml_ds + clustering case, emitted by the architect (#513).
+
+    A K-Means case segments ENTITIES (centros, pacientes, zonas, estudiantes, clientes…). The
+    architect narrates one entity + a population count; the deterministic data layer renames the
+    dataset index to ``{snake_prefix}_00001`` and the column to ``{snake_prefix}_id`` so the CSV the
+    student downloads matches the M1 story (Opción A — the data adapts to the narrative). Only
+    ``snake_prefix`` drives the data; ``singular``/``plural`` carry the human entity words for the
+    column description + the coherence oracle.
+
+    Bulletproof coerce-never-reject: ``case_architect`` degrades the WHOLE M1 to an error
+    placeholder if ANY field raises a ``ValidationError`` (graph.py ``except Exception``), so every
+    field has a ``mode="before"`` coercer that falls back to a safe default instead of raising, and
+    the parent ``CaseArchitectOutput`` drops a non-dict ``entity_descriptor`` to ``None`` (mirrors
+    ``BusinessCostMatrix._normalize_currency`` / ``ValueModel._coerce_lens``).
+    """
+
+    singular: str = Field(
+        default="cliente",
+        description="Entidad en singular, español (p.ej. 'centro de distribución', 'paciente', 'zona').",
+    )
+    plural: str = Field(
+        default="clientes",
+        description="Entidad en plural, español (p.ej. 'centros de distribución', 'pacientes', 'zonas').",
+    )
+    snake_prefix: str = Field(
+        default=_ENTITY_PREFIX_DEFAULT,
+        description=(
+            "Prefijo snake_case ASCII de la entidad para el id del dataset (p.ej. 'centro', "
+            "'paciente', 'zona'). El dataset usará la columna `{snake_prefix}_id` con valores "
+            "`{snake_prefix}_00001`. Una sola raíz, minúsculas, sin acentos ni espacios."
+        ),
+    )
+
+    @field_validator("singular", mode="before")
+    @classmethod
+    def _coerce_singular(cls, v: object) -> str:
+        return v.strip() if isinstance(v, str) and v.strip() else "cliente"
+
+    @field_validator("plural", mode="before")
+    @classmethod
+    def _coerce_plural(cls, v: object) -> str:
+        return v.strip() if isinstance(v, str) and v.strip() else "clientes"
+
+    @field_validator("snake_prefix", mode="before")
+    @classmethod
+    def _coerce_prefix(cls, v: object) -> str:
+        return _sanitize_entity_prefix(v) or _ENTITY_PREFIX_DEFAULT
+
+
 class CaseArchitectOutput(BaseModel):
     """Salida del Case Architect — cimientos del caso (Documento 1).
 
@@ -432,6 +562,29 @@ class CaseArchitectOutput(BaseModel):
             "Reencuadra solo el lado del VALOR; los costos siguen en USD (DD3)."
         ),
     )
+    # Issue #513 (EPIC #511) — entity descriptor for ml_ds + clustering. Optional; the architect
+    # emits the unit-of-analysis entity (and its population count via the prompt hint) so the
+    # deterministic data layer renames the dataset index to {snake_prefix}_00001 / column
+    # {snake_prefix}_id, making the CSV match the M1 narrative (Opción A). Prompt-side / internal
+    # (NOT canonical / student-facing, NOT in case_sanitization). Populated only when the entity
+    # hint is active (mlds_clustering_structure AND mlds_clustering_entity_coherence); None
+    # otherwise → the data layer falls back to the #468 user_id behavior (byte-identical).
+    entity_descriptor: Optional[EntityDescriptor] = Field(
+        default=None,
+        description=(
+            "Entidad unidad-de-análisis del caso de segmentación (ml_ds + clustering): "
+            "{singular, plural, snake_prefix}. El dataset usará la columna `{snake_prefix}_id`."
+        ),
+    )
+
+    @field_validator("entity_descriptor", mode="before")
+    @classmethod
+    def _coerce_entity_descriptor(cls, v: object) -> object:
+        # Bulletproof: a non-dict emission (bare string / list / scalar) → None instead of a
+        # ValidationError that would degrade the WHOLE architect output to an error placeholder
+        # (graph.py case_architect `except Exception`). A dict is validated by EntityDescriptor,
+        # whose per-field coercers never raise.
+        return v if isinstance(v, (dict, EntityDescriptor)) else None
 
 
 

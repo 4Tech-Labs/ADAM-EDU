@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     # false to disable the sibling and ship the prior unsigned schema byte-identically (instant env-only
     # revert; no redeploy). No-op when no feature declares a direction, or outside ml_ds + clasificación.
     mlds_directional_priors: bool = True
+    # Keep the EDA-outlier injection (Fix B-05) inside each feature's DECLARED [range_min, range_max]
+    # for ml_ds datasets, so no generated value exceeds its own semantic bound (e.g. a credit_score
+    # declared [300, 850] never ships an impossible 1700, a percentage never exceeds 100). When true
+    # (default), the ml_ds outlier cap matches the already-correct business path (range_max, ×1.0)
+    # instead of the legacy ×2.0; the injected point stays a detectable ~5σ outlier (the bulk is
+    # center-concentrated) AND a semantically valid value. Kill-switch: set
+    # MLDS_OUTLIER_RESPECT_RANGE=false to restore the legacy ×2.0 ml_ds cap byte-identically (instant
+    # env-only revert; no redeploy). business is unaffected either way (it always capped at range_max).
+    mlds_outlier_respect_range: bool = True
     # Coerce the ml_ds + clasificación target to a binary int classification_target (Issue #350).
     # When true, the deterministic sibling `_normalize_mlds_classification_target` forces any
     # non-int / non-classification target the LLM emits to int binary {0,1} BEFORE the schema
@@ -80,6 +89,15 @@ class Settings(BaseSettings):
     # prior behavior byte-identically (instant env-only revert; no redeploy). churn / already-binary
     # cases are unaffected either way (the sibling passes them through unchanged).
     mlds_binary_target_coerce: bool = True
+    # Calibrate the business + clasificación dataset prevalence to the architect's declared
+    # target_event_rate (Issue #518). When true (default), (a) `_validate_target_event_rate`
+    # PRESERVES a plausible rate for business+clf instead of nullifying it, (b) the architect
+    # business block asks for the rate, and (c) the deterministic top-k calibration fires for
+    # business too, so the synthetic binary target's prevalence EQUALS the Exhibit-2 rate
+    # (preserving the driver->target order, AUC intact). Set BUSINESS_EVENT_RATE_CALIBRATION=false
+    # to revert byte-identically: business rates are nullified again and the target lands at ~0.50
+    # (instant env-only revert; no redeploy). ml_ds + clasificación is unaffected either way.
+    business_event_rate_calibration: bool = True
     # Inject real cluster structure into the ml_ds + clustering synthetic dataset (Issue #452).
     # When true (default), an ml_ds + clustering case (a) gets a dedicated entity-level SEGMENTATION
     # schema (period + interpretable segmentation features, instead of the generic churn/SaaS time-
@@ -91,6 +109,18 @@ class Settings(BaseSettings):
     # redeploy). clasificación / regresión / serie_temporal / business are unaffected either way
     # (the gate is profile=="ml_ds" AND family=="clustering").
     mlds_clustering_structure: bool = True
+    # Centroid geometry for the injected ml_ds + clustering blobs (k-coherence fix). When true
+    # (default), `_enforce_mlds_clustering_structure` places the K∈{3,4} blob centers as a regular
+    # SIMPLEX (mutually-equidistant centroids, randomly rotated into the feature space) so the
+    # notebook's data-driven k-selection (`argmax_k silhouette`, the cell the student runs) lands on
+    # the coordinated `target_k` (Issue #467) — the legacy per-feature permutation could leave the
+    # silhouette peaking at k=2/3 while the M1/M4/M5 narrative framed `target_k=4` segments, so the
+    # student read "4 segmentos" but their own notebook reported 2. Set
+    # MLDS_CLUSTERING_SIMPLEX_CENTERS=false to revert to the legacy permutation placement +
+    # `_CLUSTERING_BLOB_SPREAD_FRAC` (byte-identical to pre-fix; the RED control for the new oracle).
+    # Only affects the geometry when MLDS_CLUSTERING_STRUCTURE is also on; non-clustering / business
+    # are unaffected. Instant env-only revert, no redeploy.
+    mlds_clustering_simplex_centers: bool = True
     # Execute + quality-gate the ml_ds + clustering M3 notebook (Issue #453, extends #239). When
     # true (default), the K-Means notebook is run in the executor subprocess (same nbclient/AST-
     # scrub/timeout path as classification), its real silhouette/n_clusters metrics are parsed into
@@ -142,6 +172,43 @@ class Settings(BaseSettings):
     # family=="clustering"; clasificación / regresión / serie_temporal / business (including
     # business+clustering, which uses the audit prompt) are unaffected either way.
     mlds_clustering_m3_content: bool = True
+    # M3 conceptual (methodological) questions for ml_ds + clustering (EPIC #458). When true
+    # (default), an ml_ds + clustering case selects the dedicated `M3_QUESTIONS_PROMPT_CLUSTERING`
+    # (segmentation-native 3-question arc: how k is chosen, segment validity, segments → the M1
+    # strategic decision) instead of the generic supervised-experiment `M3_EXPERIMENT_QUESTIONS_PROMPT`
+    # (fragile hypothesis / algorithmic bias / discard-before-deploy) that the #467 hint only reframed
+    # on top of contradictory examples. The brace-free #467 hint still appends (anchoring target_k), so
+    # the prompts compose; quality is judged qualitatively (the notebook executor runs AFTER this node,
+    # so no real silhouette exists — anti-fabrication is enforced at the prompt boundary, the #457
+    # pattern). The 3 conceptual questions stay non-redundant with the 2 output-grounded notebook
+    # questions (#489/#494). Set MLDS_CLUSTERING_M3_QUESTIONS=false to revert to the generic prompt +
+    # #467 hint byte-identically (instant env-only revert, no redeploy). The gate is profile=="ml_ds"
+    # AND family=="clustering"; clasificación / regresión / serie_temporal / business (including
+    # business+clustering, which uses the audit prompt) are unaffected either way.
+    mlds_clustering_m3_questions: bool = True
+    # Dedicated segmentation-native M4 (Impacto) QUESTIONS prompt for ml_ds + clustering (EPIC #458).
+    # When true (default), an ml_ds + clustering case generates its 3 M4 questions with
+    # `M4_QUESTIONS_PROMPT_CLUSTERING` instead of the generic prompt, whose P2 frames a SUPERVISED
+    # model-ROI verdict ("¿el valor proyectado del modelo justifica la inversión dado el veredicto de
+    # M3?") and demands citing M4 metrics — incoherent for a K-Means segmentation (no predictive model,
+    # no projected uplift). The dedicated prompt asks instead about segment value, prioritization vs.
+    # intervention cost (USD), and segmentation production risk. The lens hint (#437) and the #467/#469
+    # verdict hint still append to it; the option/MCQ coherence guard is unchanged. Set
+    # MLDS_CLUSTERING_M4_QUESTIONS=false to revert to the generic prompt byte-identically (instant
+    # env-only revert, no redeploy). The gate is profile=="ml_ds" AND family=="clustering"; every other
+    # cohort (incl. business+clustering) is unaffected either way.
+    mlds_clustering_m4_questions: bool = True
+    # Dedicated segmentation-native M5 final-memorándum QUESTIONS prompt for ml_ds + clustering
+    # (EPIC #458). When true (default), an ml_ds + clustering case generates its single M5 consigna with
+    # `M5_QUESTIONS_PROMPT_CLUSTERING` instead of the generic prompt, which frames the memo around a
+    # SUPERVISED model decision ("límites del modelo … rol del CTO") — incoherent for a segmentation,
+    # where the executive decision is which segmentation strategy (Opción A/B/C) to adopt. The memo keeps
+    # the SHARED M5 contract (1 consigna, 100-160 words, 5 single-sentence paragraphs) verbatim; only the
+    # subject is reframed. The #467 verdict hint + the `_apply_clustering_m5_verdict_coherence` guarantee
+    # still apply. Set MLDS_CLUSTERING_M5_QUESTIONS=false to revert byte-identically (instant env-only
+    # revert, no redeploy). The gate is profile=="ml_ds" AND family=="clustering"; every other cohort
+    # (incl. business+clustering) is unaffected either way.
+    mlds_clustering_m5_questions: bool = True
     # Cross-module clustering coherence source of truth (Issue #467). When true (default), an
     # ml_ds + clustering case resolves a deterministic `clustering_decision`
     # {target_k∈{3,4}, recommended_option∈{A,B,C}, silhouette_floor} ONCE at intake and propagates it:
@@ -154,6 +221,18 @@ class Settings(BaseSettings):
     # hash, no prompt hints, no verdict guard; instant env-only revert, no redeploy). The gate is
     # profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected either way.
     mlds_clustering_decision_coherence: bool = True
+    # Entity + population coherence for ml_ds + clustering (Issue #513, EPIC #511). When true
+    # (default), an ml_ds + clustering case has the architect emit an `entity_descriptor`
+    # {singular, plural, snake_prefix} (via a brace-free M1 prompt hint that also declares EXACTLY
+    # `_MLDS_CLUSTERING_MAX_ROWS` entities), and the deterministic data layer renames the dataset
+    # index to `{snake_prefix}_id` / `{snake_prefix}_00001` so the CSV matches the M1 narrative
+    # (Opción A — the data adapts to the story). Gated TOGETHER with MLDS_CLUSTERING_STRUCTURE (the
+    # N-rows premise) so the hint never narrates N over a structure-off (200-row) dataset. Set
+    # MLDS_CLUSTERING_ENTITY_COHERENCE=false to revert byte-identically (no hint, descriptor not
+    # persisted → the data layer falls back to the #468 `user_id`; instant env-only revert, no
+    # redeploy). The gate is profile=="ml_ds" AND family=="clustering"; every other cohort is
+    # unaffected either way.
+    mlds_clustering_entity_coherence: bool = True
     # M4 value-frame for ml_ds + clustering (Issue #469). When true (default), an ml_ds + clustering
     # case on the NEUTRAL Impact-Lens path selects a dedicated M4 content + chart prompt where the
     # first chart is value-BY-SEGMENT (not a fabricated payback / break-even "Mes N"), §4.1/§4.2 are
@@ -226,6 +305,17 @@ class Settings(BaseSettings):
     # financial base byte-identically (the #382-only behavior; instant env-only revert, no redeploy).
     # Gated INSIDE the #382 de-churn path: churn/retention, business, and other families are unaffected.
     mlds_detemplate_cross_section: bool = True
+    # De-template the SaaS/churn customer template for ml_ds + clasificación WORKFORCE/HR ATTRITION
+    # (employee attrition / staff turnover). `attrition` is a HARD retention token, so #382 skipped
+    # these cases and they kept the customer SaaS template (customer_ltv/plan_tier/payment_failures…),
+    # incoherent for an employee dataset (M2 mutual_info showed revenue/churn_rate as predictors of
+    # employee attrition). When true (default), the #382 retention RED LINE is narrowed to genuine SaaS
+    # CUSTOMER churn: a retention-by-name target that is ALSO workforce attrition (high-precision HR
+    # tokens in the target/feature names, `_is_workforce_attrition_case`) falls through to the de-churn
+    # path → domain (HR) driver + SaaS template stripped. Set MLDS_DETEMPLATE_WORKFORCE=false to keep
+    # every retention target on the template byte-identically (#382/#507 behavior; instant env-only
+    # revert, no redeploy). Genuine customer churn is NEVER affected (zero predicate FP on the red line).
+    mlds_detemplate_workforce: bool = True
     # Deterministic, data-only EDA chart builder for ml_ds + clustering (Issue #466, Frente 2). When
     # true (default), an ml_ds + clustering case routes M2 charts through `_eda_clustering_python_path`
     # (3 PRE-MODEL, target-free charts: feature distributions → motivates StandardScaler, correlation
@@ -237,6 +327,42 @@ class Settings(BaseSettings):
     # chart can never reappear. The gate is profile=="ml_ds" AND family=="clustering"; the builder is
     # profile-agnostic so business+clustering (#317) is a 1-line dispatch follow-up.
     mlds_clustering_charts: bool = True
+    # ml_ds + clustering M1 currency honesty (Issue #514, EPIC #511). When true (default), a brace-free
+    # node-level hint is appended to the case_architect AND case_writer prompts prohibiting absolute $
+    # magnitudes on the per-entity / per-segment behavior axes of the case (e.g. "$135.000/mes", "$15M")
+    # — the per-row dataset (monetary_value at an individual scale) does not back them. Exhibit 1 (the
+    # company P&L, aggregate USD) is preserved; per-segment value is expressed qualitatively/relatively.
+    # The hint names NO concrete feature (feature-agnostic — invariant I3). This is the PREVENTION layer;
+    # the deterministic guarantee is the sibling Issue #515. Gate: profile=="ml_ds" AND family==
+    # "clustering" (STRICT); independent of MLDS_CLUSTERING_STRUCTURE / MLDS_CLUSTERING_M1_ANCHOR. Set
+    # MLDS_CLUSTERING_CURRENCY_HONESTY=false to skip the append → byte-identical (instant env-only revert,
+    # no redeploy). Every other cohort is byte-identical either way; the append is best-effort (a hint
+    # error degrades to the un-hinted prompt, never fails a job).
+    mlds_clustering_currency_honesty: bool = True
+    # ml_ds + clustering M1↔dataset coherence validator (Issue #515, EPIC #511) — the
+    # deterministic GUARANTEE sibling of the #513/#514 PREVENTION hints. When true (default), a
+    # pure validator (`m1_dataset_coherence`) checks the M1 narrative against the deterministic
+    # dataset: a per-entity/per-segment USD figure that exceeds the dataset's monetary scale
+    # ceiling (×3) triggers reprompt-once-then-DEGRADE in case_writer; entity/population
+    # contradictions are logger-only (the #513 hint prevents them by construction). Gate:
+    # profile=="ml_ds" AND family=="clustering" AND `mlds_clustering_structure` ON (the
+    # deterministic scale only holds then). Best-effort (violations degrade/log, never fail a
+    # job). Set MLDS_CLUSTERING_M1_COHERENCE_GUARD=false to skip the guard → byte-identical
+    # (instant env-only revert, no redeploy). Every other cohort is byte-identical either way.
+    mlds_clustering_m1_coherence_guard: bool = True
+    # Domain-adaptive segmentation columns for ml_ds + clustering (Issue #531). When true (default),
+    # the architect's DOMAIN `feature_columns` (with the architect's range_min/range_max or a
+    # name/dtype heuristic) ARE the dataset's segmentation features, so the CSV the student downloads
+    # is coherent with ANY case domain (educacion/salud/ambiental/manufactura -> e.g.
+    # `willingness_to_pay_usd` / `visit_recency_days`), instead of always the generic e-commerce RFM.
+    # Falls back to the fixed RFM when there is no/insufficient contract. NOTE: the duplicate-column /
+    # broken-`_default_column`-range defect (the generic augmenter appending the contract features on
+    # top of the RFM) is fixed UNCONDITIONALLY by skipping the augmenter on the clustering
+    # deterministic path -- restoring it on an off-switch would re-expose the bug (anti-pattern; cf.
+    # #470). So MLDS_CLUSTERING_DOMAIN_COLUMNS=false reverts to the CLEAN fixed-6-RFM behavior (the
+    # intended #452 baseline, what g07 shows), NOT the buggy duplicate path (instant env-only revert,
+    # no redeploy). Gate: profile=="ml_ds" AND family=="clustering"; every other cohort is unaffected.
+    mlds_clustering_domain_columns: bool = True
     # USD-only deterministic currency backstop (Issue #377). When true, `enforce_usd_currency`
     # relabels any non-USD currency token adjacent to a figure (€/£/EUR/COP/MXN/R$/…) to USD in
     # the architect source fields + the downstream prose (`sanitize_markdown`), so no foreign
@@ -298,14 +424,16 @@ class Settings(BaseSettings):
     # business/other-family/non-clf cases are unaffected. Kill-switch: set
     # M3_QUESTION_COHERENCE=false to passthrough exactly (instant env-only revert; no redeploy).
     m3_question_coherence: bool = True
-    # Internal coherence of the M4 (Impacto) decision-question options (clasificación, both
-    # profiles). When true, `validate_question_option_coherence` (reused from m1_grounding with
-    # the floor universe A/B/C — M4 has no `dilema_brief`) checks that each `solucion_esperada`
-    # only recommends an option the case defines (A/B/C) and that its own `enunciado` presents;
-    # `m4_questions_generator` reprompts once then degrades to the pass-1 questions (identity-
-    # guarded on `numero`). Best-effort + gated to the classification family, so
-    # business/other-family/non-clf cases are unaffected. Kill-switch: set
-    # M4_QUESTION_COHERENCE=false to passthrough exactly (instant env-only revert; no redeploy).
+    # Internal coherence of the M4 (Impacto) decision questions. When true,
+    # `validate_m4_questions_coherence` runs FOUR checks: option nonexistent/unpresented (reused from
+    # m1_grounding with the floor universe A/B/C — M4 has no `dilema_brief`) + embedded-MCQ A/B/C
+    # (#481), BOTH for all families; PLUS the single-model leak (an ml_ds `lr_only` question must not
+    # name Random Forest, `rf_only` must not name Logistic Regression) and model-metric anchoring (no
+    # AUC/F1 absent from the executed M3 metrics), gated to ml_ds+clf via the resolved variant /
+    # anchored metrics block. `m4_questions_generator` reprompts once then degrades to the pass-1
+    # questions (identity-guarded on `numero`). Best-effort; business/other-family/non-clf cases are
+    # unaffected by the two ml_ds checks. Kill-switch: set M4_QUESTION_COHERENCE=false to passthrough
+    # exactly (instant env-only revert; no redeploy).
     m4_question_coherence: bool = True
     # Internal coherence of the M5 memorándum question (clasificación, both profiles).
     # When true, `validate_m5_questions_coherence` checks that the memorándum does not name the
@@ -339,6 +467,21 @@ class Settings(BaseSettings):
     # M2_MI_EXCLUDE_INDEX=false to restore the prior behavior byte-identically (all columns
     # except the target enter the ranking; instant env-only revert, no redeploy).
     m2_mi_exclude_index: bool = True
+    # Honest, deterministic text for the M2 "Distribución de la variable objetivo"
+    # (class_distribution) and "Top features por Mutual Information" (mutual_info_top8)
+    # charts (ml_ds + clasificación). When true, `_build_class_distribution` writes the
+    # exact class balance + the majority-baseline reading (Accuracy Paradox) and
+    # `_build_mutual_info_top8` writes the real MI ranking top feature + the
+    # MI≠causation/leakage caveat into `description`/`notes`, and
+    # `_eda_classification_python_path` excludes both charts from LLM annotation — so the
+    # LLM annotator (which never sees the data) can no longer write a caption that
+    # contradicts the chart. With `m2_missingness_honest_text` also on, all 3 charts are
+    # deterministic and the annotate-only LLM call is skipped entirely. Best-effort +
+    # scoped to the classification python path, so business/other-family/non-clf cases are
+    # unaffected. Kill-switch: set M2_CLASSIFICATION_CHART_HONEST_TEXT=false to restore the
+    # prior behavior byte-identically (empty builder text + LLM annotates the two charts;
+    # instant env-only revert, no redeploy).
+    m2_classification_chart_honest_text: bool = True
     # M6 Teaching Note as a concise per-module teacher guide. When true, `teaching_note_part1`
     # emits §1 "Resumen para el Docente" + a Python-OWNED §2 "Recorrido por Módulo"
     # (`build_module_guide_block` — module set/numbering/labels correct by construction,
@@ -389,6 +532,29 @@ class Settings(BaseSettings):
     # guard, no redeploy). The deterministic guarantee on the frozen golden set lives in
     # `tests/golden_eval` (`check_m4_narrative_no_fabrication` / `check_m4_charts_no_fabrication`).
     m4_fabrication_guard: bool = True
+    # M4 decision-charts reframe (ml_ds + clasificación ONLY, NEUTRAL/lens-on 2-chart path). When true
+    # (default), `m4_chart_generator` reframes the ml_ds+clf charts to be coherent + grounded: Gráfico 1
+    # = the lens-aware investment case (LLM, anchored to the M4 narrative; no invented per-period cash
+    # schedule, no forced monetization of a non-financial lens), and Gráfico 2 = the cost-of-errors
+    # economics built DETERMINISTICALLY in Python from the contract `business_cost_matrix` (fp/fn, USD)
+    # — zero fabrication by construction (no LLM, no guard); omitted when the case has no real
+    # asymmetric cost matrix (M4 then ships only Gráfico 1, honest). This replaces the old prompt that
+    # ORDERED the LLM to invent an "A) Full deploy / B) Piloto / C) Heurístico" comparison with
+    # ROI/NPV/Payback absent from the case. Set M4_CLASSIFICATION_DECISION_CHARTS=false to keep the
+    # prior 2-chart LLM prompt byte-identically (instant env-only revert, no redeploy; mirrors
+    # MLDS_CLUSTERING_M4_VALUE_FRAME). ml_ds-only — business+clf / clustering / other families and the
+    # legacy 3-chart path are byte-identical regardless.
+    m4_classification_decision_charts: bool = True
+    # M4 investment-chart dual y-axis (ml_ds + clasificación ONLY, decision-charts reframe path, NON-financial
+    # lens). On the reframe Gráfico 1, the deployment COST (always USD) and the projected VALUE in the lens
+    # unit (e.g. "240 estudiantes retenidos") used to share ONE y-axis, so — differing by orders of
+    # magnitude — the value bar rendered invisible. When true (default), `m4_chart_generator` appends a
+    # brace-free hint instructing the LLM to put the non-monetary value on a SECONDARY y-axis (Plotly `y2`).
+    # FINANCIAL lens is unaffected (both series in USD → the clean payback chart is byte-identical). Set
+    # M4_INVESTMENT_DUAL_AXIS=false to skip the hint → byte-identical to the prior (single-axis) behavior
+    # (instant env-only revert, no redeploy; mirrors M4_CLASSIFICATION_DECISION_CHARTS). No-op when the
+    # reframe is off, lens is financial, or profile/family is not ml_ds+clf.
+    m4_investment_dual_axis: bool = True
     # Impact Lens (Issue #437 / ADR 0003, Fase 1, ALL profiles/families). M4's value frame
     # (primary metric, §4.5 KPI rows, chart metrics, questions framing) is no longer hardcoded
     # to ROI/Payback/NPV; it is a lens resolved ONCE from the constrained intake industry and

@@ -402,7 +402,8 @@ def validate_exhibit2_event_rate(
     """Return a violation if Exhibit 2 does not print the F1 occurrence rate (Issue #372).
 
     PRIMARY, deterministic, zero-FP-by-construction. When ``target_event_rate`` is present
-    (the ml_ds + clasificación binary gate), some ``%`` figure in the Exhibit-2 table must
+    (ml_ds + clasificación, and business+clf since Issue #518; the gate lives in the caller
+    ``_invoke_m1_exhibit2_coherence``), some ``%`` figure in the Exhibit-2 table must
     fall within ``_RATE_PCT_TOLERANCE`` of ``target_event_rate * 100`` — or some bare figure
     must equal the fraction itself. A miss means the mandatory rate row is absent,
     mislabeled-without-the-number, or prints the wrong number; all three are the SAME defect

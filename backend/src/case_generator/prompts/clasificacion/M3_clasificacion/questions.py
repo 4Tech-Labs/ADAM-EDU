@@ -33,18 +33,24 @@ Ajusta la estructura de las 3 preguntas de la siguiente manera:
 - **P1 (analysis — ref: exp.hipotesis):** Fragilidad del supuesto de LR
   Pregunta base: "¿Cuál supuesto de Logistic Regression (linealidad en log-odds,
   independencia de observaciones, ausencia de multicolinealidad severa) es más frágil
-  dado el dataset de este caso? ¿Qué columna del EDA M2 revela esa fragilidad?"
-  [Citar la columna o métrica concreta del EDA M2. Si VIF > 5 fue reportado, nombrarlo.]
+  dado el dataset de este caso? ¿Qué columna o patrón del EDA M2 revela esa fragilidad?"
+  [Anclar SIEMPRE en evidencia REAL del reporte EDA M2 — por ejemplo dos predictores
+  fuertemente correlacionados entre sí (multicolinealidad), una relación claramente no
+  lineal con el evento, o una distribución muy sesgada. Citar la columna o el patrón
+  concreto; NUNCA referir una métrica que el análisis M2 no haya producido.]
 
 - **P2 (evaluation — ref: exp.sesgo):** Threshold y matriz de costos en LR
-  Pregunta base: "El M3 muestra que fp_cost ≠ fn_cost. ¿Cómo cambia el threshold óptimo
-  de Logistic Regression bajo esa estructura de costos, y qué sesgo introduce en el modelo
-  si el threshold por defecto (0.5) se aplica sin corrección?"
-  [Nombrar el umbral concreto que el M3 derivó o sugirió, si está disponible en m3_content.]
+  Pregunta base: "El M3 muestra que el costo de un falso positivo (actuar cuando no hacía
+  falta) difiere del de un falso negativo (omitir cuando sí hacía falta). ¿Cómo cambia el
+  threshold óptimo de Logistic Regression bajo esa estructura de costos asimétrica, y qué
+  sesgo introduce si el threshold por defecto (0.5) se aplica sin corrección?"
+  [Indicar la DIRECCIÓN del ajuste del umbral que implica la asimetría de costos del M3
+  (subirlo o bajarlo); el valor numérico exacto del umbral se calcula en el notebook M3,
+  no se inventa en la consigna.]
 
 - **P3 (synthesis — ref: exp.descarte):** Condición de descarte de LR
   Pregunta base: "El M3 define cuándo Logistic Regression debe descartarse (ej.:
-  multicolinealidad extrema detectada por VIF, clases no separables linealmente,
+  multicolinealidad severa entre predictores, clases no separables linealmente,
   o violación de supuestos de independencia). Describe un escenario realista de ESTE CASO
   en que esa condición se cumpla y propón una alternativa justificada con evidencia del M3."
   [Usar la condición concreta del m3_content, no inventar condiciones genéricas.]
@@ -100,9 +106,10 @@ Ajusta la estructura de las 3 preguntas de la siguiente manera:
   [Nombrar la hipótesis concreta de cada modelo en el M3. Citar columna del EDA M2.]
 
 - **P2 (evaluation — ref: exp.sesgo):** Threshold divergente bajo la misma matriz de costos
-  Pregunta base: "Con fp_cost ≠ fn_cost, LR y RF pueden derivar thresholds óptimos
-  distintos. ¿Cómo detectarías que esa divergencia de thresholds se convierte en un
-  riesgo operativo ANTES de elegir cuál modelo desplegar en producción?"
+  Pregunta base: "Cuando el costo de un falso positivo difiere del de un falso negativo,
+  LR y RF pueden derivar thresholds óptimos distintos. ¿Cómo detectarías que esa divergencia
+  de thresholds se convierte en un riesgo operativo ANTES de elegir cuál modelo desplegar
+  en producción?"
   [Nombrar los thresholds concretos del M3, si están disponibles en m3_content.]
 
 - **P3 (synthesis — ref: exp.descarte):** Criterio de elección entre LR y RF

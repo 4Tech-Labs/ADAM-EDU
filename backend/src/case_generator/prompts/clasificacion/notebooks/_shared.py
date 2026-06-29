@@ -175,7 +175,7 @@ INTRO_BY_VARIANT: dict[ClassificationNotebookVariant, str] = {
 # ### 3.0.5 ¿Qué es el Random Forest y cómo toma una decisión?
 # Antes de entrenar nada, conviene entender el modelo que vamos a usar. El Random Forest
 # construye muchos árboles de decisión distintos, cada uno entrenado sobre una muestra y un
-# subconjunto de características diferentes. Cada árbol mira al cliente paso a paso y emite su
+# subconjunto de características diferentes. Cada árbol mira cada caso paso a paso y emite su
 # propia predicción; el bosque combina todos esos votos en una probabilidad entre 0 y 1. Esa
 # probabilidad se compara con un umbral de decisión (por defecto 0.5): por encima predice la
 # clase positiva, por debajo la negativa. Así el modelo toma una decisión, y juntar muchos
@@ -470,7 +470,10 @@ try:
       {{"model": "DummyClassifier(most_frequent)", "auc_roc_cv_mean": 0.5, "auc_roc_cv_std": 0.0, "f1_macro": float("nan"), "recall_minority": 0.0, "training_time_s": 0.0, "interpretability_note": "baseline trivial"}},
       {{"model": "LogisticRegression", "auc_roc_cv_mean": float(cv_lr.mean()) if cv_lr is not None else float("nan"), "auc_roc_cv_std": float(cv_lr.std()) if cv_lr is not None else float("nan"), "f1_macro": float(_f1_cmp(_yte_cmp, y_hat, average="macro", zero_division=0)), "recall_minority": float(rec_min), "training_time_s": round(elapsed, 4), "interpretability_note": "alta — coeficientes interpretables como log-odds"}},
     ])
-    print(comparison.to_markdown(index=False))
+    try:
+      print(comparison.to_markdown(index=False))
+    except Exception:
+      print(comparison.to_string(index=False))
 except Exception as e:
   print(f"⚠️ Tabla LR falló: {{e}}")
 """,
@@ -497,9 +500,12 @@ try:
     rec_min = _rec_cmp(_yte_cmp, y_hat, labels=[minority], average="macro", zero_division=0) if minority is not None else float("nan")
     comparison = pd.DataFrame([
       {{"model": "DummyClassifier(most_frequent)", "auc_roc_cv_mean": 0.5, "auc_roc_cv_std": 0.0, "f1_macro": float("nan"), "recall_minority": 0.0, "training_time_s": 0.0, "interpretability_note": "baseline trivial"}},
-      {{"model": "RandomForest", "auc_roc_cv_mean": float(cv_rf.mean()) if cv_rf is not None else float("nan"), "auc_roc_cv_std": float(cv_rf.std()) if cv_rf is not None else float("nan"), "f1_macro": float(_f1_cmp(_yte_cmp, y_hat, average="macro", zero_division=0)), "recall_minority": float(rec_min), "training_time_s": round(elapsed, 4), "interpretability_note": "media — revisar permutation importance"}},
+      {{"model": "RandomForest", "auc_roc_cv_mean": float(cv_rf.mean()) if cv_rf is not None else float("nan"), "auc_roc_cv_std": float(cv_rf.std()) if cv_rf is not None else float("nan"), "f1_macro": float(_f1_cmp(_yte_cmp, y_hat, average="macro", zero_division=0)), "recall_minority": float(rec_min), "training_time_s": round(elapsed, 4), "interpretability_note": "media — feature_importances_ del bosque (importancia por impureza)"}},
     ])
-    print(comparison.to_markdown(index=False))
+    try:
+      print(comparison.to_markdown(index=False))
+    except Exception:
+      print(comparison.to_string(index=False))
 except Exception as e:
   print(f"⚠️ Tabla RF falló: {{e}}")
 """,
@@ -529,9 +535,12 @@ try:
     comparison = pd.DataFrame([
       {{"model": "DummyClassifier(most_frequent)", "auc_roc_cv_mean": 0.5, "auc_roc_cv_std": 0.0, "f1_macro": float("nan"), "recall_minority": 0.0, "training_time_s": 0.0, "interpretability_note": "baseline trivial"}},
       _train_and_score(pipe_lr, "LogisticRegression", cv_lr, "alta — coeficientes interpretables"),
-      _train_and_score(pipe_rf, "RandomForest", cv_rf, "media — revisar permutation importance"),
+      _train_and_score(pipe_rf, "RandomForest", cv_rf, "media — feature_importances_ del bosque (importancia por impureza)"),
     ])
-    print(comparison.to_markdown(index=False))
+    try:
+      print(comparison.to_markdown(index=False))
+    except Exception:
+      print(comparison.to_string(index=False))
 except Exception as e:
   print(f"⚠️ Tabla contraste falló: {{e}}")
 """,

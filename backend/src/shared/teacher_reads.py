@@ -90,6 +90,7 @@ _DETAIL_CASE_VIEW_ROOT_FIELDS: Sequence[str] = (
     "caseType",
     "edaDepth",
     "studentProfile",
+    "primaryFamily",
     "generatedAt",
     "outputDepth",
 )

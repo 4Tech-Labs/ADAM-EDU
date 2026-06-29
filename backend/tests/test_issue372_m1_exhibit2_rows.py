@@ -259,11 +259,34 @@ def test_gutted_reprompt_is_rejected() -> None:
     assert any("no corregida" in m for m in rec.messages)
 
 
-def test_gate_noop_for_business() -> None:
+def test_gate_fires_for_business_with_rate(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Issue #518 — con el kill-switch on (default) + una tasa calibrada, el guard #372 ahora SÍ
+    # corre para business+clf (antes era no-op): repromptea para imprimir la tasa en Exhibit 2.
+    monkeypatch.setattr(graph_module.settings, "business_event_rate_calibration", True)
+    fake = _FakeLLM([OP_GOOD])  # corrected anexo prints 8.3 %
+    out = _invoke(fake, _state(profile="business"), OP_NO_RATE, _contract())
+    assert fake.calls == 1
+    assert validate_exhibit2_event_rate(out, RATE) == []
+    assert "8.3 %" in out
+
+
+def test_gate_noop_for_business_when_switch_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Issue #518 — kill-switch OFF → business vuelve a ser no-op byte-idéntico (además la tasa ya
+    # estaría nulificada por _validate_target_event_rate; aquí blindamos el gate del propio guard).
+    monkeypatch.setattr(graph_module.settings, "business_event_rate_calibration", False)
     fake = _FakeLLM()  # never invoked
     out = _invoke(fake, _state(profile="business"), OP_NO_RATE, _contract())
     assert fake.calls == 0
-    assert out == OP_NO_RATE  # byte-identical passthrough
+    assert out == OP_NO_RATE
+
+
+def test_gate_noop_for_business_without_rate(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Issue #518 — sin tasa (el architect la omitió) el guard es no-op aunque el switch esté on.
+    monkeypatch.setattr(graph_module.settings, "business_event_rate_calibration", True)
+    fake = _FakeLLM()  # never invoked
+    out = _invoke(fake, _state(profile="business"), OP_NO_RATE, _contract(rate=None))
+    assert fake.calls == 0
+    assert out == OP_NO_RATE
 
 
 def test_gate_noop_for_non_classification_family() -> None:

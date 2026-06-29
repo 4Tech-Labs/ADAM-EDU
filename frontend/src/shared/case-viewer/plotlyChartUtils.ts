@@ -253,9 +253,20 @@ export function buildLayout(
         },
     };
 
-    if (hasDualY && !layout.yaxis2) {
+    if (hasDualY) {
+        // A trace declares `yaxis: "y2"`, so a secondary axis is required. Plotly only overlays the
+        // second axis when `overlaying: "y"` + `side: "right"` are present — a backend that emits a
+        // PARTIAL `yaxis2` (e.g. just a `title`) would otherwise render it as a disjoint subplot. Merge:
+        // keep any backend-provided fields (notably `title`) but FORCE the overlay invariants so the
+        // dual-axis chart always renders correctly. (Was all-or-nothing: only injected when `yaxis2`
+        // was entirely absent.)
+        const providedY2 =
+            typeof baseLayout.yaxis2 === "object" && baseLayout.yaxis2 !== null
+                ? (baseLayout.yaxis2 as Record<string, unknown>)
+                : {};
         layout.yaxis2 = {
             title: "",
+            ...providedY2,
             overlaying: "y",
             side: "right",
             automargin: true,

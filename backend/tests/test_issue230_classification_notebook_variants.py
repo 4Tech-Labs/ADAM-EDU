@@ -806,3 +806,51 @@ def test_dummy_baseline_execution_missing_contract_target_skips(prompt: str) -> 
     assert namespace["target_col"] is None
     assert namespace["is_binary"] is False
     assert "REQUISITO FALTANTE" in buffer.getvalue()
+
+
+def _make_highcard_driver_df(n: int = 60) -> pd.DataFrame:
+    """Frame whose ONLY signal-bearing feature is a high-cardinality continuous driver.
+
+    ``amount`` is an all-unique continuous measurement (the natural driver in a fraud /
+    credit / pricing case); ``region`` is a low-cardinality categorical feature; ``ref_id``
+    is a numeric identifier (``_id``-named) and ``token`` is a high-cardinality string id —
+    both must be dropped. The binary target derives its signal from ``amount`` so a model
+    that loses ``amount`` from ``feature_cols`` collapses to ~random.
+    """
+    amount = [1000.0 + i * 1.37 for i in range(n)]  # n distinct floats → nunique == n
+    return pd.DataFrame({
+        "categoria": [1 if amount[i] > 1000.0 + (n / 2) * 1.37 else 0 for i in range(n)],
+        "amount": amount,
+        "region": [("norte", "sur", "centro")[i % 3] for i in range(n)],
+        "ref_id": list(range(10_000, 10_000 + n)),          # numeric, all-unique, _id-named
+        "token": [f"TK{i:05d}" for i in range(n)],           # string, all-unique → true id
+    })
+
+
+@pytest.mark.parametrize("prompt", _VARIANT_PROMPTS)
+def test_dummy_baseline_keeps_highcardinality_numeric_driver(prompt: str) -> None:
+    """Regression: the feature-hygiene all-unique drop must NOT discard a continuous
+    NUMERIC driver.
+
+    The candidate filter pre-caps categoricals at ``nunique <= 20``, so the
+    ``nunique == n_filas`` clause can only ever fire on numeric columns — exactly the
+    continuous driver that carries the target's signal (e.g. ``transaction_amount`` over a
+    realistic range produces all-unique values). Dropping it left the model with only noise
+    features → AUC ≈ random, silently shipped. A numeric column is now kept regardless of
+    cardinality; identifiers are removed by NAME (``_id``) or by being high-cardinality
+    categorical.
+    """
+    df = _make_highcard_driver_df()
+    assert df["amount"].nunique() == len(df)  # precondition: the driver IS all-unique
+
+    namespace = _exec_dummy_baseline(prompt.format(**SHARED_FORMAT_KEYS), df)
+    feature_cols = namespace["feature_cols"]
+
+    assert "amount" in feature_cols, (
+        "high-cardinality continuous numeric driver was dropped from feature_cols — "
+        "the all-unique ID heuristic must not fire on numeric columns"
+    )
+    assert "region" in feature_cols  # low-cardinality categorical feature kept
+    assert "ref_id" not in feature_cols  # numeric identifier dropped by _id name
+    assert "token" not in feature_cols  # high-cardinality string id dropped
+    assert namespace["X_raw"] is not None and namespace["X_raw"].shape[1] >= 1

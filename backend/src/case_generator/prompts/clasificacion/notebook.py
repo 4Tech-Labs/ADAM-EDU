@@ -217,9 +217,11 @@ K-bis. **Higiene de feature_cols OBLIGATORIA antes de construir X (anti-features
         `num_cols = df.select_dtypes(include=np.number).columns.tolist()`
         `cat_cols = [c for c in df.select_dtypes(include=["object", "category"]).columns if df[c].nunique(dropna=True) <= 20]`
         `candidates = [c for c in (num_cols + cat_cols) if c != target_col]`
-     2) Drop ID-like (cardinalidad == n_filas o token `"id"` en el nombre normalizado).
-        `n = len(df)`
-        `candidates = [c for c in candidates if df[c].nunique(dropna=True) < n and "id" not in normalize_colname(c).split("_")]`
+     2) Drop ID-like (token `"id"` en el nombre normalizado, o cardinalidad == n_filas
+        SOLO en columnas categóricas — una columna numérica con valores únicos es una
+        medición continua legítima, NO un ID, y se conserva).
+        `n = len(df); num_set = set(num_cols)`
+        `candidates = [c for c in candidates if (c in num_set or df[c].nunique(dropna=True) < n) and "id" not in normalize_colname(c).split("_")]`
      3) Drop near-constants (`nunique <= 1`) y high-null (`>50%` NaN).
         `candidates = [c for c in candidates if df[c].nunique(dropna=True) > 1 and df[c].isna().mean() <= 0.5]`
      4) Drop features de leakage por contrato + patrones temporal-posteriores
@@ -334,12 +336,24 @@ M. **PEDAGOGÍA HARVARD ml_ds — bloque comparativo OBLIGATORIO.**
 
 # %%
 try:
-    # Distribución del target detectado por alias (label_aliases / churn_aliases) o último categórico.
-    target_col = find_first_matching_column(df.columns, label_aliases) or \
-                 find_first_matching_column(df.columns, churn_aliases)
-    if target_col is None:
-        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
-        target_col = cat_cols[-1] if cat_cols else None
+    # Target CONTRACT-FIRST (igual que la celda de modelado 3.0.5.1): si el caso
+    # declara la columna objetivo, esa es la que se explora; si no la declara, se
+    # cae al heurístico por alias. Así el "Target candidato" que se muestra aquí
+    # coincide con la columna que entrenan los modelos, sin contradicciones (p. ej.
+    # mostrar un identificador como objetivo y luego modelar otra columna distinta).
+    _eda_contract_target = "{contract_target_name}".strip()
+    if _eda_contract_target and _eda_contract_target in df.columns:
+        target_col = _eda_contract_target
+    elif _eda_contract_target:
+        print(f"⚠️ REQUISITO FALTANTE: target '{{_eda_contract_target}}' del contrato "
+              "no está presente en el dataset.")
+        target_col = None
+    else:
+        target_col = find_first_matching_column(df.columns, label_aliases) or \
+                     find_first_matching_column(df.columns, churn_aliases)
+        if target_col is None:
+            cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+            target_col = cat_cols[-1] if cat_cols else None
     if target_col is not None:
         print("Target candidato:", target_col)
         print(df[target_col].value_counts(normalize=True).round(3))
@@ -426,9 +440,14 @@ try:
                       if df[c].nunique(dropna=True) <= 20]
     _candidates_boot = [c for c in (_num_cols_boot + _cat_cols_boot) if c != target_col]
     _n_boot = len(df)
+    _num_set_boot = set(_num_cols_boot)
     feature_cols = [
         c for c in _candidates_boot
-        if df[c].nunique(dropna=True) < _n_boot
+        # Tener TODOS los valores distintos delata un identificador SOLO en columnas de
+        # texto; una columna NUMÉRICA con valores únicos es una medición continua legítima
+        # (p. ej. un monto o un ingreso) y la conservamos — descartarla borraba la única
+        # pista con señal del objetivo.
+        if (c in _num_set_boot or df[c].nunique(dropna=True) < _n_boot)
         and "id" not in normalize_colname(c).split("_")
         and df[c].nunique(dropna=True) > 1
         and df[c].isna().mean() <= 0.5
@@ -535,6 +554,11 @@ try:
     _coef_lr = pipe_lr.named_steps["clf"].coef_.ravel()
     if len(_feat_names_lr) != len(_coef_lr):
         _feat_names_lr = [f"f{{i}}" for i in range(len(_coef_lr))]
+    # Nombres legibles para el estudiante: quita el prefijo interno que el
+    # ColumnTransformer antepone (num__/cat__) para que la tabla muestre el nombre
+    # real de la variable (ingreso, antigüedad…) y no jerga de la librería.
+    import re as _re_feat_lr
+    _feat_names_lr = [_re_feat_lr.sub(r"^(?:[a-z][a-z0-9]*__)+", "", str(_n)) for _n in _feat_names_lr]
     or_df = pd.DataFrame(
         {{"feature": _feat_names_lr, "odds_ratio": np.exp(_coef_lr)}}
     ).sort_values("odds_ratio", ascending=False)
@@ -599,6 +623,11 @@ try:
     _imp_rf = pipe_rf.named_steps["clf"].feature_importances_
     if len(_feat_names_rf) != len(_imp_rf):
         _feat_names_rf = [f"f{{i}}" for i in range(len(_imp_rf))]
+    # Nombres legibles para el estudiante: quita el prefijo interno que el
+    # ColumnTransformer antepone (num__/cat__) para que la tabla muestre el nombre
+    # real de la variable (ingreso, antigüedad…) y no jerga de la librería.
+    import re as _re_feat_rf
+    _feat_names_rf = [_re_feat_rf.sub(r"^(?:[a-z][a-z0-9]*__)+", "", str(_n)) for _n in _feat_names_rf]
     perm_df = pd.DataFrame(
         {{"feature": _feat_names_rf, "importance_mean": _imp_rf}}
     ).sort_values("importance_mean", ascending=False)

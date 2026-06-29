@@ -110,7 +110,7 @@ def test_detect_unanchored_silhouette_dedupes():
         ({"title": "Recuperación", "subtitle": "Valle de la Muerte"}, True),
         ({"title": "Break Even mensual", "subtitle": ""}, True),
         ({"title": "Valor por Segmento", "subtitle": "tamaño y valor"}, False),
-        ({"title": "Comparativa de Opciones Estratégicas", "subtitle": ""}, False),
+        ({"title": "Perfil Comparativo de Segmentos", "subtitle": "índice 0-100"}, False),
         ("not a dict", False),
         ({}, False),
     ],
