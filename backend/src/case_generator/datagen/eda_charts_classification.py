@@ -95,12 +95,18 @@ def _select_mi_feature_columns(df: pd.DataFrame, target_col: str) -> list[str]:
             ``nunique(dropna=True) <= _MI_CAT_MAX_CARD`` (la alta cardinalidad
             discreta es la ÚNICA clase que produce el artefacto).
 
-    Divergencia DELIBERADA vs. M3: el notebook también descarta numéricas con
-    ``nunique == n`` (regla anti-ID). Aquí NO se aplica a numéricas porque son
-    k-NN-seguras y descartarlas escondería señal real; la divergencia queda en la
-    dirección segura (M2 puede mostrar una numérica continua que M3 descarta,
-    nunca una columna causante del artefacto). Mantener en sync con la receta
-    ``dummy_baseline`` de ``prompts/clasificacion/notebooks`` si esa cambia.
+    Alineación con M3 (post-#531/PR#533): el notebook ``dummy_baseline`` CONSERVA
+    las numéricas de cualquier cardinalidad (una numérica all-unique es una medición
+    continua legítima —monto, ingreso, score— y descartarla borraba el único driver
+    con señal; CLAUDE.md: "Do NOT re-add the numeric all-unique drop"). Este selector
+    hace lo MISMO (numéricas k-NN-seguras se conservan salvo el token ``id``), de modo
+    que el universo del chart MI == el universo de features que el notebook RF/LR
+    modela (``feature_cols``). La ÚNICA divergencia restante es defensiva y en la
+    dirección segura: este selector EXCLUYE además ``period``/fechas por nombre/dtype
+    (un índice, nunca una feature) — el de-churn (#382) ya las elimina del dataset
+    ml_ds+clf, así que en producción ambos universos coinciden (verificado por
+    ``test_m2_rf_charts_production_quality``). Mantener en sync con la receta
+    ``dummy_baseline`` de ``prompts/clasificacion/notebook.py`` si cambia.
     """
     n_rows = len(df)
     feature_cols: list[str] = []
