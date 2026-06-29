@@ -390,14 +390,16 @@ class Settings(BaseSettings):
     # business/other-family/non-clf cases are unaffected. Kill-switch: set
     # M3_QUESTION_COHERENCE=false to passthrough exactly (instant env-only revert; no redeploy).
     m3_question_coherence: bool = True
-    # Internal coherence of the M4 (Impacto) decision-question options (clasificación, both
-    # profiles). When true, `validate_question_option_coherence` (reused from m1_grounding with
-    # the floor universe A/B/C — M4 has no `dilema_brief`) checks that each `solucion_esperada`
-    # only recommends an option the case defines (A/B/C) and that its own `enunciado` presents;
-    # `m4_questions_generator` reprompts once then degrades to the pass-1 questions (identity-
-    # guarded on `numero`). Best-effort + gated to the classification family, so
-    # business/other-family/non-clf cases are unaffected. Kill-switch: set
-    # M4_QUESTION_COHERENCE=false to passthrough exactly (instant env-only revert; no redeploy).
+    # Internal coherence of the M4 (Impacto) decision questions. When true,
+    # `validate_m4_questions_coherence` runs FOUR checks: option nonexistent/unpresented (reused from
+    # m1_grounding with the floor universe A/B/C — M4 has no `dilema_brief`) + embedded-MCQ A/B/C
+    # (#481), BOTH for all families; PLUS the single-model leak (an ml_ds `lr_only` question must not
+    # name Random Forest, `rf_only` must not name Logistic Regression) and model-metric anchoring (no
+    # AUC/F1 absent from the executed M3 metrics), gated to ml_ds+clf via the resolved variant /
+    # anchored metrics block. `m4_questions_generator` reprompts once then degrades to the pass-1
+    # questions (identity-guarded on `numero`). Best-effort; business/other-family/non-clf cases are
+    # unaffected by the two ml_ds checks. Kill-switch: set M4_QUESTION_COHERENCE=false to passthrough
+    # exactly (instant env-only revert; no redeploy).
     m4_question_coherence: bool = True
     # Internal coherence of the M5 memorándum question (clasificación, both profiles).
     # When true, `validate_m5_questions_coherence` checks that the memorándum does not name the
