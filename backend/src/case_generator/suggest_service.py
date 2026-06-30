@@ -397,6 +397,31 @@ def _technique_names(profile: str, family: str) -> list[str]:
     return [it["name"] for it in _technique_items(profile, family)]
 
 
+def _active_families(profile: str) -> list[str]:
+    """Forward-facing families the system can actually BUILD for ``profile``.
+
+    Derived from the SAME reduced source the taxonomy block and the form selector
+    use (``_technique_items`` honours ALGORITHM_CATALOG_REDUCED), so the prompt
+    prose never advertises a family the generator cannot produce. Order follows
+    ``FAMILY_META`` to match the taxonomy section. A family with no visible
+    technique for this profile (``regresion`` under the reduced catalog, or the
+    retired ``serie_temporal``) is omitted.
+    """
+    return [fam for fam in FAMILY_META if _technique_items(profile, fam)]
+
+
+def _active_algorithm_names(profile: str) -> list[str]:
+    """Flat list of catalog algorithm names visible to ``profile`` (reduced-aware).
+
+    Seeds the boundary examples with real, buildable technique names instead of
+    hardcoded ones that may be hidden/retired.
+    """
+    names: list[str] = []
+    for fam in _active_families(profile):
+        names.extend(_technique_names(profile, fam))
+    return names
+
+
 # Substring keywords that mark an unknown (off-catalog) technique as challenger.
 _CHALLENGER_KEYWORDS: tuple[str, ...] = (
     "random forest", "xgboost", "lightgbm", "catboost", "adaboost",
@@ -835,6 +860,21 @@ def _build_prompt(req: SuggestRequest) -> str:
     context_str = json.dumps(context_data, ensure_ascii=False, indent=2)
     taxonomy_str = _build_taxonomy_context(req.studentProfile)
 
+    # Forward-facing families/techniques the generator can actually build for this
+    # profile (reduced-catalog-aware — same source as the taxonomy block + the form
+    # selector). Injected into the Workflow + Boundaries prose so the suggester never
+    # proposes a scenario/family the system cannot generate.
+    active_families = _active_families(req.studentProfile)
+    families_csv = ", ".join(active_families) or "clasificacion"
+    example_algos = (
+        ", ".join(_active_algorithm_names(req.studentProfile)) or "Logistic Regression"
+    )
+    cross_family_example = (
+        f" (p.ej. mezclar {active_families[0]} con {active_families[1]})"
+        if len(active_families) >= 2
+        else ""
+    )
+
     sections = []
 
     # ── IDENTITY & MISSION ──
@@ -849,47 +889,52 @@ de un caso de negocio: escenario, pregunta guía y técnicas analíticas.
 Tu sugerencia alimentará al Case Architect, así que debe ser precisa y coherente.""")
 
     # ── WORKFLOW ──
-    sections.append("""\
+    sections.append(f"""\
 # How You Work (Workflow)
-1. **Analiza el contexto:** Lee industria, asignatura, nivel y perfil del estudiante.
-2. **Identifica el problema_tipo:** Elige UNO del catálogo (clustering, clasificacion,
-   regresion, serie_temporal, recomendacion, nlp) que mejor se alinee con la industria
-   y la unidad temática del profesor.
-3. **Diseña el escenario:** Crea una empresa ficticia con tensión narrativa real.
-   El problema debe tener urgencia temporal (deadline concreto).
+1. **Analiza el contexto del docente:** Lee con atención la industria, la asignatura,
+   el nivel académico, el perfil del estudiante, el **módulo del syllabus** y la
+   **unidad temática**. El escenario y la pregunta guía DEBEN nacer de ese contexto.
+2. **Identifica el problema_tipo:** Elige UNA de las familias que el sistema puede
+   construir hoy: {families_csv}. NO uses ninguna otra familia: el sistema NO puede
+   generar casos de series temporales/forecasting, NLP/análisis de texto, sistemas de
+   recomendación, detección de anomalías ni análisis de grafos.
+3. **Diseña el escenario:** Crea una empresa ficticia, realista para la industria y
+   apropiada para nivel universitario, con tensión narrativa real y urgencia temporal
+   (deadline concreto).
 4. **Formula la pregunta guía:** Un dilema ejecutivo o analítico que NO tenga
-   respuesta obvia — debe requerir análisis de datos para resolverse.
+   respuesta obvia — debe requerir análisis de datos con la familia elegida para
+   resolverse, conectado con el módulo y la unidad temática del docente.
 5. **Selecciona técnicas:** SOLO del catálogo provisto para el perfil del estudiante.
-   NUNCA inventes técnicas fuera del catálogo.""")
+   NUNCA inventes técnicas ni familias fuera del catálogo.""")
 
     # ── BOUNDARIES ──
     boundary_profile = ""
     if req.studentProfile == "business":
-        boundary_profile = """\
+        boundary_profile = f"""\
 **REGLA CRÍTICA — Perfil BUSINESS (Caso Harvard):**
 - Las técnicas deben ser rigurosas, interpretables y orientadas a la toma de decisiones gerenciales.
-- Se permiten algoritmos de machine learning siempre que sean interpretables y estén validados (ej: K-Means con silhouette, regresión logística con SHAP, árboles de decisión pequeños, ARIMA con walk‑forward). 
-- **PROHIBIDO** usar modelos de caja negra complejos (Random Forest, XGBoost, redes neuronales profundas) a menos que el profesor lo haya solicitado explícitamente.
-- Para análisis de texto (NLP), se recomienda usar TF‑IDF, análisis de sentimiento con VADER/TextBlob, modelado de temas (LDA) y validación con Kappa inter‑rater o bootstrap.
-- Incluir validaciones propias del tipo de problema: cross‑validation, estabilidad de clusters, intervalos de predicción, etc.
-- Las métricas deben ser claras (AUC‑ROC, F1, R², MAPE, silhouette, etc.) y adaptadas al contexto de negocio.
-- La pregunta guía debe ser gerencial: “¿Qué estrategia recomendaría usted basado en los resultados del análisis X?”.
+- Usa ÚNICAMENTE las familias y técnicas del catálogo provisto abajo (p.ej. {example_algos}); el sistema solo puede construir casos sobre esas técnicas.
+- PROHIBIDO proponer familias o técnicas fuera del catálogo: el sistema NO soporta series temporales/forecasting, NLP/análisis de texto, sistemas de recomendación, detección de anomalías ni análisis de grafos.
+- Las métricas deben corresponder a la familia elegida y al catálogo (p.ej. AUC-ROC, F1, matriz de confusión para clasificación; silhouette, Davies-Bouldin para clustering).
+- Incluir validaciones propias del tipo de problema (cross-validation, estabilidad de clusters, etc.).
+- La pregunta guía debe ser gerencial: "¿Qué estrategia recomendaría usted basado en los resultados del análisis X?".
 """
     else:
-        boundary_profile = """\
+        boundary_profile = f"""\
 **REGLA CRÍTICA — Perfil ML/DS:**
-- Las técnicas DEBEN incluir al menos 1 algoritmo de ML explícito
-  del catálogo (ej: Random Forest, K-Means, ARIMA).
-- La pregunta guía debe tener un componente técnico: "¿Qué modelo
-  predictivo permite anticipar X con la data disponible?"
-- Incluir consideración de validación y métricas."""
+- Las técnicas DEBEN incluir al menos 1 algoritmo de ML explícito del catálogo
+  provisto abajo (p.ej. {example_algos}).
+- La pregunta guía debe tener un componente técnico: "¿Qué modelo predictivo
+  permite anticipar X con la data disponible?" para familias supervisadas, o
+  "¿Qué segmentos latentes revela la data?" para clustering.
+- Incluir consideración de validación y métricas propias de la familia elegida."""
 
     sections.append(f"""\
 # Your Boundaries
 - Responde ÚNICAMENTE con JSON válido. PROHIBIDO Markdown, saludos o texto extra.
 - Empresa 100% ficticia. NUNCA uses empresas reales.
-- `problemType`: DEBE ser uno de: clustering, clasificacion, regresion,
-  serie_temporal, recomendacion, nlp.
+- `problemType`: DEBE ser uno de: {families_csv}. NO uses ninguna otra familia
+  (series temporales, NLP, recomendación, anomalías o grafos NO están soportadas).
 - `scenarioDescription`: 2-4 oraciones con tensión empresarial y deadline.
 - `guidingQuestion`: 1 oración, formulada como dilema con opciones en tensión.
 - Cuando sugieras técnicas, usa SOLO nombres exactos del catálogo provisto.
@@ -897,9 +942,8 @@ Tu sugerencia alimentará al Case Architect, así que debe ser precisa y coheren
   Modo `contrast`: devuelve `algorithmPrimary` (baseline interpretable) y
   `algorithmChallenger` (modelo de mayor capacidad). Ambos del catálogo y distintos.
   REGLA DE FAMILIA: en modo `contrast`, baseline y challenger DEBEN pertenecer
-  al mismo `problemType` (clasificacion, regresion, clustering, serie_temporal,
-  recomendacion, nlp). Comparar Logistic Regression (clasificacion) vs
-  Prophet (serie_temporal) es un contraste experimental inválido.
+  al mismo `problemType` ({families_csv}). Mezclar familias distintas{cross_family_example}
+  es un contraste experimental inválido.
 
 {boundary_profile}""")
 
