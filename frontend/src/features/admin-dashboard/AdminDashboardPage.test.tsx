@@ -276,7 +276,7 @@ describe("AdminDashboardPage", () => {
             id: "course-3",
             title: "Gobierno de Datos",
             code: "DAT-550",
-            access_link: "/app/join#course_access_token=new-course-token",
+            access_link: "/join#course_access_token=new-course-token",
         });
         vi.mocked(api.admin.updateCourse).mockResolvedValue(activeCourse);
         vi.mocked(api.admin.createTeacherInvite).mockResolvedValue({
@@ -284,11 +284,11 @@ describe("AdminDashboardPage", () => {
             full_name: "Maria Perez",
             email: "maria@example.edu",
             status: "pending",
-            activation_link: "/app/teacher/activate#invite_token=abc123",
+            activation_link: "/teacher/activate#invite_token=abc123",
         });
         vi.mocked(api.admin.resendInvite).mockResolvedValue({
             invite_id: "invite-2",
-            activation_link: "/app/teacher/activate#invite_token=resent",
+            activation_link: "/teacher/activate#invite_token=resent",
             expires_at: new Date().toISOString(),
         });
         vi.mocked(api.admin.removeTeacher).mockResolvedValue({
@@ -301,7 +301,7 @@ describe("AdminDashboardPage", () => {
         });
         vi.mocked(api.admin.regenerateCourseAccessLink).mockResolvedValue({
             course_id: activeCourse.id,
-            access_link: "/app/join#course_access_token=rotated-token",
+            access_link: "/join#course_access_token=rotated-token",
             access_link_status: "active",
         });
 
@@ -533,7 +533,7 @@ describe("AdminDashboardPage", () => {
         fireEvent.submit(screen.getByRole("button", { name: "Enviar invitacion" }).closest("form")!);
 
         expect(await screen.findByTestId("teacher-invite-success")).toBeTruthy();
-        expect(screen.getByText("/app/teacher/activate#invite_token=abc123")).toBeTruthy();
+        expect(screen.getByText("/teacher/activate#invite_token=abc123")).toBeTruthy();
         await waitFor(() => {
             expect(api.admin.getTeacherOptions).toHaveBeenCalledTimes(2);
         });
@@ -541,7 +541,7 @@ describe("AdminDashboardPage", () => {
         fireEvent.click(screen.getByRole("button", { name: "Copiar enlace" }));
 
         await waitFor(() => {
-            expect(navigator.clipboard.writeText).toHaveBeenCalledWith("/app/teacher/activate#invite_token=abc123");
+            expect(navigator.clipboard.writeText).toHaveBeenCalledWith("/teacher/activate#invite_token=abc123");
         });
 
         fireEvent.click(screen.getByLabelText("Cerrar modal de invitacion"));
@@ -1051,7 +1051,7 @@ describe("AdminDashboardPage", () => {
             expect(api.admin.regenerateCourseAccessLink).toHaveBeenCalledWith("course-1", expect.anything());
         });
 
-        expect(await screen.findAllByText("/app/join#course_access_token=rotated-token")).toHaveLength(2);
+        expect(await screen.findAllByText("/join#course_access_token=rotated-token")).toHaveLength(2);
     }, 20_000);
 
     it("regenerates a hidden active link directly from the table cell", async () => {
@@ -1064,14 +1064,14 @@ describe("AdminDashboardPage", () => {
             expect(api.admin.regenerateCourseAccessLink).toHaveBeenCalledWith("course-1", expect.anything());
         });
 
-        expect(await screen.findByText("/app/join#course_access_token=rotated-token")).toBeTruthy();
+        expect(await screen.findByText("/join#course_access_token=rotated-token")).toBeTruthy();
     }, 20_000);
 
     it("rolls back the previous regenerated link when a later regeneration fails", async () => {
         vi.mocked(api.admin.regenerateCourseAccessLink)
             .mockResolvedValueOnce({
                 course_id: activeCourse.id,
-                access_link: "/app/join#course_access_token=rotated-token",
+                access_link: "/join#course_access_token=rotated-token",
                 access_link_status: "active",
             })
             .mockRejectedValueOnce(new ApiError(500, "regen failed", "teacher_email_unavailable"));
@@ -1080,13 +1080,13 @@ describe("AdminDashboardPage", () => {
         await screen.findByText("Directorio de Cursos");
 
         fireEvent.click(screen.getByLabelText("Regenerar enlace de Finanzas Corporativas"));
-        expect(await screen.findByText("/app/join#course_access_token=rotated-token")).toBeTruthy();
+        expect(await screen.findByText("/join#course_access_token=rotated-token")).toBeTruthy();
 
         fireEvent.click(screen.getByLabelText("Editar Finanzas Corporativas"));
         fireEvent.click(screen.getByText("Regenerar enlace"));
 
         expect((await screen.findAllByText("No se pudo cargar el selector de docentes porque falta el correo de un docente activo.")).length).toBeGreaterThan(0);
-        expect(screen.getAllByText("/app/join#course_access_token=rotated-token").length).toBeGreaterThan(0);
+        expect(screen.getAllByText("/join#course_access_token=rotated-token").length).toBeGreaterThan(0);
     }, 20_000);
 
     it("does not show the inline regenerate CTA for missing or inactive links", async () => {

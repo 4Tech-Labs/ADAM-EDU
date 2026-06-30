@@ -99,7 +99,7 @@ describe("TeacherDirectoryModal", () => {
         vi.mocked(api.admin.getTeacherDirectory).mockResolvedValue(directoryResponse);
         vi.mocked(api.admin.resendInvite).mockResolvedValue({
             invite_id: "invite-1",
-            activation_link: "/app/teacher/activate#invite_token=fresh-token",
+            activation_link: "/teacher/activate#invite_token=fresh-token",
             expires_at: "2099-01-08T00:00:00+00:00",
         });
         vi.mocked(api.admin.removeTeacher).mockResolvedValue({
@@ -153,7 +153,7 @@ describe("TeacherDirectoryModal", () => {
         });
         await waitFor(() => {
             expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-                "http://localhost:5173/app/teacher/activate#invite_token=fresh-token",
+                "http://localhost:5173/teacher/activate#invite_token=fresh-token",
             );
         });
         expect(await screen.findByRole("status")).toHaveTextContent("Enlace reenviado y copiado al portapapeles.");

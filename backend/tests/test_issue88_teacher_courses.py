@@ -1027,7 +1027,7 @@ def test_issue185_teacher_course_access_link_view_returns_active_metadata(
         "access_link_status": "active",
         "access_link_id": access_link.id,
         "access_link_created_at": access_link.created_at.isoformat().replace("+00:00", "Z"),
-        "join_path": "/app/join",
+        "join_path": "/join",
     }
     assert raw_token not in response.text
 
@@ -1066,7 +1066,7 @@ def test_issue185_teacher_course_access_link_view_returns_missing_without_active
         "access_link_status": "missing",
         "access_link_id": None,
         "access_link_created_at": None,
-        "join_path": "/app/join",
+        "join_path": "/join",
     }
 
 
@@ -1182,7 +1182,7 @@ def test_issue185_teacher_regenerate_course_access_link_supports_password_runtim
     payload = regenerate_response.json()
     assert payload["course_id"] == course.id
     assert payload["access_link_status"] == "active"
-    assert payload["access_link"].startswith("/app/join#course_access_token=")
+    assert payload["access_link"].startswith("/join#course_access_token=")
 
     new_raw = payload["access_link"].split("=", maxsplit=1)[1]
     assert original_raw != new_raw

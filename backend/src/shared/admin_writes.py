@@ -262,7 +262,7 @@ def _map_course_integrity_error(exc: IntegrityError) -> HTTPException:
 
 
 def _build_teacher_activation_link(raw_token: str) -> str:
-    return f"/app/teacher/activate#invite_token={raw_token}"
+    return f"/teacher/activate#invite_token={raw_token}"
 
 
 def _emit_course_audit_event(

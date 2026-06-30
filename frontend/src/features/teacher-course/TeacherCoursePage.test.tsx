@@ -183,7 +183,7 @@ function createCourseDetailResponse(
             access_link_status: "active",
             access_link_id: "access-link-1",
             access_link_created_at: "2026-04-16T10:00:00Z",
-            join_path: "/app/join",
+            join_path: "/join",
         },
     };
 
@@ -201,7 +201,7 @@ function createCourseAccessLinkResponse(
         access_link_status: "active",
         access_link_id: "access-link-1",
         access_link_created_at: "2026-04-16T10:00:00Z",
-        join_path: "/app/join",
+        join_path: "/join",
         ...overrides,
     };
 }
@@ -211,7 +211,7 @@ function createCourseAccessLinkRegenerateResponse(
 ): TeacherCourseAccessLinkRegenerateResponse {
     return {
         course_id: "course-1",
-        access_link: "/app/join#course_access_token=fresh-token-123",
+        access_link: "/join#course_access_token=fresh-token-123",
         access_link_status: "active",
         ...overrides,
     };
@@ -639,7 +639,7 @@ describe("TeacherCoursePage", () => {
             createCourseAccessLinkRegenerateResponse(),
         );
         const expectedAccessLink = new URL(
-            "/app/join#course_access_token=fresh-token-123",
+            "/join#course_access_token=fresh-token-123",
             window.location.origin,
         ).toString();
 
@@ -679,7 +679,7 @@ describe("TeacherCoursePage", () => {
         );
         vi.mocked(api.teacher.regenerateCourseAccessLink).mockResolvedValueOnce(
             createCourseAccessLinkRegenerateResponse({
-                access_link: "/app/join#course_access_token=fresh-token-draft",
+                access_link: "/join#course_access_token=fresh-token-draft",
             }),
         );
 

@@ -3,7 +3,7 @@
 ADAM EDU es un Teacher Authoring + Preview MVP en transicion a una plataforma multi-rol con autenticacion real. El repositorio incluye:
 
 - Flujo docente completo: sugerencias en formulario, generacion asincrona con LangGraph, progreso en tiempo real via Supabase Realtime (`postgres_changes`), preview del caso y revision docente de entregas por estudiante.
-- Shell frontend auth-aware (Issue #5): `AuthProvider`, guards por rol, callback OAuth PKCE, helper `sessionStorage` de activacion con TTL 5 minutos, dashboard docente en `/app/teacher/dashboard`, detalle de curso en `/app/teacher/courses/:courseId` y ruta canonica de authoring en `/app/teacher/case-designer` (con compatibilidad via redirect `/app/teacher` -> `/app/teacher/case-designer`).
+- Shell frontend auth-aware (Issue #5): `AuthProvider`, guards por rol, callback OAuth PKCE, helper `sessionStorage` de activacion con TTL 5 minutos, dashboard docente en `/teacher/dashboard`, detalle de curso en `/teacher/courses/:courseId` y ruta canonica de authoring en `/teacher/case-designer` (con compatibilidad via redirect `/teacher` -> `/teacher/case-designer`).
 - Auth perimeter backend (Issue #3): verificacion JWT via JWKS, actor resolution por memberships, `GET /api/auth/me`, endpoints de activacion body-only.
 
 Los flujos de negocio completos de teacher activation, student join y admin provisioning siguen en Issues #6, #7 y #8 respectivamente. El shell actual deja listos los placeholders y contratos de routing para esas historias.
@@ -107,12 +107,12 @@ El frontend usa ese flujo para renderizar el timeline y el `CasePreview` del pro
 
 Rutas funcionales actuales del shell docente (frontend):
 
-- `/app/teacher/dashboard`: dashboard principal del docente.
-- `/app/teacher/courses/:courseId`: detalle del curso con tabs de syllabus, estudiantes y configuracion.
-- `/app/teacher/cases/:assignmentId/entregas`: listado de entregas del caso publicado.
-- `/app/teacher/cases/:assignmentId/entregas/:membershipId`: detalle read-only de una entrega individual.
-- `/app/teacher/case-designer`: entrada canonica al Diseñador de Casos.
-- `/app/teacher`: redirect de compatibilidad hacia `/app/teacher/case-designer`.
+- `/teacher/dashboard`: dashboard principal del docente.
+- `/teacher/courses/:courseId`: detalle del curso con tabs de syllabus, estudiantes y configuracion.
+- `/teacher/cases/:assignmentId/entregas`: listado de entregas del caso publicado.
+- `/teacher/cases/:assignmentId/entregas/:membershipId`: detalle read-only de una entrega individual.
+- `/teacher/case-designer`: entrada canonica al Diseñador de Casos.
+- `/teacher`: redirect de compatibilidad hacia `/teacher/case-designer`.
 
 ### Deploy note for `Assignment.deadline`
 

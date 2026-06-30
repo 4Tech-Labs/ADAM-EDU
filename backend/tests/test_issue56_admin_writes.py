@@ -77,7 +77,7 @@ def test_issue56_create_course_with_teacher_membership_creates_initial_access_li
     }
     assert payload["teacher_state"] == "active"
     assert payload["access_link_status"] == "active"
-    assert payload["access_link"].startswith("/app/join#course_access_token=")
+    assert payload["access_link"].startswith("/join#course_access_token=")
 
     raw_token = payload["access_link"].split("=", maxsplit=1)[1]
     stored_link = db.scalar(select(CourseAccessLink).where(CourseAccessLink.course_id == payload["id"]))
@@ -652,7 +652,7 @@ def test_issue56_teacher_invite_persists_full_name_returns_activation_link_and_k
     assert payload["full_name"] == "Diana Lopez"
     assert payload["email"] == "diana.lopez@univ.edu"
     assert payload["status"] == "pending"
-    assert payload["activation_link"].startswith("/app/teacher/activate#invite_token=")
+    assert payload["activation_link"].startswith("/teacher/activate#invite_token=")
 
     invite = db.get(Invite, payload["invite_id"])
     assert invite is not None
@@ -694,7 +694,7 @@ def test_issue56_regenerate_course_access_link_rotates_previous_link_and_keeps_o
     assert response.status_code == 200
     payload = response.json()
     assert payload["course_id"] == course.id
-    assert payload["access_link"].startswith("/app/join#course_access_token=")
+    assert payload["access_link"].startswith("/join#course_access_token=")
     assert original_raw not in payload["access_link"]
 
     db.expire_all()
