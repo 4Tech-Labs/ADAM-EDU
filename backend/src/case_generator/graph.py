@@ -221,6 +221,11 @@ from case_generator.clustering_decision import (
     validate_m4_verdict_option,
     validate_verdict_option,
 )
+from case_generator.classification_verdict import (
+    build_m1_decision_phrasing_hint,
+    build_m5_classification_verdict_hint,
+    resolve_m1_recommended_option,
+)
 from case_generator.retention_tokens import (
     RETENTION_CHURN_TOKENS,
     is_retention_match,
@@ -2507,6 +2512,12 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
         _cq_cd = state.get("clustering_decision")
         if _cq_cd:
             prompt = prompt + build_clustering_m1_questions_hint(_cq_cd)
+    # M1→M5 verdict coherence (ml_ds + clasificacion): nudge P3 to state its recommended option in a
+    # parseable form so the M5 memo guard can read M1's choice reliably. Does NOT dictate WHICH option
+    # (M1 leads). Brace-free → safe after .format. No-op (byte-identical) for every other cohort and
+    # when the kill-switch is off.
+    if settings.classification_verdict_coherence and _is_ml_ds_classification(state):
+        prompt = prompt + build_m1_decision_phrasing_hint()
 
     try:
         resultado: GeneradorPreguntasM1Output = llm.with_structured_output(
@@ -8137,6 +8148,81 @@ def _apply_clustering_m5_verdict_coherence(
     )
 
 
+def _apply_classification_m5_verdict_coherence(
+    *, llm: Any, prompt: str, preguntas_dict: list[dict], state: ADAMState
+) -> list[dict]:
+    """M1→M5 verdict-coherence guard for ml_ds + clasificacion (the deterministic GUARANTEE behind the
+    M5 verdict hint). The M5 memo's final decision must recommend the SAME strategic option (A/B/C)
+    that M1's P3 answer key recommends, so the case does not contradict itself about the answer — the
+    classification analog of the clustering #467 defect ("M1→A/B while M4/M5→C"). Reprompt-once-then-
+    DEGRADE, best-effort — NEVER fails the job.
+
+    STANDALONE — does NOT touch the clustering guards (which are a combined verdict+silhouette path).
+    Gated to ml_ds+clasificacion + the ``CLASSIFICATION_VERDICT_COHERENCE`` kill-switch + an
+    UNAMBIGUOUSLY resolved M1 option (``resolve_m1_recommended_option`` returns ``""`` when M1 is
+    ambiguous → no anchor → no-op, never a WRONG anchor); byte-identical no-op otherwise (clustering /
+    business / non-clf / option-absent / switch-off). Accepts the correction ONLY if it preserves the
+    question count AND the ``numero`` sequence (the ``M5-Q{numero}`` grading key) AND is now coherent;
+    else degrades to pass-1. ``prompt`` is the ALREADY-formatted M5 prompt; the reprompt is built by
+    CONCATENATION (never a second ``.format`` — schema/JSON braces). The OUTER ``except Exception``
+    encloses the reprompt ``.invoke`` so a reprompt ``RuntimeError`` DEGRADES instead of escaping the
+    node's ``except RuntimeError: raise`` (which would fail the job). Runs AFTER ``_apply_m5_questions_
+    coherence`` (#417), and its directive recommends M1's option — valid+presented per #412 / the same
+    ``dilema_brief`` — so it cannot reintroduce an #417 (option-nonexistent) violation."""
+    log_extra = {"node": "m5_questions", "case_id": state.get("case_id")}
+    try:
+        if not settings.classification_verdict_coherence or not _is_ml_ds_classification(state):
+            return preguntas_dict
+        option = resolve_m1_recommended_option(state.get("doc1_preguntas"))
+        if not option:
+            return preguntas_dict  # M1 ambiguous / no clear option → no anchor → no-op
+        if validate_verdict_option(_clustering_solution_verdict_text(preguntas_dict), option) == []:
+            return preguntas_dict
+        numeros = [q.get("numero") for q in preguntas_dict]
+        logger.info(
+            "[m5_questions] reprompt de coherencia de veredicto M1->M5 (clf) disparado",
+            extra={**log_extra, "recommended_option": option},
+        )
+        reprompt = prompt + (
+            "\n\n# CORRECCIÓN OBLIGATORIA DE COHERENCIA DE DECISIÓN CON EL MÓDULO 1 (clasificación)\n"
+            "El memorándum DEBE recomendar EXACTAMENTE la Opción " + option + " como decisión final "
+            "(una opción válida del caso, la establecida en el Módulo 1); no recomiendes ninguna otra "
+            "letra. Mantén la misma estructura y numeración.\n"
+        )
+        try:
+            resultado = llm.with_structured_output(GeneradorPreguntasM5Output).invoke(reprompt)
+            corrected = [p.model_dump() for p in resultado.preguntas]
+        except (ValidationError, OutputParserException, ValueError) as exc:
+            logger.warning(
+                "[m5_questions] reprompt de veredicto M1->M5 (clf) inválido — degrada a pass-1: %s",
+                exc, extra=log_extra,
+            )
+            return preguntas_dict
+        if [q.get("numero") for q in corrected] != numeros:
+            logger.warning(
+                "[m5_questions] reprompt de veredicto M1->M5 (clf) alteró numero — degrada a pass-1",
+                extra=log_extra,
+            )
+            return preguntas_dict
+        if validate_verdict_option(_clustering_solution_verdict_text(corrected), option) == []:
+            logger.info(
+                "[m5_questions] coherencia de veredicto M1->M5 (clf) corregida",
+                extra={**log_extra, "degraded": False},
+            )
+            return corrected
+        logger.warning(
+            "[m5_questions] coherencia de veredicto M1->M5 (clf) degradada tras reprompt",
+            extra={**log_extra, "degraded": True},
+        )
+        return preguntas_dict
+    except Exception as exc:  # best-effort — a coherence pass must never fail the job
+        logger.warning(
+            "[m5_questions] validador de veredicto M1->M5 (clf) falló (best-effort): %s",
+            exc, extra=log_extra,
+        )
+        return preguntas_dict
+
+
 def _apply_m5_questions_coherence(
     *,
     llm: Any,
@@ -8325,6 +8411,14 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
                 prompt_text = prompt_text + build_clustering_verdict_hint(
                     _m5_cd, real_silhouette=_m5_real_sil
                 )
+        # M1→M5 verdict coherence (ml_ds + clasificacion): honor M1 P3's recommended strategic option
+        # (A/B/C) in the memo's final decision. The deterministic guarantee is the verdict guard below.
+        # Brace-free → safe before .format. No-op (byte-identical) for every other cohort, when the
+        # kill-switch is off, or when M1's option is ambiguous (resolve returns "").
+        if settings.classification_verdict_coherence and _is_ml_ds_classification(state):
+            _m5_clf_opt = resolve_m1_recommended_option(all_q)
+            if _m5_clf_opt:
+                prompt_text = prompt_text + build_m5_classification_verdict_hint(_m5_clf_opt)
         computed_metrics_block = (
             build_computed_metrics_block(state.get("m3_metrics_summary"))
             if family == "clasificacion"
@@ -8358,6 +8452,12 @@ def m5_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
         # Issue #467 — clustering verdict coherence guard (reprompt-once-then-degrade): forces the
         # memo to recommend the shared option. No-op (byte-identical) for non ml_ds+clustering.
         preguntas = _apply_clustering_m5_verdict_coherence(
+            llm=llm, prompt=formatted, preguntas_dict=preguntas, state=state,
+        )
+        # M1→M5 verdict coherence guard (ml_ds + clasificacion): force the memo's final decision to
+        # recommend M1 P3's option (reprompt-once-then-degrade). Runs AFTER #417 + the clustering guard;
+        # no-op (byte-identical) for non ml_ds+clf, an ambiguous M1 option, or the kill-switch off.
+        preguntas = _apply_classification_m5_verdict_coherence(
             llm=llm, prompt=formatted, preguntas_dict=preguntas, state=state,
         )
         print(f"[m5_questions_generator] {len(preguntas)} memorándum final")

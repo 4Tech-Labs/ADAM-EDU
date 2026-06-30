@@ -243,6 +243,12 @@ class NodeEvalInputs:
     # from target_k (the pre-#467 hash-chosen k, or the kill-switch-off path) fails. gate-protects a
     # future data-layer regression that stops honoring target_k.
     clustering_decision_coherence_ok: bool = True
+    # ml_ds + clasificacion M1→M5 verdict coherence: the M5 final memo must recommend the SAME strategic
+    # option (A/B/C) that M1's P3 answer key recommends, so the case does not contradict itself about the
+    # answer. True (n/a) for non-clf jobs / when M1's option is ambiguous (no anchor) / when the memo text
+    # is absent. Computed via ``check_classification_verdict_coherence``. RED control: a memo that
+    # recommends a different option than M1 fails.
+    classification_verdict_coherence_ok: bool = True
     # ml_ds + clustering M4 first chart is NOT a payback / break-even chart (Issue #469): an exploratory
     # segmentation has no cash-flow model, so a "Punto de Equilibrio: Mes N" chart is fabricated. The
     # dedicated clustering M4 chart prompt replaces it with a value-by-segment chart. True (n/a) for
@@ -451,6 +457,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
         reasons.append(
             "clustering decision coherence failure: injected blob count != coordinated target_k "
             "(data k would contradict the narrative's framed k)"
+        )
+    if not r.classification_verdict_coherence_ok:
+        reasons.append(
+            "classification M1→M5 verdict coherence failure: the M5 memo recommends a different "
+            "strategic option (A/B/C) than M1's P3 answer key (the case contradicts itself)"
         )
     if not r.m4_clustering_no_payback_ok:
         reasons.append(
@@ -1377,6 +1388,24 @@ def check_clustering_decision_coherence(
     if not check_clustering_kselection_matches_target(rows, target_k):
         return False
     return check_clustering_structure(rows, latent_labels)
+
+
+def check_classification_verdict_coherence(m1_option: str, m5_memo_text: str) -> bool:
+    """Pure oracle (M1→M5 verdict coherence, ml_ds + clasificacion): does the M5 memo's final decision
+    recommend the SAME strategic option (A/B/C) that M1's P3 answer key recommends?
+
+    Reuses the production detector ``clustering_decision.validate_verdict_option`` (single source of
+    truth — family-agnostic, it just compares a recommended letter against the options the prose names).
+    True (n/a) when ``m1_option`` is empty (M1 ambiguous / no anchor) or ``m5_memo_text`` is empty, so
+    the oracle can never spuriously fail the frozen golden set. RED control: an M5 memo that recommends a
+    DIFFERENT option than ``m1_option`` → ``validate_verdict_option`` flags it → False. No LLM / network
+    / API key. Never raises on well-formed input.
+    """
+    from case_generator.clustering_decision import validate_verdict_option
+
+    if not m1_option or not m5_memo_text:
+        return True
+    return validate_verdict_option(m5_memo_text, m1_option) == []
 
 
 def check_clustering_kselection_matches_target(
