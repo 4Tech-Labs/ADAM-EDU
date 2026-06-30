@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildLayout, sanitizeTraces } from "./plotlyChartUtils";
+import { buildLayout, REGISTERED_TRACE_TYPES, sanitizeTraces } from "./plotlyChartUtils";
 
 function makeZ(rows: number, cols: number): number[][] {
     return Array.from({ length: rows }, (_, r) =>
@@ -288,5 +288,73 @@ describe("sanitizeTraces — heatmap zmin/zmax range", () => {
         // dataMin=0 ≠ dataMax=1 → rama else (sin cambio), mismo 0..1.
         expect(out.zmin).toBe(0);
         expect(out.zmax).toBe(1);
+    });
+});
+
+describe("sanitizeTraces — invalid 'line' trace coercion (render fix)", () => {
+    // Plotly.js has NO "line" trace type, but the M4 chart prompt instructs {type:"line"}
+    // for the cumulative-flow line. Without coercion that trace silently does not render.
+    it("coerces type:'line' to scatter + mode:'lines'", () => {
+        const [out] = sanitizeTraces([{ type: "line", x: [1, 2], y: [3, 4] }]);
+        expect(out.type).toBe("scatter");
+        expect(out.mode).toBe("lines");
+    });
+
+    it("is case-insensitive when coercing 'line'", () => {
+        const [out] = sanitizeTraces([{ type: "Line", x: [1], y: [2] }]);
+        expect(out.type).toBe("scatter");
+        expect(out.mode).toBe("lines");
+    });
+
+    it("preserves an explicit mode already set on a line trace", () => {
+        const [out] = sanitizeTraces([
+            { type: "line", mode: "lines+markers", x: [1], y: [2] },
+        ]);
+        expect(out.type).toBe("scatter");
+        expect(out.mode).toBe("lines+markers");
+    });
+
+    it("does not touch a real scatter trace's mode", () => {
+        const [out] = sanitizeTraces([{ type: "scatter", x: [1], y: [2] }]);
+        expect(out.type).toBe("scatter");
+        expect(out.mode).toBeUndefined();
+    });
+});
+
+describe("sanitizeTraces — unrenderable trace-type allowlist (render fix)", () => {
+    it("drops a trace whose type has no registered Plotly module", () => {
+        const out = sanitizeTraces([
+            { type: "bar", x: ["a"], y: [1] },
+            { type: "pie", values: [1, 2], labels: ["a", "b"] },
+        ]);
+        expect(out).toHaveLength(1);
+        expect(out[0].type).toBe("bar");
+    });
+
+    it("returns an empty array when every trace is unrenderable", () => {
+        const out = sanitizeTraces([{ type: "indicator", value: 42 }]);
+        expect(out).toEqual([]);
+    });
+
+    it("keeps a trace with no explicit type (Plotly defaults it to scatter)", () => {
+        const out = sanitizeTraces([{ x: [1, 2], y: [3, 4] }]);
+        expect(out).toHaveLength(1);
+    });
+
+    it("keeps every registered trace type", () => {
+        const out = sanitizeTraces(
+            REGISTERED_TRACE_TYPES.map((type) => ({ type, x: [1], y: [2] })),
+        );
+        expect(out).toHaveLength(REGISTERED_TRACE_TYPES.length);
+    });
+});
+
+describe("REGISTERED_TRACE_TYPES", () => {
+    it("matches the partial Plotly bundle registered in PlotlyComponent.tsx", () => {
+        // Drift lock: these must match the modules registered in PlotlyComponent.tsx.
+        // If the partial bundle changes, update both this list and that registration.
+        expect([...REGISTERED_TRACE_TYPES].sort()).toEqual(
+            ["bar", "box", "heatmap", "scatter", "violin", "waterfall"].sort(),
+        );
     });
 });

@@ -32,4 +32,24 @@ describe("PlotlyChartsRenderer", () => {
         expect(await screen.findByTestId("plotly-component")).toHaveTextContent("Graficas renderizadas: 1");
         expect(screen.queryByText("Cargando Gráfico...")).toBeNull();
     });
+
+    it("shows a graceful fallback when all traces are unrenderable (dropped types)", () => {
+        render(
+            <PlotlyChartsRenderer
+                charts={[
+                    {
+                        id: "chart-unrenderable",
+                        title: "Roto",
+                        traces: [{ type: "pie", values: [1, 2] }],
+                        layout: {},
+                    },
+                ]}
+            />,
+        );
+
+        expect(
+            screen.getByText("Datos no disponibles para este gráfico."),
+        ).toBeTruthy();
+        expect(screen.queryByTestId("plotly-component")).toBeNull();
+    });
 });

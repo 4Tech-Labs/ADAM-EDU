@@ -49,12 +49,12 @@ El contexto incluye el análisis de impacto M4 de un modelo de clasificación
 
 ## Gráfico 1: Flujo de Caja y Punto de Equilibrio (Payback) — Pipeline ML
 - **chart_type:** `"bar"` — un único valor en este campo (el schema no admite compuestos).
-  El trace de acumulado se añade como trace `"line"` dentro del array `traces`.
+  El trace de acumulado se añade como trace `"scatter"` con `mode:"lines"` dentro del array `traces`.
 - **Concepto:** Mostrar inversión inicial (infraestructura ML, licencias, datos) →
   flujos netos por período → punto donde el acumulado cruza cero ("Valle de la Muerte").
 - **Traces:**
   - `{{"type": "bar", ...}}`: flujo neto por período (incluir costos de reentrenamiento periódico)
-  - `{{"type": "line", ...}}`: flujo acumulado (cruza cero en el payback period)
+  - `{{"type": "scatter", "mode": "lines", ...}}`: flujo acumulado (cruza cero en el payback period; Plotly NO tiene tipo "line", una línea es scatter con mode "lines")
 - **Datos:** Extraer inversión de Exhibit 1, proyectar flujos netos según la opción
   recomendada en M4 content. Usar el horizonte temporal del caso.
 - **Títulos técnico-financieros:** ej. "ROI del Pipeline ML vs Inversión en Infra".
@@ -106,8 +106,8 @@ El contexto incluye el análisis de impacto M4 de un modelo de clasificación
   "title": "string (orientado al insight financiero del modelo ML)",
   "subtitle": "string",
   "library": "plotly",
-  "chart_type": "waterfall|bar|line",
-  "traces": [{{ "type": "bar|line|scatter", "x": [...], "y": [...], "name": "..." }}],
+  "chart_type": "waterfall|bar|scatter",
+  "traces": [{{ "type": "bar|scatter", "x": [...], "y": [...], "name": "..." }}],
   "layout": {{ "xaxis": {{"title": "..."}}, "yaxis": {{"title": "..."}}, "showlegend": true, "template": "plotly_white" }},
   "source": "Análisis Financiero — {case_id}",
   "notes": "string (insight + método de cálculo + referencia a métricas M3 si aplica)",
@@ -152,12 +152,12 @@ El contexto incluye el análisis de impacto M4 de un modelo de clasificación
 
 ## Gráfico 1: Flujo de Caja y Punto de Equilibrio (Payback) — Pipeline ML
 - **chart_type:** `"bar"` — un único valor en este campo (el schema no admite compuestos).
-  El trace de acumulado se añade como trace `"line"` dentro del array `traces`.
+  El trace de acumulado se añade como trace `"scatter"` con `mode:"lines"` dentro del array `traces`.
 - **Concepto:** Mostrar inversión inicial (infraestructura ML, licencias, datos) →
   flujos netos por período → punto donde el acumulado cruza cero ("Valle de la Muerte").
 - **Traces:**
   - `{{"type": "bar", ...}}`: flujo neto por período (incluir costos de reentrenamiento periódico)
-  - `{{"type": "line", ...}}`: flujo acumulado (cruza cero en el payback period)
+  - `{{"type": "scatter", "mode": "lines", ...}}`: flujo acumulado (cruza cero en el payback period; Plotly NO tiene tipo "line", una línea es scatter con mode "lines")
 - **Datos:** Extraer inversión de Exhibit 1, proyectar flujos netos según la opción
   recomendada en M4 content. Usar el horizonte temporal del caso.
 - **Títulos técnico-financieros:** ej. "ROI del Pipeline ML vs Inversión en Infra".
@@ -196,8 +196,8 @@ El contexto incluye el análisis de impacto M4 de un modelo de clasificación
   "title": "string (orientado al insight financiero del modelo ML)",
   "subtitle": "string",
   "library": "plotly",
-  "chart_type": "waterfall|bar|line",
-  "traces": [{{ "type": "bar|line|scatter", "x": [...], "y": [...], "name": "..." }}],
+  "chart_type": "waterfall|bar|scatter",
+  "traces": [{{ "type": "bar|scatter", "x": [...], "y": [...], "name": "..." }}],
   "layout": {{ "xaxis": {{"title": "..."}}, "yaxis": {{"title": "..."}}, "showlegend": true, "template": "plotly_white" }},
   "source": "Análisis Financiero — {case_id}",
   "notes": "string (insight + método de cálculo + referencia a métricas M3 si aplica)",
@@ -246,13 +246,13 @@ El contexto incluye el análisis de impacto M4 de un modelo de clasificación
 
 ## Gráfico 1: Flujo de Caja y Punto de Equilibrio (Payback) — Pipeline ML
 - **chart_type:** `"bar"` — un único valor en este campo (el schema no admite compuestos).
-  El trace de acumulado se añade como trace `"line"` dentro del array `traces`.
+  El trace de acumulado se añade como trace `"scatter"` con `mode:"lines"` dentro del array `traces`.
 - **Concepto:** Mostrar inversión inicial (infraestructura ML, licencias, datos) →
   flujos netos por período → punto donde el acumulado cruza cero ("Valle de la Muerte").
   Los costos van SIEMPRE en USD; el "retorno" es el VALOR del MARCO DE VALOR monetizado.
 - **Traces:**
   - `{{"type": "bar", ...}}`: flujo neto por período (incluir costos de reentrenamiento periódico)
-  - `{{"type": "line", ...}}`: flujo acumulado (cruza cero en el payback period)
+  - `{{"type": "scatter", "mode": "lines", ...}}`: flujo acumulado (cruza cero en el payback period; Plotly NO tiene tipo "line", una línea es scatter con mode "lines")
 - **Datos:** Extraer inversión de Exhibit 1, proyectar flujos netos según la opción
   recomendada en M4 content. Usar el horizonte temporal del caso.
 - **Títulos técnicos:** ej. "Recuperación de la inversión del Pipeline ML".
@@ -293,8 +293,8 @@ El contexto incluye el análisis de impacto M4 de un modelo de clasificación
   "title": "string (orientado al insight de valor del modelo ML)",
   "subtitle": "string",
   "library": "plotly",
-  "chart_type": "waterfall|bar|line",
-  "traces": [{{ "type": "bar|line|scatter", "x": [...], "y": [...], "name": "..." }}],
+  "chart_type": "waterfall|bar|scatter",
+  "traces": [{{ "type": "bar|scatter", "x": [...], "y": [...], "name": "..." }}],
   "layout": {{ "xaxis": {{"title": "..."}}, "yaxis": {{"title": "..."}}, "showlegend": true, "template": "plotly_white" }},
   "source": "Análisis de Impacto — {case_id}",
   "notes": "string (insight + método de cálculo + referencia a métricas M3 si aplica)",
@@ -360,7 +360,7 @@ determinista a partir de la matriz de costos del caso; NO lo generes tú.)
   proyectado que genera el modelo, expresado en la métrica del MARCO DE VALOR.
   - Si el MARCO DE VALOR es financiero (USD): puedes mostrar la recuperación de la inversión —
     una barra de valor neto por período (DERIVADO aritméticamente del valor anual del M4 ÷ el
-    número de períodos del horizonte) y una traza `"line"` de valor acumulado que cruza la
+    número de períodos del horizonte) y una traza `"scatter"` (con `mode:"lines"`) de valor acumulado que cruza la
     inversión inicial (el punto de recuperación). Usa SOLO cifras del M4/Exhibit 1 o derivadas.
   - Si el MARCO DE VALOR NO es financiero (p. ej. resultados clínicos, de aprendizaje o
     ambientales): muestra la inversión (USD) junto al valor proyectado en la unidad de esa
@@ -393,8 +393,8 @@ determinista a partir de la matriz de costos del caso; NO lo generes tú.)
   "title": "string (orientado al caso de inversión del modelo ML)",
   "subtitle": "string",
   "library": "plotly",
-  "chart_type": "bar|line",
-  "traces": [{{ "type": "bar|line|scatter", "x": [...], "y": [...], "name": "..." }}],
+  "chart_type": "bar|scatter",
+  "traces": [{{ "type": "bar|scatter", "x": [...], "y": [...], "name": "..." }}],
   "layout": {{ "xaxis": {{"title": "..."}}, "yaxis": {{"title": "..."}}, "showlegend": true, "template": "plotly_white" }},
   "source": "Análisis de Impacto — {case_id}",
   "notes": "string (insight + método de cálculo + referencia a métricas M3 si aplica)",
