@@ -129,9 +129,13 @@ const AUTHORING_REALTIME_SUBSCRIBE_TIMEOUT_MS = 4000;
 // (CHANNEL_ERROR/TIMED_OUT/CLOSED) is handled immediately and separately below, so this
 // is purely time-based recovery. It arms at BASE and backs off exponentially (×2, capped
 // at MAX) on each silent non-terminal reconcile, resetting to BASE on any real realtime
-// event. ±JITTER spreads concurrent clients to avoid a thundering herd. Exported for tests.
+// event. ±JITTER spreads concurrent clients to avoid a thundering herd. MAX is held at 60s
+// (not higher) so the worst case this net exists for — a DROPPED terminal event while the
+// channel stays SUBSCRIBED — is recovered within ~72s (60s × 1.2 jitter) even after the
+// backoff has fully climbed during a long silent stage, while still cutting steady-state
+// polling >90% vs the old 3s. Exported for tests.
 export const AUTHORING_REALTIME_SILENCE_BASE_MS = 30000;
-export const AUTHORING_REALTIME_SILENCE_MAX_MS = 120000;
+export const AUTHORING_REALTIME_SILENCE_MAX_MS = 60000;
 const AUTHORING_REALTIME_SILENCE_JITTER = 0.2;
 
 export class ProgressTransportDegradedError extends Error {
@@ -821,6 +825,10 @@ async function streamRealtimeProgress(
                             }
 
                             settled = true;
+                            // A racing non-terminal realtime event may have armed the
+                            // silence watchdog while this reconcile was in flight; clear it
+                            // so no stale timer lingers past the terminal resolve.
+                            clearSilenceWatchdog();
                             void realtimeClient.removeChannel(channel).then(() => resolve()).catch((error) => reject(error));
                         })
                         .catch((error) => {
@@ -828,6 +836,7 @@ async function streamRealtimeProgress(
                                 return;
                             }
                             settled = true;
+                            clearSilenceWatchdog();
                             void realtimeClient.removeChannel(channel).finally(() => reject(error));
                         });
                     return;

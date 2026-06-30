@@ -606,7 +606,7 @@ describe("api auth + stream glue", () => {
         expect(removeChannelMock).toHaveBeenCalledTimes(1);
     });
 
-    it("backs off the silence watchdog (BASE → 2×BASE → MAX cap) and resets on a real realtime event", async () => {
+    it("backs off the silence watchdog from BASE, caps at MAX, and resets on a real realtime event", async () => {
         vi.useFakeTimers();
         vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
         vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
@@ -657,25 +657,29 @@ describe("api auth + stream glue", () => {
         );
 
         // Initial snapshot (call 1) + post-SUBSCRIBED reconcile (call 2), both non-terminal.
+        // BASE=30000, MAX=60000 → one doubling (30000→60000) reaches the cap.
         await flushAsyncWorkUntil(() => fetchMock.mock.calls.length >= 2);
         await flushAsyncWork();
         expect(fetchMock).toHaveBeenCalledTimes(2);
 
-        // Fire at BASE → reconcile (call 3) → backoff to 2×BASE.
+        // Fire at BASE → reconcile (call 3) → backoff to min(2×BASE, MAX) = MAX (60000).
         await vi.advanceTimersByTimeAsync(AUTHORING_REALTIME_SILENCE_BASE_MS);
         expect(fetchMock).toHaveBeenCalledTimes(3);
 
-        // Fire at 2×BASE → reconcile (call 4) → backoff to MAX (60000×2 = 120000 = MAX).
-        await vi.advanceTimersByTimeAsync(AUTHORING_REALTIME_SILENCE_BASE_MS * 2);
+        // The next window is now MAX (60000), not BASE: advancing only BASE must NOT fire.
+        // Proves the delay actually backed off past BASE.
+        await vi.advanceTimersByTimeAsync(AUTHORING_REALTIME_SILENCE_BASE_MS);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        // Completing the MAX window fires once (call 4) → delay stays capped at MAX.
+        await vi.advanceTimersByTimeAsync(
+            AUTHORING_REALTIME_SILENCE_MAX_MS - AUTHORING_REALTIME_SILENCE_BASE_MS,
+        );
         expect(fetchMock).toHaveBeenCalledTimes(4);
 
-        // Fire at MAX → reconcile (call 5) → delay stays MAX (capped, not 2×MAX).
+        // A full MAX advance fires exactly once more (call 5). If the delay had doubled past
+        // MAX (to 120000) instead of capping, this MAX-sized advance would NOT fire.
         await vi.advanceTimersByTimeAsync(AUTHORING_REALTIME_SILENCE_MAX_MS);
         expect(fetchMock).toHaveBeenCalledTimes(5);
-
-        // Another MAX advance fires exactly once more (call 6) — proves the cap holds.
-        await vi.advanceTimersByTimeAsync(AUTHORING_REALTIME_SILENCE_MAX_MS);
-        expect(fetchMock).toHaveBeenCalledTimes(6);
 
         // A real realtime event proves the channel is alive → resets backoff to BASE.
         postgresChangesHandler?.({
@@ -686,9 +690,9 @@ describe("api auth + stream glue", () => {
         });
         await flushAsyncWork();
 
-        // After the reset the watchdog fires again at BASE (call 7), not at the capped MAX.
+        // After the reset the watchdog fires again after only BASE (call 6), not the capped MAX.
         await vi.advanceTimersByTimeAsync(AUTHORING_REALTIME_SILENCE_BASE_MS);
-        expect(fetchMock).toHaveBeenCalledTimes(7);
+        expect(fetchMock).toHaveBeenCalledTimes(6);
 
         controller.abort();
         await streamPromise;
