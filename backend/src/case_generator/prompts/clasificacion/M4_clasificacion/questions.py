@@ -14,8 +14,9 @@ Differences from the global prompt
 * ``{algorithm_mode}`` ("single" | "contrast") guides whether P2 compares
   the two models head-to-head or evaluates the single model's economics.
 * ``{computed_metrics_block}`` (injected by the caller from m3_metrics_summary)
-  allows the questions to cite verified AUC/F1/precision numbers instead of
-  placeholder figures.
+  allows the questions to cite verified AUC/F1/prevalence and the interpretability
+  metric actually emitted — coefficient (Logistic Regression) or importance (Random
+  Forest) — instead of placeholder figures. precision/recall scalars are NOT emitted.
 
 Placeholders expected in context
 ---------------------------------
@@ -72,6 +73,9 @@ riesgos de producción específicos de modelos de clasificación.
 - MODELO ÚNICO (modo single): si {algorithm_mode} es "single", las preguntas (enunciado y
   solucion_esperada) NO deben nombrar ningún modelo de clasificación distinto al seleccionado en
   {algoritmos}; no introduzcas un modelo alternativo.
+- Refiere el/los algoritmo(s) por su nombre en PROSA natural; NUNCA copies el valor crudo de
+  {algoritmos} en formato de lista/JSON (p. ej. evita escribir literalmente «["..."]» con corchetes
+  o comillas de array en el texto que lee el estudiante).
 - **Idioma de salida: {output_language}**
 
 # Modo de algoritmo: {algorithm_mode}
@@ -88,7 +92,7 @@ al aplicar el modelo {algoritmos}.
 ## P2 — evaluation (ref: §4.2)
 Beneficio proyectado del modelo ({algoritmos}) según §4.2 vs. costo total de
 despliegue y operación anual (infraestructura, reentrenamiento, monitoreo de drift).
-¿El ROI justifica la inversión dado el veredicto de M3?
+¿El ROI justifica la inversión dado el desempeño del modelo en M3?
 Si modo "contrast": ¿Cuál de los dos modelos ofrece mejor trade-off ROI/riesgo para
 el perfil de riesgo de {nombre_empresa}?
 
@@ -163,6 +167,9 @@ DE VALOR) y con los riesgos de producción específicos de modelos de clasificac
 - MODELO ÚNICO (modo single): si {algorithm_mode} es "single", las preguntas (enunciado y
   solucion_esperada) NO deben nombrar ningún modelo de clasificación distinto al seleccionado en
   {algoritmos}; no introduzcas un modelo alternativo.
+- Refiere el/los algoritmo(s) por su nombre en PROSA natural; NUNCA copies el valor crudo de
+  {algoritmos} en formato de lista/JSON (p. ej. evita escribir literalmente «["..."]» con corchetes
+  o comillas de array en el texto que lee el estudiante).
 - **Idioma de salida: {output_language}**
 
 # Modo de algoritmo: {algorithm_mode}
@@ -179,7 +186,7 @@ evento objetivo observada) impacta el VALOR del caso (según el MARCO DE VALOR) 
 ## P2 — evaluation (ref: §4.2)
 Valor proyectado del modelo ({algoritmos}) según §4.2 (en la unidad del MARCO DE VALOR)
 vs. costo total de despliegue y operación anual en USD (infraestructura, reentrenamiento,
-monitoreo de drift). ¿El valor proyectado justifica la inversión dado el veredicto de M3?
+monitoreo de drift). ¿El valor proyectado justifica la inversión dado el desempeño del modelo en M3?
 Si modo "contrast": ¿Cuál de los dos modelos ofrece mejor trade-off valor/riesgo para
 el perfil de riesgo de {nombre_empresa}?
 

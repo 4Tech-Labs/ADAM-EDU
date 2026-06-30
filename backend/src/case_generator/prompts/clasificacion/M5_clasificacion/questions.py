@@ -85,8 +85,13 @@ Párrafo 1 — Decisión: nombra la opción recomendada (A/B/C) o curso de acci�
   va a producción y por qué.
 
 Párrafo 2 — Evidencia: cita al menos 1 valor de negocio de M2/Exhibits/M4. Si {computed_metrics_block}
-  trae valores numéricos verificados, ancla además al menos 1 métrica del modelo (AUC, F1, precision,
-  recall, prevalencia, coeficiente o importancia), escrita junto a su nombre (ej. "AUC del 0.XX").
+  trae valores numéricos verificados, ancla además al menos 1 métrica del modelo (p. ej. AUC, F1 o
+  prevalencia) y, si el bloque expone un atributo de interpretabilidad, nómbralo con el TÉRMINO que
+  corresponda a lo que figura en {computed_metrics_block}: «importancia de feature» si el bloque trae
+  un `importance`, «coeficiente/odds ratio» si trae un `coefficient` (NUNCA llames «coeficiente» a una
+  importancia, ni «importancia» a un coeficiente). Escribe cada métrica junto a su nombre (ej. "AUC del
+  0.XX"). NUNCA cites un término o métrica (precision, recall, coeficiente, importancia…) que no figure
+  en {computed_metrics_block}.
   Si {computed_metrics_block} empieza con "M3_METRICS_SUMMARY_AUSENTE": NO cites AUC, F1 ni
   porcentajes como resultados ejecutados; usa hallazgos cualitativos de M3/M4. PROHIBIDO inventar
   métricas que no figuren en {computed_metrics_block} ni en el caso.
@@ -129,13 +134,16 @@ Párrafo 5 — Marco: relaciona la postura con UN framework reconocido. REGLA AN
 - Si el modo es "single", el memorándum (enunciado y solucion_esperada) NO debe nombrar ningún
   modelo de clasificación distinto al seleccionado en {algoritmos}: no introduzcas un modelo
   alternativo. La opción recomendada debe ser una de las opciones reales del caso (A/B/C).
+- Refiere el/los algoritmo(s) por su nombre en PROSA natural; NUNCA copies el valor crudo de
+  {algoritmos} en formato de lista/JSON (p. ej. evita escribir literalmente «["..."]» con corchetes
+  o comillas de array en el texto que lee el estudiante).
 - **Idioma de salida: {output_language}**
 
 # Modo de algoritmo: {algorithm_mode}
 - Si "single": La consigna evalúa la decisión de desplegar UN solo modelo ({algoritmos})
   y sus condiciones de éxito, monitoreo y umbral de retiro.
 - Si "contrast": La consigna exige al estudiante comparar los dos modelos ({algoritmos})
-  en términos de precisión, recall, costo de error y viabilidad operativa, y recomendar
+  en términos de AUC, F1, costo de error y viabilidad operativa, y recomendar
   UNO para producción con justificación cuantitativa.
 
 # Estructura de la Consigna
