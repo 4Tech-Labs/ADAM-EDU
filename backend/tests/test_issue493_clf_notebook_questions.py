@@ -236,6 +236,30 @@ class TestVariantDispatch:
         assert "Random Forest" not in LR and "RandomForest" not in LR
         assert "Logistic" not in RF and "Regresión Logística" not in RF
 
+    def test_rf_prompt_names_impurity_importance_not_permutation(self) -> None:
+        """The rf_only question must describe the SAME feature-importance artifact the student sees.
+
+        The executed RF notebook cell (`pipeline_rf`) derives `perm_df` from
+        `feature_importances_` (impurity-based) and prints "Top feature importances (RF):" with the
+        note "importancia por impureza"; #353 REMOVED the `interp_rf` permutation-importance cell
+        from the notebook core (`test_m3_rf_notebook_production_quality.py` even forbids
+        "permutation importance" in the comparison cell). So the question prompt must frame the
+        table as impurity importances — never "importancias de permutación", a technique the
+        student's notebook no longer computes (the original #493 mislabel).
+        """
+        from case_generator.prompts import (
+            M3_NOTEBOOK_QUESTIONS_PROMPT_CLASSIFICATION_LR_ONLY as LR,
+            M3_NOTEBOOK_QUESTIONS_PROMPT_CLASSIFICATION_RF_ONLY as RF,
+        )
+
+        # RF: matches the notebook's real artifact, never the removed permutation cell.
+        assert "feature_importances_" in RF
+        assert "impureza" in RF.lower()
+        assert "permutaci" not in RF.lower() and "permutation" not in RF.lower()
+        # LR: still framed as odds ratios / coefficients (direction = sign), untouched.
+        assert "odds ratios" in LR.lower() and "coeficiente" in LR.lower()
+        assert "permutaci" not in LR.lower()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Context builder — strip + injection

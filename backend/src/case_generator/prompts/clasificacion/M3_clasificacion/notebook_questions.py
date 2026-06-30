@@ -15,7 +15,9 @@ single-model executor cell does not export it), injected by the node for Q4's "s
 Two variants, one per LIVE single-model path. Each template names ONLY its model (leak-safe by
 construction — the asymmetric output guard ``detect_unselected_model_mentions`` (#337) is the runtime
 backstop): ``lr_only`` frames the top features as odds ratios / coefficients (direction = sign);
-``rf_only`` frames them as permutation importances (magnitude). ``lr_rf_contrast`` is OUT OF SCOPE
+``rf_only`` frames them as impurity-based feature importances (``feature_importances_``; magnitude,
+no direction — this is what the executed RF cell actually computes, NOT permutation importance,
+which #353 removed from the notebook core). ``lr_rf_contrast`` is OUT OF SCOPE
 (replay-only; the node omits the 2 questions for it).
 
 Q4 (evaluation) reads the real AUC vs the ``DummyClassifier`` baseline and the confusion matrix
@@ -131,7 +133,7 @@ esperado, no contra una corrida desconocida.
 - AUC-ROC del baseline (DummyClassifier): {auc_dummy}
 - F1 (macro) del mejor modelo: {f1}
 - Prevalencia del evento (proporción de la clase positiva): {prevalence}
-- Top features por peso (importancias de permutación del Random Forest): {top_features_display}
+- Top features por peso (importancias por impureza / feature_importances_ del Random Forest): {top_features_display}
 
 # Matriz de costos del caso (premisa del enunciado — ancla de la P5)
 {cost_matrix_block}
@@ -166,7 +168,7 @@ esperado, no contra una corrida desconocida.
   confusión de forma CUALITATIVA: más falsos positivos = más acciones innecesarias; más falsos
   negativos = más omisiones. Cita el AUC REAL {auc} EXACTAMENTE; NUNCA inventes otro número de métrica.
 - **P5 (numero 5 — synthesis — top features → decisión de negocio):**
-  Pide al estudiante que, leyendo la tabla de importancias de permutación de SU notebook, identifique
+  Pide al estudiante que, leyendo la tabla de importancias por impureza de SU notebook, identifique
   cuál feature pesa más y, apoyándose en el EDA del Módulo 2, en qué SENTIDO se asocia con el evento;
   conecte esa palanca con la matriz de costos (costo de acción innecesaria vs. costo de omisión) y
   proponga una acción o un ajuste de umbral, ligándolo al dilema del Módulo 1.
