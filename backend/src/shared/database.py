@@ -1029,7 +1029,17 @@ def _langgraph_pool_kwargs() -> dict[str, object]:
     return {
         "autocommit": True,
         "row_factory": dict_row,
-        "prepare_threshold": 0,
+        # MUST be None (NOT 0) to fully DISABLE server-side prepared statements.
+        # In psycopg3, prepare_threshold=0 means "prepare on first use" — it still
+        # creates named prepared statements (`_pg3_0`, ...). With autocommit=True each
+        # statement is its own transaction, so Supavisor transaction mode (:6543) routes
+        # consecutive statements to different physical backends, and a later statement
+        # hits a backend without the prepared statement -> intermittent
+        # `prepared statement "_pg3_0" does not exist` -> durable checkpoint bootstrap fails.
+        # None disables auto-prepare entirely, which is the supported way to run the
+        # checkpointer over a transaction-mode pooler. The main SQLAlchemy engine is a
+        # separate config and is unaffected.
+        "prepare_threshold": None,
         "options": _build_postgres_timeout_options(settings),
     }
 

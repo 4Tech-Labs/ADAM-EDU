@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 import shared.database as database
-from shared.database import Settings, _make_engine
+from shared.database import Settings, _langgraph_pool_kwargs, _make_engine
 
 
 def test_null_pool_when_environment_is_production() -> None:
@@ -81,3 +81,21 @@ def test_connection_level_timeouts_are_configured_via_connect_args(monkeypatch: 
     assert captured_kwargs["connect_args"] == {
         "options": "-c statement_timeout=4321 -c lock_timeout=876"
     }
+
+
+def test_langgraph_pool_disables_prepared_statements() -> None:
+    """LangGraph checkpointer pools MUST disable server-side prepared statements.
+
+    psycopg3 semantics: prepare_threshold=0 means "prepare on first use" (still
+    creates named prepared statements); None means "never prepare". Over Supavisor
+    transaction mode (:6543) named prepared statements break intermittently with
+    `prepared statement "_pg3_0" does not exist`, failing the durable checkpoint
+    bootstrap. This guards against a regression back to 0 / a positive int.
+    """
+    kwargs = _langgraph_pool_kwargs()
+
+    assert "prepare_threshold" in kwargs
+    assert kwargs["prepare_threshold"] is None
+    # autocommit makes every statement its own transaction, which is exactly why
+    # prepared statements cannot be reused across the transaction-mode pooler.
+    assert kwargs["autocommit"] is True
