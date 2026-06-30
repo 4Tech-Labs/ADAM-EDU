@@ -93,7 +93,7 @@ Los **secretos** viven SOLO en **Google Secret Manager** y se referencian por
 
 | Secreto (Secret Manager) | Variable en runtime | Contenido |
 |---|---|---|
-| `adam-database-url` | `DATABASE_URL` | DSN de Supabase **Supavisor `:6543`** (transaction mode) |
+| `adam-database-url` | `DATABASE_URL` | DSN de Supabase **Supavisor `:6543`** (transaction mode), esquema **`postgresql+psycopg://`**. Ej: `postgresql+psycopg://USER:PASS@HOST:6543/postgres?sslmode=require` |
 | `adam-gemini-api-key` | `GEMINI_API_KEY` | API key de Gemini |
 | `adam-supabase-service-role-key` | `SUPABASE_SERVICE_ROLE_KEY` | service_role de Supabase (backend-only) |
 
@@ -159,8 +159,11 @@ una base de desarrollo coherente (universidad + cuentas + cursos) existe
 
 ## 8. Gotchas conocidos
 
-- **`DATABASE_URL` debe usar el puerto `:6543`** (Supavisor transaction mode). En
-  `ENVIRONMENT=production` el código valida esto al importar y hace crash-loop si no.
+- **`DATABASE_URL` debe usar el puerto `:6543`** (Supavisor transaction mode) **y el
+  esquema `postgresql+psycopg://`** (el backend solo trae `psycopg` v3; un
+  `postgresql://` a secas resuelve a psycopg2 → `ModuleNotFoundError` al importar). En
+  `ENVIRONMENT=production` el código además valida el `:6543` al importar y hace
+  crash-loop si no. Ej: `postgresql+psycopg://USER:PASS@HOST:6543/postgres?sslmode=require`.
 - **`SUPABASE_JWT_SECRET` debe quedar VACÍA** en producción (se verifica por JWKS).
 - **`SUPABASE_ANON_KEY` no es variable de backend** — solo del build del frontend
   (`VITE_SUPABASE_ANON_KEY`).
