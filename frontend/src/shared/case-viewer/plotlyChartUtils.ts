@@ -126,7 +126,8 @@ export function validateHeatmapConfig(
 }
 
 export function sanitizeTraces(traces: Record<string, unknown>[]): Record<string, unknown>[] {
-    return traces.map((trace) => {
+    const hasDualY = chartHasDualY(traces);
+    return traces.map((trace, index) => {
         const sanitized = { ...trace };
 
         if (isHeatmapTrace(trace)) {
@@ -216,6 +217,23 @@ export function sanitizeTraces(traces: Record<string, unknown>[]): Record<string
             if (Array.isArray(sanitized.y)) {
                 sanitized.y = sanitized.y.map((value) => value ?? 0);
             }
+
+            // Eje Y doble (M4 Gráfico 1 de inversión, lente no-financiera): el costo en USD
+            // va en el eje `y` y el valor en la unidad de la lente va en `y2` (overlaying).
+            // Dos barras en ejes SUPERPUESTOS se dibujan centradas en la MISMA categoría X →
+            // la segunda traza tapa por completo a la primera (la barra de costo desaparece).
+            // Para renderizarlas lado a lado, cada barra necesita un `offsetgroup` distinto
+            // (más `barmode: "group"` en el layout). Sin esto, Plotly NO desplaza barras que
+            // viven en ejes distintos. Solo afecta a trazas de barra de un gráfico dual-Y;
+            // todo lo demás queda byte-idéntico.
+            if (hasDualY && String(trace.type || "").toLowerCase() === "bar") {
+                if (sanitized.offsetgroup == null) {
+                    sanitized.offsetgroup = String(index);
+                }
+                if (sanitized.alignmentgroup == null) {
+                    sanitized.alignmentgroup = "dualY";
+                }
+            }
         }
 
         return sanitized;
@@ -271,6 +289,11 @@ export function buildLayout(
             side: "right",
             automargin: true,
         };
+
+        // Las dos barras (costo en `y`, valor en `y2`) llevan `offsetgroup` distinto en
+        // sanitizeTraces; `barmode: "group"` las coloca lado a lado en lugar de superpuestas.
+        // Se FUERZA (igual que overlaying/side arriba) para garantizar el render correcto.
+        layout.barmode = "group";
     }
 
     return layout;

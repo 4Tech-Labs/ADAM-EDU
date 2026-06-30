@@ -154,12 +154,61 @@ describe("buildLayout — secondary y-axis (M4 investment dual-axis fix)", () =>
         expect((layout.margin as Record<string, unknown>).r).toBe(80);
     });
 
+    it("forces barmode group so the two dual-axis bars render side by side, not overlapping", () => {
+        // Bug: two bar traces on overlaying axes (y + y2) draw at the SAME x-pixel and the second
+        // hides the first (the USD cost bar disappears behind the value bar). barmode group + the
+        // per-trace offsetgroup (see sanitizeTraces) is what offsets them.
+        const layout = buildLayout({}, dualTraces) as Record<string, unknown>;
+        expect(layout.barmode).toBe("group");
+    });
+
     it("does NOT add a yaxis2 for a single-axis chart (byte-identical for non-dual charts)", () => {
         const layout = buildLayout({}, [
             { type: "bar", x: ["a"], y: [1] },
         ]) as Record<string, unknown>;
         expect(layout.yaxis2).toBeUndefined();
+        expect(layout.barmode).toBeUndefined();
         expect((layout.margin as Record<string, unknown>).r).toBe(40);
+    });
+});
+
+describe("sanitizeTraces — dual-axis grouped bars (M4 investment overlap fix)", () => {
+    const dualTraces = [
+        { type: "bar", name: "Inversión (USD)", x: ["Despliegue"], y: [515000] },
+        { type: "bar", name: "Estudiantes retenidos", x: ["Despliegue"], y: [600], yaxis: "y2" },
+    ];
+
+    it("assigns a distinct offsetgroup and a common alignmentgroup to each dual-axis bar", () => {
+        const out = sanitizeTraces(dualTraces);
+        expect(out[0].offsetgroup).toBe("0");
+        expect(out[1].offsetgroup).toBe("1");
+        expect(out[0].offsetgroup).not.toBe(out[1].offsetgroup); // side-by-side, not overlapping
+        expect(out[0].alignmentgroup).toBe("dualY");
+        expect(out[1].alignmentgroup).toBe("dualY");
+    });
+
+    it("does NOT touch offsetgroup for a single-axis bar chart (byte-identical)", () => {
+        const out = sanitizeTraces([{ type: "bar", x: ["a"], y: [1] }]);
+        expect(out[0].offsetgroup).toBeUndefined();
+        expect(out[0].alignmentgroup).toBeUndefined();
+    });
+
+    it("respects a backend-provided offsetgroup", () => {
+        const out = sanitizeTraces([
+            { type: "bar", x: ["a"], y: [1], offsetgroup: "cost" },
+            { type: "bar", x: ["a"], y: [2], yaxis: "y2" },
+        ]);
+        expect(out[0].offsetgroup).toBe("cost"); // kept
+        expect(out[1].offsetgroup).toBe("1"); // assigned
+    });
+
+    it("only groups bar traces, leaving a non-bar trace on a dual-axis chart alone", () => {
+        const out = sanitizeTraces([
+            { type: "bar", x: ["a"], y: [1] },
+            { type: "scatter", x: ["a"], y: [2], yaxis: "y2" },
+        ]);
+        expect(out[0].offsetgroup).toBe("0");
+        expect(out[1].offsetgroup).toBeUndefined();
     });
 });
 
