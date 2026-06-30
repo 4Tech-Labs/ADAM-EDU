@@ -18,7 +18,15 @@ vi.mock("@supabase/supabase-js", () => ({
     createClient: createClientMock,
 }));
 
-import { ApiError, api, formatHttpError, resetApiClientForTests } from "./api";
+import {
+    ApiError,
+    api,
+    AUTHORING_PROGRESS_POLL_INTERVAL_MS,
+    AUTHORING_REALTIME_SILENCE_BASE_MS,
+    AUTHORING_REALTIME_SILENCE_MAX_MS,
+    formatHttpError,
+    resetApiClientForTests,
+} from "./api";
 
 async function flushAsyncWork() {
     for (let tick = 0; tick < 10; tick += 1) {
@@ -428,6 +436,7 @@ describe("api auth + stream glue", () => {
     });
 
     it("reconciles a terminal backend failure after realtime channel error", async () => {
+        vi.useFakeTimers();
         vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
         vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
 
@@ -487,7 +496,15 @@ describe("api auth + stream glue", () => {
             );
         vi.stubGlobal("fetch", fetchMock);
 
-        await api.authoring.streamProgress("job-1", (event) => events.push(event));
+        const streamPromise = api.authoring.streamProgress("job-1", (event) => events.push(event));
+
+        // After CHANNEL_ERROR the established channel falls to the degraded poll. The
+        // immediate pollOnce may reuse the still-in-flight reconcile (non-terminal), so
+        // advance one poll interval to let the next poll reconcile the failed state.
+        await flushAsyncWorkUntil(() => fetchMock.mock.calls.length >= 2);
+        await flushAsyncWork();
+        await vi.advanceTimersByTimeAsync(AUTHORING_PROGRESS_POLL_INTERVAL_MS);
+        await streamPromise;
 
         expect(events).toContainEqual({ event: "metadata", data: "{\"status\":\"failed\"}" });
         expect(events).toContainEqual({
@@ -567,10 +584,14 @@ describe("api auth + stream glue", () => {
             );
         vi.stubGlobal("fetch", fetchMock);
 
+        // Pin jitter to exactly 1.0 (factor = 1 - 0.2 + 0.5 * 2 * 0.2) so the silence
+        // watchdog fires at exactly BASE for a deterministic timer advance.
+        vi.spyOn(Math, "random").mockReturnValue(0.5);
+
         const streamPromise = api.authoring.streamProgress("job-silent", (event) => events.push(event));
 
         await flushAsyncWork();
-        await vi.advanceTimersByTimeAsync(3000);
+        await vi.advanceTimersByTimeAsync(AUTHORING_REALTIME_SILENCE_BASE_MS);
         await streamPromise;
 
         expect(events).toContainEqual({
@@ -583,6 +604,99 @@ describe("api auth + stream glue", () => {
             data: "{\"canonical_output\":{\"title\":\"Recovered case\"}}",
         });
         expect(removeChannelMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("backs off the silence watchdog from BASE, caps at MAX, and resets on a real realtime event", async () => {
+        vi.useFakeTimers();
+        vi.stubEnv("VITE_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("VITE_SUPABASE_ANON_KEY", "anon-key");
+        // Pin jitter to exactly 1.0 so each silence delay equals the backoff value.
+        vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+        // Capture the postgres_changes handler so the test can inject a real realtime
+        // event and assert the backoff resets.
+        let postgresChangesHandler: ((payload: { new: unknown }) => void) | undefined;
+        const channel = {
+            on: vi.fn((_event: string, _config: unknown, handler: (payload: { new: unknown }) => void) => {
+                postgresChangesHandler = handler;
+                return channel;
+            }),
+            subscribe: vi.fn((handler: (status: string) => void) => {
+                handler("SUBSCRIBED");
+                return channel;
+            }),
+        };
+        const removeChannelMock = vi.fn().mockResolvedValue(undefined);
+
+        createClientMock.mockImplementationOnce(() => ({
+            auth: { getSession: getSessionMock },
+            channel: vi.fn(() => channel),
+            removeChannel: removeChannelMock,
+        }));
+
+        // Every /progress poll returns a FRESH non-terminal snapshot so the watchdog
+        // keeps backing off; the job never completes during the test. A new Response per
+        // call is required because a Response body can only be read once.
+        const fetchMock = vi.fn().mockImplementation(() =>
+            Promise.resolve(
+                new Response(JSON.stringify({
+                    job_id: "job-backoff",
+                    status: "processing",
+                    current_step: "case_writer",
+                    progress_seq: 1,
+                }), { status: 200, headers: { "Content-Type": "application/json" } }),
+            ),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const controller = new AbortController();
+        const streamPromise = api.authoring.streamProgress(
+            "job-backoff",
+            () => undefined,
+            controller.signal,
+        );
+
+        // Initial snapshot (call 1) + post-SUBSCRIBED reconcile (call 2), both non-terminal.
+        // BASE=30000, MAX=60000 → one doubling (30000→60000) reaches the cap.
+        await flushAsyncWorkUntil(() => fetchMock.mock.calls.length >= 2);
+        await flushAsyncWork();
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+
+        // Fire at BASE → reconcile (call 3) → backoff to min(2×BASE, MAX) = MAX (60000).
+        await vi.advanceTimersByTimeAsync(AUTHORING_REALTIME_SILENCE_BASE_MS);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+
+        // The next window is now MAX (60000), not BASE: advancing only BASE must NOT fire.
+        // Proves the delay actually backed off past BASE.
+        await vi.advanceTimersByTimeAsync(AUTHORING_REALTIME_SILENCE_BASE_MS);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        // Completing the MAX window fires once (call 4) → delay stays capped at MAX.
+        await vi.advanceTimersByTimeAsync(
+            AUTHORING_REALTIME_SILENCE_MAX_MS - AUTHORING_REALTIME_SILENCE_BASE_MS,
+        );
+        expect(fetchMock).toHaveBeenCalledTimes(4);
+
+        // A full MAX advance fires exactly once more (call 5). If the delay had doubled past
+        // MAX (to 120000) instead of capping, this MAX-sized advance would NOT fire.
+        await vi.advanceTimersByTimeAsync(AUTHORING_REALTIME_SILENCE_MAX_MS);
+        expect(fetchMock).toHaveBeenCalledTimes(5);
+
+        // A real realtime event proves the channel is alive → resets backoff to BASE.
+        postgresChangesHandler?.({
+            new: {
+                status: "processing",
+                task_payload: { current_step: "m3_content_generator", progress_seq: 2 },
+            },
+        });
+        await flushAsyncWork();
+
+        // After the reset the watchdog fires again after only BASE (call 6), not the capped MAX.
+        await vi.advanceTimersByTimeAsync(AUTHORING_REALTIME_SILENCE_BASE_MS);
+        expect(fetchMock).toHaveBeenCalledTimes(6);
+
+        controller.abort();
+        await streamPromise;
+        expect(vi.getTimerCount()).toBe(0);
     });
 
     it("returns a non-generic auth error for forbidden streams", async () => {
@@ -658,7 +772,7 @@ describe("api auth + stream glue", () => {
         const streamPromise = api.authoring.streamProgress("job-1", (event) => events.push(event));
 
         await flushAsyncWork();
-        await vi.advanceTimersByTimeAsync(3000);
+        await vi.advanceTimersByTimeAsync(AUTHORING_PROGRESS_POLL_INTERVAL_MS);
         await streamPromise;
 
         const nodes = events
@@ -756,10 +870,10 @@ describe("api auth + stream glue", () => {
         await flushAsyncWorkUntil(() => fetchMock.mock.calls.length >= 2);
         expect(fetchMock).toHaveBeenCalledTimes(2);
 
-        await vi.advanceTimersByTimeAsync(3000);
+        await vi.advanceTimersByTimeAsync(AUTHORING_PROGRESS_POLL_INTERVAL_MS);
         expect(fetchMock).toHaveBeenCalledTimes(3);
 
-        await vi.advanceTimersByTimeAsync(3000);
+        await vi.advanceTimersByTimeAsync(AUTHORING_PROGRESS_POLL_INTERVAL_MS);
         expect(fetchMock).toHaveBeenCalledTimes(3);
 
         resolvePendingPoll?.(

@@ -111,14 +111,32 @@ interface AuthoringJobRealtimeRow {
 }
 
 const AUTHORING_PROGRESS_STEP_SET = new Set<string>(AUTHORING_PROGRESS_STEP_IDS);
-const AUTHORING_PROGRESS_POLL_INTERVAL_MS = 3000;
+// Degraded full-poll cadence used by pollProgressUntilTerminal() when the realtime
+// WebSocket is fully unavailable (no client) or has died (CHANNEL_ERROR/TIMED_OUT/
+// CLOSED). Realtime is the primary transport; this is the durable fallback, so a 20s
+// cadence detects a terminal state with ample margin on a 15-30min job while keeping
+// load off the shared DB_CRITICAL_ENDPOINT_BUDGET budget. Exported for tests.
+export const AUTHORING_PROGRESS_POLL_INTERVAL_MS = 20000;
 // Increased from 1800ms: cold WebSocket setup on production Supabase (DNS + TLS +
 // Phoenix channel join + JWT validation) can reach ~2s on P99 of 4G connections.
 // After the JWT race fix below, the primary cause of premature watchdog triggers
 // (pre-INITIAL_SESSION CHANNEL_ERROR → self-heal → second attempt hits 1800ms) is
 // eliminated. 4000ms covers P99 without adding unnecessary polling-fallback latency.
 const AUTHORING_REALTIME_SUBSCRIBE_TIMEOUT_MS = 4000;
-const AUTHORING_REALTIME_SILENCE_TIMEOUT_MS = AUTHORING_PROGRESS_POLL_INTERVAL_MS;
+// Silence watchdog: a SAFETY NET (not a heartbeat) for the two realtime failure modes
+// that emit no event — a "half-open" channel that reports SUBSCRIBED but stops
+// delivering, and a dropped terminal `completed` update. Real channel death
+// (CHANNEL_ERROR/TIMED_OUT/CLOSED) is handled immediately and separately below, so this
+// is purely time-based recovery. It arms at BASE and backs off exponentially (×2, capped
+// at MAX) on each silent non-terminal reconcile, resetting to BASE on any real realtime
+// event. ±JITTER spreads concurrent clients to avoid a thundering herd. MAX is held at 60s
+// (not higher) so the worst case this net exists for — a DROPPED terminal event while the
+// channel stays SUBSCRIBED — is recovered within ~72s (60s × 1.2 jitter) even after the
+// backoff has fully climbed during a long silent stage, while still cutting steady-state
+// polling >90% vs the old 3s. Exported for tests.
+export const AUTHORING_REALTIME_SILENCE_BASE_MS = 30000;
+export const AUTHORING_REALTIME_SILENCE_MAX_MS = 60000;
+const AUTHORING_REALTIME_SILENCE_JITTER = 0.2;
 
 export class ProgressTransportDegradedError extends Error {
     constructor(message: string) {
@@ -738,6 +756,9 @@ async function streamRealtimeProgress(
         let subscribed = false;
         let subscribeWatchdog: ReturnType<typeof setTimeout> | null = null;
         let silenceWatchdog: ReturnType<typeof setTimeout> | null = null;
+        // Backoff for the silence watchdog: starts at BASE, doubles (capped at MAX) on
+        // each silent non-terminal reconcile, resets to BASE on any real realtime event.
+        let silenceDelayMs = AUTHORING_REALTIME_SILENCE_BASE_MS;
 
         const channel = realtimeClient
             .channel(`authoring-job-${jobId}`)
@@ -761,6 +782,9 @@ async function streamRealtimeProgress(
                         taskPayload.progress_seq,
                         taskPayload.bootstrap_state,
                     );
+                    // A real realtime event proves the channel is alive → reset the
+                    // backoff before re-arming the silence safety net.
+                    silenceDelayMs = AUTHORING_REALTIME_SILENCE_BASE_MS;
                     armSilenceWatchdog();
 
                     const nextStatus = payload.new.status;
@@ -770,6 +794,9 @@ async function streamRealtimeProgress(
                         || nextStatus === "failed_resumable"
                     ) {
                         settled = true;
+                        // Clear the silence watchdog just re-armed above so no stale
+                        // timer lingers after the terminal event resolves the stream.
+                        clearSilenceWatchdog();
                         void emitTerminalEvent(jobId, nextStatus, taskPayload, onEvent)
                             .then(() => realtimeClient.removeChannel(channel))
                             .then(() => resolve())
@@ -798,6 +825,10 @@ async function streamRealtimeProgress(
                             }
 
                             settled = true;
+                            // A racing non-terminal realtime event may have armed the
+                            // silence watchdog while this reconcile was in flight; clear it
+                            // so no stale timer lingers past the terminal resolve.
+                            clearSilenceWatchdog();
                             void realtimeClient.removeChannel(channel).then(() => resolve()).catch((error) => reject(error));
                         })
                         .catch((error) => {
@@ -805,6 +836,7 @@ async function streamRealtimeProgress(
                                 return;
                             }
                             settled = true;
+                            clearSilenceWatchdog();
                             void realtimeClient.removeChannel(channel).finally(() => reject(error));
                         });
                     return;
@@ -868,12 +900,15 @@ async function streamRealtimeProgress(
             }
 
             clearSilenceWatchdog();
+            const jitteredDelayMs =
+                silenceDelayMs
+                * (1 - AUTHORING_REALTIME_SILENCE_JITTER + Math.random() * 2 * AUTHORING_REALTIME_SILENCE_JITTER);
             silenceWatchdog = setTimeout(() => {
                 if (settled) {
                     return;
                 }
 
-                console.warn("[authoring-progress] realtime silence detected", { jobId });
+                console.debug("[authoring-progress] realtime silence detected", { jobId });
                 void reconcileLatestSnapshot()
                     .then((reconciledTerminalState) => {
                         if (settled) {
@@ -887,6 +922,9 @@ async function streamRealtimeProgress(
                             return;
                         }
 
+                        // Channel still silent: back off exponentially (capped) before
+                        // re-arming, so a long backend stage no longer floods polling.
+                        silenceDelayMs = Math.min(silenceDelayMs * 2, AUTHORING_REALTIME_SILENCE_MAX_MS);
                         armSilenceWatchdog();
                     })
                     .catch((error) => {
@@ -898,7 +936,7 @@ async function streamRealtimeProgress(
                         clearSilenceWatchdog();
                         void realtimeClient.removeChannel(channel).finally(() => reject(error));
                     });
-            }, AUTHORING_REALTIME_SILENCE_TIMEOUT_MS);
+            }, jitteredDelayMs);
         }
 
         subscribeWatchdog = setTimeout(() => {
