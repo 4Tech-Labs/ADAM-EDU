@@ -7,7 +7,10 @@ chart was retired: orphan (no §4.x narrative / no M4 question), highest fabrica
 Coverage:
 * New-prompt drift-locks: the 3 live chart prompts instruct 2 charts and never mention the tornado.
 * Legacy-revert drift-locks: the ``*_LEGACY`` snapshots keep the 3-chart / Tornado contract intact,
-  so ``M4_CHART_DROP_SENSITIVITY=false`` is a faithful byte-revert.
+  so ``M4_CHART_DROP_SENSITIVITY=false`` reverts to the 3-chart behavior. (The classification
+  ``*_LEGACY`` prompt's ``line``→``scatter``+``mode:"lines"`` token was modernized in lockstep with
+  the live prompts; this is render-identical — the frontend ``sanitizeTraces`` coerces ``line``→
+  scatter — so the revert stays behaviorally faithful even though it is no longer byte-for-byte.)
 * Dispatch identity: both dispatch tables point at the right constants.
 * ``.format()`` smoke: no stray ``{}`` introduced by the edits (new + legacy).
 * Detector units: ``is_sensitivity_chart`` / ``drop_sensitivity_charts`` (zero-FP, non-mutating, total).
@@ -72,7 +75,19 @@ def test_live_prompt_has_no_tornado(name: str) -> None:
     assert "Gráfico 3" not in _LIVE_PROMPTS[name], f"{name} must renumber away Gráfico 3"
 
 
-# ── 2. Legacy-revert drift-locks (so M4_CHART_DROP_SENSITIVITY=false is a faithful byte-revert) ──
+def test_classification_chart_prompt_emits_scatter_not_invalid_line() -> None:
+    # Plotly.js has NO "line" trace type (a line is scatter + mode:"lines"); the ml_ds+clf chart
+    # prompt was corrected to emit scatter so the LLM stops producing an unrenderable trace.
+    # Scope note: the shared generic ``M4_CHART_GENERATOR_PROMPT`` (and the business prompt derived
+    # from it) still say ``line`` — that is handled render-side by ``sanitizeTraces``' line→scatter
+    # coercion, and completing the generic prompt is a documented defense-in-depth follow-up
+    # (intentionally out of scope to keep the shared-prompt blast radius minimal here).
+    prompt = M4_CHART_PROMPT_CLASSIFICATION
+    assert '"type": "line"' not in prompt, "classification chart prompt must not instruct type:line"
+    assert "bar|line" not in prompt, "classification chart prompt must not list 'line' in the enum hint"
+
+
+# ── 2. Legacy-revert drift-locks (so M4_CHART_DROP_SENSITIVITY=false reverts to 3-chart behavior) ──
 
 
 @pytest.mark.parametrize("name", list(_LEGACY_PROMPTS))

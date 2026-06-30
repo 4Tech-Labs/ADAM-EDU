@@ -1,6 +1,7 @@
-import React, { Suspense, useMemo } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
 import type { EDAChartSpec } from "@/shared/adam-types";
 
+import { ChartErrorBoundary } from "./ChartErrorBoundary";
 import {
     buildLayout,
     chartHasHeatmap,
@@ -14,7 +15,21 @@ export interface PlotlyChartsRendererProps {
     onRetry?: () => void;
 }
 
+function ChartFallback({ height, message }: { height: number; message: string }) {
+    return (
+        <div
+            className="flex items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50"
+            style={{ height }}
+        >
+            <p className="px-6 text-center text-sm text-slate-400">{message}</p>
+        </div>
+    );
+}
+
 function PlotlyChartCard({ spec }: { spec: EDAChartSpec }) {
+    // Set asynchronously by the Plot's `onError` (a plotly.js draw rejection) — React
+    // error boundaries cannot catch those, so this state drives the fallback instead.
+    const [renderFailed, setRenderFailed] = useState(false);
     const hasHeatmap = chartHasHeatmap(spec.traces || []);
     const chartHeight = hasHeatmap ? 450 : 350;
     const sanitizedTraces = useMemo(
@@ -26,6 +41,12 @@ function PlotlyChartCard({ spec }: { spec: EDAChartSpec }) {
         [spec.layout, sanitizedTraces],
     );
 
+    // Re-arm the failure state when the chart data changes, so a card that failed on a
+    // previous spec retries instead of staying latched on the fallback.
+    useEffect(() => {
+        setRenderFailed(false);
+    }, [spec.traces]);
+
     const hasUnrenderableHeatmap =
         hasHeatmap &&
         sanitizedTraces.some(
@@ -33,6 +54,19 @@ function PlotlyChartCard({ spec }: { spec: EDAChartSpec }) {
                 String(trace.type || "").toLowerCase() === "heatmap" &&
                 (!trace.z || (Array.isArray(trace.z) && trace.z.length === 0)),
         );
+
+    // No renderable traces survived sanitisation (e.g. an unregistered trace type was
+    // dropped) → graceful placeholder instead of an empty Plotly canvas.
+    const hasNoRenderableData = sanitizedTraces.length === 0;
+
+    const showFallback =
+        renderFailed || hasUnrenderableHeatmap || hasNoRenderableData;
+
+    const fallbackMessage = renderFailed
+        ? "No se pudo renderizar este gráfico."
+        : hasUnrenderableHeatmap
+          ? "Datos de la matriz no disponibles para este gráfico."
+          : "Datos no disponibles para este gráfico.";
 
     return (
         <div className="relative rounded-xl border border-slate-100 bg-white p-5 shadow-sm transition-shadow hover:shadow-md">
@@ -43,36 +77,40 @@ function PlotlyChartCard({ spec }: { spec: EDAChartSpec }) {
             </div>
 
             <div className="mt-2 w-full overflow-hidden" style={{ minHeight: chartHeight }}>
-                {hasUnrenderableHeatmap ? (
-                    <div
-                        className="flex items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50"
-                        style={{ height: chartHeight }}
-                    >
-                        <p className="px-6 text-center text-sm text-slate-400">
-                            Datos de la matriz no disponibles para este gráfico.
-                        </p>
-                    </div>
+                {showFallback ? (
+                    <ChartFallback height={chartHeight} message={fallbackMessage} />
                 ) : (
-                    <Suspense
+                    <ChartErrorBoundary
+                        resetKey={spec.traces}
                         fallback={
-                            <div className="flex w-full items-center justify-center rounded-lg bg-slate-50/50" style={{ height: chartHeight }}>
-                                <div className="flex flex-col items-center gap-3">
-                                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-slate-400" />
-                                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                                        Cargando Gráfico...
-                                    </span>
-                                </div>
-                            </div>
+                            <ChartFallback
+                                height={chartHeight}
+                                message="No se pudo renderizar este gráfico."
+                            />
                         }
                     >
-                        <Plot
-                            data={sanitizedTraces}
-                            layout={layoutConfig}
-                            config={{ responsive: true, displayModeBar: false }}
-                            useResizeHandler={true}
-                            style={{ width: "100%", height: `${chartHeight}px` }}
-                        />
-                    </Suspense>
+                        <Suspense
+                            fallback={
+                                <div className="flex w-full items-center justify-center rounded-lg bg-slate-50/50" style={{ height: chartHeight }}>
+                                    <div className="flex flex-col items-center gap-3">
+                                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-slate-400" />
+                                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                                            Cargando Gráfico...
+                                        </span>
+                                    </div>
+                                </div>
+                            }
+                        >
+                            <Plot
+                                data={sanitizedTraces}
+                                layout={layoutConfig}
+                                config={{ responsive: true, displayModeBar: false }}
+                                useResizeHandler={true}
+                                onError={() => setRenderFailed(true)}
+                                style={{ width: "100%", height: `${chartHeight}px` }}
+                            />
+                        </Suspense>
+                    </ChartErrorBoundary>
                 )}
             </div>
 

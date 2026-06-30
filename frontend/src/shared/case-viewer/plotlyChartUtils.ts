@@ -125,10 +125,35 @@ export function validateHeatmapConfig(
     return { valid: errors.length === 0, errors, warnings, normalizedZ, zMin, zMax };
 }
 
+// The trace `type`s whose Plotly modules are registered in the partial bundle
+// (PlotlyComponent.tsx). A trace with any other type has no module and would render
+// nothing, so sanitizeTraces drops it. Kept here (not imported from PlotlyComponent)
+// so the heavy plotly.js bundle stays out of the eager chunk. The drift-lock test in
+// plotlyChartUtils.test.ts pins this list; keep it in sync with the modules registered
+// in PlotlyComponent.tsx.
+export const REGISTERED_TRACE_TYPES: readonly string[] = [
+    "bar",
+    "box",
+    "heatmap",
+    "scatter",
+    "violin",
+    "waterfall",
+];
+
 export function sanitizeTraces(traces: Record<string, unknown>[]): Record<string, unknown>[] {
     const hasDualY = chartHasDualY(traces);
-    return traces.map((trace, index) => {
+    const mapped = traces.map((trace, index) => {
         const sanitized = { ...trace };
+
+        // Plotly.js has NO "line" trace type — a line is scatter + mode:"lines". The M4
+        // chart prompt instructs {type:"line"} for the cumulative-flow line, which would
+        // silently not render. Coerce it, preserving any explicit mode already set.
+        if (String(sanitized.type ?? "").trim().toLowerCase() === "line") {
+            sanitized.type = "scatter";
+            if (sanitized.mode == null) {
+                sanitized.mode = "lines";
+            }
+        }
 
         if (isHeatmapTrace(trace)) {
             const validation = validateHeatmapConfig(trace);
@@ -237,6 +262,20 @@ export function sanitizeTraces(traces: Record<string, unknown>[]): Record<string
         }
 
         return sanitized;
+    });
+
+    // Drop any trace whose type has no registered Plotly module (after the coercion
+    // above): the partial bundle cannot draw it, so it would render nothing. A trace
+    // with no explicit type defaults to "scatter" in Plotly and is kept.
+    return mapped.filter((trace) => {
+        const type = String(trace.type ?? "").trim().toLowerCase();
+        if (type && !REGISTERED_TRACE_TYPES.includes(type)) {
+            console.warn(
+                `[sanitizeTraces] dropping trace with unrenderable type "${type}"`,
+            );
+            return false;
+        }
+        return true;
     });
 }
 
