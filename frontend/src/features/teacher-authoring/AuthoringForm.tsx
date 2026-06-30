@@ -552,10 +552,6 @@ export function AuthoringForm({
         invalidateSuggestionResponses();
         setIndustry(val);
     };
-    // Issue #437 Fase 3 — the AUTO sentinel maps to null (no override → resolve from industry).
-    const onImpactLensChange = (val: string) => {
-        setImpactLens(val === IMPACT_LENS_AUTO ? null : (val as ImpactLens));
-    };
     const onStudentProfileChange = (val: string) => {
         invalidateSuggestionResponses();
         setStudentProfile(val as StudentProfile);
@@ -935,8 +931,12 @@ export function AuthoringForm({
                                         </div>
                                     )}
 
-                                    {/* Industria */}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 border-t border-slate-100 pt-3">
+                                    {/* Industria. El selector "Marco de valor" (Impact Lens, Issue #437 Fase 3)
+                                        está oculto del formulario: la lente se resuelve automáticamente desde la
+                                        industria. El campo backend `impact_lens` se sigue enviando como null
+                                        (= automático), así que el contrato del backend no cambia y reactivar el
+                                        selector es trivial. */}
+                                    <div className="border-t border-slate-100 pt-3">
                                         <div>
                                             <label htmlFor="field-industria" className="block text-sm font-semibold text-slate-700 mb-1.5">
                                                 Industria / Sector <span className="text-red-500" aria-hidden="true">*</span>
@@ -957,29 +957,6 @@ export function AuthoringForm({
                                                 </SelectContent>
                                             </Select>
                                             <ErrorMsg show={!!errors.industria} />
-                                        </div>
-                                        {/* Marco de valor (Impact Lens) — Issue #437 Fase 3. Opcional; "Automático"
-                                            deja que la lente se resuelva desde la industria. */}
-                                        <div>
-                                            <label htmlFor="field-impact-lens" className="block text-sm font-semibold text-slate-700 mb-1.5">
-                                                Marco de valor (opcional)
-                                            </label>
-                                            <Select value={impactLens ?? IMPACT_LENS_AUTO} onValueChange={onImpactLensChange}>
-                                                <SelectTrigger
-                                                    id="field-impact-lens"
-                                                    className="input-base w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800"
-                                                >
-                                                    <SelectValue placeholder="Automático (por industria)" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectGroup>
-                                                        {IMPACT_LENS_OPTIONS.map((opt) => (
-                                                            <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                                                        ))}
-                                                    </SelectGroup>
-                                                </SelectContent>
-                                            </Select>
-                                            <p className="field-hint">Cómo M4 mide el valor. Por defecto se infiere de la industria.</p>
                                         </div>
                                     </div>
 
