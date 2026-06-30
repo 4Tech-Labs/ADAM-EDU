@@ -58,11 +58,51 @@ def test_resolve_single_label_fallback():
     assert resolve_m1_recommended_option(_qs("La Opción B equilibra ambos errores.")) == "B"
 
 
-def test_resolve_negation_two_bound_is_ambiguous():
-    # Negation binds BOTH letters → ambiguous → "" (never guess).
+def test_resolve_symmetric_negation_resolves_to_recommended():
+    # "No se recomienda A" rejects A; "Se recomienda B" recommends B → B (A is removed as rejected).
     assert resolve_m1_recommended_option(
         _qs("No se recomienda la Opción A. Se recomienda la Opción B.")
+    ) == "B"
+
+
+def test_resolve_asymmetric_negation_never_anchors_rejected_option():
+    # FINDING 1 (HIGH): A is REJECTED via a cue ('No se recomienda'); B is recommended but WITHOUT a
+    # recognized cue. Must NOT return A (the rejected option); precision-first → "".
+    assert resolve_m1_recommended_option(
+        _qs("No se recomienda la opción A dado su bajo recall. La opción B es claramente superior y debe implementarse.")
     ) == ""
+
+
+def test_resolve_single_negated_option_is_not_anchored():
+    # FINDING 3: only A is named, under a negated cue → must NOT return A → "".
+    assert resolve_m1_recommended_option(_qs("No se recomienda la Opción A.")) == ""
+
+
+@pytest.mark.parametrize(
+    "sol",
+    [
+        "Se recomienda la opción A/B testing como marco metodológico.",  # A/B testing, not Option A
+        "La opción C-suite ejecutiva debe liderar la decisión.",          # C-suite, not Option C
+        "Se recomienda la opción A-1 del catálogo de medidas.",           # A-1, not Option A
+    ],
+)
+def test_resolve_false_label_collocations_never_anchor(sol):
+    # FINDING 2 (MEDIUM): methodology/role collocations near a cue must not bind a spurious letter.
+    assert resolve_m1_recommended_option(_qs(sol)) == ""
+
+
+def test_resolve_positive_with_no_solo_is_not_negated():
+    # "no solo ... A" is ADDITIVE, not a rejection → A still anchors.
+    assert resolve_m1_recommended_option(
+        _qs("No solo se recomienda la Opción A por su robustez, también reduce el costo de omisión.")
+    ) == "A"
+
+
+def test_resolve_sin_duda_is_not_negation():
+    # "sin duda se recomienda A" is POSITIVE (sin is NOT a negator here) → A.
+    assert resolve_m1_recommended_option(
+        _qs("Sin duda se recomienda la Opción A frente a las demás.")
+    ) == "A"
 
 
 def test_resolve_multiple_labels_no_cue_is_ambiguous():
@@ -175,6 +215,13 @@ def _memo(solucion, numero=1):
     return {"numero": numero, "titulo": "Memo", "enunciado": "Elige A/B/C", "solucion_esperada": solucion}
 
 
+def _run_guard(graph, *, llm, preguntas, state, prompt="P", variant=None, metrics_block="", dilema_brief=""):
+    return graph._apply_classification_m5_verdict_coherence(
+        llm=llm, prompt=prompt, preguntas_dict=preguntas, state=state,
+        variant=variant, metrics_block=metrics_block, dilema_brief=dilema_brief,
+    )
+
+
 def test_m5_guard_fixes_on_reprompt(monkeypatch):
     from case_generator import graph
 
@@ -183,9 +230,7 @@ def test_m5_guard_fixes_on_reprompt(monkeypatch):
     wrong = [_memo("Se recomienda la Opción C.")]      # M5 → C (mismatch)
     corrected = _StubResult([_StubMemo(_memo("Se recomienda la Opción B."))])
     llm = _FakeM5LLM(corrected)
-    out = graph._apply_classification_m5_verdict_coherence(
-        llm=llm, prompt="PROMPT", preguntas_dict=wrong, state=state
-    )
+    out = _run_guard(graph, llm=llm, preguntas=wrong, state=state)
     assert llm.calls == 1
     assert "Opción B" in out[0]["solucion_esperada"]
 
@@ -197,9 +242,7 @@ def test_m5_guard_noop_when_coherent(monkeypatch):
     state = _clf_state("Se recomienda la Opción B.")
     ok = [_memo("Se recomienda la Opción B frente a A y C.")]
     llm = _FakeM5LLM(_StubResult([]))
-    out = graph._apply_classification_m5_verdict_coherence(
-        llm=llm, prompt="P", preguntas_dict=ok, state=state
-    )
+    out = _run_guard(graph, llm=llm, preguntas=ok, state=state)
     assert out == ok and llm.calls == 0
 
 
@@ -207,13 +250,11 @@ def test_m5_guard_noop_when_m1_ambiguous(monkeypatch):
     from case_generator import graph
 
     monkeypatch.setattr(graph.settings, "classification_verdict_coherence", True, raising=False)
-    # M1 is ambiguous (negation binds two) → no anchor → no-op even though the memo names C.
-    state = _clf_state("No se recomienda la Opción A. Se recomienda la Opción B.")
+    # M1 names all three options with no recommendation cue → ambiguous → "" → no anchor → no-op.
+    state = _clf_state("Las Opciones A, B y C presentan tradeoffs distintos.")
     memo = [_memo("Se recomienda la Opción C.")]
     llm = _FakeM5LLM(_StubResult([_StubMemo(_memo("Se recomienda la Opción B."))]))
-    out = graph._apply_classification_m5_verdict_coherence(
-        llm=llm, prompt="P", preguntas_dict=memo, state=state
-    )
+    out = _run_guard(graph, llm=llm, preguntas=memo, state=state)
     assert out == memo and llm.calls == 0
 
 
@@ -226,9 +267,7 @@ def test_m5_guard_degrades_on_persistent_mismatch(monkeypatch):
     # reprompt STILL recommends C → degrade to pass-1.
     still_bad = _StubResult([_StubMemo(_memo("Se recomienda la Opción C."))])
     llm = _FakeM5LLM(still_bad)
-    out = graph._apply_classification_m5_verdict_coherence(
-        llm=llm, prompt="P", preguntas_dict=wrong, state=state
-    )
+    out = _run_guard(graph, llm=llm, preguntas=wrong, state=state)
     assert out == wrong and llm.calls == 1
 
 
@@ -243,10 +282,25 @@ def test_m5_guard_degrades_on_numero_drift(monkeypatch):
         _StubMemo(_memo("Se recomienda la Opción B.", numero=2)),
     ])
     llm = _FakeM5LLM(drift)
-    out = graph._apply_classification_m5_verdict_coherence(
-        llm=llm, prompt="P", preguntas_dict=wrong, state=state
-    )
+    out = _run_guard(graph, llm=llm, preguntas=wrong, state=state)
     assert out == wrong
+
+
+def test_m5_guard_degrades_when_reprompt_reintroduces_model_leak(monkeypatch):
+    # FINDING 4: the reprompt regenerates the WHOLE memo. If it fixes the verdict (→B) but re-leaks the
+    # unselected model (lr_only must not name Random Forest), the corrected memo is a #337 regression →
+    # degrade to the leak-clean pass-1.
+    from case_generator import graph
+
+    monkeypatch.setattr(graph.settings, "classification_verdict_coherence", True, raising=False)
+    state = _clf_state("Se recomienda la Opción B.")  # M1 → B
+    base = [_memo("Se recomienda la Opción C según el análisis.")]  # mismatch, leak-clean
+    leaky = _StubResult([_StubMemo(
+        _memo("Se recomienda la Opción B; el Random Forest mostró mejor desempeño.")  # verdict ok, but leaks RF
+    )])
+    llm = _FakeM5LLM(leaky)
+    out = _run_guard(graph, llm=llm, preguntas=base, state=state, variant="lr_only")
+    assert out == base and llm.calls == 1  # degraded — the verdict fix would regress #337
 
 
 def test_m5_guard_degrades_on_reprompt_runtimeerror(monkeypatch):
@@ -256,9 +310,7 @@ def test_m5_guard_degrades_on_reprompt_runtimeerror(monkeypatch):
     state = _clf_state("Se recomienda la Opción B.")
     wrong = [_memo("Se recomienda la Opción C.")]
     llm = _FakeM5LLM(RuntimeError("transient"))  # reprompt raises → must DEGRADE, not propagate
-    out = graph._apply_classification_m5_verdict_coherence(
-        llm=llm, prompt="P", preguntas_dict=wrong, state=state
-    )
+    out = _run_guard(graph, llm=llm, preguntas=wrong, state=state)
     assert out == wrong  # job never fails
 
 
@@ -269,9 +321,7 @@ def test_m5_guard_noop_kill_switch_off(monkeypatch):
     state = _clf_state("Se recomienda la Opción B.")
     wrong = [_memo("Se recomienda la Opción C.")]
     llm = _FakeM5LLM(_StubResult([]))
-    out = graph._apply_classification_m5_verdict_coherence(
-        llm=llm, prompt="P", preguntas_dict=wrong, state=state
-    )
+    out = _run_guard(graph, llm=llm, preguntas=wrong, state=state)
     assert out == wrong and llm.calls == 0
 
 
@@ -282,9 +332,7 @@ def test_m5_guard_noop_business(monkeypatch):
     state = _clf_state("Se recomienda la Opción B.", profile="business")
     wrong = [_memo("Se recomienda la Opción C.")]
     llm = _FakeM5LLM(_StubResult([]))
-    out = graph._apply_classification_m5_verdict_coherence(
-        llm=llm, prompt="P", preguntas_dict=wrong, state=state
-    )
+    out = _run_guard(graph, llm=llm, preguntas=wrong, state=state)
     assert out == wrong and llm.calls == 0
 
 
@@ -296,10 +344,22 @@ def test_m5_guard_noop_clustering(monkeypatch):
     state = _clf_state("Se recomienda la Opción B.", algoritmos=("K-Means",))
     wrong = [_memo("Se recomienda la Opción C.")]
     llm = _FakeM5LLM(_StubResult([]))
-    out = graph._apply_classification_m5_verdict_coherence(
-        llm=llm, prompt="P", preguntas_dict=wrong, state=state
-    )
+    out = _run_guard(graph, llm=llm, preguntas=wrong, state=state)
     assert out == wrong and llm.calls == 0
+
+
+def test_m5_guard_fires_for_ml_ds_unresolved_algoritmos(monkeypatch):
+    # FINDING 5: gate uses default_unresolved_ml_ds_to_classification=True, matching the M5 node body,
+    # so an ml_ds job with no resolved algoritmos (treated as classification downstream) IS guarded.
+    from case_generator import graph
+
+    monkeypatch.setattr(graph.settings, "classification_verdict_coherence", True, raising=False)
+    state = _clf_state("Se recomienda la Opción B.", algoritmos=())
+    wrong = [_memo("Se recomienda la Opción C.")]
+    corrected = _StubResult([_StubMemo(_memo("Se recomienda la Opción B."))])
+    llm = _FakeM5LLM(corrected)
+    out = _run_guard(graph, llm=llm, preguntas=wrong, state=state)
+    assert llm.calls == 1 and "Opción B" in out[0]["solucion_esperada"]
 
 
 # ── 4. Golden oracle ──────────────────────────────────────────────────────────

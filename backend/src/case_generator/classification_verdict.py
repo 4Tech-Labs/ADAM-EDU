@@ -44,24 +44,48 @@ _RECOMMENDED_OPTION_CHOICES: tuple[str, ...] = ("A", "B", "C")
 # propagation design only NUDGES it via ``build_m1_decision_phrasing_hint``): we also accept "óptima",
 # "mejor opción", "conviene", "prioriza(r)", "opción correcta/recomendada". The window between the cue
 # and the option is a bounded, lazy, non-newline-and-non-period run (no nested quantifier over the same
-# class) → LINEAR-time / ReDoS-safe, and it never crosses a sentence boundary.
+# class) → LINEAR-time / ReDoS-safe, and it never crosses a sentence boundary. The captured letter ends
+# in ``(?![\w/-])`` (mirrors ``m1_grounding._OPTION_REF_RE``) so a methodology/role collocation like
+# "opción A/B testing", "opción C-suite" or "opción A-1" never binds a spurious single letter.
 _M1_RECOMMEND_RE = re.compile(
     r"(?:se\s+recomienda|recomiendo|recomendam[oa]s|recomendad[oa]s?|recomendaci[oó]n|"
     r"veredicto|elegir|seleccionar|escoger|optar\s+por|adoptar|prioriza(?:r)?|conviene|"
     r"[oó]ptim[oa]|mejor\s+opci[oó]n|opci[oó]n\s+correcta|opci[oó]n\s+recomendada)"
-    r"[^.\n]{0,40}?\b(?:opci[oó]n|alternativa)\s+([A-F])\b",
+    r"[^.\n]{0,40}?\b(?:opci[oó]n|alternativa)\s+([A-F])(?![\w/-])",
+    re.IGNORECASE,
+)
+
+# A NEGATION marker in the ≤16 word/space chars immediately before a recommendation cue flips it into a
+# REJECTION ("No se recomienda la Opción A" → A is rejected, not recommended), so an asymmetric "No se
+# recomienda A … la opción B es superior" never anchors the REJECTED option A. Only the tight Spanish
+# negators are used: NOT "sin" (which co-occurs with positives — "sin duda se recomienda A"); "no
+# solo/sólo/únicamente" is excluded (it is ADDITIVE, not a rejection). Anchored at the window end,
+# bounded quantifiers → LINEAR / ReDoS-safe; the period/comma break ``[\s\w]`` so it never crosses a
+# clause (e.g. "No obstante, se recomienda B" does not mark B as rejected).
+_NEG_WINDOW = 28
+_NEG_BEFORE_RE = re.compile(
+    r"\b(?:no|nunca|jam[aá]s|tampoco)\b(?!\s+(?:solo|s[oó]lo|[uú]nicament))[\s\w]{0,16}$",
     re.IGNORECASE,
 )
 
 
-def _bound_options(text: str) -> set[str]:
-    """Option letters bound to a recommendation cue (e.g. 'se recomienda la Opción B' → {'B'}).
+def _classify_cue_options(text: str) -> tuple[set[str], set[str]]:
+    """Split cue-bound option letters into (recommended, rejected).
 
-    This is the strong, precision-first signal. Returns ``set()`` when no cue binds an explicit option,
-    in which case the caller falls back to the mention-based check. Negation ('no se recomienda A; se
-    recomienda B') binds BOTH letters, so the caller treats it as ambiguous → no anchor (never guesses).
+    A cue immediately preceded by a negation marker (``_NEG_BEFORE_RE``) marks its letter as REJECTED,
+    not recommended — the precision-first defense against an LLM that contrasts ("No se recomienda A …")
+    instead of stating a clean positive recommendation. ``set()``/``set()`` when no cue binds an option.
     """
-    return {m.group(1).upper() for m in _M1_RECOMMEND_RE.finditer(text or "")}
+    recommended: set[str] = set()
+    rejected: set[str] = set()
+    for m in _M1_RECOMMEND_RE.finditer(text or ""):
+        letter = m.group(1).upper()
+        window = text[max(0, m.start() - _NEG_WINDOW) : m.start()]
+        if _NEG_BEFORE_RE.search(window):
+            rejected.add(letter)
+        else:
+            recommended.add(letter)
+    return recommended, rejected
 
 
 def _answer_key_text(preguntas: list[dict]) -> str:
@@ -83,12 +107,15 @@ def resolve_m1_recommended_option(preguntas: list[dict] | None) -> str:
     PRECISION-FIRST (the worst failure would be anchoring M5 to a WRONG letter): returns a letter ONLY
     when M1 unambiguously recommends exactly one. Strategy, applied first to the decision question
     (``numero == 3``) then to ALL questions as a fallback (covers a degraded/missing P3):
-      1. A letter bound to a recommendation cue (``_bound_options``) is the strong signal — iff exactly
-         ONE distinct letter is bound → return it.
-      2. Two-or-more bound letters (incl. negation 'no se recomienda A; se recomienda B') → ``""``
-         (ambiguous → never guess).
-      3. Else, iff exactly ONE option label appears at all (``_extract_option_labels``) → return it.
-      4. Else → ``""`` (none / course-of-action without a letter → no anchor → the M5 guard no-ops →
+      1. Classify cue-bound options into recommended/rejected (``_classify_cue_options`` — negation
+         aware). A letter rejected anywhere is removed from the recommended set.
+      2. Exactly ONE recommended letter → return it. Two-or-more → ``""`` (ambiguous → never guess).
+      3. ZERO recommended but a rejection IS present (e.g. "No se recomienda A" with the real
+         recommendation phrased without a cue) → ``""`` — do NOT fall back to a bare label, which could
+         pick the REJECTED option (the precision-first defense against the asymmetric-negation case).
+      4. ZERO recommended and NO rejection → iff exactly ONE option label appears at all
+         (``_extract_option_labels``) → return it.
+      5. Else → ``""`` (none / course-of-action without a letter → no anchor → the M5 guard no-ops →
          byte-identical to today).
     Pure, total — never raises.
     """
@@ -100,11 +127,14 @@ def resolve_m1_recommended_option(preguntas: list[dict] | None) -> str:
         text = _answer_key_text(scope)
         if not text:
             continue
-        bound = _bound_options(text)
-        if len(bound) == 1:
-            return next(iter(bound))
-        if len(bound) > 1:
-            return ""  # ambiguous recommendation → never guess
+        recommended, rejected = _classify_cue_options(text)
+        recommended -= rejected  # a letter rejected anywhere is never the recommendation
+        if len(recommended) == 1:
+            return next(iter(recommended))
+        if len(recommended) > 1:
+            return ""  # ambiguous positive recommendation → never guess
+        if rejected:
+            return ""  # negation present, no clean positive cue → never guess a bare label
         labels = {lbl.upper() for lbl in _extract_option_labels(text)}
         if len(labels) == 1:
             return next(iter(labels))
