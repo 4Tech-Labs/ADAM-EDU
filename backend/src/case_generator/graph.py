@@ -648,6 +648,7 @@ def _get_writer_llm(
     model: str,
     temperature: float = 0.7,
     thinking_level: str = "low",
+    max_output_tokens: int = 8192,
 ):
     """LLM estándar (Flash) para redacción y structured output.
     Fallback automático a gemini-2.5-flash si el primary falla.
@@ -665,10 +666,12 @@ def _get_writer_llm(
         gemini_fallback_model="gemini-2.5-flash",
         temperature=temperature,
         thinking_level=thinking_level,
-        max_output_tokens=8192,
+        max_output_tokens=max_output_tokens,
     )
     # Fallback: modelo anterior estable. Mismos prompts funcionan sin cambios.
-    fallback = _build_gemini("gemini-2.5-flash", temperature=temperature, max_output_tokens=8192)
+    fallback = _build_gemini(
+        "gemini-2.5-flash", temperature=temperature, max_output_tokens=max_output_tokens
+    )
     return primary.with_fallbacks([fallback])
 
 
@@ -2398,14 +2401,14 @@ def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
     cfg = Configuration.from_runnable_config(config)
     # Fix A-04: narrativa de 3000 palabras ≈ 4000-4500 tokens output.
     # _get_writer_llm tiene max_output_tokens=8192 — suficiente en la mayoría de
-    # modelos Flash, pero con thinking_level="low" algunos tokens se consumen en
+    # modelos Flash, pero con thinking_level="high" más tokens se consumen en
     # el bloque de thinking interno, dejando margen ajustado.
     # 12288 garantiza que incluso con Exhibits extensos (>1500 chars c/u) el modelo
     # complete la narrativa sin truncamiento silencioso.
     primary = ChatGoogleGenerativeAI(
         model=cfg.writer_model,
         temperature=0.7,
-        thinking_level="low",
+        thinking_level="high",
         max_output_tokens=12288,
         max_retries=2,
         api_key=os.getenv("GEMINI_API_KEY"),
@@ -2474,7 +2477,7 @@ def case_questions(state: ADAMState, config: RunnableConfig) -> dict:
     cfg = Configuration.from_runnable_config(config)
     # Fix M-07: 0.5 en vez de 0.7 — preguntas estructuradas Bloom L4-L6
     # requieren consistencia pedagógica, no creatividad narrativa.
-    llm = _get_writer_llm(cfg.writer_model, temperature=0.5, thinking_level="low")
+    llm = _get_writer_llm(cfg.writer_model, temperature=0.5, thinking_level="high")
 
     context = _build_base_context(state)
     context.update({
@@ -2581,9 +2584,13 @@ def eda_text_analyst(state: ADAMState, config: RunnableConfig) -> dict:
 
     try:
         cfg = Configuration.from_runnable_config(config)
-        # Fix M-08: "medium" — análisis estadístico del dataset requiere razonamiento
+        # Fix M-08: "high" — análisis estadístico del dataset requiere razonamiento
         # (correlaciones, outliers, tendencias). "low" producía análisis superficiales.
-        llm = _get_writer_llm(cfg.writer_model, temperature=0.4, thinking_level="medium")
+        # max_output_tokens=16384: a "high" el razonamiento consume más del budget; el reporte
+        # EDA (~3.5k tokens) necesita headroom sobre el thinking para no truncarse en silencio.
+        llm = _get_writer_llm(
+            cfg.writer_model, temperature=0.4, thinking_level="high", max_output_tokens=16384
+        )
 
         dataset = state.get("doc7_dataset", [])
         if dataset:
@@ -2988,7 +2995,7 @@ def _annotate_validate_emit(
     if charts_context:
         try:
             cfg = Configuration.from_runnable_config(config)
-            llm = _get_chart_llm(cfg.writer_model, temperature=0.3, thinking_level="minimal")
+            llm = _get_chart_llm(cfg.writer_model, temperature=0.3, thinking_level="medium")
             prompt = annotate_prompt.format(
                 charts_context_json=json.dumps(charts_context, ensure_ascii=False),
                 case_id=state.get("case_id", "") or state.get("titulo", ""),
@@ -3298,7 +3305,7 @@ def eda_chart_generator(state: ADAMState, config: RunnableConfig) -> dict:
     try:
         cfg = Configuration.from_runnable_config(config)
         # Fix C-05: _get_chart_llm (16384 tokens) para JSON pesado de múltiples charts
-        llm = _get_chart_llm(cfg.writer_model, temperature=0.3, thinking_level="minimal")
+        llm = _get_chart_llm(cfg.writer_model, temperature=0.3, thinking_level="medium")
 
         dataset = state.get("doc7_dataset", [])
         # Fix M-04: usar helper compartido
@@ -3650,7 +3657,7 @@ def eda_questions_generator(state: ADAMState, config: RunnableConfig) -> dict:
     try:
         cfg = Configuration.from_runnable_config(config)
         # Fix M-07: 0.5 — preguntas socráticas EDA requieren rigor analítico, no creatividad.
-        llm = _get_writer_llm(cfg.writer_model, temperature=0.5, thinking_level="low")
+        llm = _get_writer_llm(cfg.writer_model, temperature=0.5, thinking_level="high")
 
         charts = state.get("doc2_eda_charts", [])
         chart_manifest = json.dumps(
