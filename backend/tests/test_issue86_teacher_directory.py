@@ -148,7 +148,7 @@ def test_issue86_resend_teacher_invite_rotates_hash_and_resets_expiration(
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["invite_id"] == invite.id
-    assert payload["activation_link"].startswith("/app/teacher/activate#invite_token=")
+    assert payload["activation_link"].startswith("/teacher/activate#invite_token=")
     db.expire_all()
     refreshed = db.get(Invite, invite.id)
     assert refreshed is not None

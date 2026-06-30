@@ -3,7 +3,7 @@ import { useAuth } from "./useAuth";
 import { AppLanding } from "@/app/AppLanding";
 
 /**
- * Handles the root route `/app/`.
+ * Handles the root route `/`.
  *
  * Redirect precedence (deterministic, per Issue #33):
  *  1. must_rotate_password=true      -> /admin/change-password (always wins)

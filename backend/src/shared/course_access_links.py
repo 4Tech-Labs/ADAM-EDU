@@ -21,7 +21,7 @@ def generate_course_access_token() -> str:
 
 
 def serialize_course_access_link(raw_token: str) -> str:
-    return f"/app/join#course_access_token={raw_token}"
+    return f"/join#course_access_token={raw_token}"
 
 
 def course_regeneration_lock_key(course_id: str) -> int:

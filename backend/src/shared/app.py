@@ -26,6 +26,8 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import Scope
 
 from case_generator.core.authoring import AuthoringService, derive_progress_percentage
 from case_generator.impact_lens import ImpactLensLiteral
@@ -1747,6 +1749,30 @@ async def suggest_context(req: SuggestRequest) -> SuggestResponse:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+class SPAStaticFiles(StaticFiles):
+    """Static file server with single-page-app history fallback.
+
+    Starlette's ``StaticFiles(html=True)`` serves real files and 404s on any
+    other path. Because the React app uses client-side routing, a fresh
+    navigation / reload / invite link to a route such as ``/teacher/activate`` or
+    ``/join`` has no matching file on disk and returns ``{"detail":"Not Found"}``.
+    This subclass serves ``index.html`` for any such path so the client router can
+    take over.
+
+    The ``/api`` and ``/health`` routes are registered before this mount and take
+    precedence, so they never reach here; we still re-raise for ``/api`` typos so
+    genuine API 404s stay JSON instead of returning the SPA shell.
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and not path.startswith("api/"):
+                return await super().get_response("index.html", scope)
+            raise
+
+
 def create_frontend_router(build_dir: str = "../frontend/dist") -> Any:
     build_path = pathlib.Path(__file__).parent.parent.parent / build_dir
     if not build_path.is_dir() or not (build_path / "index.html").is_file():
@@ -1756,7 +1782,7 @@ def create_frontend_router(build_dir: str = "../frontend/dist") -> Any:
             return Response("Frontend not built.", media_type="text/plain", status_code=503)
 
         return Route("/{path:path}", endpoint=dummy_frontend)
-    return StaticFiles(directory=build_path, html=True)
+    return SPAStaticFiles(directory=build_path, html=True)
 
 
 # Serve the SPA at the site root. This MUST stay the last mount: API routes and

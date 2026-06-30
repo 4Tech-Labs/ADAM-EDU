@@ -124,7 +124,7 @@ class TeacherCourseConfigurationResponse(StrictModel):
     access_link_status: Literal["active", "missing"]
     access_link_id: str | None = None
     access_link_created_at: datetime | None = None
-    join_path: str = "/app/join"
+    join_path: str = "/join"
 
 
 class TeacherCourseDetailResponse(StrictModel):
