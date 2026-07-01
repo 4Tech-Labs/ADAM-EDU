@@ -221,7 +221,7 @@ jobs:
             --min-instances=0 \
             --max-instances=4 \
             --no-cpu-throttling \
-            --memory=2Gi --cpu=2 --timeout=3600 \
+            --memory=8Gi --cpu=4 --timeout=3600 \
             --set-env-vars='^@^ENVIRONMENT=production@SUPABASE_URL=https://pdnbjsrxgvxstjcqpxde.supabase.co@CORS_ALLOWED_ORIGIN=https://adamcampus.com@OPENROUTER_REASONING_EFFORT=high@OPENROUTER_REASONING_MAX_TOKENS=16000@NODE_MODEL_OVERRIDES={"schema_designer":"gemini-3.5-flash","m3_content_generator":"google/gemini-3.5-flash","m3_questions_generator":"google/gemini-3-flash-preview","m5_content_generator":"z-ai/glm-5.2","m5_questions_generator":"google/gemini-3-flash-preview","m4_content_generator":"gemini-3.1-pro-preview"}' \
             --set-secrets="DATABASE_URL=adam-database-url:latest,GEMINI_API_KEY=adam-gemini-api-key:latest,SUPABASE_SERVICE_ROLE_KEY=adam-supabase-service-role-key:latest,OPENROUTER_API_KEY=adam-openrouter-api-key:latest"
 
