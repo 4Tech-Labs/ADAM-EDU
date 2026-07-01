@@ -25,6 +25,9 @@ from case_generator.prompts import (
     CASE_WRITER_PROMPT_BY_FAMILY,
     CASE_WRITER_PROMPT_CLASSIFICATION,
 )
+from case_generator.prompts.clasificacion.M1_clasificacion.questions import (
+    _M1_CLASSIFICATION_ANCHOR_QUESTIONS,
+)
 
 # ── Sentinel strings that MUST appear in the classification anchor blocks ─────
 # These are unique to the classification prompts; their presence proves the
@@ -231,3 +234,51 @@ class TestClassificationPromptsLongerThanGeneric:
         assert len(CASE_QUESTIONS_PROMPT_CLASSIFICATION) > len(CASE_QUESTIONS_PROMPT), (
             "CASE_QUESTIONS_PROMPT_CLASSIFICATION must be longer than the generic prompt"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. M1 questions anchor is domain-neutral (de-churn — works for ANY clf case)
+# ─────────────────────────────────────────────────────────────────────────────
+# The P2 guiding example + P3 cost framing used to hardcode churn/retention
+# entity-flavor ("cliente 'en riesgo'", "¿En qué ventana temporal?",
+# "clientes/unidades") — the lone M1 surface the #346/#382/#383 de-churn campaign
+# missed (the architect + writer anchors of the same module were already de-churned).
+# These guards keep the anchor entity/domain-neutral so a fraude / mora / aprobación
+# case is coherent, while preserving the load-bearing P2/P3 scaffolding. Prompt-only
+# fix (no kill-switch), mirroring the #346 precedent; a runtime "ban churn vocab in
+# OUTPUT" guard would false-positive on legitimate churn cases (g13 fixture proves
+# they exist), so the correct deterministic teeth for a prompt-guidance defect is
+# this text-shape drift-lock on the anchor.
+
+class TestQuestionsAnchorDomainNeutral:
+    """The M1 classification questions anchor must be entity/domain-neutral (de-churn)."""
+
+    def test_m1_questions_anchor_is_domain_neutral_not_churn(self) -> None:
+        """No churn/retention entity hardcode in P2(a) or P3; entity-neutral framing present.
+        Mirrors #346's test_eda_text_ml_ds_not_churn_hardcoded for the M2 EDA narrative."""
+        low = _M1_CLASSIFICATION_ANCHOR_QUESTIONS.lower()
+        assert "en riesgo" not in low, "M1 P2 example still uses churn 'en riesgo' framing"
+        assert "clientes/unidades" not in low, "M1 P3 still hardcodes 'clientes/unidades'"
+        # entity-neutral vocabulary (mirrors the writer's clientes/transacciones/solicitudes)
+        assert "transacción" in low, "M1 anchor is not entity-neutral (no 'transacción')"
+        assert "solicitud" in low, "M1 anchor is not entity-neutral (no 'solicitud')"
+        assert "evento objetivo" in low, "M1 anchor lost the neutral 'evento objetivo' framing"
+
+    def test_m1_questions_p2_binary_and_anti_churn_framing(self) -> None:
+        """P2(a) frames the target as a binary event (two mutually-exclusive states), coherent
+        with the binary-only contract (#350), and steers the LLM to adapt to the case domain
+        instead of assuming retention. Binariness is plain-language — no DS jargon leaks."""
+        low = _M1_CLASSIFICATION_ANCHOR_QUESTIONS.lower()
+        assert "ocurre / no ocurre" in low, "P2(a) lost the binary (ocurre / no ocurre) framing"
+        assert "no asumas retención" in low, "P2(a) lost the anti-churn domain steer"
+
+    def test_m1_questions_anchor_preserves_load_bearing_structure(self) -> None:
+        """De-churning must NOT drop the load-bearing P2/P3 scaffolding or the format placeholders."""
+        anchor = _M1_CLASSIFICATION_ANCHOR_QUESTIONS
+        assert "definición operacional" in anchor  # P2(a)
+        assert "Exhibit 2" in anchor  # P2(a) measurement anchor
+        assert "hipótesis falsable" in anchor  # P2(b) preserved
+        assert "PROHIBIDO pedir que el estudiante elija un algoritmo" in anchor
+        assert "Coherencia obligatoria de opciones" in anchor  # P3 option coherence (#412)
+        assert "{cost_matrix_block}" in anchor  # P3 cost grounding placeholder (#361)
+        assert "{pregunta_eje}" in anchor
