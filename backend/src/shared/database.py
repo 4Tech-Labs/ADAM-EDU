@@ -81,6 +81,16 @@ class Settings(BaseSettings):
     # MLDS_OUTLIER_RESPECT_RANGE=false to restore the legacy ×2.0 ml_ds cap byte-identically (instant
     # env-only revert; no redeploy). business is unaffected either way (it always capped at range_max).
     mlds_outlier_respect_range: bool = True
+    # Drop columns that are 100% NULL from the emitted dataset (M2 empty-column defect). A
+    # `type:"date"` column the deterministic generator has no branch for (LLM-emitted or contract-
+    # injected, e.g. `cancellation_request_date`) ships 100% null, showing as an all-red band in the
+    # M2 missingness heatmap and an all-"null" column in the dataset table. When true (default), the
+    # `data_validator` node drops any entirely-null column (never the target) from the rows + schema;
+    # the M3 notebook already excludes such a column (`isna>0.5`), so this is BYTE-IDENTICAL in
+    # modelling/grounding — a purely cosmetic cleanup. A partially-null column (real missingness) is
+    # never dropped. Set DATASET_DROP_EMPTY_COLUMNS=false to keep the empty column byte-identically
+    # (instant env-only revert; no redeploy). Profile/family-agnostic.
+    dataset_drop_empty_columns: bool = True
     # Coerce the ml_ds + clasificación target to a binary int classification_target (Issue #350).
     # When true, the deterministic sibling `_normalize_mlds_classification_target` forces any
     # non-int / non-classification target the LLM emits to int binary {0,1} BEFORE the schema

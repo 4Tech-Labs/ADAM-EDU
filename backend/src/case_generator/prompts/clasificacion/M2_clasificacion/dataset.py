@@ -71,6 +71,11 @@ REGLAS DE COBERTURA DEL CONTRATO (cuando NO esté vacío):
 - dependency: objeto con depends_on, relationship ("linear" o "inverse"), noise_factor (0.0-1.0), o null.
   REGLA CRÍTICA: depends_on SOLO puede referenciar columnas de tipo "int" o "float".
   Está estrictamente prohibido que depends_on apunte a columnas de tipo "str" o "date".
+- REGLA CRÍTICA — columna temporal: la ÚNICA columna temporal permitida es `period` (type "str").
+  NUNCA generes otra columna de type "date" (p. ej. cancellation_request_date, order_date,
+  signup_date): el generador determinista no las puede poblar y saldrían 100% vacías. Si el dilema
+  necesita una fecha de dominio, represéntala como "str" (p. ej. "2024-03") o desglósala en
+  componentes numéricos int/float (año, mes, antigüedad_en_días).
 - Para {student_profile}="business": EXACTAMENTE 10 columnas, nullable=false en todas.
   Columnas obligatorias en este orden:
   period, revenue, costs, margin_pct, churn_rate, nps,
