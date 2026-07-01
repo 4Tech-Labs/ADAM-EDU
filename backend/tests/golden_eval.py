@@ -345,6 +345,13 @@ class NodeEvalInputs:
     # legacy ×2 ml_ds cap. RED control: a dataset generated with the kill-switch off (ml_ds ×2) ships
     # values above range_max and fails.
     outliers_within_declared_bounds_ok: bool = True
+    # The emitted dataset has NO 100%-null column: a `type:"date"` column the deterministic generator
+    # cannot populate (LLM-emitted or contract-injected, e.g. `cancellation_request_date`) no longer
+    # ships as an all-red band in the M2 missingness heatmap / an all-"null" dataset column. True (n/a)
+    # when rows are absent. Computed via ``check_no_all_null_columns``; gate-protects the
+    # ``data_validator`` empty-column drop. RED control: a dataset carrying an all-null column (the
+    # kill-switch-off path) fails.
+    no_all_null_columns_ok: bool = True
 
 
 @dataclass
@@ -535,6 +542,11 @@ def evaluate_downgrade_gate(r: NodeEvalInputs) -> GateResult:
             "dataset bounds failure: a generated value exceeds its column's declared "
             "[range_min, range_max] (the EDA outlier injection shipped a semantically impossible "
             "value, e.g. a credit_score declared [300,850] reaching 1700)"
+        )
+    if not r.no_all_null_columns_ok:
+        reasons.append(
+            "dataset empty-column failure: the emitted dataset carries a 100%-null column (a "
+            "type:date column the generator cannot populate leaked through data_validator)"
         )
     if r.judge_baseline_mean is not None and r.judge_candidate_mean is not None:
         drop = r.judge_baseline_mean - r.judge_candidate_mean
@@ -1133,6 +1145,28 @@ def check_outliers_within_declared_bounds(
                 return False
             if rmin is not None and fv < float(rmin) - abs_tol - rel_tol * abs(float(rmin)):
                 return False
+    return True
+
+
+def check_no_all_null_columns(rows: list | None) -> bool:
+    """Pure oracle: the emitted dataset has NO column that is 100% NULL.
+
+    A 100%-null column is always a generation gap (a ``type:"date"`` column the generator has no
+    branch for, LLM-emitted or contract-injected), never real data — legitimate columns top out at
+    ~5% nulls. ``data_validator`` drops such columns (kill-switch ``DATASET_DROP_EMPTY_COLUMNS``);
+    this oracle gate-protects against a regression that reopens the M2 empty-column defect. Profile/
+    family-agnostic, zero-FP: a partially-null column never trips it. True (n/a) for empty rows. RED
+    control: a dataset carrying an all-null column (the kill-switch-off path) → False.
+    """
+    if not rows:
+        return True
+    cols: set[str] = set()
+    for r in rows:
+        if isinstance(r, dict):
+            cols.update(r.keys())
+    for c in cols:
+        if all((r.get(c) if isinstance(r, dict) else None) is None for r in rows):
+            return False
     return True
 
 

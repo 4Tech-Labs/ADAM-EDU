@@ -3977,6 +3977,65 @@ def _validate_and_correct_dataset(
     return is_valid, errors, corrected_rows
 
 
+def _drop_all_null_columns(
+    rows: list,
+    schema: dict,
+    *,
+    target_col_name: str | None,
+    enabled: bool = True,
+) -> tuple[list, dict, list[str]]:
+    """Drop columns that are 100% NULL (every value ``None`` across all rows) from BOTH the row dicts
+    and ``schema["columns"]``, keeping the emitted dataset free of entirely-empty columns.
+
+    A 100%-null column is ALWAYS a generation gap, never real data: the generator populates every
+    handled column, and a legitimately ``nullable`` column tops out at ~5% nulls — so only an
+    UNPOPULATED column (a ``type:"date"`` column the generator has no branch for, either LLM-emitted
+    or contract-injected) can reach 100% null. The M3 notebook already excludes such a column from the
+    model (``isna > 0.5``), so dropping it is BYTE-IDENTICAL in modelling/grounding behaviour — it only
+    removes the cosmetic all-red band from the M2 missingness heatmap and the empty column from the
+    dataset table. The STRICT 100%-null threshold leaves partially-null columns (real / intentional
+    missingness) untouched.
+
+    Pure, copy-on-write (never mutates its inputs → seed determinism + thread-safety), total (raises
+    nothing on its own; the caller wraps it best-effort anyway), idempotent (a second pass drops
+    nothing → resume-safe). ``target_col_name`` is never dropped (defence-in-depth; the binary target
+    is never all-null). ``enabled=False`` → returns the inputs unchanged (kill-switch off = byte
+    identical). Returns ``(new_rows, new_schema, dropped_names)``; ``dropped_names`` is empty when no
+    column was dropped, in which case the caller MUST keep its byte-identical return path.
+    """
+    if not enabled or not rows:
+        return rows, schema, []
+    # Column universe = the union of every row's keys (robust to ragged rows).
+    candidate_cols: set[str] = set()
+    for r in rows:
+        if isinstance(r, dict):
+            candidate_cols.update(r.keys())
+    dropped = sorted(
+        c
+        for c in candidate_cols
+        if c != target_col_name
+        and all((r.get(c) if isinstance(r, dict) else None) is None for r in rows)
+    )
+    if not dropped:
+        return rows, schema, []
+    drop_set = set(dropped)
+    new_rows = [
+        {k: v for k, v in r.items() if k not in drop_set} if isinstance(r, dict) else r
+        for r in rows
+    ]
+    new_schema = schema
+    if isinstance(schema, dict) and isinstance(schema.get("columns"), list):
+        new_schema = {
+            **schema,
+            "columns": [
+                c
+                for c in schema["columns"]
+                if not (isinstance(c, dict) and c.get("name") in drop_set)
+            ],
+        }
+    return new_rows, new_schema, dropped
+
+
 # Entity-level SEGMENTATION feature columns for the ml_ds + clustering fallback schema
 # (Issue #452). Customer-level RFM + behavioural axes (NOT a financial time-series panel), so
 # K-Means clusters interpretable segments. `_enforce_mlds_clustering_structure` injects the
@@ -7439,6 +7498,32 @@ def data_validator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
         context_label=f"intento {retry_count + 1}/{MAX_RETRIES + 1}",
     )
 
+    # Descartar columnas 100% nulas del dataset emitido (kill-switch DATASET_DROP_EMPTY_COLUMNS,
+    # default true). Un `type:"date"` que el generador no puede poblar sale 100% vacío; el notebook M3
+    # ya lo excluye (`isna>0.5`), así que descartarlo es byte-idéntico en modelado/grounding y solo
+    # limpia la tabla del dataset + el heatmap de faltantes de M2. Corre ANTES de M2 EDA / M3
+    # (topología eda_flow → m3_flow). Poda filas + `schema` en lockstep; el schema podado se re-emite
+    # SOLO si se descartó algo (no-op → retorno byte-idéntico). Best-effort: cualquier error degrada a
+    # sin-descarte y NUNCA falla el job.
+    dropped_columns: list[str] = []
+    if settings.dataset_drop_empty_columns:
+        try:
+            _drop_target = _safe_contract_target_name(state.get("dataset_schema_required")) or None
+            corrected_rows, schema, dropped_columns = _drop_all_null_columns(
+                corrected_rows,
+                schema,
+                target_col_name=_drop_target,
+                enabled=True,
+            )
+            if dropped_columns:
+                logger.warning(
+                    "[data_validator] Descartadas %d columna(s) 100%% nula(s): %s",
+                    len(dropped_columns), dropped_columns,
+                )
+        except Exception as exc:  # best-effort — nunca falla el job por esto
+            logger.warning("[data_validator] drop de columnas nulas falló (ignorado): %s", exc)
+            dropped_columns = []
+
     # Construir dataset_metadata para downstream (eda_text_analyst, eda_chart_generator)
     def _build_metadata(r: list) -> dict:
         columns = schema.get("columns", [])
@@ -7472,7 +7557,7 @@ def data_validator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
 
     # Si la validación pasa (post-corrección), aceptar y retornar filas corregidas
     if is_valid:
-        return {
+        out: dict[str, Any] = {
             "doc7_dataset": corrected_rows,
             "dataset_metadata": _build_metadata(corrected_rows),
             "dataset_valid": True,
@@ -7480,6 +7565,12 @@ def data_validator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             "dataset_errors": [],
             "current_agent": "data_validator",
         }
+        # Re-emitir el schema podado SOLO si se descartó alguna columna → sin descarte, retorno
+        # byte-idéntico (no se escribe `dataset_schema`). Espeja el precedente de clustering
+        # (data_generator ~7400). Mantiene `protected_columns`/metadata truthful para downstream.
+        if dropped_columns:
+            out["dataset_schema"] = schema
+        return out
 
     # Retry SOLO si hay filas insuficientes (truncamiento del serializer)
     # Revenue/costs ya fueron corregidos — retry no ayudaría
@@ -7505,7 +7596,7 @@ def data_validator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             "(mejor resultado disponible tras %d intento/s)",
             len(errors), len(corrected_rows), retry_count + 1,
         )
-        return {
+        out_partial: dict[str, Any] = {
             "doc7_dataset": corrected_rows,
             "dataset_metadata": _build_metadata(corrected_rows),
             "dataset_valid": len(errors) == 0,
@@ -7513,6 +7604,9 @@ def data_validator(state: ADAMState, config: RunnableConfig) -> dict:  # noqa: A
             "dataset_errors": errors,
             "current_agent": "data_validator",
         }
+        if dropped_columns:
+            out_partial["dataset_schema"] = schema
+        return out_partial
 
     # Sin filas — pipeline continúa con dataset vacío
     logger.warning("[data_validator] sin filas válidas tras correcciones — %s", errors)
