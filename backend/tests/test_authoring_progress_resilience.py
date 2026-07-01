@@ -17,6 +17,7 @@ from case_generator.core.authoring import (
     BOOTSTRAP_STATE_INITIALIZING,
     CANONICAL_TIMELINE_STEP_IDS,
     AuthoringService,
+    _force_job_failed,
     _persist_intermediate_progress_step,
     _to_canonical_progress_step,
 )
@@ -1164,6 +1165,79 @@ def test_run_job_duplicate_retry_race_allows_only_one_checkpoint_attempt(
     assert payload.get("error_code") == "checkpoint_unavailable"
     assert payload.get("last_known_step") == "case_writer"
     orphan_mock.assert_not_called()
+
+
+def test_force_job_failed_marks_processing_job_failed(db, seed_identity) -> None:
+    """The finalization safety net flips a stuck `processing` job to `failed`.
+
+    Guarantees a finalization error can never leave a job hung at 100% in
+    `processing` (the production bug: DuplicatePreparedStatement on the completion
+    commit AND on the recovery commit -> job stuck forever).
+    """
+    teacher_id = str(uuid.uuid4())
+    seed_identity(user_id=teacher_id, email="teacher-force-failed@example.edu", role="teacher")
+
+    job = _seed_processing_job(db, teacher_id)
+
+    marked = asyncio.run(_force_job_failed(job.id, error_code="finalization_error"))
+    assert marked is True
+
+    db.expire_all()
+    refreshed = db.get(AuthoringJob, job.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    payload = dict(refreshed.task_payload or {})
+    assert payload.get("progress_status") == "failed"
+    assert payload.get("current_step") == "failed"
+    assert payload.get("error_code") == "finalization_error"
+
+
+def test_force_job_failed_is_idempotent_when_not_processing(db, seed_identity) -> None:
+    """Never clobbers a job that already left `processing` (idempotent no-op)."""
+    teacher_id = str(uuid.uuid4())
+    seed_identity(user_id=teacher_id, email="teacher-force-idempotent@example.edu", role="teacher")
+
+    job = _seed_authoring_job(db, teacher_id, status="completed")
+
+    marked = asyncio.run(_force_job_failed(job.id, error_code="finalization_error"))
+    assert marked is True  # no-op success: 0 rows matched, nothing to fix
+
+    db.expire_all()
+    refreshed = db.get(AuthoringJob, job.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+
+
+def test_force_job_failed_recovers_after_transient_commit_failure(
+    db,
+    seed_identity,
+    monkeypatch,
+) -> None:
+    """A transient commit failure is retried; the job still ends up `failed`."""
+    teacher_id = str(uuid.uuid4())
+    seed_identity(user_id=teacher_id, email="teacher-force-retry@example.edu", role="teacher")
+
+    job = _seed_processing_job(db, teacher_id)
+
+    original_commit = OrmSession.commit
+    state = {"commit_calls": 0}
+
+    def flaky_commit(self, *args, **kwargs):
+        state["commit_calls"] += 1
+        if state["commit_calls"] == 1:
+            raise RuntimeError("transient commit failure")
+        return original_commit(self, *args, **kwargs)
+
+    monkeypatch.setattr(OrmSession, "commit", flaky_commit)
+
+    marked = asyncio.run(_force_job_failed(job.id, error_code="finalization_error"))
+    assert marked is True
+    assert state["commit_calls"] >= 2  # first attempt failed, retried
+
+    db.expire_all()
+    refreshed = db.get(AuthoringJob, job.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
 
 
 async def test_run_job_same_thread_retry_preserves_checkpoint_lineage_and_rebuilds_runtime(

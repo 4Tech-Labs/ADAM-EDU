@@ -638,6 +638,89 @@ def _next_progress_payload(
     return payload
 
 
+async def _force_job_failed(
+    job_id: str,
+    *,
+    error_code: str,
+    error_trace: str | None = None,
+    max_attempts: int = 3,
+) -> bool:
+    """Last-resort guarantee that a job leaves ``processing`` after a finalization error.
+
+    Status-only UPDATE on a fresh short-lived session, DECOUPLED from artifact
+    orphaning so a heavy/failing cleanup write can never keep the job stuck at
+    100%. Bounded retry with short async backoff (hard cap < ~1s), idempotent
+    (only flips a row still in ``processing``), and NEVER raises.
+
+    Returns True if the job is out of ``processing`` (we flipped it, or a
+    concurrent writer already did), False if every attempt failed.
+
+    LIMITATION: uses the same ORM engine, so it recovers transient/isolated
+    failures, not a systemic outage or a killed process (deploy drain / OOM) —
+    those need the stuck-job reaper (documented follow-up).
+    """
+    payload = _next_progress_payload(
+        None,
+        status=AUTHORING_JOB_STATUS_FAILED,
+        current_step="failed",
+        error_code=error_code,
+        error_trace=error_trace or error_code,
+    )
+    for attempt in range(1, max_attempts + 1):
+        db = SessionLocal()
+        try:
+            result = db.execute(
+                update(AuthoringJob)
+                .where(
+                    AuthoringJob.id == job_id,
+                    AuthoringJob.status == AUTHORING_JOB_STATUS_PROCESSING,
+                )
+                .values(
+                    status=AUTHORING_JOB_STATUS_FAILED,
+                    task_payload=payload,
+                )
+            )
+            db.commit()
+            # Session.execute() of a Core UPDATE returns a CursorResult at runtime;
+            # cast so mypy accepts .rowcount (typed as bare Result).
+            rowcount = cast(Any, result).rowcount
+            if rowcount and rowcount > 0:
+                logger.error(
+                    "AuthoringService: Emergency FAILED write succeeded for Job %s (attempt %d/%d).",
+                    job_id,
+                    attempt,
+                    max_attempts,
+                )
+            else:
+                logger.info(
+                    "AuthoringService: Job %s already out of `processing`; emergency write skipped.",
+                    job_id,
+                )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "AuthoringService: Emergency FAILED write attempt %d/%d failed for Job %s: %s",
+                attempt,
+                max_attempts,
+                job_id,
+                exc,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        finally:
+            db.close()
+        if attempt < max_attempts:
+            await asyncio.sleep(0.1 * attempt)
+    logger.critical(
+        "AuthoringService: Emergency FAILED write EXHAUSTED for Job %s; "
+        "it may remain in `processing` until the stuck-job reaper runs.",
+        job_id,
+    )
+    return False
+
+
 def _derive_output_depth(payload: Mapping[str, Any]) -> str | None:
     """Determine the graph output depth from the current intake payload."""
     case_type = payload.get("caseType", "harvard_only")
@@ -1398,36 +1481,43 @@ class AuthoringService:
             db.commit()
             logger.info("AuthoringService: Successfully promoted to V5 and completed Job %s", job_id)
         except Exception:
+            error_trace = traceback.format_exc()
             logger.error(
                 "AuthoringService: Failure updating final state for Job %s: %s",
                 job_id,
-                traceback.format_exc(),
+                error_trace,
             )
-            db.rollback()
-            db = SessionLocal()
             try:
-                job = db.query(AuthoringJob).filter(AuthoringJob.id == job_id).first()
-                if job is not None and job.status != AUTHORING_JOB_STATUS_FAILED:
-                    job.status = AUTHORING_JOB_STATUS_FAILED
-                    current_payload = _next_progress_payload(
-                        job.task_payload,
-                        status=AUTHORING_JOB_STATUS_FAILED,
-                        current_step="failed",
-                        error_code="finalization_error",
-                        error_trace=traceback.format_exc(),
-                    )
-                    job.task_payload = current_payload
-                    ArtifactManager.orphan_job_artifacts(db, job_id)
-                    db.commit()
-                    logger.error(
-                        "AuthoringService: Job %s marked as FAILED after final-state exception.",
-                        job_id,
-                    )
-            except Exception as inner_exc:
-                logger.error("AuthoringService: Could not persist failure state for Job %s: %s", job_id, inner_exc)
                 db.rollback()
-            finally:
-                db.close()
+            except Exception:
+                pass
+            db.close()
+            # Guarantee the job leaves `processing` even if the finalization commit
+            # failed. Status-only write on a fresh session with bounded retry —
+            # DECOUPLED from artifact orphaning (cleanup) so a slow/failing orphan
+            # write can never keep the job stuck at 100%. Never raises.
+            marked = await _force_job_failed(
+                job_id,
+                error_code="finalization_error",
+                error_trace=error_trace,
+            )
+            if marked:
+                # Best-effort artifact cleanup AFTER the status is safely persisted.
+                cleanup_db = SessionLocal()
+                try:
+                    ArtifactManager.orphan_job_artifacts(cleanup_db, job_id)
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "AuthoringService: Best-effort artifact orphaning failed for Job %s: %s",
+                        job_id,
+                        cleanup_exc,
+                    )
+                    try:
+                        cleanup_db.rollback()
+                    except Exception:
+                        pass
+                finally:
+                    cleanup_db.close()
             return
         finally:
             db.close()

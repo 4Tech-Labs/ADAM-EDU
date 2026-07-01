@@ -67,6 +67,11 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # Disable psycopg3 server-side prepared statements under Supavisor
+        # transaction mode (:6543) — same reason as the app ORM engine
+        # (_build_connect_args) and the LangGraph checkpointer pool in
+        # shared/database.py. Harmless on a direct connection.
+        connect_args={"prepare_threshold": None},
     )
 
     with connectable.connect() as connection:
