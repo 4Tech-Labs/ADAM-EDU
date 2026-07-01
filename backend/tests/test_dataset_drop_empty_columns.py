@@ -167,10 +167,13 @@ def test_e2e_generator_ships_all_null_date_then_validator_drops_it() -> None:
 
     out = data_validator(_state(rows, schema), {})
     assert all("cancellation_request_date" not in r for r in out["doc7_dataset"])
+    # the drop is SURGICAL — every real column survives (guards against an over-broad drop)
+    assert all("tenure_months" in r and "default_flag" in r for r in out["doc7_dataset"])
     assert check_no_all_null_columns(out["doc7_dataset"]) is True
     # the pruned schema is re-emitted (a column was dropped) and no longer lists the date column
     assert "dataset_schema" in out
     assert all(c["name"] != "cancellation_request_date" for c in out["dataset_schema"]["columns"])
+    assert any(c["name"] == "tenure_months" for c in out["dataset_schema"]["columns"])
 
 
 def test_node_reemits_schema_only_when_a_column_is_dropped() -> None:
@@ -199,6 +202,48 @@ def test_node_never_drops_the_contract_target() -> None:
     schema = {"columns": [{"name": "tenure_months", "type": "int"}, {"name": "default_flag", "type": "int"}]}
     out = data_validator(_state(rows, schema, target="default_flag"), {})
     assert all("default_flag" in r for r in out["doc7_dataset"])
+
+
+def test_node_drops_all_null_column_without_contract() -> None:
+    # No dataset_schema_required (harvard-only / no-contract path): `_safe_contract_target_name(None)`
+    # returns "" → `_drop_target=None`; the drop STILL fires on the all-null column and re-emits the
+    # pruned schema. Exercises the node's target-resolution line with a None contract (helper unit
+    # tests only cover `target_col_name=None` directly).
+    rows = [{"a": 1, "empty_date": None}, {"a": 2, "empty_date": None}]
+    schema = {"columns": [{"name": "a", "type": "int"}, {"name": "empty_date", "type": "date"}]}
+    out = data_validator(_state(rows, schema, target=None), {})  # contract = None
+    assert all("empty_date" not in r for r in out["doc7_dataset"])
+    assert all("a" in r for r in out["doc7_dataset"])
+    assert "dataset_schema" in out
+    assert all(c["name"] != "empty_date" for c in out["dataset_schema"]["columns"])
+
+
+def test_node_degrades_when_drop_helper_raises(monkeypatch) -> None:
+    # Best-effort guarantee: if the drop helper raises, the node degrades to no-drop and NEVER fails
+    # the job. Pins the load-bearing `except` branch (`graph.py`), so a future refactor that lets an
+    # exception escape (or moves the drop outside the try) is caught by CI.
+    def _boom(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(G, "_drop_all_null_columns", _boom)
+    rows = [{"a": 1, "empty_date": None}, {"a": 2, "empty_date": None}]
+    schema = {"columns": [{"name": "a", "type": "int"}, {"name": "empty_date", "type": "date"}]}
+    out = data_validator(_state(rows, schema, target="a"), {})
+    assert out["dataset_valid"] is True  # job completed, did not raise
+    assert out["doc7_dataset"] == rows  # degraded to no-drop → the empty column survives
+    assert "dataset_schema" not in out  # no re-emit when nothing was dropped
+
+
+def test_node_non_identifier_target_name_is_not_protected() -> None:
+    # `_safe_contract_target_name` returns "" for a NON-identifier target name (its injection-safety
+    # contract), so `_drop_target=None` and the target carve-out does not apply. A target is never
+    # all-null on real data, so this only bites a doubly-pathological all-null non-identifier "target":
+    # it is dropped (an all-null column carries zero signal). Pins the documented behavior vs drift.
+    rows = [{"a": 1, "weird target": None}, {"a": 2, "weird target": None}]
+    schema = {"columns": [{"name": "a", "type": "int"}, {"name": "weird target", "type": "int"}]}
+    out = data_validator(_state(rows, schema, target="weird target"), {})
+    assert all("weird target" not in r for r in out["doc7_dataset"])
+    assert all("a" in r for r in out["doc7_dataset"])
 
 
 # ── Golden oracle `check_no_all_null_columns` ────────────────────────────────────────────────────
@@ -235,8 +280,15 @@ def test_gate_defaults_true_backcompat() -> None:
 
 
 # ── Prompt drift-lock (defense-in-depth, SHA-safe) ───────────────────────────────────────────────
-def test_schema_designer_prompt_forbids_standalone_date_columns() -> None:
-    from case_generator.prompts import SCHEMA_DESIGNER_PROMPT
+def test_schema_designer_prompts_forbid_standalone_date_columns() -> None:
+    # The rule must live in BOTH the generic prompt AND the classification prompt: `schema_designer`
+    # dispatches by family, and ml_ds+clasificación (the cohort the bug fixture targets) uses
+    # SCHEMA_DESIGNER_PROMPT_CLASSIFICATION, not the generic one. Clustering already forbids `date`.
+    from case_generator.prompts import (
+        SCHEMA_DESIGNER_PROMPT,
+        SCHEMA_DESIGNER_PROMPT_CLASSIFICATION,
+    )
 
-    assert "la ÚNICA columna temporal permitida es `period`" in SCHEMA_DESIGNER_PROMPT
-    assert 'NUNCA generes otra columna de type "date"' in SCHEMA_DESIGNER_PROMPT
+    for prompt in (SCHEMA_DESIGNER_PROMPT, SCHEMA_DESIGNER_PROMPT_CLASSIFICATION):
+        assert "la ÚNICA columna temporal permitida es `period`" in prompt
+        assert 'NUNCA generes otra columna de type "date"' in prompt

@@ -4010,11 +4010,17 @@ def _drop_all_null_columns(
     for r in rows:
         if isinstance(r, dict):
             candidate_cols.update(r.keys())
+    # ``key=str`` keeps the sort total even for the (JSON-impossible) mixed-key-type row, so the
+    # helper genuinely "raises nothing on its own"; for the real all-string-keyed case it is the
+    # identical order to a bare ``sorted``.
     dropped = sorted(
-        c
-        for c in candidate_cols
-        if c != target_col_name
-        and all((r.get(c) if isinstance(r, dict) else None) is None for r in rows)
+        (
+            c
+            for c in candidate_cols
+            if c != target_col_name
+            and all((r.get(c) if isinstance(r, dict) else None) is None for r in rows)
+        ),
+        key=str,
     )
     if not dropped:
         return rows, schema, []

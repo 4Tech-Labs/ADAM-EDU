@@ -1157,6 +1157,11 @@ def check_no_all_null_columns(rows: list | None) -> bool:
     this oracle gate-protects against a regression that reopens the M2 empty-column defect. Profile/
     family-agnostic, zero-FP: a partially-null column never trips it. True (n/a) for empty rows. RED
     control: a dataset carrying an all-null column (the kill-switch-off path) → False.
+
+    Note: intentionally STRICTER than ``_drop_all_null_columns`` (the node), which carves the contract
+    target out of its droppable set. A target is never all-null on real data (it carries the binary
+    0/1 labels), so the two never disagree in practice; a synthetic all-null target would be preserved
+    by the node but (correctly) flagged here.
     """
     if not rows:
         return True
