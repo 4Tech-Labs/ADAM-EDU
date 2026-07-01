@@ -1,4 +1,4 @@
-import { GraduationCap } from "lucide-react";
+import { GraduationCap, MessageSquarePlus } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { useAuth } from "@/app/auth/useAuth";
@@ -8,6 +8,7 @@ import {
 } from "@/shared/ui/layout";
 
 const FACULTY_SUBTITLE = "Portal Docente";
+const SUGGESTIONS_FORM_URL = "https://forms.gle/EVtZ5cD8wYxC4ZAaA";
 
 function getTeacherInitials(fullName: string): string {
     const parts = fullName.trim().split(/\s+/).filter(Boolean);
@@ -69,6 +70,17 @@ export function TeacherUserHeader() {
                             </p>
                         </div>
                     </div>
+                    <a
+                        href={SUGGESTIONS_FORM_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label="Enviar sugerencias"
+                        title="Enviar sugerencias"
+                        className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/10 px-3 text-sm font-semibold text-white transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                    >
+                        <MessageSquarePlus className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                        <span className="hidden sm:inline">Sugerencias</span>
+                    </a>
                     <button
                         type="button"
                         onClick={() => void signOut()}
