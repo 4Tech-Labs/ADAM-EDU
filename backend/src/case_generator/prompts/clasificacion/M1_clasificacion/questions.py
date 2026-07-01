@@ -35,10 +35,14 @@ _M1_CLASSIFICATION_ANCHOR_QUESTIONS = """
 
 **P2 (analysis) — cuando {student_profile} = "ml_ds":**
 P2 debe pedir al estudiante que realice las dos siguientes operaciones analíticas:
-  (a) Proponga una definición operacional precisa de la variable objetivo del negocio.
-      Ejemplo guía: "¿Qué constituye exactamente un cliente 'en riesgo' según los
-      datos disponibles? ¿Cómo lo mediría con los datos del Exhibit 2? ¿En qué ventana
-      temporal?". La respuesta esperada debe ser una definición medible, no una intuición.
+  (a) Proponga una definición operacional precisa de la variable objetivo del negocio,
+      expresada como dos estados mutuamente excluyentes (ocurre / no ocurre) de la entidad
+      del caso (cliente, transacción, solicitud u otra, según el dilema). Ejemplo guía, a
+      ADAPTAR al dominio del caso (no asumas retención): "¿Qué condición concreta y medible
+      marca que la entidad presentó el evento objetivo según los datos disponibles? ¿Cómo lo
+      mediría con los datos del Exhibit 2? ¿Bajo qué criterio de observación —y, cuando el
+      caso lo implique, en qué ventana temporal— se declara el evento?". La respuesta esperada
+      debe ser una definición medible de dos estados (ocurre / no ocurre), no una intuición.
   (b) Formule UNA hipótesis falsable conectando una característica del caso con el
       evento objetivo. Ejemplo: "Si la variable X aumenta, la probabilidad del evento Y
       debería subir porque…" — sustentado en Exhibit 1 o 2, no en intuición general.
@@ -54,8 +58,8 @@ de costo EXCLUSIVAMENTE de la matriz de costos del caso provista a continuación
 {cost_matrix_block}
 
   - Costo de acción innecesaria: enmarca cuánto pierde la empresa si interviene con
-    clientes/unidades que NO presentarían el evento (usa la cifra de "acción innecesaria"
-    del bloque de arriba).
+    entidades (clientes, transacciones o solicitudes) que NO presentarían el evento (usa la
+    cifra de "acción innecesaria" del bloque de arriba).
   - Costo de omisión: enmarca cuánto pierde si NO actúa con quienes SÍ presentarían el
     evento (usa la cifra de "omisión" del bloque de arriba).
   Estas cifras son PREMISAS del enunciado y NO provienen de un Exhibit: fija el campo
