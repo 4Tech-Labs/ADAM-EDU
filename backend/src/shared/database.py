@@ -634,9 +634,21 @@ def _build_postgres_timeout_options(s: Settings) -> str:
     )
 
 
-def _build_connect_args(s: Settings) -> dict[str, str]:
-    """Set session-level statement and lock timeout for every DB connection."""
-    return {"options": _build_postgres_timeout_options(s)}
+def _build_connect_args(s: Settings) -> dict[str, object]:
+    """Session-level statement/lock timeout + disable psycopg3 server-side
+    prepared statements for every ORM DB connection.
+
+    prepare_threshold=None is REQUIRED under Supavisor transaction mode (:6543):
+    without it psycopg3 assigns fixed prepared-statement names (`_pg3_N`) that
+    collide across pooled backends under concurrency -> DuplicatePreparedStatement
+    on commit -> a job's completion write fails and it hangs in `processing`.
+    Mirrors the checkpointer pool config in `_langgraph_pool_kwargs` (which the
+    comment there noted the main SQLAlchemy engine did NOT yet share).
+    """
+    return {
+        "options": _build_postgres_timeout_options(s),
+        "prepare_threshold": None,
+    }
 
 
 def _make_engine(s: Settings) -> Engine:
