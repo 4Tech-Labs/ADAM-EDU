@@ -13,8 +13,9 @@ M2 trim, PR #567 — prompt-only, no kill-switch, length is STYLE not coherence)
 
 The NOTEBOOK surfaces are deliberately untouched — the notebook carries the
 technical pedagogy; the M3 narrative DESIGNS the analysis. ``m3_content`` also
-feeds the notebook generator prompt and M4/M5 (``contexto_m3``) untruncated, so
-the trim saves downstream INPUT tokens too.
+flows untruncated into M4/M5 (``contexto_m3``), so the trim saves downstream
+INPUT tokens too (the notebook generator prompt already received it capped at
+``[:2000]`` — unchanged).
 
 These locks pin the guarantees of the trim:
 
