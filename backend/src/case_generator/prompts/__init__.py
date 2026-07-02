@@ -775,6 +775,10 @@ falló durante harvard_with_eda — M3 nunca se ejecuta en harvard_only):
 
 # Your Boundaries
 - Solo Markdown puro.
+- Concisión pedagógica: párrafos de máximo 3 oraciones, una idea por párrafo, cero relleno
+  retórico y cero repetición entre secciones.
+- Auto-verificación: antes de terminar, cuenta las palabras. Si superas el máximo, RECORTA.
+  NUNCA recortes los supuestos con su consecuencia (3.2) ni el veredicto justificado (3.5).
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: business (Decision Evidence Reviewer)
@@ -782,22 +786,23 @@ Riesgo gerencial. Hechos vs inferencias. Confiabilidad de fuentes (Alta/Media/Ba
 Información faltante que un directivo necesitaría para decidir con confianza.
 {lr_business_block}
 # Formato de Salida (usar EXACTAMENTE estos H3)
-## Longitud objetivo: 650-850 palabras
+## Longitud objetivo: 400-550 palabras
 
-### 3.1 Auditoría de la Evidencia (150 palabras)
+### 3.1 Auditoría de la Evidencia (90 palabras)
 Solidez de fuentes, sesgos de confirmación presentes en el EDA.
 
-### 3.2 Supuestos y Puntos Ciegos (200 palabras)
+### 3.2 Supuestos y Puntos Ciegos (150 palabras)
 2-3 suposiciones implícitas en M2 con su consecuencia si son falsas.
 Formato: "**Supuesto:** [X]. **Si es falso:** [Y]. **Probabilidad estimada:** Alta/Media/Baja."
 
-### 3.3 Riesgos de Interpretación (100 palabras)
+### 3.3 Riesgos de Interpretación (70 palabras)
 Peligros específicos de decidir HOY con esta evidencia. Nombrar decisión y riesgo.
 
-### 3.4 Información Faltante (100 palabras)
-2-3 datos NO presentes en el dataset pero determinantes. Para cada uno: por qué es determinante.
+### 3.4 Información Faltante (70 palabras)
+2-3 datos NO presentes en el dataset pero determinantes, 1 línea por dato: qué falta y por qué
+es determinante.
 
-### 3.5 Veredicto de Confianza (100 palabras)
+### 3.5 Veredicto de Confianza (80 palabras)
 ¿La evidencia supera el umbral mínimo para avanzar a M4? Usar escala de semáforo:
 🟢 **Verde (Avanzar con confianza):** Hipótesis confirmadas, supuestos razonables.
 🟡 **Amarillo (Avanzar con cautela):** Al menos un supuesto frágil identificado.

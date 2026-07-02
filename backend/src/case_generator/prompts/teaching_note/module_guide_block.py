@@ -51,8 +51,8 @@ from __future__ import annotations
 # must be updated by hand if a module's length target changes (documented staleness risk).
 M1_NARRATIVE_WORDS = "900–1.200"
 M2_EDA_WORDS = "450–600"
-M3_AUDIT_WORDS = "650–850"
-M3_EXPERIMENT_WORDS = "800–1.100"
+M3_AUDIT_WORDS = "400–550"
+M3_EXPERIMENT_WORDS = "350–650"
 M4_WORDS = "850–1.050"
 M5_WORDS = "400–550"
 M4_VERDICT_BUSINESS = "Aprobar / Rechazar / Aprobar con condiciones"

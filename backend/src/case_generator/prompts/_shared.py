@@ -31,44 +31,46 @@ Lema: "Correlación no implica causalidad."
   renderiza LaTeX. La moneda con prefijo ($8M, $750,000) es válida.
 
 # Política de Priorización de Algoritmos
-Si {algoritmos} contiene más de 4 algoritmos:
-1. Selecciona los 4 más estratégicamente relevantes para el caso.
-2. Justifica brevemente la selección en 1-2 oraciones antes de la Sección 2.
-3. Menciona los descartados por nombre con razón de descarte en 1 línea.
+Si {algoritmos} contiene más de 2 algoritmos, analiza SOLO los 2 más estratégicamente
+relevantes para el caso y nombra los descartados con su razón en 1 línea antes de la Sección 2.
 
 # Formato de Salida (usar EXACTAMENTE estos H2 y H3)
 ## 1. Rol del Architect Engineer
-Describe el rol adaptando la metáfora al contexto narrativo del caso (sin mencionar industrias
-genéricas; usa el contexto concreto del M1).
+(40-60 palabras) Describe el rol adaptando la metáfora al contexto narrativo concreto del M1
+(sin mencionar industrias genéricas).
 
 ## 2. Diseño de los Módulos Algorítmicos
-OBLIGATORIO: Para cada algoritmo seleccionado, incluir los 9 elementos siguientes:
+OBLIGATORIO: Para cada algoritmo seleccionado, incluir los 9 elementos siguientes.
+Cada elemento es UNA idea en 1-3 frases directas — sin relleno retórico ni repetición:
 
 ### [Nombre del Algoritmo]
-1. **El Concepto** (≤80 palabras): teoría simplificada, agnóstica al caso.
-2. **Hipótesis experimental**: qué afirmación causal intenta probar o refutar este módulo.
+1. **El Concepto** (≤60 palabras): teoría simplificada, agnóstica al caso.
+2. **Hipótesis experimental** (≤45 palabras): qué afirmación causal intenta probar o refutar este módulo.
    Formato obligatorio: "Si [X observable en datos], entonces [Y debería cambiar de dirección Z]."
-3. **Variable / resultado objetivo**: qué mide concretamente el éxito del módulo.
+3. **Variable / resultado objetivo** (≤35 palabras): qué mide concretamente el éxito del módulo.
    Si no puede determinarse desde M1/M2: "Variable objetivo pendiente — requiere [input concreto]."
-4. **Métrica de éxito**: criterio cuantitativo o cualitativo mínimo aceptable.
+4. **Métrica de éxito** (≤35 palabras): criterio cuantitativo o cualitativo mínimo aceptable.
    Si el dataset no permite calcularlo: "Métrica pendiente — requiere [input concreto]."
-5. **Riesgo principal de sesgo o confusión**: factor más probable que invalide la hipótesis.
-6. **Criterio mínimo de validación**: qué debe cumplirse antes de considerar el módulo válido.
-7. **Condición de descarte**: bajo qué condición este módulo NO debe ejecutarse o deployarse.
-8. **Visualizaciones clave** (describir en texto, no codificar):
-   Gráficos conceptuales que validarían el algoritmo. Derivar del tipo de problema, no asumir siempre tabular.
+5. **Riesgo principal de sesgo o confusión** (≤35 palabras): factor más probable que invalide la hipótesis.
+6. **Criterio mínimo de validación** (≤35 palabras): qué debe cumplirse antes de considerar el módulo válido.
+7. **Condición de descarte** (≤35 palabras): bajo qué condición este módulo NO debe ejecutarse o deployarse.
+8. **Visualizaciones clave** (≤40 palabras; describir en texto, no codificar): los 1-2 gráficos
+   que validarían el algoritmo, según el tipo de problema:
    - Clasificación/Regresión: Feature Importance + scatter real vs predicho
    - Clustering: Elbow method + scatter con colores por cluster
-   - NLP: bar de términos TF-IDF o distribución de tópicos
-   - Grafos: Red de nodos con pesos (NetworkX)
-   - Recomendación: Heatmap de afinidad
-   - Anomalías: Scatter con puntos anómalos marcados
    - Serie temporal: Línea temporal con tendencia
-9. **Acción de Negocio habilitada** (≤60 palabras): decisión estratégica que habilita este módulo.
+9. **Acción de Negocio habilitada** (≤50 palabras): decisión estratégica que habilita este módulo.
 
 # Your Boundaries
 - **Idioma de salida: {output_language}**
-- Longitud objetivo: 800-1100 palabras totales.
+- Longitud objetivo TOTAL: 350-650 palabras con un algoritmo (hasta 1.000 con dos algoritmos),
+  INCLUYENDO las secciones adicionales que un bloque de familia exija más abajo (si existe).
+- Concisión pedagógica: párrafos de máximo 3 oraciones, una idea por párrafo, cero relleno
+  retórico y cero repetición entre elementos. La profundidad técnica la aporta el notebook (si
+  existe); esta narrativa DISEÑA el análisis, no lo parafrasea.
+- Auto-verificación: antes de terminar, cuenta las palabras. Si superas el máximo, RECORTA.
+  NUNCA recortes la hipótesis experimental, la métrica de éxito, los criterios de validación y
+  descarte, ni las columnas reales citadas del EDA M2.
 - Agnóstico: no asumas sector, industria ni columnas concretas que no se mencionen en M1/M2.
 
 # Context
