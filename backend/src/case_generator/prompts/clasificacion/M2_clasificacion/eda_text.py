@@ -69,70 +69,55 @@ _EDA_CLASS_BALANCE_BLOCK_BUSINESS = """\
 _EDA_TARGET_DISTRIBUTION_BLOCK_ML_DS = """\
 ### Distribución del Target y Balance de Clases
 Calcula desde el dataset:
-- Conteo de clase 0 y clase 1 en `categoria`.
-- Imbalance ratio: count_mayoritaria / count_minoritaria (resultado siempre ≥ 1).
-- Emite la fórmula explícita:
+- Conteo de clase 0 y clase 1 en `categoria`, con la fórmula explícita:
   imbalance_ratio = max(count_cat0, count_cat1) / min(count_cat0, count_cat1)
-  donde count_cat0 = count(categoria==0) y count_cat1 = count(categoria==1).
-  El resultado es siempre ≥ 1 (numerador = clase mayoritaria, denominador = minoritaria),
-  sin asumir a priori qué clase es mayoritaria en el dataset concreto.
-- Si imbalance ratio > 4:1: "Desbalance severo (ratio X:1). La accuracy como métrica
-  única es engañosa. El estudiante debe analizar Matriz de Confusión, Precision, Recall
-  y F1-Score — especialmente para la clase 1 (casos con el evento objetivo). Considerar
-  ajuste de threshold antes de entrenar el algoritmo de clasificación seleccionado."\
+  donde count_cat0 = count(categoria==0) y count_cat1 = count(categoria==1)
+  (resultado siempre ≥ 1: numerador = clase mayoritaria, denominador = minoritaria,
+  sin asumir a priori qué clase es mayoritaria).
+- Si imbalance_ratio > 4:1: "Desbalance severo (ratio X:1). La accuracy como métrica
+  única es engañosa. Analizar Matriz de Confusión, Precision, Recall y F1-Score —
+  especialmente para la clase 1 (casos con el evento objetivo) — y considerar ajuste
+  de threshold antes de entrenar el algoritmo de clasificación seleccionado."\
 """
 
 _EDA_TARGET_DISTRIBUTION_BLOCK_BUSINESS = """\
 ### Distribución del Evento Objetivo
 A partir del dataset, describe en lenguaje de negocio:
 - Qué proporción de los casos presenta el evento y qué proporción no.
-- Si el evento es claramente minoritario (menos de 1 de cada 5 casos), explícalo como un
-  desbalance: hay muchos más casos "normales" que casos con el evento, así que mirar solo
-  el porcentaje global de aciertos engaña. Lo relevante es cuántos de los casos con evento
+- Si el evento es claramente minoritario (menos de 1 de cada 5 casos), explica el desbalance:
+  mirar solo el porcentaje global de aciertos engaña; lo relevante es cuántos casos con evento
   se logran anticipar y a qué costo de "falsas alarmas".
 - Traduce siempre a impacto: qué significa para el negocio que el evento sea raro o frecuente.\
 """
 
 _EDA_FEATURE_ENGINEERING_BLOCK_ML_DS = """\
 ## 3. Feature Engineering para Modelos Predictivos
-Explica 4-5 variables derivadas orientadas a la clasificación binaria del evento objetivo,
-justificando cada una con su relevancia para predecir `categoria` con el algoritmo seleccionado.
-Fórmulas simples (ejemplos genéricos — adáptalos al dominio del caso):
-- intensity_rate: frecuencia o intensidad del comportamiento clave en la ventana de observación.
-- risk_score: score compuesto de factores de riesgo ponderados por historial.
+Explica 3 variables derivadas orientadas a la clasificación binaria del evento objetivo, con una
+frase de justificación por variable (su relevancia para predecir `categoria`) y una fórmula
+simple, adaptadas al dominio del caso. Ejemplos genéricos del tipo de variable:
+- intensity_rate: frecuencia del comportamiento clave en la ventana de observación.
 - recency_index: tiempo transcurrido desde el último evento relevante del caso.
 - anomaly_ratio: proporción de eventos anómalos sobre el total observado.
 
 **ADVERTENCIA DE FUGA TEMPORAL (Leakage Guard):**
-Una variable derivada puede introducir fuga temporal si su valor observado ocurre DESPUÉS del
-evento objetivo. Verificar la ventana de observación antes de incluirla: el valor debe corresponder
-a un momento anterior a la fecha del evento objetivo. Si hay duda, excluir la variable del
-entrenamiento inicial.
-
-**Umbral pedagógico para el modelo:**
-AUC-ROC >= 0.70 es el umbral pedagógico mínimo para este caso. Si el dataset muestra un
-imbalance > 3:1, considerar ajuste de threshold por sobre 0.5 para maximizar recall en la
-clase 1 (casos con el evento objetivo) — en muchos contextos de negocio el costo de no detectar
-un caso positivo supera el costo de un falso positivo.
-(Objetivo: 200 palabras)\
+Una variable derivada introduce fuga temporal si su valor se observa DESPUÉS del evento
+objetivo. Verificar la ventana de observación: el valor debe ser anterior al evento; si hay
+duda, excluir la variable del entrenamiento inicial.
+(Objetivo: 90-130 palabras)\
 """
 
 _EDA_FEATURE_ENGINEERING_BLOCK_BUSINESS = """\
 ## 3. Señales que Anticipan el Evento
-Describe 4-5 señales de negocio (derivadas de los datos) que ayudarían a anticipar el evento
-objetivo, explicando en lenguaje llano por qué cada una es relevante para la decisión. Evita
-nombres técnicos y fórmulas; usa nombres comprensibles para un directivo. Ejemplos del tipo de
-señal (adáptalos al caso, no los copies literalmente):
-- Caída reciente en el uso o la actividad del cliente.
-- Acumulación de incidencias o quejas en poco tiempo.
-- Señales de tensión de pago (retrasos o fallos recientes).
-- Cambios bruscos respecto al comportamiento habitual del cliente.
+Describe 3-4 señales de negocio (derivadas de los datos) que ayudarían a anticipar el evento
+objetivo, con una frase en lenguaje llano por señal explicando por qué es relevante para la
+decisión. Evita nombres técnicos y fórmulas; usa nombres comprensibles para un directivo y
+adapta las señales al caso (ej.: caída reciente de actividad, acumulación de incidencias,
+señales de tensión de pago).
 
 **Cuidado al elegir las señales:**
-Asegúrate de que cada señal se mide ANTES de que ocurra el evento, no después. Si una señal
-solo se conoce una vez que el evento ya pasó, no sirve para anticiparlo y da una falsa
-sensación de certeza.
-(Objetivo: 200 palabras)\
+Cada señal debe medirse ANTES de que ocurra el evento; una señal que solo se conoce después
+no sirve para anticiparlo y da una falsa sensación de certeza.
+(Objetivo: 90-130 palabras)\
 """
 
 
@@ -196,7 +181,8 @@ traducir los datos del dataset en insights pedagógicos orientados a anticipar {
 conectados con el dilema del Módulo 1.
 
 # Your Mission
-Generar el Módulo 2 (reporte EDA) en Markdown puro para un caso de clasificación binaria.
+Generar el Módulo 2 (reporte EDA, 450-600 palabras) en Markdown puro para un caso de
+clasificación binaria: conciso, de alta densidad y fácil de leer.
 Confirmar o rechazar las hipótesis del M1 usando exclusivamente los datos del dataset y
 los Exhibits provistos. Identificar la variable objetivo `{target_column_name}` (int 0/1, donde
 1 = ocurre {event_label}) y colocar el análisis de balance de clases como eje central
@@ -214,6 +200,10 @@ del reporte.
 4. **Redacta Simbiosis Text-to-Chart:** En la sección 2, narra los números EXACTOS
    extraídos del dataset. El chart generator lee el dataset directamente.
 5. **Modula Profundidad:** Ajusta rigor según {output_depth}.
+6. **Auto-verifica concisión:** Antes de cerrar, cuenta mentalmente las palabras.
+   Si superas ~600 palabras, RECORTA: elimina adjetivos, rodeos y repeticiones.
+   NUNCA recortes números extraídos del dataset, el análisis de balance de clases,
+   las tablas obligatorias ni el bullet de "Brechas de datos detectadas".
 
 ## Error Handling
 - {dataset_instruction}
@@ -237,6 +227,9 @@ REGLAS para brechas:
 - Para "charts_plus_explanation": añade intuición estadística en lenguaje accesible.
 - Para "charts_plus_code": eleva rigor técnico.
   NUNCA prometas notebooks adjuntos en este reporte — el notebook es un artefacto separado.
+- **Concisión pedagógica:** párrafos de máximo 3-4 oraciones, una idea por párrafo,
+  cero relleno retórico, cero repetición de cifras ya presentadas. La densidad la ponen
+  el dataset y los gráficos; la narrativa los conecta, no los parafrasea.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}
@@ -250,47 +243,43 @@ REGLAS para brechas:
   Mencionar implicaciones metodológicas para el algoritmo en {algoritmos}.
 
 # Formato de Salida (usar EXACTAMENTE estas 3 secciones H2 — ## 1, ## 2 y ## 3 — NO alterar la numeración)
-## Longitud objetivo por sección (total: 700-900 palabras):
-##   §1: 250 palabras | §2: 350 palabras | §3: 200 palabras
 
 ## 1. Qué hace el Detective de Datos
-Introducción inspirada en Sherlock Holmes: el EDA es inspeccionar la escena del crimen
-donde cada número es una pista y la variable `{target_column_name}` es el "cuerpo del delito"
-(el evento que queremos anticipar: {event_label}). Usa una tabla analógica que mapee
-conceptos detectivescos (lupa, conexiones entre sospechosos, evidencia forense) con
-técnicas de análisis de datos (gráficos de dispersión, correlaciones, cohortes).
-Personaliza la metáfora al contexto del caso.
+Abre con 2-3 frases que presenten el EDA como trabajo de detective aplicado al contexto
+del caso: cada número es una pista y la variable `{target_column_name}` es el "caso a
+resolver" (el evento que queremos anticipar: {event_label}).
+Sin tablas analógicas ni teoría genérica.
 
 Incluye el Resumen Ejecutivo:
 - Hallazgo principal del dataset (extraído de los datos, no inventado).
-- Cómo confirma, rechaza o matiza la hipótesis del M1.
-- Si {dilema_hypotheses} está disponible: indica explícitamente si la hipótesis
-  del dilema se confirma, rechaza o matiza con los datos.
+- Cómo confirma, rechaza o matiza la hipótesis del M1 (usa {dilema_hypotheses}
+  si está disponible).
 {class_balance_block}
 
-Incluye el Diccionario de Datos como tabla Markdown, mín 8 variables:
+Incluye el Diccionario de Datos como tabla Markdown con TODAS las variables presentes
+en el dataset (no inventes columnas; descripción de máx 8 palabras por variable):
 | Variable | Tipo | Descripción | Completitud (%) | Notas de calidad |
-(Objetivo: 250 palabras)
+(Objetivo: 120-160 palabras)
 
 ## 2. Hallazgos Clave del Análisis
 
 {target_distribution_block}
 
 ### Calidad de la Evidencia
-Nulos/outliers reales del dataset. Cómo afectan la calidad de la predicción.
-Para "ml_ds": mencionar implicaciones para el preprocessing antes del modelado
-(imputación, escalado, encoding de categóricas para LR/RF).
+Nulos/outliers reales del dataset y cómo afectan la calidad de la predicción, en 2-4 frases.
+Para "ml_ds": implicaciones para el preprocessing antes del modelado
+(imputación, escalado, encoding de categóricas para el algoritmo seleccionado).
 
 ### Análisis Exploratorio de Predictores
-3-4 subsecciones H3 con los predictores más correlacionados con `{target_column_name}`.
-Narrar números EXACTOS extraídos del dataset.
+2-3 subsecciones H3 con los predictores más correlacionados con `{target_column_name}`,
+cada una de 2-3 frases con números EXACTOS extraídos del dataset.
 Ejemplo: "Los casos con más de 2 fallos de pago presentan una tasa de evento del 72%
 frente al 18% en los que no tienen fallos de pago."
 
 ### Validación de Hipótesis Previas
 Tabla: # | Hipótesis (del M1 o del caso) | Veredicto | Implicación para la decisión
-(3-4 filas — hipótesis derivadas del dilema del M1, NO del estudiante)
-(Objetivo: 350 palabras)
+(2-3 filas — hipótesis derivadas del dilema del M1, NO del estudiante)
+(Objetivo: 230-300 palabras)
 
 {feature_engineering_block}
 

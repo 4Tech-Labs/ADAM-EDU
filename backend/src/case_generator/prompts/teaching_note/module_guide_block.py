@@ -50,7 +50,7 @@ from __future__ import annotations
 # hyphen vs. "900–1.200" here), so they are validated for PRESENCE in the rendered block only and
 # must be updated by hand if a module's length target changes (documented staleness risk).
 M1_NARRATIVE_WORDS = "900–1.200"
-M2_EDA_WORDS = "700–900"
+M2_EDA_WORDS = "450–600"
 M3_AUDIT_WORDS = "650–850"
 M3_EXPERIMENT_WORDS = "800–1.100"
 M4_WORDS = "850–1.050"
