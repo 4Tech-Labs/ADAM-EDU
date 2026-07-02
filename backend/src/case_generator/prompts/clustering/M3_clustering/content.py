@@ -38,31 +38,30 @@ Este bloque aplica a un caso ml_ds de la familia clustering con K-Means. El obje
 predecir una etiqueta ni acertar una clase: es DESCUBRIR segmentos latentes en los clientes o
 entidades a partir de sus features de comportamiento (por ejemplo recencia, frecuencia, valor
 monetario, antigüedad). Encuadra TODO el módulo como el DISEÑO del análisis de segmentación que
-se ejecutará después, no como resultados ya obtenidos.
+se ejecutará después, no como resultados ya obtenidos. Añade estas cuatro secciones cortas
+(cuentan DENTRO de la longitud objetivo total):
 
 ## Cómo se elige el número de segmentos
-Explica el procedimiento para decidir cuántos segmentos usar SIN ejecutarlo todavía: el método
-del codo sobre la inercia (buscar el punto donde añadir un segmento más deja de reducir de forma
-marcada la dispersión interna) y la lectura del silhouette para varios valores de k (probar varios
-y quedarse con el que ofrezca mejor separación y cohesión). Preséntalo como el criterio que se
-aplicará, nunca como un valor ya calculado.
+(≤55 palabras) El procedimiento para decidir cuántos segmentos usar SIN ejecutarlo todavía: el
+método del codo sobre la inercia y la lectura del silhouette para varios valores de k (quedarse
+con el que ofrezca mejor separación y cohesión). Preséntalo como el criterio que se aplicará,
+nunca como un valor ya calculado.
 
 ## Cómo se interpreta el silhouette
-Explica de forma CUALITATIVA qué mide el coeficiente de silueta: si cada punto está más cerca de
-su propio segmento que del vecino más próximo. Una silueta alta describe segmentos compactos y bien
-separados (la segmentación cuenta una historia clara y accionable); una silueta baja describe solape
-(los segmentos se confunden y la lectura de negocio es frágil). PROHIBIDO escribir un valor numérico
-concreto de silhouette o de Davies-Bouldin: el análisis aún no se ha ejecutado.
+(≤55 palabras) De forma CUALITATIVA: mide si cada punto está más cerca de su propio segmento que
+del vecino más próximo. Silueta alta = segmentos compactos y bien separados (historia clara y
+accionable); silueta baja = solape (lectura de negocio frágil). PROHIBIDO escribir un valor
+numérico concreto de silhouette o de Davies-Bouldin: el análisis aún no se ha ejecutado.
 
 ## Perfilado de segmentos hacia personas de negocio
-Describe cómo, una vez ajustado el modelo, se PERFILA cada segmento leyendo las medias de sus
-features (qué hace distinto a cada grupo) y se traduce a una persona de negocio interpretable
-(por ejemplo, clientes de alto valor recientes frente a clientes en riesgo de fuga). Las personas
-se nombran por el patrón de sus features, no por una etiqueta predefinida.
+(≤55 palabras) Cómo, una vez ajustado el modelo, se PERFILA cada segmento leyendo las medias de
+sus features y se traduce a una persona de negocio interpretable. Las personas se nombran por el
+patrón de sus features, no por una etiqueta predefinida.
 
 ## Acción de negocio por segmento
-Para cada persona, indica el TIPO de acción diferenciada que habilitaría (retención, venta cruzada,
-reactivación o atención prioritaria) y por qué la segmentación vuelve accionable esa decisión.
+(≤55 palabras) Para cada persona, el TIPO de acción diferenciada que habilitaría (retención,
+venta cruzada, reactivación o atención prioritaria) y por qué la segmentación vuelve accionable
+esa decisión.
 
 # Prohibición de fabricación de métricas (clustering, pre-ejecución)
 El notebook todavía no se ha ejecutado cuando escribes este módulo. PROHIBIDO inventar o citar

@@ -29,17 +29,19 @@ Forest ni ningún otro modelo. El análisis es exclusivo sobre Logistic Regressi
 Pregunta eje directiva del caso:
 {pregunta_eje}
 
-Además del formato base, incluye estas dos secciones cortas con estos títulos EXACTOS:
+Además del formato base, incluye estas dos secciones cortas (cuentan DENTRO de la longitud
+objetivo total) con estos títulos EXACTOS:
 
 ## Por qué LR para esta decisión
-Explica por qué Logistic Regression es el modelo adecuado para responder la pregunta eje.
-Argumenta desde la interpretabilidad matemática directa, los requisitos de explicabilidad
-regulatoria/directiva del caso y la naturaleza del espacio de decisión. No inventes métricas;
+(≤80 palabras) Explica por qué Logistic Regression es el modelo adecuado para responder la
+pregunta eje: interpretabilidad matemática directa, requisitos de explicabilidad
+regulatoria/directiva del caso y naturaleza del espacio de decisión. No inventes métricas;
 usa evidencia de M1/M2 o el grounding computado cuando esté disponible.
 
 ## Cómo leer la matriz de costos
-Explica cómo fp_cost y fn_cost cambian el threshold y la decisión directiva. Conecta esta
-lectura con la pregunta eje y con el costo de elegir una opción A/B/C bajo incertidumbre.
+(≤80 palabras) Explica cómo el costo de negocio de una falsa alarma (falso positivo) y el de
+una omisión (falso negativo) cambian el umbral de decisión y la decisión directiva. Conecta
+esta lectura con la pregunta eje y con el costo de elegir una opción A/B/C bajo incertidumbre.
 """
 
 # ── RF-only deep dive ─────────────────────────────────────────────────────────
@@ -54,17 +56,19 @@ Regression ni ningún otro modelo. El análisis es exclusivo sobre Random Forest
 Pregunta eje directiva del caso:
 {pregunta_eje}
 
-Además del formato base, incluye estas dos secciones cortas con estos títulos EXACTOS:
+Además del formato base, incluye estas dos secciones cortas (cuentan DENTRO de la longitud
+objetivo total) con estos títulos EXACTOS:
 
 ## Por qué RF para esta decisión
-Explica por qué Random Forest es el modelo adecuado para responder la pregunta eje.
-Argumenta desde su capacidad de capturar no linealidades, interacciones complejas y
-robustez ante outliers en el contexto del problema. No inventes métricas; usa evidencia
-de M1/M2 o el grounding computado cuando esté disponible.
+(≤80 palabras) Explica por qué Random Forest es el modelo adecuado para responder la
+pregunta eje: capacidad de capturar no linealidades, interacciones complejas y robustez
+ante outliers en el contexto del problema. No inventes métricas; usa evidencia de M1/M2
+o el grounding computado cuando esté disponible.
 
 ## Cómo leer la matriz de costos
-Explica cómo fp_cost y fn_cost cambian el threshold y la decisión directiva. Conecta esta
-lectura con la pregunta eje y con el costo de elegir una opción A/B/C bajo incertidumbre.
+(≤80 palabras) Explica cómo el costo de negocio de una falsa alarma (falso positivo) y el de
+una omisión (falso negativo) cambian el umbral de decisión y la decisión directiva. Conecta
+esta lectura con la pregunta eje y con el costo de elegir una opción A/B/C bajo incertidumbre.
 """
 
 # ── LR vs RF contrast ─────────────────────────────────────────────────────────
@@ -76,19 +80,22 @@ Este bloque aplica SOLO a jobs con algorithm_mode="contrast" (LR + RF) con perfi
 Pregunta eje directiva del caso:
 {pregunta_eje}
 
-Además del formato base, incluye estas tres secciones cortas con estos títulos EXACTOS:
+Además del formato base, incluye estas tres secciones cortas (cuentan DENTRO de la longitud
+objetivo total) con estos títulos EXACTOS:
 
 ## Por qué LR baseline
-Explica por qué Logistic Regression es el baseline interpretable adecuado para la pregunta eje.
-No inventes métricas; usa evidencia de M1/M2 o el grounding computado cuando esté disponible.
+(≤80 palabras) Explica por qué Logistic Regression es el baseline interpretable adecuado para
+la pregunta eje. No inventes métricas; usa evidencia de M1/M2 o el grounding computado cuando
+esté disponible.
 
 ## Por qué RF challenger
-Explica por qué Random Forest funciona como challenger para capturar no linealidad o interacciones.
-Debes contrastarlo con LR en términos de interpretabilidad, robustez y riesgo operativo.
+(≤80 palabras) Explica por qué Random Forest funciona como challenger para capturar no
+linealidad o interacciones. Contrástalo con LR en interpretabilidad, robustez y riesgo operativo.
 
 ## Cómo leer la matriz de costos
-Explica cómo fp_cost y fn_cost cambian el threshold y la decisión directiva. Conecta esta lectura
-con la pregunta eje y con el costo de elegir una opción A/B/C bajo incertidumbre.
+(≤80 palabras) Explica cómo el costo de negocio de una falsa alarma (falso positivo) y el de
+una omisión (falso negativo) cambian el umbral de decisión y la decisión directiva. Conecta
+esta lectura con la pregunta eje y con el costo de elegir una opción A/B/C bajo incertidumbre.
 """
 
 # ── M3 narrative prompt constants — one per classification variant ─────────────
