@@ -1,27 +1,47 @@
 # Despliegue de ADAM-EDU (producción)
 
-Guía operativa del despliegue **real** en producción. Refleja la infraestructura
-viva (no la del runbook histórico `docs/runbooks/cloud-run-deploy.md`, que describe
-un diseño de dos servicios que hoy NO se usa).
+Guía operativa del despliegue **real** en producción. Desde el ADR 0004
+(`docs/adr/0004-cloud-run-split-request-billing.md`) la arquitectura es de **dos
+servicios** Cloud Run desde la misma imagen — el diseño del Issue #9 documentado en
+`docs/runbooks/cloud-run-deploy.md`, ahora activo.
 
 ---
 
 ## 1. Resumen / arquitectura
 
-- **Un solo servicio** de Cloud Run: `public-api`. Sirve el SPA (frontend) **y** la
-  API (FastAPI) desde la **misma imagen** y el **mismo origen**.
-- La generación de casos corre **in-process** dentro de `public-api` (FastAPI
-  `BackgroundTasks`) — no hay worker ni Cloud Tasks productor en el código.
+- **Dos servicios** de Cloud Run desde la **misma imagen**:
+  - `public-api`: sirve el SPA (frontend) **y** la API (FastAPI) desde el mismo
+    origen, con **facturación por request** (`--cpu-throttling`; instancias
+    warm-idle gratis → el goteo 24/7 de bots/dashboards ya no factura ~21 h/día).
+  - `authoring-worker`: ejecuta la generación de casos (LangGraph). Recibe el job
+    vía **Cloud Tasks** (endpoint interno OIDC, app `shared.worker_app`), sostiene
+    el request abierto durante todo el job y corre con `--no-cpu-throttling` +
+    `min-instances=0` → **solo factura durante generaciones reales**.
+- El despacho lo gobierna `AUTHORING_DISPATCH` (`cloud_tasks` en producción;
+  `inline` = kill-switch/local: jobs in-process como antes del ADR 0004).
+  **Regla:** `cloud_tasks` va SIEMPRE con `--cpu-throttling` en `public-api`, e
+  `inline` va SIEMPRE con `--no-cpu-throttling`. Un estado mixto cuelga
+  generaciones en silencio.
 - El frontend se compila **dentro** de la imagen (multi-stage Docker) y se sirve en
   la **raíz** del dominio (`/`).
 
 ```
-Navegador ──HTTPS──> adamcampus.com ──> Cloud Run (public-api)
+Navegador ──HTTPS──> adamcampus.com ──> Cloud Run (public-api, request-billing)
                                           ├─ /            -> SPA (React)
                                           ├─ /api/*       -> FastAPI
                                           └─ /health      -> healthcheck
-        Supabase: Auth (JWT/JWKS) + Postgres (Supavisor :6543) + Realtime
-        Gemini: generación de casos (in-process)
+        intake ──enqueue──> Cloud Tasks (adam-authoring-jobs)
+                              └──OIDC──> Cloud Run (authoring-worker,
+                                         instance-billing, min=0)
+                                         LangGraph + Gemini/OpenRouter
+        Supabase: Auth (JWT/JWKS) + Postgres (Supavisor :6543) + Realtime (progreso)
+```
+
+Rollback rápido del split (sin redeploy, vuelve al modo in-process):
+
+```bash
+gcloud run services update public-api --region us-west1 \
+  --update-env-vars=AUTHORING_DISPATCH=inline --no-cpu-throttling
 ```
 
 ---
@@ -32,8 +52,9 @@ Navegador ──HTTPS──> adamcampus.com ──> Cloud Run (public-api)
 |---|---|
 | GCP project | `gen-lang-client-0145484488` |
 | Región | `us-west1` |
-| Servicio Cloud Run | `public-api` |
-| Imagen (Artifact Registry) | `us-west1-docker.pkg.dev/gen-lang-client-0145484488/adam-edu/public-api` |
+| Servicios Cloud Run | `public-api` (SPA+API, request-billing) y `authoring-worker` (jobs, instance-billing, min=0) |
+| Cola Cloud Tasks | `adam-authoring-jobs` (us-west1) |
+| Imagen (Artifact Registry) | `us-west1-docker.pkg.dev/gen-lang-client-0145484488/adam-edu/public-api` (compartida por ambos servicios) |
 | SA runtime (corre el servicio) | `adam-run@gen-lang-client-0145484488.iam.gserviceaccount.com` |
 | SA deployer (CI) | `github-deployer@gen-lang-client-0145484488.iam.gserviceaccount.com` |
 | Supabase project ref | `aoauxftghxujeduutbev` (región AWS us-west-2) |

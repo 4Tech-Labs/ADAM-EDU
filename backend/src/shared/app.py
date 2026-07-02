@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Scope
 
-from case_generator.core.authoring import AuthoringService, derive_progress_percentage
+from case_generator.core.authoring import derive_progress_percentage
 from case_generator.impact_lens import ImpactLensLiteral
 from case_generator.suggest_service import (
     SuggestRequest,
@@ -79,6 +79,7 @@ from shared.database import (
     get_db,
     validate_runtime_database_configuration,
 )
+from shared.job_dispatch import dispatch_authoring_job
 from shared.db_resilience import (
     AUTH_ME_ENDPOINT,
     AUTHORING_INTAKE_ENDPOINT,
@@ -810,7 +811,9 @@ def create_authoring_job(
         db.refresh(job)
 
         logger.info("Intake complete. Job %s enqueued. Assignment: %s", job.id, assignment.id)
-        background_tasks.add_task(AuthoringService.run_job, job.id)
+        dispatch_authoring_job(
+            background_tasks, job_id=job.id, idempotency_key=job.idempotency_key
+        )
 
         return JobCreatedResponse(
             job_id=job.id,
@@ -859,7 +862,9 @@ def retry_authoring_job(
         job.id,
         job.status,
     )
-    background_tasks.add_task(AuthoringService.run_job, job.id)
+    dispatch_authoring_job(
+        background_tasks, job_id=job.id, idempotency_key=job.idempotency_key
+    )
     return RetryJobResponse(
         job_id=job.id,
         status="accepted",
@@ -894,7 +899,12 @@ def regenerate_authoring_notebook(
         )
 
     logger.info("Authoring notebook regeneration accepted for job %s", job.id)
-    background_tasks.add_task(AuthoringService.regenerate_notebook, job.id)
+    dispatch_authoring_job(
+        background_tasks,
+        job_id=job.id,
+        idempotency_key=job.idempotency_key,
+        kind="regenerate_notebook",
+    )
     return RetryJobResponse(
         job_id=job.id,
         status="accepted",

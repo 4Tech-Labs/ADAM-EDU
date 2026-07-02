@@ -1,6 +1,15 @@
 # Cloud Run Deploy — ADAM-EDU
 
 > Runbook for deploying and operating the two Cloud Run services introduced in Issue #9.
+>
+> **Status (ADR 0004, 2026-07-01):** the two-service split is now LIVE in production.
+> The authoritative live configuration is the `deploy` job in `.github/workflows/ci.yml`
+> and `docs/deploy.md`; where this runbook differs, those win. Deliberate deviations from
+> the sketch below: `public-api` runs `min-instances=0` under REQUEST-based billing
+> (`--cpu-throttling`; warm-idle is free, the 24/7 bot/dashboard trickle keeps it warm at
+> no cost), the worker runs `--no-cpu-throttling` + 2 vCPU/4Gi + `concurrency=2`, and the
+> worker uses `--ingress=all` with `--no-allow-unauthenticated` (IAM invoker restricted to
+> `adam-run@`) plus the app-level OIDC check, instead of `ingress: internal`.
 
 ---
 

@@ -88,6 +88,14 @@ This repository does not currently include a student runtime, full authenticatio
 - Do not introduce complex queue reclaimers/orchestrators for this progress path unless an approved ADR explicitly changes the architecture.
 - If a change proposes moving away from Supabase Realtime or Supavisor defaults, require a dedicated ADR and synchronized updates to `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and `CLAUDE.md` in the same PR.
 
+## Authoring Job Dispatch — Cloud Run split (ADR 0004)
+
+- Production runs TWO Cloud Run services from the SAME image: `public-api` (SPA + API, REQUEST-based billing / `--cpu-throttling`) and `authoring-worker` (`shared.worker_app`, receives jobs via Cloud Tasks, `--no-cpu-throttling`, `min-instances=0` — bills only during real generations). Progress stays 100% Supabase-native (this split only moves WHERE the job executes, never the progress path).
+- Dispatch is governed by `AUTHORING_DISPATCH` (Settings `authoring_dispatch`, default `inline`; producer `shared/job_dispatch.py`). `inline` = FastAPI BackgroundTasks in-process (dev/local/tests, byte-identical pre-ADR behavior). `cloud_tasks` = enqueue via Cloud Tasks REST (httpx + metadata-server token, zero new deps) with OIDC + `dispatchDeadline=1800s`; enqueue failure raises and the job stays `pending` (retryable) — never a silent inline fallback.
+- INVARIANT: `AUTHORING_DISPATCH=cloud_tasks` goes WITH `--cpu-throttling` on `public-api`, and `inline` goes WITH `--no-cpu-throttling`. A mixed state (inline + throttled CPU) silently stalls generations. The worker's `--no-cpu-throttling` is load-bearing: the internal handler HOLDS the request open for the whole job, and if Cloud Tasks drops the connection at its 30-min deadline the coroutine still finishes at full CPU (`GRAPH_EXECUTION_TIMEOUT_SECONDS=1900`).
+- The worker handler (`shared/internal_tasks.py`) validates Cloud Tasks OIDC and applies the idempotency barrier; `InternalTaskPayload.kind` (`"run"` default | `"regenerate_notebook"`) routes regeneration of COMPLETED cases past the run-status barrier. Cloud Run IAM (`--no-allow-unauthenticated`, invoker = `adam-run@`) is the outer boundary.
+- Rollback without redeploy: `gcloud run services update public-api --update-env-vars=AUTHORING_DISPATCH=inline --no-cpu-throttling`. Do not re-hardcode job execution into request handlers; all three dispatch sites (intake, retry, regenerate-notebook) go through `dispatch_authoring_job`.
+
 ## Authoring Live Preview (module-by-module)
 
 - During generation the graph persists a PARTIAL `assignments.canonical_output` per completed canonical step so teachers read each module as it lands instead of only watching the step loader. This stays Supabase-native — no new SSE/bus/table/Realtime publication. `assignments` is NOT in the `supabase_realtime` publication, so the partial write does not bloat the Realtime broadcast.
