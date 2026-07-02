@@ -7090,7 +7090,23 @@ def _clustering_blob_centers(k: int, n_features: int, rng) -> "Any":
     simplex = u[:, : k - 1] * s[: k - 1]  # (k, k-1), mutually equidistant
     dims = min(k - 1, n_features)
     embedded = np.zeros((k, n_features))
-    embedded[:, :dims] = simplex[:, :dims]
+    if dims < k - 1 and dims >= 1:
+        # Below the simplex dimension (unreachable in production: F>=3>=k-1 for k<=4) the
+        # nonzero singular values above are ALL EQUAL, so the SVD basis orientation is
+        # LAPACK/backend-arbitrary — truncating coordinates can collapse two vertices onto
+        # the same point on some builds (observed on CI Linux while Windows passed). Use a
+        # deterministic max-spread layout instead of a truncated projection: a regular k-gon
+        # in 2D, an even linspace in 1D — distinct centers on every backend, no SVD involved.
+        if dims >= 2:
+            ang = 2.0 * np.pi * np.arange(k) / k
+            embedded[:, 0] = np.cos(ang)
+            embedded[:, 1] = np.sin(ang)
+        else:
+            embedded[:, 0] = np.linspace(-1.0, 1.0, k)
+    else:
+        # Production path (n_features >= k-1): the FULL simplex is kept, so pairwise
+        # distances are basis-independent. Byte-identical to the pre-fix behavior.
+        embedded[:, :dims] = simplex[:, :dims]
     # Random orthogonal rotation (QR of a seeded Gaussian) so the simplex spreads across ALL
     # features instead of only the first (k-1) → every feature discriminates segments.
     q, _r = np.linalg.qr(rng.standard_normal((n_features, n_features)))
