@@ -205,16 +205,48 @@ jobs:
       - name: Push image (immutable SHA tag)
         run: docker push "$IMAGE:$GITHUB_SHA"
 
-      - name: Deploy to Cloud Run
+      # ADR 0004 — Cloud Run cost split. Two services from the SAME image:
+      #
+      #   authoring-worker: runs LangGraph generation jobs dispatched via Cloud Tasks.
+      #     The internal handler HOLDS the request open for the whole job, and
+      #     --no-cpu-throttling (instance-based billing) is LOAD-BEARING here: if
+      #     Cloud Tasks drops the connection at its 30-min dispatch deadline, the
+      #     coroutine still finishes at full CPU (GRAPH_EXECUTION_TIMEOUT is 1900s).
+      #     min-instances=0 → the worker only bills during actual generations.
+      #
+      #   public-api: serves the SPA + API under REQUEST-BASED billing (no
+      #     --no-cpu-throttling): idle-but-warm instances are free, so the 24/7
+      #     trickle traffic (bots + dashboard refetch) no longer bills ~21h/day.
+      #     AUTHORING_DISPATCH=cloud_tasks is REQUIRED in this mode — inline jobs
+      #     would starve without allocated CPU. Kill-switch/rollback: set
+      #     AUTHORING_DISPATCH=inline AND restore --no-cpu-throttling on public-api.
+      #
+      # The worker deploys FIRST so a flipped public-api never dispatches to a
+      # stale worker revision. NODE_MODEL_OVERRIDES is JSON (contains commas) and
+      # CLOUD_TASKS_SERVICE_ACCOUNT contains '@' → use the '^##^' custom delimiter
+      # for --set-env-vars so values are not split on ',' or '@'.
+      - name: Deploy authoring-worker to Cloud Run
         run: |
-          # NODE_MODEL_OVERRIDES is JSON (contains commas) → use gcloud's custom '@' delimiter
-          # (^@^) for --set-env-vars so its value is not split on the JSON's internal commas.
-          #
-          # Sizing (cost): 2 vCPU / 4Gi covers observed p99 usage (~0.8 vCPU / ~2.3Gi) with
-          # >2x headroom. --no-cpu-throttling (instance-based billing) is LOAD-BEARING:
-          # authoring jobs run in-process as asyncio background tasks after the intake
-          # response returns, so request-based billing would starve them of CPU. Do not
-          # switch billing mode without first moving job execution out of the API process.
+          gcloud run deploy authoring-worker \
+            --image="$IMAGE:$GITHUB_SHA" \
+            --region="$REGION" \
+            --service-account="$RUNTIME_SA" \
+            --command=uvicorn \
+            --args="shared.worker_app:worker_app,--host,0.0.0.0,--port,8000" \
+            --port=8000 \
+            --ingress=all \
+            --no-allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=2 \
+            --concurrency=2 \
+            --no-cpu-throttling \
+            --cpu-boost \
+            --memory=4Gi --cpu=2 --timeout=3600 \
+            --set-env-vars='^##^ENVIRONMENT=production##SUPABASE_URL=https://pdnbjsrxgvxstjcqpxde.supabase.co##OPENROUTER_REASONING_EFFORT=high##OPENROUTER_REASONING_MAX_TOKENS=16000##NODE_MODEL_OVERRIDES={"schema_designer":"gemini-3.5-flash","m3_content_generator":"google/gemini-3.5-flash","m3_questions_generator":"google/gemini-3-flash-preview","m5_content_generator":"z-ai/glm-5.2","m5_questions_generator":"google/gemini-3-flash-preview","m4_content_generator":"gemini-3.1-pro-preview"}##CLOUD_TASKS_SERVICE_ACCOUNT=adam-run@gen-lang-client-0145484488.iam.gserviceaccount.com##CLOUD_TASKS_AUDIENCE=https://authoring-worker-1039937714231.us-west1.run.app' \
+            --set-secrets="DATABASE_URL=adam-database-url:latest,GEMINI_API_KEY=adam-gemini-api-key:latest,SUPABASE_SERVICE_ROLE_KEY=adam-supabase-service-role-key:latest,OPENROUTER_API_KEY=adam-openrouter-api-key:latest"
+
+      - name: Deploy public-api to Cloud Run
+        run: |
           gcloud run deploy public-api \
             --image="$IMAGE:$GITHUB_SHA" \
             --region="$REGION" \
@@ -226,9 +258,10 @@ jobs:
             --allow-unauthenticated \
             --min-instances=0 \
             --max-instances=2 \
-            --no-cpu-throttling \
+            --cpu-throttling \
+            --cpu-boost \
             --memory=4Gi --cpu=2 --timeout=3600 \
-            --set-env-vars='^@^ENVIRONMENT=production@SUPABASE_URL=https://pdnbjsrxgvxstjcqpxde.supabase.co@CORS_ALLOWED_ORIGIN=https://adamcampus.com@OPENROUTER_REASONING_EFFORT=high@OPENROUTER_REASONING_MAX_TOKENS=16000@NODE_MODEL_OVERRIDES={"schema_designer":"gemini-3.5-flash","m3_content_generator":"google/gemini-3.5-flash","m3_questions_generator":"google/gemini-3-flash-preview","m5_content_generator":"z-ai/glm-5.2","m5_questions_generator":"google/gemini-3-flash-preview","m4_content_generator":"gemini-3.1-pro-preview"}' \
+            --set-env-vars='^##^ENVIRONMENT=production##SUPABASE_URL=https://pdnbjsrxgvxstjcqpxde.supabase.co##CORS_ALLOWED_ORIGIN=https://adamcampus.com##OPENROUTER_REASONING_EFFORT=high##OPENROUTER_REASONING_MAX_TOKENS=16000##NODE_MODEL_OVERRIDES={"schema_designer":"gemini-3.5-flash","m3_content_generator":"google/gemini-3.5-flash","m3_questions_generator":"google/gemini-3-flash-preview","m5_content_generator":"z-ai/glm-5.2","m5_questions_generator":"google/gemini-3-flash-preview","m4_content_generator":"gemini-3.1-pro-preview"}##AUTHORING_DISPATCH=cloud_tasks##CLOUD_TASKS_PROJECT=gen-lang-client-0145484488##CLOUD_TASKS_LOCATION=us-west1##CLOUD_TASKS_QUEUE=adam-authoring-jobs##CLOUD_TASKS_WORKER_URL=https://authoring-worker-1039937714231.us-west1.run.app/api/internal/tasks/authoring_step##CLOUD_TASKS_SERVICE_ACCOUNT=adam-run@gen-lang-client-0145484488.iam.gserviceaccount.com##CLOUD_TASKS_AUDIENCE=https://authoring-worker-1039937714231.us-west1.run.app' \
             --set-secrets="DATABASE_URL=adam-database-url:latest,GEMINI_API_KEY=adam-gemini-api-key:latest,SUPABASE_SERVICE_ROLE_KEY=adam-supabase-service-role-key:latest,OPENROUTER_API_KEY=adam-openrouter-api-key:latest"
 
       # Advance the floating :latest tag ONLY after a successful deploy, so :latest

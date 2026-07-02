@@ -20,8 +20,10 @@ OIDC validation flow:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, Header, HTTPException
 from jwt import PyJWKClient, PyJWKSetError
@@ -67,10 +69,16 @@ _google_jwks_client = PyJWKClient(
 
 
 class InternalTaskPayload(BaseModel):
-    """Payload for the Cloud Tasks authoring step endpoint."""
+    """Payload for the Cloud Tasks authoring step endpoint.
+
+    ``kind`` defaults to "run" for backward compatibility with pre-ADR-0004 payloads.
+    "regenerate_notebook" re-runs ONLY the degraded M3 notebook of a COMPLETED case
+    (its own idempotency guard — the m3_notebook_degraded flag — lives in the service).
+    """
 
     job_id: str
     idempotency_key: str
+    kind: Literal["run", "regenerate_notebook"] = "run"
 
 
 def _verify_cloud_tasks_oidc(authorization: str | None) -> None:
@@ -136,6 +144,12 @@ async def process_authoring_job_task(
     if not job:
         logger.error("cloud_task_job_not_found", extra={"job_id": payload.job_id})
         raise HTTPException(status_code=404, detail="Job not found")
+
+    if payload.kind == "regenerate_notebook":
+        # Applies to COMPLETED jobs, so it must bypass the run-status barrier below.
+        # The service is sync (runs the notebook nodes via .invoke) → thread offload.
+        await asyncio.to_thread(AuthoringService.regenerate_notebook, job.id)
+        return {"status": "success", "job_id": job.id, "kind": "regenerate_notebook"}
 
     if job.status in [
         AUTHORING_JOB_STATUS_COMPLETED,

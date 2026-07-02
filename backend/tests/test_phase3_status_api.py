@@ -328,7 +328,11 @@ def test_retry_authoring_job_accepts_failed_resumable(
     db.add(job)
     db.commit()
 
-    with patch("shared.app.AuthoringService.run_job", new=AsyncMock()) as run_job_mock:
+    # Retry dispatches through shared.job_dispatch (ADR 0004); inline mode (the test
+    # default) resolves to AuthoringService.run_job via that module's import.
+    with patch(
+        "shared.job_dispatch.AuthoringService.run_job", new=AsyncMock()
+    ) as run_job_mock:
         response = client.post(f"/api/authoring/jobs/{job.id}/retry", headers=headers)
 
     assert response.status_code == 202
@@ -424,7 +428,9 @@ def test_regenerate_notebook_accepts_degraded_job(
     db.add(job)
     db.commit()
 
-    with patch("shared.app.AuthoringService.regenerate_notebook", new=Mock()) as regen_mock:
+    with patch(
+        "shared.job_dispatch.AuthoringService.regenerate_notebook", new=Mock()
+    ) as regen_mock:
         response = client.post(f"/api/authoring/jobs/{job.id}/regenerate-notebook", headers=headers)
 
     assert response.status_code == 202

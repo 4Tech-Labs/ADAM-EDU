@@ -50,6 +50,24 @@ class Settings(BaseSettings):
     # preview). Kill-switch: set AUTHORING_LIVE_PREVIEW=false to disable the per-node
     # partial-canonical write + /preview endpoint and degrade cleanly to the step loader.
     authoring_live_preview: bool = True
+    # Authoring job dispatch (ADR 0004 — Cloud Run cost split). "inline" (default) runs
+    # jobs in-process via FastAPI BackgroundTasks (pre-ADR behavior; the ONLY correct mode
+    # when the API runs with CPU always allocated / --no-cpu-throttling). "cloud_tasks"
+    # enqueues to Cloud Tasks targeting the authoring-worker Cloud Run service, so
+    # public-api can run under request-based billing (CPU throttled outside requests)
+    # without starving LangGraph jobs. Kill-switch: AUTHORING_DISPATCH=inline reverts to
+    # in-process execution (public-api must then run --no-cpu-throttling again).
+    authoring_dispatch: str = "inline"
+    # Cloud Tasks producer coordinates — required only when AUTHORING_DISPATCH=cloud_tasks.
+    cloud_tasks_project: str | None = None
+    cloud_tasks_location: str | None = None
+    cloud_tasks_queue: str = "adam-authoring-jobs"
+    # Full URL of the worker's internal endpoint (…/api/internal/tasks/authoring_step).
+    cloud_tasks_worker_url: str | None = None
+    # OIDC identity Cloud Tasks signs with; the worker validates the same email/audience
+    # (shared.internal_tasks reads the same env vars on the worker side).
+    cloud_tasks_service_account: str | None = None
+    cloud_tasks_audience: str | None = None
     # Reduce the forward-facing algorithm catalog (form selector + suggester taxonomy +
     # intake validation). When true (default) the regresion family and the clustering
     # challenger (DBSCAN) are hidden: ml_ds sees {Logistic Regression, Random Forest,
