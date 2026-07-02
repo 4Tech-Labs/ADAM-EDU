@@ -2402,9 +2402,9 @@ def _normalize_exhibit_field(text: str) -> str:
 # NODO 2a — CASE WRITER (Flash, paralelo con 2b)
 # ─────────────────────────────────────────────────────────
 def case_writer(state: ADAMState, config: RunnableConfig) -> dict:
-    """Redacta la narrativa larga del caso (2,500-3,000 palabras)."""
+    """Redacta la narrativa del caso (900-1200 palabras, concisa y de alta densidad)."""
     cfg = Configuration.from_runnable_config(config)
-    # Fix A-04: narrativa de 3000 palabras ≈ 4000-4500 tokens output.
+    # Fix A-04: narrativa de ~1200 palabras ≈ 1600-2000 tokens output.
     # _get_writer_llm tiene max_output_tokens=8192 — suficiente en la mayoría de
     # modelos Flash, pero con thinking_level="high" más tokens se consumen en
     # el bloque de thinking interno, dejando margen ajustado.
