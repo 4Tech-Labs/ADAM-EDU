@@ -46,10 +46,10 @@ from __future__ import annotations
 # Curated descriptive constants exposed for the drift tests. The M4 VERDICT literals ARE bound to
 # the source M4 prompt (test_m4_verdict_literals_bound_to_source asserts they appear in
 # prompts/_shared.py, modulo the `**bold**` markers). The word-count literals are NOT bound: the
-# source prompts phrase them differently (e.g. _writer_base.py writes "3,000-3,500" with a comma +
-# hyphen vs. "3.000–3.500" here), so they are validated for PRESENCE in the rendered block only and
+# source prompts phrase them differently (e.g. _writer_base.py writes "900-1200" with a plain
+# hyphen vs. "900–1.200" here), so they are validated for PRESENCE in the rendered block only and
 # must be updated by hand if a module's length target changes (documented staleness risk).
-M1_NARRATIVE_WORDS = "3.000–3.500"
+M1_NARRATIVE_WORDS = "900–1.200"
 M2_EDA_WORDS = "700–900"
 M3_AUDIT_WORDS = "650–850"
 M3_EXPERIMENT_WORDS = "800–1.100"
