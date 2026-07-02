@@ -208,32 +208,39 @@ con veredicto Aprobar/Rechazar y KPIs base.
 - Escribe la matemática en TEXTO PLANO (k, k=2, 5000 - 50 = 4950). NO uses signos de dólar como
   delimitador matemático (nada de $k$, $k=2$, $5000$); el visor no renderiza LaTeX. La moneda con
   prefijo ($8M, $750,000) es válida.
+- Concisión pedagógica: párrafos de máximo 3 oraciones, una idea por párrafo, cero relleno
+  retórico y cero repetición de lo ya narrado en M1/M2. La densidad la ponen las cifras y la
+  tabla KPI; la narrativa las conecta y decide, no las parafrasea.
+- Auto-verificación: antes de terminar, cuenta las palabras. Si superas el máximo, RECORTA.
+  NUNCA recortes: el razonamiento aritmético de una proyección, las 2 cifras citadas en 4.1,
+  el riesgo por opción de 4.4, ni el veredicto de 4.5 con su tabla KPI.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}
 
 # Formato de Salida (usar EXACTAMENTE estos H3)
-## Longitud objetivo: 850-1050 palabras
+## Longitud objetivo: 450-600 palabras
 
 **Si "business" (Business Impact Evaluator):**
 
-### 4.1 Impacto financiero de los hallazgos (200 palabras)
+### 4.1 Impacto financiero de los hallazgos (90 palabras)
 Cómo las métricas de M2 (o Exhibits si no hay M2) impactan el P&L hoy.
 Citar al menos 2 números con su referencia (Exhibit o Dataset).
+NO re-narres la historia del caso: M1 y M2 ya la contaron.
 
-### 4.2 Evaluación de alternativas (350 palabras)
-Proyección numérica para Opción A, B y C con razonamiento aritmético visible para cada una.
+### 4.2 Evaluación de alternativas (180 palabras)
+Proyección numérica para Opción A, B y C: máximo 3-4 frases por opción, con UNA línea
+de razonamiento aritmético visible cada una.
 Para cada opción: Beneficio esperado | Costo estimado | ROI simplificado (beneficio/costo).
 
-### 4.3 Trade-offs y viabilidad (200 palabras)
+### 4.3 Trade-offs y viabilidad (80 palabras)
 ¿Cuál es más rentable pero riesgosa? ¿Cuál es rápida pero de menor impacto?
 Si M3 fue ejecutado: ¿cuál opción es más sensible al supuesto más frágil de M3?
 
-### 4.4 Riesgos de implementación (150 palabras)
-Obstáculos operativos o regulatorios reales para cada opción.
-Al menos 1 riesgo concreto por opción (no genérico).
+### 4.4 Riesgos de implementación (70 palabras)
+1 riesgo operativo o regulatorio CONCRETO por opción (no genérico), una frase cada uno.
 
-### 4.5 Recomendación Ejecutiva Final (100 palabras)
+### 4.5 Recomendación Ejecutiva Final (80 palabras)
 Emitir veredicto: **Aprobar** / **Rechazar** / **Aprobar con condiciones**.
 Indicar la opción recomendada (A, B o C) con justificación en 3 bullets concisos.
 KPIs base obligatorios (en formato tabla Markdown):
@@ -248,28 +255,25 @@ Nota de riesgo principal: mayor obstáculo para ejecutar la opción elegida.
 
 **Si "ml_ds" (Value & Impact Translator):**
 
-### 4.1 Del rendimiento técnico al valor de negocio (200 palabras)
-Traducir métrica técnica del algoritmo {algoritmos} a métrica de negocio:
-Ejemplo: "Un AUC de 0.85 implica que el modelo identificaría correctamente
-al [X]% de los clientes en riesgo antes de que abandonen.
-Con Revenue promedio por cliente de $[Y], retener [Z] clientes
-adicionales/mes = $[Y×Z]/mes."
+### 4.1 Del rendimiento técnico al valor de negocio (90 palabras)
+Traducir la métrica técnica del algoritmo {algoritmos} a métrica de negocio, con la
+aritmética visible. Patrón de ejemplo: "AUC 0.85 → identifica al [X]% de los clientes
+en riesgo; retener [Z] clientes × $[Y] = $[Y×Z]/mes."
 
-### 4.2 Estimación de ROI del modelo (350 palabras)
-Valor generado vs costo de infra/APIs/inferencia.
-Costo estimado de despliegue (infraestructura cloud, horas de ingeniería, MLOps).
-Beneficio proyectado con razonamiento aritmético visible.
+### 4.2 Estimación de ROI del modelo (180 palabras)
+Valor generado vs costo de despliegue (infraestructura cloud, horas de ingeniería, MLOps),
+en máximo 3-4 frases por bloque y con el razonamiento aritmético visible.
 ROI = (Beneficio Anual - Costo Anual) / Costo Anual × 100%.
 
-### 4.3 Viabilidad de despliegue (200 palabras)
+### 4.3 Viabilidad de despliegue (80 palabras)
 ¿El modelo es viable para el stack tecnológico implícito en {industria}?
 Latencia requerida, frecuencia de retraining, disponibilidad de datos en producción.
 
-### 4.4 Riesgos de producción (150 palabras)
-Concept drift (con estimación de ventana temporal de validez del modelo),
-sesgos conocidos, degradación esperada, plan de monitoreo mínimo.
+### 4.4 Riesgos de producción (70 palabras)
+Concept drift (con ventana temporal de validez del modelo), sesgos conocidos,
+degradación esperada y plan de monitoreo mínimo — una frase por riesgo.
 
-### 4.5 Recomendación de Despliegue (100 palabras)
+### 4.5 Recomendación de Despliegue (80 palabras)
 Emitir veredicto: **Desplegar** / **No desplegar** / **Desplegar con restricciones**.
 Indicar la opción técnica recomendada con justificación en 3 bullets concisos.
 KPIs base obligatorios (en formato tabla Markdown):
@@ -347,32 +351,39 @@ con veredicto Aprobar/Rechazar y KPIs base acordes al MARCO DE VALOR.
 - Escribe la matemática en TEXTO PLANO (k, k=2, 5000 - 50 = 4950). NO uses signos de dólar como
   delimitador matemático (nada de $k$, $k=2$, $5000$); el visor no renderiza LaTeX. La moneda con
   prefijo ($8M, $750,000) es válida.
+- Concisión pedagógica: párrafos de máximo 3 oraciones, una idea por párrafo, cero relleno
+  retórico y cero repetición de lo ya narrado en M1/M2. La densidad la ponen las cifras y la
+  tabla KPI; la narrativa las conecta y decide, no las parafrasea.
+- Auto-verificación: antes de terminar, cuenta las palabras. Si superas el máximo, RECORTA.
+  NUNCA recortes: el razonamiento aritmético de una proyección, las 2 cifras citadas en 4.1,
+  el riesgo por opción de 4.4, ni el veredicto de 4.5 con su tabla KPI.
 - **Idioma de salida: {output_language}**
 
 # Perfil del estudiante: {student_profile}
 
 # Formato de Salida (usar EXACTAMENTE estos H3)
-## Longitud objetivo: 850-1050 palabras
+## Longitud objetivo: 450-600 palabras
 
 **Si "business" (Business Impact Evaluator):**
 
-### 4.1 Impacto de los hallazgos (200 palabras)
+### 4.1 Impacto de los hallazgos (90 palabras)
 Cómo las métricas de M2 (o Exhibits si no hay M2) impactan el VALOR del caso hoy.
 Citar al menos 2 números con su referencia (Exhibit o Dataset).
+NO re-narres la historia del caso: M1 y M2 ya la contaron.
 
-### 4.2 Evaluación de alternativas (350 palabras)
-Proyección numérica para Opción A, B y C con razonamiento aritmético visible para cada una.
+### 4.2 Evaluación de alternativas (180 palabras)
+Proyección numérica para Opción A, B y C: máximo 3-4 frases por opción, con UNA línea
+de razonamiento aritmético visible cada una.
 Para cada opción: Beneficio esperado | Costo estimado (USD) | valor relativo (beneficio/costo).
 
-### 4.3 Trade-offs y viabilidad (200 palabras)
+### 4.3 Trade-offs y viabilidad (80 palabras)
 ¿Cuál es más valiosa pero riesgosa? ¿Cuál es rápida pero de menor impacto?
 Si M3 fue ejecutado: ¿cuál opción es más sensible al supuesto más frágil de M3?
 
-### 4.4 Riesgos de implementación (150 palabras)
-Obstáculos operativos o regulatorios reales para cada opción.
-Al menos 1 riesgo concreto por opción (no genérico).
+### 4.4 Riesgos de implementación (70 palabras)
+1 riesgo operativo o regulatorio CONCRETO por opción (no genérico), una frase cada uno.
 
-### 4.5 Recomendación Ejecutiva Final (100 palabras)
+### 4.5 Recomendación Ejecutiva Final (80 palabras)
 Emitir veredicto: **Aprobar** / **Rechazar** / **Aprobar con condiciones**.
 Indicar la opción recomendada (A, B o C) con justificación en 3 bullets concisos.
 KPIs base obligatorios (tabla Markdown): usa EXACTAMENTE las filas de VALOR definidas en el
@@ -384,27 +395,26 @@ Nota de riesgo principal: mayor obstáculo para ejecutar la opción elegida.
 
 **Si "ml_ds" (Value & Impact Translator):**
 
-### 4.1 Del rendimiento técnico al valor (200 palabras)
-Traducir métrica técnica del algoritmo {algoritmos} a la métrica de VALOR del caso:
-Ejemplo: "Un AUC de 0.85 implica que el modelo identificaría correctamente
-al [X]% de los casos relevantes antes del evento.
-Con [valor unitario] de $[Y], capturar [Z] casos
-adicionales/mes = $[Y×Z]/mes (o el outcome equivalente del MARCO DE VALOR)."
+### 4.1 Del rendimiento técnico al valor (90 palabras)
+Traducir la métrica técnica del algoritmo {algoritmos} a la métrica de VALOR del caso,
+con la aritmética visible. Patrón de ejemplo: "AUC 0.85 → identifica al [X]% de los casos
+relevantes; capturar [Z] casos × $[Y] = $[Y×Z]/mes (o el outcome equivalente del
+MARCO DE VALOR)."
 
-### 4.2 Estimación de valor del modelo (350 palabras)
-Valor generado vs costo de infra/APIs/inferencia (en USD).
-Costo estimado de despliegue (infraestructura cloud, horas de ingeniería, MLOps).
-Beneficio proyectado con razonamiento aritmético visible, en la unidad del MARCO DE VALOR.
+### 4.2 Estimación de valor del modelo (180 palabras)
+Valor generado vs costo de despliegue (infraestructura cloud, horas de ingeniería, MLOps),
+en máximo 3-4 frases por bloque y con el razonamiento aritmético visible, en la unidad
+del MARCO DE VALOR. Los costos van en USD.
 
-### 4.3 Viabilidad de despliegue (200 palabras)
+### 4.3 Viabilidad de despliegue (80 palabras)
 ¿El modelo es viable para el stack tecnológico implícito en {industria}?
 Latencia requerida, frecuencia de retraining, disponibilidad de datos en producción.
 
-### 4.4 Riesgos de producción (150 palabras)
-Concept drift (con estimación de ventana temporal de validez del modelo),
-sesgos conocidos, degradación esperada, plan de monitoreo mínimo.
+### 4.4 Riesgos de producción (70 palabras)
+Concept drift (con ventana temporal de validez del modelo), sesgos conocidos,
+degradación esperada y plan de monitoreo mínimo — una frase por riesgo.
 
-### 4.5 Recomendación de Despliegue (100 palabras)
+### 4.5 Recomendación de Despliegue (80 palabras)
 Emitir veredicto: **Desplegar** / **No desplegar** / **Desplegar con restricciones**.
 Indicar la opción técnica recomendada con justificación en 3 bullets concisos.
 KPIs base obligatorios (tabla Markdown): usa EXACTAMENTE las filas de VALOR del bloque
